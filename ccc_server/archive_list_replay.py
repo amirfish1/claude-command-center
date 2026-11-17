@@ -6,6 +6,7 @@ Entries contain only immutable bytes and offsets. Decoding on replay gives
 ticket processing its own mutable rows without reprojecting the archive.
 """
 import json
+import pickle
 import struct
 import zlib
 
@@ -91,7 +92,9 @@ def encode_rows(rows, overlay_ids):
 
 def replay_rows(entry, overlays):
     raw, spans = entry[:2]
-    rows = json.loads(raw)
+    # Clone bytes are created only from our own JSON-decoded rows below;
+    # they are never accepted from disk, HTTP or another process.
+    rows = pickle.loads(entry[3]) if len(entry) > 3 and entry[3] is not None else json.loads(raw)
     for index, _, _ in spans:
         row = rows[index]
         source = overlays[str(row.get('session_id') or row.get('id') or '')]
@@ -101,6 +104,17 @@ def replay_rows(entry, overlays):
             else:
                 row.pop(key, None)
     return rows
+
+
+def with_owned_rows(entry, rows):
+    """Retain an immutable clone of normalized rows, before ticket mutation."""
+    return (*entry[:3], pickle.dumps(rows, protocol=pickle.HIGHEST_PROTOCOL))
+
+
+def entry_weight(entry):
+    return (len(entry[0]) + sum(map(len, entry[2]))
+            + (len(entry[3] or b'') if len(entry) > 3 else 0)
+            + 256 * len(entry[1]) + 1024)
 
 
 def encode_replay(entry, rows):
@@ -124,7 +138,7 @@ def compressed_entry(raw, spans):
 
 
 def compress_replay(entry, rows):
-    _, spans, fixed = entry
+    _, spans, fixed = entry[:3]
     chunks = []
     for slot, (index, _, _) in enumerate(spans):
         chunks.extend((fixed[slot], _deflate_fragment(json.dumps(rows[index]).encode())))

@@ -19505,12 +19505,20 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
                                        _inputs=(resumes, parents, ideas, selected))
         raw, spans = _list_replay.encode_rows(payload["conversations"], set(overlay_ids))
         entry = _list_replay.compressed_entry(raw, spans)
-        _ARCHIVE_LIST_PROJECTION_CACHE.put(
-            key, entry, len(raw) + sum(map(len, entry[2])) + 256 * len(spans) + 1024)
+        _ARCHIVE_LIST_PROJECTION_CACHE.put(key, entry, _list_replay.entry_weight(entry))
         compressed = _list_replay.compress_replay(entry, payload["conversations"])
     else:
         wall, cpu = time.perf_counter(), time.thread_time()
         projected = _list_replay.replay_rows(entry, dict(zip(overlay_ids, extra)))
+        if len(entry) == 3:
+            # Pay clone preparation only on reuse, never on the cold build.
+            # Charge the additional bytes to the same bounded cache.
+            entry = _list_replay.with_owned_rows(entry, projected)
+            if _list_replay.entry_weight(entry) > _ARCHIVE_LIST_PROJECTION_CACHE.max_bytes:
+                # Keep the usable JSON entry without retrying an oversized
+                # clone on every subsequent read.
+                entry = (*entry[:3], None)
+            _ARCHIVE_LIST_PROJECTION_CACHE.put(key, entry, _list_replay.entry_weight(entry))
         changed = _archive_list_ticket_updates(projected, ideas)
         if window == "all":
             _trace_row_flicker(projected, now=now)

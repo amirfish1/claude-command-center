@@ -77,6 +77,50 @@ def test_reuses_archive_but_keeps_timestamps_ticket_ticks_and_containers_fresh(i
     assert again['queue_health'] == {'at': 10001}
     assert again['count'] == 2 and again['total_count'] == 2
 
+    # Later replays restore a private clone rather than decoding JSON again.
+    again['conversations'][0]['session_state']['todos'][0]['text'] = 'second caller'
+    rows[1].update(mtime=9950, modified=9950)
+    third = read(rows, now=10002)
+    assert inputs['calls'] == 1
+    assert third['conversations'][1]['mtime'] == 9950
+    assert third['conversations'][0]['session_state']['todos'][0]['text'] == 'nested'
+    assert inputs['ticks'][-1][1]['mtime'] == 9950
+    assert len(inputs['ticks']) == 3
+
+
+def test_owned_clone_preserves_json_normalization_and_byte_budget():
+    original = [{'session_id': 'live', 'mtime': 1,
+                 'session_state': {'values': (1, 2), 'keys': {1: 'one'}}}]
+    raw, spans = replay.encode_rows(original, {'live'})
+    entry = replay.compressed_entry(raw, spans)
+    normalized = replay.replay_rows(entry, {'live': original[0]})
+    cloned = replay.with_owned_rows(entry, normalized)
+    assert replay.entry_weight(cloned) == replay.entry_weight(entry) + len(cloned[3])
+    restored = replay.replay_rows(cloned, {'live': dict(original[0], mtime=2)})
+    assert restored[0]['session_state'] == {'values': [1, 2], 'keys': {'1': 'one'}}
+    assert restored[0]['mtime'] == 2
+    restored[0]['session_state']['values'].append(3)
+    assert replay.replay_rows(cloned, {'live': original[0]}) == normalized
+    cache = server.ByteBudgetCache(replay.entry_weight(entry), 2)
+    assert cache.put('entry', entry, replay.entry_weight(entry))
+    assert not cache.put('entry', cloned, replay.entry_weight(cloned))
+    assert cache.bytes == 0 and len(cache) == 0
+
+
+def test_clone_that_exceeds_budget_keeps_existing_json_replay(inputs):
+    rows = fixture_rows()
+    read(rows)
+    cache = server._ARCHIVE_LIST_PROJECTION_CACHE
+    cache.max_bytes = cache.bytes
+    budget = cache.bytes
+    rows[1]['mtime'] += 1
+    read(rows, now=10001)
+    rows[1]['mtime'] += 1
+    third = read(rows, now=10002)
+    assert inputs['calls'] == 1
+    assert third['conversations'][1]['mtime'] == rows[1]['mtime']
+    assert cache.bytes == budget and len(cache) == 1
+
 
 @pytest.mark.parametrize('mutation', ['title', 'parent', 'other-field', 'presence', 'membership',
                                       'snapshot', 'context', 'topics', 'graph', 'ideas'])
