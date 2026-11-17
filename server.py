@@ -11101,7 +11101,7 @@ def _spawn_model_for_engine(engine, explicit_model=None):
     return _spawn_default_model_for_engine(engine)
 
 
-def _settings_launch_overview():
+def _settings_launch_overview(*, only_queue=None):
     """Read-only saved routing plus actual consumer facts, never a quota probe."""
     from ccc_server.launch_preview import snapshot
     from ccc_server.settings_insights import queue_overview, revision
@@ -11123,18 +11123,21 @@ def _settings_launch_overview():
         raw = {}
     defaults = _load_spawn_defaults(persist=False)
     config = _wt_read_config()
+    selected_config = ({name: conf for name, conf in config.items() if name == only_queue}
+                       if only_queue is not None else config)
     session_facts = {}
     try:
-        engine, model = _spawn_request_engine_and_model({}, defaults)
-        session_facts = {"verified": True, "engine": engine, "model": model,
-                         "effort": _spawn_request_reasoning_effort({}, engine, defaults)}
-        if engine == "codex":
-            canonical, error = _validate_codex_model(model, require_available=False)
-            if canonical != model and not error:
-                session_facts.update(model=canonical, model_source="consumer_validation",
-                                     model_explanation="Codex launch validation resolves this model alias.")
-            if error:
-                session_facts["warnings"] = ["Session launch would be rejected by model validation: " + error]
+        if only_queue is None:
+            engine, model = _spawn_request_engine_and_model({}, defaults)
+            session_facts = {"verified": True, "engine": engine, "model": model,
+                             "effort": _spawn_request_reasoning_effort({}, engine, defaults)}
+            if engine == "codex":
+                canonical, error = _validate_codex_model(model, require_available=False)
+                if canonical != model and not error:
+                    session_facts.update(model=canonical, model_source="consumer_validation",
+                                         model_explanation="Codex launch validation resolves this model alias.")
+                if error:
+                    session_facts["warnings"] = ["Session launch would be rejected by model validation: " + error]
     except Exception:
         session_facts = {"warnings": ["Session consumer resolution unavailable; showing configured values only."]}
 
@@ -11150,8 +11153,8 @@ def _settings_launch_overview():
             from watchtower import workers as consumer
             policy = native.worker_fallback_policy()
             chain = list(dict.fromkeys(engine for engine in native.fallback_chain() if engine))
-            for name in [None, *config]:
-                if name is not None and (not isinstance(config[name], dict) or config[name].get("archived")):
+            for name in ([only_queue] if only_queue is not None else [None, *config]):
+                if name is not None and (not isinstance(config.get(name), dict) or config[name].get("archived")):
                     continue
                 try:
                     engine, model, effort = native.engine(name), native.model(name), native.effort(name)
@@ -11187,14 +11190,14 @@ def _settings_launch_overview():
     # configuration changed during the read instead of presenting it as actual.
     if before != read_raw() or revision(config) != revision(_wt_read_config()):
         raise ValueError("Launch settings changed while reading. Refresh the preview.")
-    plans = snapshot(defaults, raw, config, session_facts, facts)
+    plans = snapshot(defaults, raw, selected_config, session_facts, facts)
     plans["observed_at"] = datetime.now(timezone.utc).isoformat()
     by_queue = {plan["id"][6:]: plan for plan in plans["plans"] if plan["id"].startswith("queue:")}
     def resolve(name):
         fields = by_queue[name]["fields"]
         return tuple(fields[key]["value"] or ("Unresolved" if key == "engine" else "Engine default")
                      for key in ("engine", "model", "effort"))
-    result = queue_overview(config, defaults, resolve)
+    result = queue_overview(selected_config, defaults, resolve)
     result["launch_preview"] = plans
     return result
 
@@ -11217,7 +11220,7 @@ def _queue_policy_action_unlocked(payload, *, source_check=None):
     rev = policy.state_revision(config, raw)
     key = policy.entry(config, payload.get("queue"))
     if action == "read":
-        overview = _settings_launch_overview()
+        overview = _settings_launch_overview(only_queue=key)
         if policy.state_revision(policy.read(path), policy.defaults_text(SPAWN_DEFAULTS_FILE)) != rev:
             raise policy.StalePreview("Queue settings changed while reading. Refresh again.")
         plan = next((p for p in overview["launch_preview"]["plans"] if p["id"] == "queue:" + key), None)
