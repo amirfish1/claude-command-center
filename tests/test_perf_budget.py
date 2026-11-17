@@ -1397,7 +1397,7 @@ def test_conv_meta_cache_roundtrip_avoids_reparse(big_projects, monkeypatch, tmp
 # exercised separately below.
 
 @pytest.fixture
-def isolated_archive_cache(monkeypatch, tmp_path):
+def isolated_archive_cache(monkeypatch, tmp_path, drain_server_workers):
     """Point the archive response cache at a temp file, empty, no disk load."""
     cache_file = tmp_path / "archive_resp_cache.json"
     monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", cache_file)
@@ -1418,6 +1418,7 @@ def isolated_archive_cache(monkeypatch, tmp_path):
     # make a signature-gated assertion order-dependent.
     _reset_short_ttl_memos()
     yield
+    drain_server_workers()
     server._ARCHIVE_RESPONSE_CACHE.clear()
     server._ARCHIVE_RESPONSE_CACHE_LOADED = False
     server._archive_serve_cache.clear()
@@ -1437,6 +1438,54 @@ def _reset_short_ttl_memos():
     live = getattr(server, "_session_live_cache", None)
     if isinstance(live, dict):
         live.clear()
+
+
+def test_archive_fixture_drains_worker_before_restoring_state(tmp_path, drain_server_workers):
+    """A detached refresh must finish before fixture caches/env disappear."""
+    ready = threading.Event()
+    drain_started = threading.Event()
+    observed = {}
+    with pytest.MonkeyPatch.context() as patch:
+        fixture = isolated_archive_cache.__wrapped__(patch, tmp_path, drain_server_workers)
+        next(fixture)
+        patch.setenv("CCC_STATE_DIR", str(tmp_path / "worker-state"))
+        server._archive_serve_cache["fixture-marker"] = {"rows": []}
+
+        def detached(*_args):
+            ready.set()
+            assert drain_started.wait(5)
+            child = subprocess.run(
+                [sys.executable, "-c",
+                 "import os; print(os.environ['CCC_STATE_DIR'])"],
+                capture_output=True, text=True, check=True, timeout=5,
+            )
+            observed["state"] = child.stdout.strip()
+            observed["cache_alive"] = "fixture-marker" in server._archive_serve_cache
+            return [], False
+
+        patch.setattr(server, "_archive_compute_rows_detached", detached)
+        worker = threading.Thread(
+            target=server._archive_serve_refresh,
+            args=("fixture-worker", {}, server._archive_serve_generation, time.time()),
+        )
+        join = worker.join
+
+        def begin_drain(timeout=None):
+            drain_started.set()
+            join(timeout)
+
+        patch.setattr(worker, "join", begin_drain)
+        worker.start()
+        try:
+            assert ready.wait(5)
+            with pytest.raises(StopIteration):
+                next(fixture)
+            assert not worker.is_alive(), "fixture reset while detached refresh was alive"
+            assert observed == {"state": str(tmp_path / "worker-state"), "cache_alive": True}
+            assert "fixture-marker" not in server._archive_serve_cache
+        finally:
+            drain_started.set()
+            join(5)
 
 
 _ALL_OPTS = dict(include_prs=False, resolve_pr_states=False,

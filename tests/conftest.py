@@ -108,10 +108,7 @@ def _drain_recall_background_syncs(monkeypatch):
     # tests patch and count.
     # Keyed on the live threads, not the in-flight flags: a test that sets a
     # flag by hand must not stall every later teardown.
-    for thread in threading.enumerate():
-        target = getattr(thread, "_target", None)
-        if getattr(target, "__qualname__", "") in _DRAINED_SERVER_WORKERS:
-            thread.join(max(0.0, deadline - _real_monotonic()))
+    drain_server_background_workers(deadline)
 
 
 @pytest.fixture(autouse=True)
@@ -135,8 +132,26 @@ def _no_cold_archive_scan(monkeypatch):
 
 _DRAINED_SERVER_WORKERS = frozenset({
     "_archive_refresh_response_cache_async.<locals>.refresh",
+    "_archive_serve_refresh",
     "_load_spawn_markers_locked.<locals>._revalidate",
 })
+
+
+def drain_server_background_workers(deadline=None):
+    """Drain before cache reset as well as before monkeypatch restores env."""
+    if deadline is None:
+        deadline = _real_monotonic() + 15
+    for thread in threading.enumerate():
+        target = getattr(thread, "_target", None)
+        if getattr(target, "__qualname__", "") in _DRAINED_SERVER_WORKERS:
+            thread.join(max(0.0, deadline - _real_monotonic()))
+            if thread.is_alive():
+                pytest.fail(f"background worker outlived test isolation: {thread.name}")
+
+
+@pytest.fixture
+def drain_server_workers():
+    return drain_server_background_workers
 
 
 @pytest.fixture(autouse=True)
