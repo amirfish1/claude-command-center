@@ -29112,7 +29112,10 @@ def _conversation_open_response(conv_id, query, accept_encoding, in_reader=False
 # URLs, and absolute Unix paths anchored to whitespace/quote/paren so
 # we don't pull tokens out of the middle of code identifiers.
 _FFC_URL_RE = re.compile(r"https?://[^\s<>\"'`)\]]+")
-_FFC_PATH_RE = re.compile(r"(?:^|(?<=[\s\"'`(\[]))(/[^\s\"'`<>)\]]+)")
+# Lead with the slash so the regex engine can skip ordinary transcript text.
+# Checking its predecessor afterward preserves both start-of-string paths
+# and the existing whitespace/quote/paren boundary without a per-byte branch.
+_FFC_PATH_RE = re.compile(r"(/(?<![^\s\"'`(\[]/)[^\s\"'`<>)\]]+)")
 _FFC_PATH_TRAIL_PUNCT = ".,;:!?)]}>'\""
 _FFC_MAX_ENTRIES = 500
 
