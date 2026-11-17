@@ -142,6 +142,7 @@ from ccc_server import memory_release as _memory_release
 from ccc_server.index_page_cache import IndexPageCache
 from ccc_server.bounded_cache import ByteBudgetCache
 from ccc_server.static_encoding_cache import StaticEncodingCache
+from ccc_server.response_timing import ResponseTimingMixin
 _cpu_accounting.install_thread_exit_accounting()
 from ccc_server import idea_tickets as _idea_tickets
 from ccc_server import headroom as _headroom
@@ -31816,7 +31817,7 @@ def _memory_scope(qs):
     return "all" if (qs.get("scope", ["local"])[0] or "").strip().lower() == "all" else "local"
 
 
-class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
+class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandler):
     def _is_morning_path(self, path):
         """True if the request targets the (opt-in) Morning sub-feature."""
         return (
