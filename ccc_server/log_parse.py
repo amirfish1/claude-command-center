@@ -1694,23 +1694,48 @@ def _truncate_session_name(name):
     return s[: _core.SESSION_NAME_MAX_CHARS - 1].rstrip() + "…"
 
 
+_session_names_cache_lock = threading.Lock()
+_session_names_cache = {"key": None, "names": {}}
+
+
+def _session_names_signature(st):
+    return (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size)
+
+
 def _load_session_name_overrides():
     """Load user-set names from the side-car file. Returns {session_id: name}.
 
     Values are truncated to SESSION_NAME_MAX_CHARS on read so that legacy
     entries (annotation context dumped as a "name") cannot inflate the
     sidebar even before the next write rewrites the file."""
-    try:
-        data = json.loads(SESSION_NAMES_FILE.read_text())
-    except (OSError, json.JSONDecodeError):
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    return {
-        k: _core._truncate_session_name(v)
-        for k, v in data.items()
-        if isinstance(k, str) and v
-    }
+    # Multiple list phases and concurrent tabs read the same sidecar. Keep
+    # normalization off the polling path, but check the actual file on every
+    # call so peer renames (including same-length atomic replacements) appear
+    # immediately. Return a copy: rename writers edit this mapping in place.
+    with _session_names_cache_lock:
+        try:
+            key = (str(SESSION_NAMES_FILE), _core.SESSION_NAME_MAX_CHARS,
+                   _session_names_signature(SESSION_NAMES_FILE.stat()))
+            if _session_names_cache["key"] == key:
+                return dict(_session_names_cache["names"])
+            with SESSION_NAMES_FILE.open() as fh:
+                before = _session_names_signature(os.fstat(fh.fileno()))
+                data = json.load(fh)
+                after = _session_names_signature(os.fstat(fh.fileno()))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        names = {
+            k: _core._truncate_session_name(v)
+            for k, v in data.items()
+            if isinstance(k, str) and v
+        }
+        if before == after:
+            _session_names_cache.update(
+                key=(str(SESSION_NAMES_FILE), _core.SESSION_NAME_MAX_CHARS, after),
+                names=names)
+        return dict(names)
 
 
 def _load_conversation_order():
