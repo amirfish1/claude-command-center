@@ -114,7 +114,21 @@ def adopt(sid, ref, *, auto=False, legacy=None):
 
 def cancel(sid, ref):
     from . import idea_tickets as tickets
-    result = _call(["cancel", sid])
+    # Every continuation shares the ticket's AUTO control, but WT supervision
+    # belongs to one canonical conversation. Resolve it before cancelling so
+    # a stale local handoff cannot target an unbound (or unrelated) session.
+    snapshot = _call(["status"])
+    if not snapshot.get("ok"):
+        return {**snapshot, "ref": ref}
+    bindings = [row for row in snapshot.get("supervisions", [])
+                if row.get("ticket") == ref]
+    if len(bindings) != 1:
+        return {"ok": False, "ref": ref,
+                "error": "WatchTower has no unique takeover binding for this ticket"}
+    target = (bindings[0].get("session") or {}).get("session_id")
+    if not target:
+        return {"ok": False, "ref": ref, "error": "WatchTower takeover session is missing"}
+    result = _call(["cancel", target])
     if result.get("ok"):
         _mirror(ref, result)
         tickets._set_handoff(ref, state="taken_back")
@@ -136,6 +150,9 @@ def answer(sid, ref, text):
 def sync_once(statuses=None):
     """Import fenced legacy records, then refresh presentation from WT truth."""
     from . import idea_tickets as tickets
+    canonical_bindings = {(row.get("ticket"), row.get("supervision_id")): row
+                          for row in (statuses or {}).values()
+                          if row.get("ok") and row.get("supervision_id")}
     # Automatic enrollment originates in WT, so it may have no local handoff
     # record yet. Only mirror sessions already associated with that ticket.
     for sid, result in (statuses or {}).items():
@@ -158,6 +175,14 @@ def sync_once(statuses=None):
         with tickets.handoff_effect_lock(ref):
             tickets._state_cache["key"] = None
             current = (tickets.load_state()["tickets"].get(ref) or {}).get("handoff") or {}
+            # A failed adoption from a continuation may have overwritten the
+            # local session while retaining the original supervision ID. WT
+            # refuses that rebind; restore its identity before any retry,
+            # including cancelled bindings that must never be re-enrolled.
+            canonical = canonical_bindings.get((ref, current.get("supervision_id")))
+            if canonical and (canonical.get("session") or {}).get("session_id") != sid:
+                _mirror(ref, canonical, auto=current.get("auto", False))
+                continue
             if current.get("state") == "unsupported" and not current.get("supervision_id"):
                 # Recover requests incorrectly rejected by the former engine
                 # restriction through the ordinary durable adoption path.

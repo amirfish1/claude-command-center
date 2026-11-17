@@ -48,6 +48,8 @@ class TakeoverBridgeTest(unittest.TestCase):
         self.calls.append(args)
         if args[0] == "answer":
             return 0, "accepted"
+        if args == ["takeover", "status", "--json"]:
+            return 0, json.dumps({"supervisions": [self.response]})
         return 0, json.dumps(self.response)
 
     def handoff(self):
@@ -141,9 +143,66 @@ class TakeoverBridgeTest(unittest.TestCase):
         self.assertEqual(self.calls[-1], ["takeover", "cancel", "session-a", "--json"])
         self.assertEqual(self.handoff()["state"], "taken_back")
 
+    def test_takeback_from_continuation_cancels_canonical_binding(self):
+        tickets.handoff("session-a")
+        tickets._attach("session-b", "DEMO-1", "continued", "session-a")
+        tickets._set_handoff("DEMO-1", session="session-b", adoption_pending=True,
+                             state="waiting", sync_error="failed adoption")
+        self.response.update(state="cancelled", generation=2)
+        self.calls.clear()
+        self.assertTrue(tickets.takeback("session-b")["ok"])
+        self.assertEqual(self.calls, [["takeover", "status", "--json"],
+                                     ["takeover", "cancel", "session-a", "--json"]])
+        self.assertEqual(self.handoff()["session"], "session-a")
+        self.assertFalse(self.handoff()["adoption_pending"])
+        self.assertEqual(self.handoff()["sync_error"], "")
+        self.assertEqual(self.handoff()["state"], "taken_back")
+        bridge.sync_once({"session-a": {**self.response, "ok": True}})
+        self.assertEqual(len(self.calls), 2)  # no adoption, retry or delivery
+        self.assertEqual(self.injects, [])
+
+    def test_takeback_does_not_cancel_another_tickets_binding(self):
+        tickets.handoff("session-a")
+        self.response["ticket"] = "DEMO-2"
+        self.calls.clear()
+        self.assertFalse(tickets.takeback("session-a")["ok"])
+        self.assertEqual(self.calls, [["takeover", "status", "--json"]])
+        self.assertEqual(self.handoff()["state"], "running")
+
+    def test_takeback_status_failure_does_not_guess_from_local_state(self):
+        tickets.handoff("session-a")
+        with mock.patch.object(tickets, "_wt", return_value=(1, "unavailable")) as call:
+            self.assertFalse(tickets.takeback("session-a")["ok"])
+        call.assert_called_once_with(["takeover", "status", "--json"])
+        self.assertEqual(self.handoff()["state"], "running")
+
+    def test_takeback_rejects_ambiguous_binding_without_cancelling(self):
+        tickets.handoff("session-a")
+        snapshot = {"supervisions": [self.response, {**self.response,
+                    "session": {"session_id": "session-b"}}]}
+        with mock.patch.object(tickets, "_wt", return_value=(0, json.dumps(snapshot))) as call:
+            self.assertFalse(tickets.takeback("session-a")["ok"])
+        call.assert_called_once_with(["takeover", "status", "--json"])
+        self.assertEqual(self.handoff()["state"], "running")
+
+    def test_sync_recovers_cancelled_canonical_session_before_adoption_retry(self):
+        tickets.handoff("session-a")
+        tickets._set_handoff("DEMO-1", session="session-b", adoption_pending=True,
+                             state="waiting", sync_error="failed adoption", auto=True)
+        self.response.update(state="cancelled", generation=2)
+        self.calls.clear()
+        bridge.sync_once({"session-a": {**self.response, "ok": True}})
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.handoff()["session"], "session-a")
+        self.assertEqual(self.handoff()["state"], "taken_back")
+        self.assertFalse(self.handoff()["adoption_pending"])
+        self.assertEqual(self.injects, [])
+
     def test_watchtower_mode_list_projection_has_no_effects(self):
         # No rows: nothing to close, and no CCC-side handoff watchdog.
-        self.assertEqual(tickets.autopilot_rows([], now=1000), 0)
+        # Closed-ticket refresh is a separate background job, not supervision.
+        with mock.patch.object(tickets, "_tick_closed_sync"):
+            self.assertEqual(tickets.autopilot_rows([], now=1000), 0)
         self.assertEqual(self.calls, [])
 
     def test_publisher_reuses_native_identity_and_only_linked_work(self):
