@@ -7,6 +7,7 @@ Transactions retain newer variants and update only changed row bodies. The
 small JSON snapshot remains a fallback, not the canonical historical store.
 """
 import hashlib
+import copy
 import json
 import math
 import os
@@ -34,6 +35,7 @@ _INVENTORY_CACHE = ByteBudgetCache(max_bytes=64 << 20, max_entries=2)
 # The attention poll needs classification inputs, not parser/tool histories.
 # Keep the projection transactionally paired with the canonical row digest.
 ATTENTION_VERSION = '1:'
+_ATTENTION_CACHE = ByteBudgetCache(max_bytes=192 << 20, max_entries=32768)
 ATTENTION_FIELDS = (
     'archived', 'backlog_type', 'display_name', 'engine', 'first_message',
     'folder_label', 'folder_path', 'gh_in_progress', 'gh_state', 'has_commit',
@@ -246,11 +248,42 @@ def load_attention(cache_file, key, *, schema_version, build_id):
                               (key, ATTENTION_VERSION)).fetchone()
         if missing:
             return None
-        rows = con.execute('''SELECT a.identity,a.body FROM rows r JOIN session_attention a
+        stat = database_path(cache_file).stat()
+        namespace = (str(database_path(cache_file).resolve()), stat.st_dev, stat.st_ino, key)
+        signatures = con.execute('''SELECT a.identity,a.digest FROM rows r JOIN session_attention a
             ON a.variant=r.variant AND a.identity=r.identity
-            WHERE r.variant=? ORDER BY r.position''', (key,))
-        return {'cached_at': header[0],
-                'rows': [(rid, json.loads(body)) for rid, body in rows]}
+            WHERE r.variant=? ORDER BY r.position''', (key,)).fetchall()
+        cached, missing = {}, []
+        for rid, digest in signatures:
+            row = _ATTENTION_CACHE.get((*namespace, rid, digest))
+            if row is None:
+                missing.append(rid)
+            else:
+                cached[rid] = row
+        # Read bodies only for new/changed rows. Validation, order and these
+        # bodies share one transaction, including across concurrent writers.
+        if missing:
+            bodies = con.execute('''SELECT identity,digest,body FROM session_attention
+                WHERE variant=? AND identity IN (SELECT value FROM json_each(?))''',
+                                 (key, json.dumps(missing)))
+            for rid, digest, body in bodies:
+                row = json.loads(body)
+                value = (row, tuple(name for name, item in row.items()
+                                    if isinstance(item, (dict, list))))
+                cached[rid] = value
+                # Account for decoded containers and keys as well as strings.
+                # Oversized rows remain readable without being retained.
+                _ATTENTION_CACHE.put((*namespace, rid, digest), value, 4 * (len(rid) + len(body)))
+        decoded = []
+        for rid, _ in signatures:
+            row, nested = cached[rid]
+            # Lifecycle overlays and consumer enrichment must never mutate
+            # cached inputs, including nested structured state and labels.
+            result = row.copy()
+            for name in nested:
+                result[name] = copy.deepcopy(row[name])
+            decoded.append((rid, result))
+        return {'cached_at': header[0], 'rows': decoded}
     finally:
         con.close()
 

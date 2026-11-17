@@ -107,3 +107,57 @@ def test_projection_covers_classifier_and_feed_inputs():
                     and node.func.attr == 'get' and node.args
                     and isinstance(node.args[0], ast.Constant)):
                 assert node.args[0].value in store.ATTENTION_FIELDS
+
+
+def test_unchanged_poll_reuses_decode_but_observes_changed_rows(tmp_path, monkeypatch):
+    target, key, cold, _, snapshot = setup_archive(tmp_path, monkeypatch)
+    load = lambda: store.load_attention(target, key, schema_version=snapshot['schema_version'],
+                                        build_id=snapshot['build_id'])
+    expected = load()
+    original = json.loads
+    decoded = []
+
+    def decode(body):
+        decoded.append(body)
+        return original(body)
+
+    monkeypatch.setattr(store.json, 'loads', decode)
+    assert load() == expected
+    assert decoded == []
+    cold[1]['question_text'] = 'Updated question'
+    cold[1]['session_state']['did'] = 'Updated state'
+    snapshot['entries'][key]['cached_at'] += 1
+    store.save(target, snapshot, complete=True)
+    decoded.clear()
+    result = load()
+    assert len(decoded) == 1
+    assert result['rows'][1][1]['question_text'] == 'Updated question'
+    assert result['rows'][1][1]['session_state']['did'] == 'Updated state'
+
+
+@pytest.mark.parametrize('damage', ['digest', 'stamp', 'version'])
+def test_warm_decode_cache_does_not_hide_invalid_projection(tmp_path, monkeypatch, damage):
+    target, key, _, _, snapshot = setup_archive(tmp_path, monkeypatch)
+    load = lambda: store.load_attention(target, key, schema_version=snapshot['schema_version'],
+                                        build_id=snapshot['build_id'])
+    assert load() is not None
+    with sqlite3.connect(store.database_path(target)) as con:
+        if damage == 'digest':
+            con.execute("UPDATE session_attention SET digest='stale'")
+        elif damage == 'stamp':
+            con.execute('UPDATE variants SET cached_at=200')
+        else:
+            con.execute("UPDATE attention_variants SET version='old'")
+    assert load() is None
+
+
+def test_attention_decode_cache_budget_keeps_oversized_rows_readable(tmp_path, monkeypatch):
+    target, key, _, _, snapshot = setup_archive(tmp_path, monkeypatch)
+    cache = store.ByteBudgetCache(max_bytes=1, max_entries=1)
+    monkeypatch.setattr(store, '_ATTENTION_CACHE', cache)
+    first = store.load_attention(target, key, schema_version=snapshot['schema_version'],
+                                 build_id=snapshot['build_id'])
+    second = store.load_attention(target, key, schema_version=snapshot['schema_version'],
+                                  build_id=snapshot['build_id'])
+    assert first == second
+    assert len(cache) == cache.bytes == 0
