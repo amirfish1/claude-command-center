@@ -27632,14 +27632,19 @@
         // Search results must remain discoverable without changing the saved choice.
         if (_hideGroupChatsForSearch) collapsed = false;
         const contentId = 'session-section-' + _allTabView + '-' + key + '-content';
+        // Keep standalone identities available to family deduplication even
+        // while the section's row markup waits for an explicit expansion.
+        const deferredIds = collapsed && rows.length ? escapeAttr(JSON.stringify(
+          _allTabTreeRowsFor(rows).map(item => String(_ultraFreshCurrent(item.card).id)))) : '';
         return '<section class="session-lifecycle-section' + (collapsed ? ' is-collapsed' : '') + '" data-session-section="' + key + '" aria-label="' + label + '">'
           + '<h3 class="session-lifecycle-heading"><button type="button" class="session-lifecycle-toggle" data-role="session-section-toggle" data-storage-key="' + storageKey + '"'
           + ' title="' + hint + '" aria-expanded="' + !collapsed + '" aria-controls="' + contentId + '"><span class="session-lifecycle-dot" aria-hidden="true"></span>'
           + label + '<span class="session-lifecycle-count">' + rows.length + '</span><span class="session-lifecycle-arrow" aria-hidden="true">' + (collapsed ? '▸' : '▾') + '</span></button></h3>'
-          + '<div class="session-lifecycle-content" id="' + contentId + '"' + (collapsed ? ' hidden' : '') + '>'
+          + '<div class="session-lifecycle-content" id="' + contentId + '"' + (collapsed ? ' hidden' : '')
+          + (deferredIds ? ' data-deferred-row-ids="' + deferredIds + '"' : '') + '>'
           // Active is one time-ordered list in every ticket tab; the yellow
           // dot marks Needs You rows without lifting stale ones to the top.
-          + (rows.length ? renderSectionRows(rows, { todayFirst: key === 'active' })
+          + (rows.length ? (collapsed ? '' : renderSectionRows(rows, { todayFirst: key === 'active' }))
             : '<div class="session-lifecycle-empty">' + ({ 'needs-you': 'Nothing needs your attention.', active: 'No active sessions in this view.', finished: 'No finished sessions in this view.', archived: 'No archived sessions in this view.' }[key]) + '</div>')
           + '</div></section>';
       };
@@ -28370,6 +28375,12 @@
         toggle.setAttribute('aria-expanded', String(!collapsed));
         toggle.querySelector('.session-lifecycle-arrow').textContent = collapsed ? '▸' : '▾';
         try { localStorage.setItem(toggle.dataset.storageKey, collapsed ? '1' : '0'); } catch (_) {}
+        if (!collapsed && content.hasAttribute('data-deferred-row-ids')) {
+          renderSidebar(filterConversations($convSearch.value), { force: true });
+          const replacement = Array.from($convList.querySelectorAll('[data-role="session-section-toggle"]'))
+            .find(button => button.dataset.storageKey === toggle.dataset.storageKey && button.checkVisibility());
+          if (replacement) replacement.focus({ preventScroll: true });
+        }
       });
     });
     // Toggle handler for the All tab's Trash section header (CCC-468).
@@ -40175,12 +40186,15 @@
     list.querySelectorAll('.conv-item[data-id]').forEach(el => {
       if (!el.closest('.is-family-nest > .conv-subagent-cluster-body')) outside.add(el.getAttribute('data-id'));
     });
-    const deferredIds = body => {
-      try { return JSON.parse(body.getAttribute('data-deferred-lane-ids') || '[]'); }
+    const deferredIds = (body, attribute = 'data-deferred-lane-ids') => {
+      try { return JSON.parse(body.getAttribute(attribute) || '[]'); }
       catch (_) { return []; }
     };
     list.querySelectorAll('.conv-subagent-cluster:not(.is-family-nest) > .conv-subagent-cluster-body[data-lanes-deferred]').forEach(body => {
       deferredIds(body).forEach(id => outside.add(id));
+    });
+    list.querySelectorAll('.session-lifecycle-content[data-deferred-row-ids]').forEach(body => {
+      deferredIds(body, 'data-deferred-row-ids').forEach(id => outside.add(id));
     });
     nests.forEach(nest => {
       const body = nest.querySelector(':scope > .conv-subagent-cluster-body');

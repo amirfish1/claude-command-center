@@ -37,6 +37,11 @@ test('a nested lane that also has its own row elsewhere is dropped from the nest
         <div class="conv-subagent-cluster-body" data-lanes-deferred="true" data-deferred-lane-ids='["a","b","c"]'></div>
       </div>
       <div class="conv-subagent-cluster"><div class="conv-subagent-cluster-body" data-lanes-deferred="true" data-deferred-lane-ids='["c"]'></div></div>
+      <div class="conv-subagent-cluster is-family-nest" id="section-nest">
+        <button data-role="subagent-cluster-toggle"><span class="conv-subagent-cluster-summary">↳ 2 lanes</span></button>
+        <div class="conv-subagent-cluster-body" data-lanes-deferred="true" data-deferred-lane-ids='["archived","remaining"]'></div>
+      </div>
+      <div class="session-lifecycle-content" hidden data-deferred-row-ids='["archived"]'></div>
     </div>`);
     const res = await page.evaluate(code => {
       (0, eval)(code);
@@ -48,6 +53,7 @@ test('a nested lane that also has its own row elsewhere is dropped from the nest
         wa: list.querySelector('.wa-lanes').firstChild.nodeValue,
         deferredSummary: list.querySelector('#deferred-nest .conv-subagent-cluster-summary').textContent,
         deferredWa: list.querySelector('#deferred-nest .wa-lanes').firstChild.nodeValue,
+        sectionSummary: list.querySelector('#section-nest .conv-subagent-cluster-summary').textContent,
       };
     }, fn('_dedupeFamilyNestRows'));
     assert.deepEqual(res.ids, ['p', 'a', 'b']);
@@ -55,6 +61,7 @@ test('a nested lane that also has its own row elsewhere is dropped from the nest
     assert.equal(res.wa, '↳ 1 ');
     assert.equal(res.deferredSummary, '↳ 1 lane');
     assert.equal(res.deferredWa, '↳ 1 ');
+    assert.equal(res.sectionSummary, '↳ 1 lane', 'deferred sections still own their standalone identities');
   } finally {
     await browser.close();
   }

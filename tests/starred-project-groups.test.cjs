@@ -10,7 +10,7 @@ const marker = '\n})();\n\n/* === Hero: Fleet Pulse === */';
 assert.ok(app.includes(marker));
 const exposed = app.replace('const _renderRow = (c, opts = {}) => {',
   'const _renderRow = (c, opts = {}) => { window.projectGroupRowsBuilt++;').replace(marker, `
-  window.projectGroupTest = {seed(grouping='project', starred=true, tab='alltickets') {
+  window.projectGroupTest = {seed(grouping='project', starred=true, tab='alltickets', withArchive=false, search='') {
     // API fixtures are empty; keep their background refresh from replacing
     // the explicit rows under test while exercising the real list renderer.
     renderArchiveList=()=>renderConversationList(conversationsData);
@@ -18,6 +18,7 @@ const exposed = app.replace('const _renderRow = (c, opts = {}) => {',
     window.CCCNavigation.setTab(tab);
     localStorage.setItem('ccc-archived-grouping',grouping);
     localStorage.setItem('ccc-archive-window','all');
+    document.getElementById('convSearch').value=search;
     const now=Date.now()/1000;
     const row=(id,n,extra={})=>({id,session_id:id,source:'interactive',engine:'claude',
       display_name:'Topic '+n,first_message:'Investigate topic '+n,modified:now-n,
@@ -26,6 +27,7 @@ const exposed = app.replace('const _renderRow = (c, opts = {}) => {',
     const rows=[row('starred-topic',1,{modified:now-500}),row('regular-topic',2),
       row('other-topic',3,{cwd:'/workspace/other',folder_path:'/workspace/other',folder_label_chip:'Other Project'}),
       row('child-lane',4,{parent_session_id:'regular-topic',idea_ticket:{ref:'IDEAS-2',queue:'IDEAS'}})];
+    if(withArchive)Object.assign(rows[2],{archived:true,explicitly_archived:true});
     _todayStars=starred ? {'starred-topic':now} : {};
     conversationsData=rows; archiveData=rows; archiveLoaded=true; archiveDataWindow="all";
     window.projectGroupRowsBuilt=0;
@@ -123,5 +125,23 @@ test('Today stars keep a project together while chronological mode retains its T
     assert.equal(await page.$eval(phoneLanes,el=>el===document.activeElement),true,
       'phone expansion focuses the visible phone control');
     assert.equal(await page.$eval(active+' [data-session-id="child-lane"]',el=>el.checkVisibility()),true);
+    await page.evaluate(()=>projectGroupTest.seed('time',false,'alltickets',true));
+    const archived='[data-session-section="archived"]';
+    const archiveToggle=archived+' [data-role="session-section-toggle"]';
+    assert.equal(await page.$(archived+' [data-session-id="other-topic"]'),null,
+      'a collapsed archive retains data without building hidden rows');
+    assert.equal(await page.$eval(archived+' .session-lifecycle-count',el=>el.textContent),'1');
+    await page.click(archiveToggle);
+    assert.equal(await page.$eval(archived+' [data-session-id="other-topic"]',el=>el.checkVisibility()),true);
+    assert.equal(await page.$eval(archiveToggle,el=>el===document.activeElement),true);
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Enter');
+    assert.equal(await page.$eval(archived+' [data-session-id="other-topic"]',el=>el.checkVisibility()),true);
+    await page.evaluate(()=>projectGroupTest.seed('time',false,'alltickets',true));
+    assert.equal(await page.$eval(archived+' [data-session-id="other-topic"]',el=>el.checkVisibility()),true,
+      'saved archive expansion survives ordinary refresh');
+    await page.click(archiveToggle);
+    await page.evaluate(()=>projectGroupTest.seed('time',false,'alltickets',true,'topic'));
+    assert.equal(await page.$('[data-deferred-row-ids]'),null,'search does not defer matching sections');
   } finally {await browser.close();}
 });
