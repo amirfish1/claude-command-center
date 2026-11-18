@@ -18600,12 +18600,13 @@ def _archive_list_row_template(row, cached=_ARCHIVE_LIST_TEMPLATE_UNREAD, *,
         scalars["last_assistant_preview"] = preview
     source = dict(row)
     # Estimate retained metadata with room for Python containers. Marshal's
-    # builtin encoder avoids JSON escaping on every cold row. These bytes
-    # are only measured, never stored or deserialized; returned JSON and the
-    # cache's byte/entry limits are unchanged. Unusual parser values retain
+    # builtin encoder avoids JSON escaping on every cold row. Version 2 also
+    # skips reference tracking, charging repeated values conservatively.
+    # These bytes are only measured, never stored or deserialized. Returned
+    # JSON and the cache limits are unchanged. Unusual parser values retain
     # the existing JSON/default=str sizing fallback.
     try:
-        encoded_size = len(marshal.dumps(source, 4))
+        encoded_size = len(marshal.dumps(source, 2))
     except (TypeError, ValueError):
         encoded_size = len(_ARCHIVE_LIST_TEMPLATE_ENCODER.encode(source))
     weight = 4 * encoded_size + 2 * sys.getsizeof(source)

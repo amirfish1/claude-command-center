@@ -94,7 +94,7 @@ def test_template_weight_estimates_builtin_metadata_without_json_escaping(monkey
     row = {'session_id': 'unicode', 'display_name': 'Caf\u00e9 \U0001f600',
            'session_state': {'nested': ['\u05d0\u05d1', '\ud800', 3]},
            'parser_only': {'fallback': frozenset(('example',))}}
-    expected = 4 * len(server.marshal.dumps(row, 4)) + 2 * server.sys.getsizeof(row)
+    expected = 4 * len(server.marshal.dumps(row, 2)) + 2 * server.sys.getsizeof(row)
     def no_json(*args, **kwargs):
         raise AssertionError('builtin metadata should not need JSON sizing')
     monkeypatch.setattr(server._ARCHIVE_LIST_TEMPLATE_ENCODER, 'encode', no_json)
