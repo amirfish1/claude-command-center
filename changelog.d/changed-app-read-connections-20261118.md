@@ -1,0 +1,1 @@
+- Reuse HTTP connections for bodyless app and static GETs with framed responses and bounded idle waits, reducing new connection and handler-thread work during app startup. Other routes and methods retain their connection behavior.

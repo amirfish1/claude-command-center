@@ -107,7 +107,8 @@ def test_signal_finishes_inflight_write(running_server, stop_signal):
     assert proc.wait(timeout=10) == 0
 
 
-def test_late_headers_refused_without_executing_write(running_server):
+@pytest.mark.parametrize('reuse_read', [False, True])
+def test_late_headers_refused_without_executing_write(running_server, reuse_read):
     proc, port, state = running_server
     with concurrent.futures.ThreadPoolExecutor() as pool:
         result = pool.submit(post, port)
@@ -115,6 +116,12 @@ def test_late_headers_refused_without_executing_write(running_server):
         # Hold a second accepted connection in header parsing.
         client = socket.create_connection(('127.0.0.1', port), timeout=10)
         try:
+            if reuse_read:
+                client.sendall(b'GET /view/demo HTTP/1.1\r\nHost: localhost\r\n\r\n')
+                response = http.client.HTTPResponse(client)
+                response.begin()
+                assert response.version == 11 and not response.will_close
+                assert json.loads(response.read()) == {'ok': True}
             client.sendall(b'POST /must-not-run HTTP/1.1\r\nHost: localhost\r\n')
             time.sleep(.1)
             proc.terminate()
@@ -130,6 +137,19 @@ def test_late_headers_refused_without_executing_write(running_server):
         assert result.result(timeout=10) == (200, {'saved': True})
     assert (state / 'executed').read_text() == '/save'
     assert proc.wait(timeout=10) == 0
+
+
+def test_idle_reused_read_does_not_hold_shutdown_open(running_server):
+    proc, port, _ = running_server
+    conn = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
+    try:
+        conn.request('GET', '/view/demo')
+        response = conn.getresponse()
+        assert response.read() and response.version == 11 and not response.will_close
+        proc.terminate()
+        assert proc.wait(timeout=3) == 0
+    finally:
+        conn.close()
 
 
 def test_busy_exec_restart_is_cancelled(monkeypatch):
