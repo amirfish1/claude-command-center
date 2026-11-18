@@ -2480,10 +2480,10 @@ def _acp_session_new(harness, cwd, prompt=None, model=None, mode=None, effort=No
         _core._acp_set_config(harness, sid, "model", model)
     if effort:
         if harness == "grok":
-            # Grok advertises effort as sessionConfig options with category
-            # "mode" and ids low/medium/high/xhigh. Best-effort; spawn still
-            # succeeds if the option name is not accepted.
-            _core._acp_set_config(harness, sid, effort, True)
+            # ACP select options take a string value, not a boolean named
+            # after the selected level. Grok otherwise rejects the request
+            # and silently keeps its default (usually high).
+            _core._acp_set_config(harness, sid, "reasoning_effort", effort)
         else:
             # Kimi's ACP "thinking" option: binary on/off on older CLI builds
             # (any non-off value coerces to the model's default effort — a

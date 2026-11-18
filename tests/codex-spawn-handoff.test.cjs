@@ -10,8 +10,8 @@ function fn(name) {
   return source.slice(start, end);
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
-function harness(rows, selected = true) {
-  const card = {id:'spawning-temp', source:'codex', pending_spawn:true};
+function harness(rows, selected = true, source = 'codex') {
+  const card = {id:'spawning-temp', source, pending_spawn:true};
   const calls = [], timers = [];
   const ctx = vm.createContext({
     Date, Map, Array, Object, String,
@@ -65,6 +65,20 @@ test('an accepted Codex UUID binds without waiting for registry or full-list rea
   assert.equal(h.calls.includes('refresh'),false);
   assert.equal(h.ctx.conversationsData[0].id,'new-session');
   assert.equal(h.card.expected_session_id,'new-session');
+});
+
+test('an accepted Grok UUID releases the placeholder without an archive read', () => {
+  const h = harness([], true, 'grok');
+  h.ctx.pendingSpawns.delete('spawn-1');
+  h.ctx.pendingSpawns.set('temp', h.card);
+  h.ctx.adoptPendingSpawnPid('temp', 'grok-session', null, 'grok-session');
+  assert.equal(h.ctx.currentConversation, 'grok-session');
+  assert.equal(h.card.pending_spawn, false);
+  assert.equal(h.card._landedResolved, true);
+  assert.equal(h.ctx.sessionSourceByConv['grok-session'], 'grok');
+  assert.equal(h.ctx.codexSpawnPreviews.size, 0);
+  assert.equal(h.calls.includes('refresh'), false);
+  assert.equal(h.calls.includes('probe'), false);
 });
 
 test('a confirmed background pane can resolve without stealing the selected conversation', async () => {

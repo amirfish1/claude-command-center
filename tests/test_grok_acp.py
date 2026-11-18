@@ -160,7 +160,8 @@ def test_grok_harness_is_registered():
     assert server._acp_harness_enabled("grok") is True
 
 
-def test_session_new_sends_yolo_meta(monkeypatch):
+@pytest.mark.parametrize("effort", [None, "low", "medium", "high", "xhigh"])
+def test_session_new_sends_yolo_meta(monkeypatch, effort):
     captured = {}
     set_configs = []
 
@@ -183,12 +184,12 @@ def test_session_new_sends_yolo_meta(monkeypatch):
     monkeypatch.setattr(server, "_acp_wire_tail_start", lambda *a, **k: None)
     monkeypatch.setattr(server, "_acp_prompt", lambda *a, **k: {"ok": True})
 
-    result = server._acp_session_new("grok", "/tmp/repo", prompt="hi", mode="yolo")
+    result = server._acp_session_new("grok", "/tmp/repo", prompt="hi", mode="yolo", effort=effort)
     assert result["ok"] is True
     assert captured["method"] == "session/new"
     assert captured["params"]["_meta"]["yoloMode"] is True
     assert result["session_id"] == "01a00000-0000-0000-0000-000000000001"
-    assert set_configs == []
+    assert set_configs == ([(("grok", result["session_id"], "reasoning_effort", effort), {})] if effort else [])
 
 
 def test_grok_approval_mode_is_not_sent_as_a_live_config_change(monkeypatch):

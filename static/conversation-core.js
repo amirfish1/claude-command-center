@@ -8531,7 +8531,7 @@
     }
     sharedState.pendingSpawns.delete(tempPid);
     sharedState.pendingSpawns.set(realPid, placeholder);
-    if (placeholder.source === 'codex' && sessionId) {
+    if ((placeholder.source === 'codex' || placeholder.source === 'grok') && sessionId) {
       bindAcceptedCodexSpawn(placeholder, sessionId);
       return placeholder;
     }
@@ -8548,9 +8548,12 @@
     card.expected_session_id = sid;
     card.pending_spawn = false;
     card._landedResolved = true;
-    sharedState.codexSpawnPreviews.set(sid, card);
+    // Grok also returns a usable session UUID in the spawn acknowledgement.
+    // Bind it now: a full archive refresh can take seconds, and the pending
+    // selection itself suppresses periodic polling while we wait for it.
+    if (card.source === 'codex') sharedState.codexSpawnPreviews.set(sid, card);
     sharedState.sessionIdByConv[sid] = sid;
-    sharedState.sessionSourceByConv[sid] = 'codex';
+    sharedState.sessionSourceByConv[sid] = card.source;
     sharedState.sessionCwdByConv[sid] = card.session_cwd || card.spawn_cwd || card.cwd || '';
     sharedState.sessionCwdExistsByConv[sid] = card.session_cwd_exists !== false;
     sharedState.sessionSpawnPidByConv[sid] = card.spawn_pid;
@@ -8562,7 +8565,9 @@
       (0, hostServices.renderArchiveList)(sharedState.$convSearch ? sharedState.$convSearch.value : '', { force: true });
       markSpawnRowPaint(sid);
     }, 0));
-    setTimeout(() => sharedState.codexSpawnPreviews.delete(sid), 3 * 60 * 1000);
+    if (card.source === 'codex') {
+      setTimeout(() => sharedState.codexSpawnPreviews.delete(sid), 3 * 60 * 1000);
+    }
   }
 
   function markSpawnRowPaint(sid) {

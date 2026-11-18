@@ -1,0 +1,1 @@
+- Open accepted Grok sessions immediately instead of waiting on the archive refresh, and apply the selected reasoning effort correctly.
