@@ -19899,10 +19899,28 @@
       const idOf = row => String(row && (row.session_id || row.id) || '');
       const byId = new Map(rows.filter(Boolean).map(row => [idOf(row), row]));
       const saved = new Set();
+      const stringFields = ['id', 'session_id', 'folder_path', 'session_cwd',
+        'first_message', 'display_name', 'ai_title'];
+      const clipped = new Set(['first_message', 'display_name', 'ai_title']);
       for (const row of ordered) {
         if (entries.length >= sharedState.ARCHIVE_SIDEBAR_CACHE_MAX_ROWS) break;
         const firstId = idOf(row);
         if (!firstId || saved.has(firstId)) continue;
+        // Once the preview is nearly full, most remaining rows cannot fit.
+        // These required strings alone bound their JSON size from below;
+        // escaping, other fields and ancestors can only increase it. Skip
+        // impossible rows before projecting/serializing their whole family,
+        // while still considering later smaller rows for the remaining space.
+        let minimum = 2; // braces; omitted commas keep this conservative
+        const remaining = sharedState.ARCHIVE_SIDEBAR_CACHE_MAX_CHARS - chars;
+        for (const key of stringFields) {
+          const value = row[key];
+          if (typeof value === 'string') {
+            minimum += key.length + 5 + (clipped.has(key)
+              ? Math.min(400, value.length) : value.length);
+          }
+        }
+        if (minimum + 1 > remaining) continue;
         // Admit a child with its loaded ancestors as one bounded batch. A
         // busy fleet must not evict the parent and leave an unexplained lane.
         const batch = [], batchSeen = new Set();

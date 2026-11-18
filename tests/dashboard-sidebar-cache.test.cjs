@@ -82,6 +82,21 @@ test('bad, expired, future, oversized and wrong-window caches are ignored', () =
   assert.doesNotThrow(() => c.write([{ id: 'one' }], '7d'));
 });
 
+test('nearly full previews retain clipped titles and later small rows', () => {
+  const { context: c } = harness();
+  c.write([
+    { id: 'filler', folder_path: 'f'.repeat(260800) },
+    { id: 'too-large', folder_path: 'x'.repeat(2000) },
+    { id: 'clipped', first_message: 'p'.repeat(20000), display_name: 't'.repeat(20000) },
+    { id: 'tiny', display_name: '"\\\n☃' },
+  ], '7d');
+  const rows = c.read('7d');
+  assert.deepEqual(Array.from(rows, row => row.id), ['filler', 'clipped', 'tiny']);
+  assert.equal(rows[1].first_message.length, 400);
+  assert.equal(rows[1].display_name.length, 400);
+  assert.equal(rows[2].display_name, '"\\\n☃');
+});
+
 test('writes coalesce after paint and cached rows never claim a complete window', () => {
   const { context: c, idle, paints, storage } = harness();
   c.schedule([{ id: 'old' }], '7d');
