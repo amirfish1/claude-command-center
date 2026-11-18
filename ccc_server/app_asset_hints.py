@@ -1,4 +1,4 @@
-"""Overlap canonical app assets with preparation of a browser's app page."""
+"""Preload canonical app assets without competing with document headers."""
 
 import re
 
@@ -14,7 +14,6 @@ _ASSETS = (
     ("conversation-deferred.js", "script"),
     ("conversation-extensions.css", "style"),
 )
-_FINAL_ASSETS = {"conversation-app.js", "app.css"}
 
 
 class AppAssetHintsMixin:
@@ -33,7 +32,7 @@ class AppAssetHintsMixin:
 def send(handler, app_id, apps_dir, asset_url):
     """Preload assets without delaying the final response's header delivery.
 
-    Navigation metadata excludes clients that may treat 103 as a final reply.
+    Navigation metadata limits speculative loading to browser documents.
     HTTPS proxies can relay the hints over HTTP/2; direct HTTP browsers keep
     their existing HTML preloads. Only installed apps with an agent need them.
     The caller has already applied its proxy and phone access checks.
@@ -50,20 +49,15 @@ def send(handler, app_id, apps_dir, asset_url):
     session = agent.get("session_id") if isinstance(agent, dict) else None
     if not isinstance(session, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", session):
         return False
-    early, final = [], []
+    links = []
     for name, kind in _ASSETS:
         url = asset_url(name)
         if not re.fullmatch(r"/static/" + re.escape(name) + r"\?v=[A-Za-z0-9_.-]{1,128}", url):
             return False
         link = f"<{url}>; rel=preload; as={kind}"
-        (final if name in _FINAL_ASSETS else early).append(link)
-    # Large preloads can fill the shared HTTP/2 connection ahead of the
-    # document's final headers. Start them with those headers instead; the
-    # smaller extension phases still overlap document preparation.
-    handler._ccc_final_asset_hints = tuple(final)
-    # Bypass final-response hooks: this has no body, status accounting, framing
-    # or response timing of its own. The eventual HTML keeps all those hooks.
-    links = "".join(f"Link: {link}\r\n" for link in early)
-    handler.wfile.write(("HTTP/1.1 103 Early Hints\r\n" + links + "\r\n").encode("ascii"))
-    handler.wfile.flush()
+        links.append(link)
+    # Even extension downloads can queue ahead of the document on a shared
+    # HTTP/2 connection. Deliver all preload links with its final headers so
+    # the browser can start them before parsing HTML without delaying it.
+    handler._ccc_final_asset_hints = tuple(links)
     return True
