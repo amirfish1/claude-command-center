@@ -1055,6 +1055,74 @@
       <div class="log-list" id="convList" data-tour="session-list" style="overflow-y:auto;flex:1;min-height:0;max-height:none;">
         <div class="empty-state" style="height:auto;padding:20px;font-size:13px;">Loading...</div>
       </div>
+      <script id="cccArchiveTitlePreview">
+// A bounded title preview can paint before the dashboard controllers initialize.
+(function () {
+  'use strict';
+  const list = document.getElementById('convList');
+  const params = new URLSearchParams(location.search);
+  if (!list || window.self !== window.top || params.has('ccc_app') || params.has('ccc_popout')
+      || params.has('popout') || params.has('ccc_mode')) return;
+  let savedWindow;
+  try {
+    if (localStorage.getItem('ccc-conv-cache') === '0' || localStorage.getItem('ccc-archive-engine-filter')
+      || ['board','flow'].includes(localStorage.getItem('ccc-session-view'))
+      || localStorage.getItem('ccc-kanban-view') === 'true') return;
+    savedWindow = localStorage.getItem('ccc-archive-window');
+  } catch (_) { return; }
+  const windowName = ['8h','1d','7d','all'].includes(savedWindow)
+    ? savedWindow : '7d';
+  let owned = null;
+  function paint(rows, saved = true) {
+    if (!Array.isArray(rows)) return;
+    if (owned && !owned.isConnected) return;
+    if (!owned && list.querySelector('.conv-item')) return;
+    const entries = rows.filter(r => r && typeof r === 'object' && typeof r.id === 'string' && r.id.length > 0 && r.id.length <= 512
+      && !r.trashed && !r.archived && r.source !== 'github_pr' && r.source !== 'backlog').slice(0,8);
+    if (!entries.length) return;
+    const panel = document.createElement('div');
+    panel.dataset.bootPreview = '1';
+    const notice = document.createElement('div');
+    notice.className = 'archive-empty-state';
+    notice.textContent = saved ? 'Saved sessions · updating list…' : 'Recent sessions · loading full archive…';
+    panel.append(notice);
+    for (const row of entries) {
+      const link = document.createElement('a');
+      link.className = 'conv-item';
+      link.style.cssText = 'display:block;padding:0;color:var(--text);text-decoration:none';
+      link.dataset.id = row.id;
+      link.dataset.sessionId = row.session_id || row.id;
+      const url = new URL(location.pathname, location.origin);
+      url.search = new URLSearchParams({ccc_popout:'conversation',conv:row.id,
+        session_id:row.session_id || row.id,source:row.source || 'interactive',
+        repo_path:typeof row.session_cwd === 'string' ? row.session_cwd : '',
+        cwd:typeof row.session_cwd === 'string' ? row.session_cwd : ''}).toString();
+      link.href = url.href;
+      const title = document.createElement('div');
+      title.className = 'wa-row';
+      title.style.cssText = 'display:block;padding:12px;overflow-wrap:anywhere;font-weight:500';
+      title.textContent = String(row.display_name || row.ai_title || row.first_message || row.id).slice(0,160);
+      link.append(title); panel.append(link);
+    }
+    list.replaceChildren(panel); owned = panel;
+    document.getElementById('cccLoadingOverlay')?.classList.add('gone');
+  }
+  try {
+    const raw = localStorage.getItem('ccc-sidebar-snapshot-v1:' + windowName);
+    if (raw && raw.length <= 256 * 1024) {
+      const value = JSON.parse(raw), age = Date.now() - value.savedAt;
+      if (value.version === 1 && value.window === windowName && age >= 0 && age <= 86400000
+          && Array.isArray(value.rows) && value.rows.length <= 500) paint(value.rows);
+    }
+  } catch (_) {}
+  // Share parsing with the normal loader rather than consume its response twice.
+  window.__cccArchiveBootstrap?.promise.then(async response => {
+    if (!response?.ok || response.bodyUsed) return;
+    const body = await (response._cccArchiveParsedBody ||= response.json());
+    paint(body?.conversations, false);
+  }).catch(() => {});
+})();
+      </script>
       <div class="coord-toolbar" id="coordToolbar">
         <span class="coord-count" id="coordCount"></span>
         <button class="coord-btn" id="coordBtn">Coordinate&hellip;</button>
