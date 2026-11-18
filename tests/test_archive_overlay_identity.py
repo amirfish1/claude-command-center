@@ -3,6 +3,7 @@ import server
 
 
 def test_sources_keep_precedence_and_do_not_mutate_the_archive(monkeypatch):
+    monkeypatch.setattr(server, '_ARCHIVE_CLAUDE_REG_CACHE', {'sig': None, 'rows': []})
     base = [{'session_id': 'stored'}]
     native = {'session_id': 'new-native', 'source': 'codex'}
     terminal = {'session_id': 'new-terminal', 'source': 'interactive'}

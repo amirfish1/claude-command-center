@@ -18870,6 +18870,30 @@ _ARCHIVE_CLAUDE_REG_CACHE = {"sig": None, "rows": [], "changed_at": 0.0, "built_
 _ARCHIVE_CLAUDE_REG_LOCK = threading.Lock()
 
 
+def _archive_claude_registry_snapshot():
+    """Read candidate identities with the same launch/exit gate as row builds."""
+    try:
+        sig = SESSIONS_REGISTRY.stat().st_mtime_ns
+    except OSError:
+        return {}
+    now = time.monotonic()
+    cache = _ARCHIVE_CLAUDE_REG_CACHE
+    if (cache.get("registry_sig") == sig
+            and (now - cache.get("registry_changed_at", 0.0) > 5.0
+                 or now - cache.get("registry_built_at", 0.0) < 1.0)):
+        return cache.get("registry", {})
+    if not _ARCHIVE_CLAUDE_REG_LOCK.acquire(blocking=False):
+        return cache.get("registry", {})
+    try:
+        registry = _load_session_registry()
+        if cache.get("registry_sig") != sig:
+            cache["registry_changed_at"] = now
+        cache.update(registry_sig=sig, registry_built_at=now, registry=registry)
+        return registry
+    finally:
+        _ARCHIVE_CLAUDE_REG_LOCK.release()
+
+
 def _archive_claude_registry_rows(*, candidate_ids=None, registry=None):
     """Archive-shaped live registry rows, optionally limited to missing IDs.
 
@@ -18897,6 +18921,11 @@ def _archive_claude_registry_rows(*, candidate_ids=None, registry=None):
         try:
             archived, trashed = _load_conversation_lifecycle_sets()
             source = registry if registry is not None else _load_session_registry()
+            if registry is None:
+                if _ARCHIVE_CLAUDE_REG_CACHE.get("registry_sig") != sig[0]:
+                    _ARCHIVE_CLAUDE_REG_CACHE["registry_changed_at"] = now
+                _ARCHIVE_CLAUDE_REG_CACHE.update(
+                    registry_sig=sig[0], registry_built_at=now, registry=source)
             for sid, meta in source.items():
                 if candidate_ids is not None and sid not in candidate_ids:
                     continue
@@ -18996,7 +19025,7 @@ def _archive_overlay_claude_registry_sessions(rows, *, existing_ids=None):
     existing = _archive_overlay_existing_ids(rows) if existing_ids is None else existing_ids
     try:
         archived, trashed = _load_conversation_lifecycle_sets()
-        registry = _load_session_registry()
+        registry = _archive_claude_registry_snapshot()
         candidates = set(registry) - existing - archived - trashed
         if not candidates:
             return []

@@ -34,14 +34,18 @@ def test_live_terminal_session_overlays_until_real_row_arrives(env):
 
 
 def test_existing_registry_sessions_skip_row_metadata_without_hiding_new_sessions(env, monkeypatch):
-    server, registry, _, reg_dir = env
+    server, registry, calls, reg_dir = env
     built = []
     monkeypatch.setattr(server, '_live_registry_conversation_row',
                         lambda sid, meta, **kw: built.append(sid) or {'session_id': sid})
     assert server._archive_overlay_claude_registry_sessions(
         [{'id': 'term-session'}]) == []
     assert built == [], 'covered sessions must not build launch/repository metadata'
+    for _ in range(20):
+        assert server._archive_overlay_claude_registry_sessions([], existing_ids={'term-session'}) == []
+    assert len(calls) == 1, 'covered polls must keep the directory-change read gate'
     registry['new-terminal'] = {'pid': 4343, 'cwd': str(reg_dir)}
+    (reg_dir / '4343.json').write_text('{}')
     actual = server._archive_overlay_claude_registry_sessions(
         [], existing_ids={'term-session'})
     assert [row['session_id'] for row in actual] == ['new-terminal']
