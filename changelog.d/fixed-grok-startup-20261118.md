@@ -1,1 +1,1 @@
-- Open accepted Grok sessions immediately instead of waiting on the archive refresh, and apply the selected reasoning effort correctly.
+- Keep ACP agents alive after their launching request ends on Linux, open accepted Grok sessions immediately, and apply the selected reasoning effort correctly.

@@ -2324,6 +2324,40 @@ def _acp_authenticate(harness, conn):
     return False
 
 
+def _acp_start_process(argv):
+    """Keep the launching thread alive for the lifetime of the agent.
+
+    Linux parent-death signals follow the thread that created the child.
+    Agents using PR_SET_PDEATHSIG would otherwise die when the HTTP/worker
+    request thread exits, even though the owning CCC process stays alive.
+    """
+    ready = threading.Event()
+    launched = {}
+
+    def own_process():
+        try:
+            launched["proc"] = subprocess.Popen(
+                argv,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                bufsize=1,
+                start_new_session=True,
+            )
+        except OSError:
+            launched["proc"] = None
+        finally:
+            ready.set()
+        proc = launched.get("proc")
+        if proc is not None:
+            proc.wait()
+
+    threading.Thread(target=own_process, daemon=True, name="acp-process-owner").start()
+    ready.wait()
+    return launched.get("proc")
+
+
 def _acp_ensure(harness):
     """Lazily start + initialize the harness's ACP subprocess."""
     cfg = _core._ACP_HARNESSES.get(harness)
@@ -2357,18 +2391,7 @@ def _acp_ensure(harness):
     resolved = _core._acp_resolve_bin(harness)
     proc = None
     if resolved.get("available"):
-        try:
-            proc = subprocess.Popen(
-                [resolved["bin"], *cfg.get("acp_args", ())],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                bufsize=1,
-                start_new_session=True,
-            )
-        except (FileNotFoundError, OSError):
-            proc = None
+        proc = _acp_start_process([resolved["bin"], *cfg.get("acp_args", ())])
     if proc is None:
         reason = resolved.get("reason") or f"could not launch the {cfg.get('label', harness)} CLI"
         with _core._ACP_LOCK:
