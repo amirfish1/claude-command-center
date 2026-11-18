@@ -22316,6 +22316,13 @@
   function _sidebarLaneModel(rows) {
     // One synchronous model must use one set of view preferences. Reading
     // localStorage per row repeats this work across counts and membership.
+    // Counts and pagination share these facts for this synchronous render.
+    // The next model observes changed rows, preferences and live state.
+    const utilityCache = new Map();
+    const isUtility = row => {
+      if (!utilityCache.has(row)) utilityCache.set(row, _isOtherUtilityRow(row));
+      return utilityCache.get(row);
+    };
     const engineFilter = _archiveEngineFilter();
     const windowCutoff = _archiveWindowCutoff();
     const _allTabLaneOverride = (c) => {
@@ -22349,7 +22356,7 @@
       const owner = _wkTicketOwnerSid.get(facts.ticketRef) || '';
       return owner && owner !== _allTabSessionId(c) ? owner : '';
     };
-    const _allTabParentId = (c) => _isOtherUtilityRow(c) ? '' : f2EffectiveParentSessionId(
+    const _allTabParentId = (c) => isUtility(c) ? '' : f2EffectiveParentSessionId(
       _allTabSessionId(c), c && (c.parent_session_id || c.hermes_parent_session_id || continuationParentId(c) || c.continued_from_session_id)
     ) || _wkHelperParentId(c);
     const _allTabById = new Map();
@@ -22453,7 +22460,7 @@
     // Coding rows go to Other while the flag is on.
     const _ideaTicketsOn = ideaTicketsOn();
     const _ideaTicketFor = (c) => {
-      if (_isOtherUtilityRow(c)) return null;
+      if (isUtility(c)) return null;
       const seen = new Set();
       while (c) {
         const id = _allTabSessionId(c);
@@ -22474,7 +22481,7 @@
       return t.queue === 'SMALL-BUGS' ? 'smallbugs' : 'ideas';
     };
     const _allTabLaneFor = (c, seen = new Set()) => {
-      if (_isOtherUtilityRow(c)) return 'other';
+      if (isUtility(c)) return 'other';
       const ticketLane = _ideaTicketLane(c);
       if (ticketLane) return ticketLane;
       const override = _allTabLaneOverride(c);
@@ -22496,8 +22503,13 @@
       && !String(c.folder_path || '').includes('/command-center/scratch')
       && !String(c.slug || '').includes('-claude-command-center-scratch')
       && c.folder_label !== 'scratch';
-    const sessionAllowed = c => baseAllowed(c) && c.source !== 'github_pr'
-      && (classifyKanbanColumn(c) !== 'backlog' || isApprovalAskRow(c));
+    const eligibilityCache = new Map();
+    const sessionAllowed = c => {
+      if (!eligibilityCache.has(c)) eligibilityCache.set(c, baseAllowed(c)
+        && c.source !== 'github_pr'
+        && (classifyKanbanColumn(c) !== 'backlog' || isApprovalAskRow(c)));
+      return eligibilityCache.get(c);
+    };
     const codingCount = rows.filter(c => sessionAllowed(c) && !c.trashed
       && _archiveEngineAllowsRow(c, engineFilter) && laneFor(c) === 'coding').length;
     // This threshold is a property of the full list, not the current page.
@@ -22544,12 +22556,12 @@
       if (cache.has(c)) return cache.get(c);
       if (directMatch(c, tab)) { cache.set(c, true); return true; }
       // Family membership must not pull automatic checks back into All.
-      if (_isOtherUtilityRow(c)) return false;
-      if (c.trashed || !sessionAllowed(c)) return false;
+      if (isUtility(c)) { cache.set(c, false); return false; }
+      if (c.trashed || !sessionAllowed(c)) { cache.set(c, false); return false; }
       // The rendered family also includes lanes attached to an earlier leg
       // of the topic, even when that lane has a different engine or override.
       const parent = _allTabById.get(fold.headOf(rawSpawnParent(c)));
-      if (!parent || parent === c || (seen && seen.has(c))) return false;
+      if (!parent || parent === c || (seen && seen.has(c))) { cache.set(c, false); return false; }
       if (!seen) seen = new Set();
       seen.add(c);
       const included = matches(parent, tab, false, seen);
@@ -22557,7 +22569,7 @@
       return included;
     };
     const parentIds = c => {
-      if (_isOtherUtilityRow(c)) return [];
+      if (isUtility(c)) return [];
       const raw = rawSpawnParent(c);
       return [_allTabParentId(c), raw, fold.headOf(raw), continuationParentId(c)].filter(Boolean);
     };

@@ -18586,9 +18586,10 @@ def _archive_list_row_template(row, cached=_ARCHIVE_LIST_TEMPLATE_UNREAD, *,
             if len(_fields_by_shape) < 128:
                 _fields_by_shape[shape] = fields
     scalars, containers = {}, []
+    container_types = (dict, list)
     for key in fields:
         value = row[key]
-        if isinstance(value, (dict, list)):
+        if isinstance(value, container_types):
             containers.append(key)
         else:
             scalars[key] = value
