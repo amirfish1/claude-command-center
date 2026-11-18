@@ -316,7 +316,7 @@ def test_reader_only_popouts_skip_dashboard_stream_heartbeat_and_subagent_status
     # archive list fetch.
     assert "if (!READER_ONLY_POPOUT) connectDashboardEvents();" in SOURCE
 
-    heartbeat = _function("// Slow heartbeat:", "// Last rows render done by the stuck-render recovery")
+    heartbeat = _function("// Slow heartbeat:", "let _archiveRecoveryRendered =")
     assert "if (!READER_ONLY_POPOUT) setInterval(() => {" in heartbeat
     assert "'[ARCHIVE-DIAG] alive hidden='" in heartbeat
 

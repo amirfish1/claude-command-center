@@ -34,6 +34,14 @@ const exposed = app.replace('function _captureArchiveListScroll(q, $list) {',
       return _convListRenderVersion;
     },
     empty() { archiveData=[]; scrollTestRender('', {force:true, skipRestore:true}); },
+    covered(query='') { return _archiveRecoveryRenderCovers(query); },
+    deferNewRows() {
+      archiveData=archiveData.slice();
+      _renameInProgress=true;
+      try { scrollTestRender('', {force:true, skipRestore:true}); }
+      finally { _renameInProgress=false; }
+      return _archiveRecoveryRenderCovers('');
+    },
     capture() { return _captureArchiveListScroll('', document.getElementById('convList')); }
   };
 ` + marker);
@@ -65,6 +73,8 @@ test('archive refresh captures scroll only for rebuilt rows and retains the visi
     await page.waitForNetworkIdle({idleTime:200});
     await page.evaluate(() => scrollTest.seed());
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await page.evaluate(() => scrollTest.covered()), true, 'normal archive paint must cover the boot continuation');
+    assert.equal(await page.evaluate(() => scrollTest.covered('different query')), false);
     const unchanged = await page.evaluate(() => {
       scrollCaptures=0;
       const version=scrollTest.render();
@@ -90,6 +100,7 @@ test('archive refresh captures scroll only for rebuilt rows and retains the visi
     const after = await page.evaluate(() => scrollTest.capture());
     assert.equal(after.anchorValue, before.anchorValue);
     assert.ok(Math.abs(after.anchorOffset-before.anchorOffset) < 2);
+    assert.equal(await page.evaluate(() => scrollTest.deferNewRows()), false, 'deferred new rows must not earn a paint receipt');
     await page.evaluate(() => { scrollCaptures=0; scrollTest.empty(); });
     assert.equal(await page.evaluate(() => scrollCaptures), 1, 'empty-state replacement retains the capture path');
   } finally { await browser.close(); }

@@ -42675,11 +42675,9 @@
       + ' pause=' + (typeof shouldPauseSidebarRender === 'function' ? shouldPauseSidebarRender() : '?')
       + ' conv=' + String(window.currentConversation || ''));
   }, 60 * 1000);
-  // Last rows render done by the stuck-render recovery: which archiveData
-  // snapshot and which query. On a normal boot the recovery piggybacks on the
-  // in-flight first fetch and paints the rows before setArchiveMode's own
-  // continuation runs, so setArchiveMode can skip its identical render
-  // instead of forcing layout and rebuilding the HTML before the first paint.
+  // Last successful rows render: which archiveData snapshot and query.
+  // Both ordinary refresh and stuck recovery paint before setArchiveMode's
+  // continuation, which can reuse that paint instead of rebuilding its HTML.
   let _archiveRecoveryRendered = conversationInitializers._archiveRecoveryRendered();
   function _archiveRecoveryRenderCovers(query) {
     const q = (query || '').trim().toLowerCase();
@@ -43411,6 +43409,7 @@
       });
     }
     _finishArchiveRender();
+    _archiveRecoveryRendered = { data: archiveData, query: q };
     _markArchiveFirstLoaded();
   }
 
