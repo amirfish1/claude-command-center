@@ -2696,3 +2696,19 @@ def test_native_queue_owner_rejects_ccc_enqueue_without_mutating_memory(monkeypa
     assert result['code'] == 'codex_native_queue_owned'
     assert not server._pending_resume_queue.get(sid)
     assert not (tmp_path / 'pending.json').exists()
+
+
+@pytest.mark.parametrize("version", [-1, 4, 99])
+def test_unknown_claim_schema_is_quarantined_without_replay(monkeypatch, tmp_path, version):
+    from ccc_server import pending_inputs
+    monkeypatch.setattr(server, "PENDING_INPUT_HANDOFF_DIR", tmp_path / "handoffs")
+    claim = {"session_id": "schema-quarantine", "queue_name": "resume",
+             "index": 0, "item": "never-replay-unknown"}
+    assert server._write_pending_input_claim_journal(claim) == "journaled"
+    journal = next((tmp_path / "handoffs" / "claim-recovery").glob("*.json"))
+    payload = json.loads(journal.read_text())
+    payload["version"] = version
+    journal.write_text(json.dumps(payload))
+    assert pending_inputs._validate_pending_claim_journal(journal, payload) is None
+    assert not journal.exists()
+    assert journal.with_suffix(".invalid").exists()

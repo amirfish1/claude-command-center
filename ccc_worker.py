@@ -117,7 +117,6 @@ class WorkerRuntime:
                         "work-graph-v1",
                         "safe-drain-v1",
                         "pending-input-cas-v1",
-                        "codex-managed-recovery-v1",
                         "codex-turn-gate-v1",
                     ],
                 },
@@ -442,7 +441,7 @@ def _adopt_codex_restart_fence(path=None, interval_s=2.0):
     threading.Thread(target=loop, name="codex-restart-fence", daemon=True).start()
 
 
-def serve(path=None, *, managed_control_stdio=False):
+def serve(path=None):
     path = Path(path or socket_path())
     path.parent.mkdir(parents=True, exist_ok=True)
     token = ensure_token(token_path())
@@ -486,10 +485,6 @@ def serve(path=None, *, managed_control_stdio=False):
         f"socket={path} nofile={open_files}",
         flush=True,
     )
-    if managed_control_stdio:
-        from ccc_server.managed_restart_control import serve_stdio
-        threading.Thread(target=serve_stdio, args=(runtime,), daemon=True,
-                         name='ccc-managed-control').start()
     _release_stale_restart_drain(runtime)
     if (
         not runtime.ledger.drain_state().get("enabled")
@@ -559,8 +554,6 @@ def main(argv=None):
     os.umask(0o077)
     parser = argparse.ArgumentParser(description="CCC persistent execution worker")
     parser.add_argument("--socket", help="Unix socket path")
-    parser.add_argument('--managed-control-stdio', action='store_true',
-                        help='fixed observation protocol for a measured root coordinator')
     parser.add_argument(
         "--health", action="store_true",
         help="query the running worker and exit",
@@ -619,7 +612,7 @@ def main(argv=None):
         return 0 if response.get("ok") else 1
     from ccc_server import memory_release
     memory_release.start()
-    serve(args.socket, managed_control_stdio=args.managed_control_stdio)
+    serve(args.socket)
     return 0
 
 

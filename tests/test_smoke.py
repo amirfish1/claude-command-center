@@ -14193,14 +14193,6 @@ class TestRepoContextHelpers(unittest.TestCase):
 
     def test_codex_app_server_prefers_managed_socket(self):
         server = self.server
-        from ccc_server import codex_managed_recovery as recovery
-        # process_identity() reads Linux /proc; use a synthetic identity so the
-        # test runs on macOS too.
-        proc_identity = {"pid": os.getpid(), "start_ticks": 1, "boot_id": "test-boot"}
-        identity = dict(proc_identity, socket_device=1, socket_inode=2,
-                        directory_device=1, directory_inode=3,
-                        binary_sha256=next(iter(recovery.SUPPORTED)), version='0.169.0',
-                        protocol_sha256=next(iter(recovery.SUPPORTED.values()))[1])
 
         class FakeTransport:
             kind = "managed-unix"
@@ -14209,7 +14201,6 @@ class TestRepoContextHelpers(unittest.TestCase):
             def __init__(self):
                 self.sent = []
                 self.sock = object()
-                self.managed_candidate_identity = identity
 
             def alive(self):
                 return True
@@ -14236,7 +14227,6 @@ class TestRepoContextHelpers(unittest.TestCase):
                 with mock.patch.object(server, "_codex_managed_app_server_socket_path", return_value=sock), \
                      mock.patch.object(server, "_connect_codex_managed_app_server", return_value=transport), \
                      mock.patch.object(server, "_codex_app_server_request_to_transport", return_value={"result": {"userAgent": "codex/0.169.0", "data": []}}), \
-                     mock.patch.object(recovery, "observe_peer", return_value=identity) as observe, \
                      mock.patch.object(server.threading, "Thread", FakeThread), \
                      mock.patch.object(server.subprocess, "Popen") as popen:
                     result = server._ensure_codex_app_server()
@@ -14245,9 +14235,6 @@ class TestRepoContextHelpers(unittest.TestCase):
 
         self.assertIs(result, transport)
         self.assertEqual(result.kind, "managed-unix")
-        self.assertEqual(observe.call_count, 2)
-        self.assertFalse(result.managed_recovering)
-        self.assertEqual(result.managed_identity, identity)
         popen.assert_not_called()
 
     def test_codex_app_server_falls_back_to_stdio_when_managed_fails(self):

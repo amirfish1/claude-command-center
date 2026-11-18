@@ -1202,41 +1202,116 @@ class _CodexAppServerTransport:
 
 
 def _read_exact(sock, n):
-    from ccc_server.codex_managed_websocket import read_exact
-    return read_exact(sock, n)
+    chunks = []
+    remaining = n
+    while remaining > 0:
+        chunk = sock.recv(remaining)
+        if not chunk:
+            raise OSError("socket closed")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
 
 
 def _websocket_send_frame(sock, opcode, payload=b"", *, mask=True):
-    from ccc_server.codex_managed_websocket import send_frame
-    return send_frame(sock, opcode, payload, mask=mask)
+    payload = payload or b""
+    first = 0x80 | (opcode & 0x0F)
+    length = len(payload)
+    if length <= 125:
+        header = bytes([first, (0x80 if mask else 0) | length])
+    elif length <= 0xFFFF:
+        header = bytes([first, (0x80 if mask else 0) | 126]) + length.to_bytes(2, "big")
+    else:
+        header = bytes([first, (0x80 if mask else 0) | 127]) + length.to_bytes(8, "big")
+    if not mask:
+        sock.sendall(header + payload)
+        return
+    key = os.urandom(4)
+    masked = bytes(b ^ key[i % 4] for i, b in enumerate(payload))
+    sock.sendall(header + key + masked)
 
 
 def _websocket_send_text(sock, text):
-    from ccc_server.codex_managed_websocket import send_text
-    return send_text(sock, text)
+    _websocket_send_frame(sock, 0x1, str(text).encode("utf-8"), mask=True)
 
 
 def _websocket_recv_text(sock):
-    from ccc_server.codex_managed_websocket import recv_text
-    return recv_text(sock)
+    fragments = []
+    while True:
+        first, second = _read_exact(sock, 2)
+        fin = bool(first & 0x80)
+        opcode = first & 0x0F
+        masked = bool(second & 0x80)
+        length = second & 0x7F
+        if length == 126:
+            length = int.from_bytes(_read_exact(sock, 2), "big")
+        elif length == 127:
+            length = int.from_bytes(_read_exact(sock, 8), "big")
+        mask_key = _read_exact(sock, 4) if masked else b""
+        payload = _read_exact(sock, length) if length else b""
+        if masked and payload:
+            payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
+        if opcode == 0x8:
+            raise OSError("websocket closed")
+        if opcode == 0x9:
+            _websocket_send_frame(sock, 0xA, payload, mask=True)
+            continue
+        if opcode == 0xA:
+            continue
+        if opcode == 0x1:
+            fragments = [payload]
+        elif opcode == 0x0:
+            fragments.append(payload)
+        else:
+            continue
+        if fin:
+            return b"".join(fragments).decode("utf-8", "replace")
 
 
 def _connect_codex_managed_app_server(path):
-    from ccc_server.codex_managed_websocket import connect
-    from ccc_server import codex_managed_recovery as recovery
-    recovery.compatible_writers()
-    before = recovery.socket_path_identity(path)
-    sock = connect(path)
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(10)
     try:
-        identity = recovery.observe_peer(sock, path)
-        if any(identity[k] != value for k, value in before.items()):
-            raise recovery.Refused("managed socket replaced during connect")
-        transport = _core._CodexAppServerTransport("managed-unix", sock=sock)
-        transport.managed_candidate_identity = identity
-        transport.managed_socket_path = str(path)
-        return transport
-    except BaseException:
-        sock.close()
+        sock.connect(str(path))
+        key = base64.b64encode(os.urandom(16)).decode("ascii")
+        request = (
+            "GET / HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            "Sec-WebSocket-Version: 13\r\n"
+            "\r\n"
+        )
+        sock.sendall(request.encode("ascii"))
+        response = b""
+        while b"\r\n\r\n" not in response and len(response) < 16384:
+            chunk = sock.recv(4096)
+            if not chunk:
+                raise OSError("managed app-server closed during websocket handshake")
+            response += chunk
+        header = response.split(b"\r\n\r\n", 1)[0].decode("iso-8859-1", "replace")
+        lines = header.split("\r\n")
+        if not lines or " 101 " not in f" {lines[0]} ":
+            raise OSError("managed app-server did not accept websocket upgrade")
+        accept = ""
+        for line in lines[1:]:
+            name, _, value = line.partition(":")
+            if name.lower() == "sec-websocket-accept":
+                accept = value.strip()
+                break
+        expected = base64.b64encode(hashlib.sha1(
+            (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")
+        ).digest()).decode("ascii")
+        if accept and accept != expected:
+            raise OSError("managed app-server websocket accept key mismatch")
+        sock.settimeout(None)
+        return _core._CodexAppServerTransport("managed-unix", sock=sock)
+    except Exception:
+        try:
+            sock.close()
+        except OSError:
+            pass
         raise
 
 
@@ -2762,8 +2837,7 @@ def _codex_app_server_handle_notification(method, params):
         _codex_telemetry_note_notification(method, params, thread_id, turn_id)
     except Exception:
         pass
-    from ccc_server import codex_managed_recovery as recovery
-    if delivered_user_text and not recovery.tracked_on_transport(thread_id):
+    if delivered_user_text:
         # The app-server's userMessage item is the authoritative delivery ack.
         # Reconcile any durable copy left queued by an unconfirmed/phantom-owner
         # attempt; duplicate prompts remain valid because only one copy is
@@ -2817,10 +2891,6 @@ def _codex_app_server_handle_message(payload, source_transport=None):
             _core._CODEX_APP_SERVER_LOCK.notify_all()
             return
         if "id" in payload:
-            transport = source_transport or _core._CODEX_APP_SERVER_TRANSPORT
-            if transport is not None and transport.kind == "managed-unix":
-                from ccc_server import codex_managed_recovery as recovery
-                recovery.response(transport, payload["id"], payload)
             result = payload.get("result")
             if isinstance(result, dict):
                 thread = result.get("thread")
@@ -3161,8 +3231,6 @@ def _codex_app_server_reader(transport):
                 except json.JSONDecodeError:
                     continue
                 try:
-                    from ccc_server import codex_managed_recovery as recovery
-                    recovery.notification(transport, payload)
                     if codex_client_observe(payload, transport):
                         continue
                     _core._codex_app_server_handle_message(payload, source_transport=transport)
@@ -3173,9 +3241,6 @@ def _codex_app_server_reader(transport):
         exit_reason = f"error:{e!r}"
         raise
     finally:
-        if transport.kind == "managed-unix" and getattr(transport, "managed_identity", None):
-            from ccc_server import codex_managed_recovery as recovery
-            recovery.disconnected(transport)
         codex_client_disconnect(transport)
         _core._app_server_trace("reader-exit", reason=exit_reason,
                           child_pid=getattr(transport.proc, "pid", None))
@@ -3241,11 +3306,6 @@ def _codex_app_server_request_to_transport(
                 # the restart barrier refuses while any is (CCC-250).
                 _CODEX_APP_SERVER_MUTATING_PENDING[req_id] = (method, transport)
             try:
-                from ccc_server import codex_managed_recovery as recovery
-                if transport.kind == "managed-unix":
-                    params = recovery.before_send(transport, method, params, req_id)
-                else:
-                    recovery.protect_stdio(method, params)
                 transport.send_json({
                     "jsonrpc": "2.0",
                     "id": req_id,
@@ -3258,11 +3318,6 @@ def _codex_app_server_request_to_transport(
                     kind="real" if count_as_inflight else "probe",
                     child_pid=getattr(transport.proc, "pid", None),
                 )
-            except recovery.Refused as e:
-                _CODEX_APP_SERVER_MUTATING_PENDING.pop(req_id, None)
-                return {"ok": False, "code": "managed_needs_reconciliation",
-                        "error": str(e), "fallback": "queue", "sent": False,
-                        "ambiguous": e.uncertain}
             except (BrokenPipeError, OSError) as e:
                 send_error = e
                 # A partial write may still have reached the child, so the
@@ -3303,8 +3358,7 @@ def _codex_app_server_request_to_transport(
                 "app-server", "SENDFAIL",
                 f"method={method} id={req_id} send failed: {send_error!r}",
             )
-            return {"ok": False, "error": str(send_error), "fallback": "queue",
-                    "ambiguous": True}
+            return {"ok": False, "error": str(send_error), "fallback": "queue"}
         if exited:
             proc = transport.proc
             exit_code = proc.poll() if proc is not None else None
@@ -3485,10 +3539,7 @@ def _codex_app_server_request(method, params=None, timeout=20, *, _route=True, _
         _route=_route, _null_params=_null_params,
         _expected_generation=_expected_generation,
     )
-    from ccc_server import codex_managed_recovery as recovery
-    managed_thread = (method == "thread/resume" and
-                      recovery.known_thread(str((params or {}).get("threadId") or "")))
-    if method == "thread/resume" and not managed_thread and _codex_error_needs_parent_resume(response):
+    if method == "thread/resume" and _codex_error_needs_parent_resume(response):
         response = _codex_resume_subagent_via_parent(
             params, response, timeout,
             _route=_route, _expected_generation=_expected_generation,
@@ -3702,19 +3753,6 @@ def _codex_app_server_request_once(method, params=None, timeout=20, *, _route=Tr
     response = _core._codex_app_server_request_to_transport(
         transport, method, params=None if _null_params else params, timeout=timeout,
     )
-    if (transport.kind == "managed-unix" and method in ("thread/start", "thread/resume")
-            and isinstance(response.get("result"), dict)):
-        from ccc_server import codex_managed_recovery as recovery
-        thread = response["result"].get("thread")
-        try:
-            if (not isinstance(thread, dict) or not isinstance(thread.get("id"), str)
-                    or not thread["id"] or (method == "thread/resume"
-                        and thread["id"] != params.get("threadId"))):
-                raise recovery.Refused("managed resume/start returned an unexpected thread identity")
-            recovery.track(transport, thread["id"], thread.get("path") or params.get("path"))
-        except OSError as error:
-            return {"ok": False, "code": "managed_needs_reconciliation",
-                    "error": str(error), "ambiguous": True}
     try:
         _codex_app_server_track_thread_health(method, thread_id, response)
     except Exception:
@@ -4385,27 +4423,9 @@ def _ensure_codex_app_server(*, allow_stdio=True):
                 f"managed app-server failed initialize {_CODEX_MANAGED_MAX_FAILS}x; "
                 f"skipping it for {int(_codex_managed_cooldown_s())}s and using stdio",
             )
-        if init.get("result") is not None and kind == "managed-unix":
-            from ccc_server import codex_managed_recovery as recovery
-            try:
-                identity = recovery.observe_peer(transport.sock, arg)
-                if identity != transport.managed_candidate_identity:
-                    raise recovery.Refused("managed identity changed during initialize")
-                recovery.verify_initialize(identity, init)
-                transport.send_json({"jsonrpc": "2.0", "method": "initialized", "params": {}})
-                recovery.connected(transport, identity)
-                with recovery.recovery_reads():
-                    recovery.reattach(transport, lambda method, params, timeout:
-                        _core._codex_app_server_request_to_transport(
-                            transport, method, params, timeout=timeout))
-                if recovery.observe_peer(transport.sock, arg) != identity:
-                    raise recovery.Refused("managed identity changed during recovery")
-            except (OSError, ValueError, TypeError):
-                init = {"error": "managed identity/recovery is unproven"}
         if init.get("result") is not None:
             try:
-                if kind != "managed-unix":
-                    transport.send_json({"jsonrpc": "2.0", "method": "initialized", "params": {}})
+                transport.send_json({"jsonrpc": "2.0", "method": "initialized", "params": {}})
             except (BrokenPipeError, OSError):
                 pass
             with _core._CODEX_APP_SERVER_LOCK:
@@ -5964,8 +5984,6 @@ def _codex_unsubscribe_idle_thread(session_id):
         # Recheck on the wire, under the same mutex as resume -> turn/start.
         # Do not start a replacement transport solely to release an old one.
         transport = _core._CODEX_APP_SERVER_TRANSPORT
-        if transport is not None and transport.kind == "managed-unix":
-            return False  # Disconnect/restart must never become unsubscribe.
         if transport is None or transport is _CODEX_IDLE_UNSUBSCRIBE_UNSUPPORTED_TRANSPORT:
             return False
         response = _core._codex_app_server_request_to_transport(
@@ -5999,9 +6017,6 @@ def _codex_unsubscribe_idle_thread(session_id):
 
 def _schedule_codex_idle_unsubscribe(session_id):
     """Run outside the notification reader, which must receive RPC replies."""
-    transport = _core._CODEX_APP_SERVER_TRANSPORT
-    if transport is not None and transport.kind == "managed-unix":
-        return
     with _core._CODEX_APP_SERVER_LOCK:
         if session_id in _CODEX_IDLE_UNSUBSCRIBE_PENDING:
             return

@@ -1,1 +1,0 @@
-- Verify managed Codex daemon identity and preserve uncertain input handoffs across reconnects; refuse unsafe replay and duplicate writers.

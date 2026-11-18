@@ -955,6 +955,18 @@ class RestartMergedBodyTests(unittest.TestCase):
             server.CommandCenterHandler.do_POST(handler)
         return handler, precheck, kick, schedule, caller, protected
 
+    def test_legacy_managed_route_refuses_without_lifecycle_actions(self):
+        handler, precheck, kick, schedule, caller, protected = self._request(
+            "/api/restart/managed", {"allow_codex_interrupt": True})
+        precheck.assert_not_called()
+        kick.assert_not_called()
+        schedule.assert_not_called()
+        payload, status = handler.send_json.call_args.args
+        self.assertEqual(status, 409)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["code"], "codex_restart_pending")
+        self.assertEqual(payload["fallback"], "queue")
+
     def test_combined_restart_reads_override_and_audit_body_once(self):
         payload = {"routine": True, "allow_codex_interrupt": True,
                    "audit_caller": {"source": "fixture"}}

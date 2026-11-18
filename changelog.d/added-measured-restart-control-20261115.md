@@ -1,1 +1,0 @@
-Add an explicit root-accepted, measured restart control path that keeps replacement admission stopped until exact runtime proofs and initial/final process identities pass. Existing restart behavior remains conservative when acceptance is absent.

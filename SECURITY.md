@@ -180,3 +180,8 @@ Read-aloud uses the browser voice for English and the device voice as fallback.
 Version 7 removes the server speech-generation (`/api/free-runtime/tts*`) and
 offline voice installation (`/api/local-speech/*`) endpoints. Dictation and
 live conversation APIs are unchanged.
+
+The legacy `POST /api/restart/managed` route is a refusal-only compatibility
+endpoint. It cannot launch an execution artifact, stop a daemon, or grant
+restart authority. The normal worker restart gate still refuses loaded or
+active Codex threads.

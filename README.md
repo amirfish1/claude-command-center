@@ -348,3 +348,8 @@ The `gh` and Vercel CLIs provide optional integrations.
 
 [How-to guides for coding agent notifications and bug reports](docs/guides/README.md)
 Version 7 removes `/api/free-runtime/tts*` and `/api/local-speech/*`; read-aloud uses browser/device voices.
+
+The experimental managed-restart controller is unavailable. Its legacy
+`POST /api/restart/managed` endpoint returns a compatibility refusal (409)
+without launching a controller. Use the guarded worker restart command;
+loaded or active Codex threads continue to prevent restart.

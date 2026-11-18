@@ -1,1 +1,0 @@
-- Preserve initial managed Codex notifications received with the WebSocket upgrade, validate the upgrade proof, and reject malformed or oversized frames.

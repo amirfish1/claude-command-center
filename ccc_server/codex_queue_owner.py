@@ -53,9 +53,6 @@ def release_native_queue(thread_id, read_native_queue):
                 return
             if _inflight_file(thread_id).exists():
                 raise ValueError("A Codex queue action is pending or unconfirmed; keep using the Codex queue")
-            from ccc_server import codex_managed_recovery as recovery
-            if recovery.known_thread(thread_id) and _core._pending_input_recovery_blocked(thread_id):
-                raise ValueError("An uncertain managed input keeps native queue ownership")
         result = read_native_queue()
         if not result.get("ok"):
             raise ValueError("Cannot verify the Codex queue; queue ownership was kept")

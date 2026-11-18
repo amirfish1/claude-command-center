@@ -10,6 +10,8 @@ these calls does nothing.
 
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
 import os
 import sys
 import threading
@@ -29,11 +31,8 @@ def _load_libc():
     if not _libc_loaded:
         _libc_loaded = True
         try:
-            # Optional optimization: restricted runtimes can forbid dynamic
-            # native loading, even when the rest of the worker is supported.
-            import ctypes
             _libc = ctypes.CDLL(None)
-        except (ImportError, OSError, RuntimeError):
+        except OSError:
             _libc = None
     return _libc
 
@@ -59,7 +58,6 @@ def release_freed_memory():
         return True
     relief = getattr(libc, "malloc_zone_pressure_relief", None)
     if relief is not None and sys.platform == "darwin":
-        import ctypes
         relief.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
         relief.restype = ctypes.c_size_t
         relief(None, 0)
