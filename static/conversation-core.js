@@ -7559,17 +7559,26 @@
 
   function syncRowQuickActions(sid) {
     const selector = rowActionSelector(sid);
-    // Measure every row before the loop writes: a read after each row's write
-    // forced a layout per row, ~1s of a busy open (CCC-143).
+    // Only transcript checks consume visibility. Ordinary action/feedback
+    // updates must not force layout of a freshly rebuilt sidebar. Keep all
+    // necessary reads ahead of the writes, including mixed row batches.
     const rows = Array.from(document.querySelectorAll(selector));
-    const rects = rows.map(row => row.getBoundingClientRect());
-    rows.forEach((row, rowIndex) => {
-      const rect = rects[rowIndex];
-      if (rect.width && rect.height && rect.bottom > 0 && rect.top < innerHeight) loadRowDecisionReply(row);
-      if (rect.width && rect.height && rect.bottom > 0 && rect.top < innerHeight
-          && !sharedState._rowQuickActionSending.has(row.dataset.sessionId) && sharedState._rowInvestigationChecksInFlight < 4) {
+    const checks = rows.map(row => {
+      let candidate = null;
+      if (!sharedState._rowQuickActionSending.has(row.dataset.sessionId)
+          && sharedState._rowInvestigationChecksInFlight < 4) {
         const base = _ultraFreshRow(row.dataset.sessionId);
-        const candidate = base && rowQuickActionSource(_ultraFreshCurrent(base), true);
+        candidate = base && rowQuickActionSource(_ultraFreshCurrent(base), true);
+      }
+      const needsReply = innerWidth <= 1200 && !!row.querySelector('.wa-decision-reply');
+      return { candidate, rect: needsReply || candidate?.investigation ? row.getBoundingClientRect() : null };
+    });
+    rows.forEach((row, rowIndex) => {
+      const { rect, candidate } = checks[rowIndex];
+      const visible = rect && rect.width && rect.height && rect.bottom > 0 && rect.top < innerHeight;
+      if (visible) loadRowDecisionReply(row);
+      if (visible
+          && !sharedState._rowQuickActionSending.has(row.dataset.sessionId) && sharedState._rowInvestigationChecksInFlight < 4) {
         if (candidate?.investigation) {
           const check = sharedState._rowInvestigationChecks.get(candidate.sid);
           if (!check || check.key !== candidate.key || (!check.pending && check.until <= Date.now())) {
