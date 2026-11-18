@@ -23,6 +23,8 @@ the child exits when its parent goes away.
   (MEMORY-20); the dashboard re-reads vectors only when ``semb`` changed.
 * daily throughput: ``throughput_ticket_counts`` reads and aggregates all
   queues here, returning just the four count fields to the dashboard.
+* worker fingerprint: ``worker_closure`` walks imports for the diagnostic
+  staleness comparison without occupying the dashboard's GIL.
 
 Fallback: ``CCC_BG_HELPER=0`` disables the child. Any connect, timeout or
 protocol error runs the old in-process path, so behaviour degrades to what
@@ -327,6 +329,10 @@ class _Child:
         return {"ok": True, "data": usage_stats._throughput_daily_ticket_counts_local(
             float(req["start_epoch"]), float(req["end_epoch"]))}
 
+    def worker_closure(self, req):
+        from ccc_server.import_closure import compute_closure
+        return {"ok": True, "hash": compute_closure(self.server._install_dir())["hash"]}
+
     # ship-graph-warm -----------------------------------------------------
     def ship_sync(self, req):
         from ccc_server import ship_graph
@@ -349,6 +355,7 @@ class _Child:
                   "live_activity": self.live_activity,
                   "system_health": self.system_health,
                   "throughput_ticket_counts": self.throughput_ticket_counts,
+                  "worker_closure": self.worker_closure,
                   "ping": lambda r: {"ok": True}}.get(op)
             try:
                 reply = fn(req) if fn else {"ok": False, "error": "unknown op"}

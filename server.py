@@ -21288,8 +21288,12 @@ def _restart_stale_worker():
     # Shadow metric (slice 2): would the import-closure fingerprint have
     # restarted? Logged only; the decision above still acts on the old hash.
     try:
+        from ccc_server import bg_helper
         from ccc_server.import_closure import compute_closure as _closure
-        new_hash = _closure(_install_dir())["hash"]
+        # A cold import walk takes seconds of Python CPU. Reuse the warmer
+        # process and its signature cache; older/disabled helpers fall back.
+        reply = bg_helper.call("worker_closure")
+        new_hash = reply["hash"] if reply is not None else _closure(_install_dir())["hash"]
         loaded_closure = worker.get("worker_closure_hash") or ""
         new_stale = bool(loaded_closure) and loaded_closure != new_hash
         _log_activity(
