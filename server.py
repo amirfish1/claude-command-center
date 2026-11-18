@@ -32111,6 +32111,9 @@ class CommandCenterHandler(ReadKeepAliveMixin, ResponseTimingMixin, http.server.
             app_id = query.get("ccc_app", [""])[0]
             app_shell = bool(app_id and app_id not in ("sessions", "queues")
                              and not query.get("ccc_popout") and not query.get("popout"))
+            if app_shell:
+                from ccc_server.app_asset_hints import send as send_app_asset_hints
+                send_app_asset_hints(self, app_id, USER_APPS_DIR, _static_asset_url)
             if app_shell or app_embed:
                 prepared = _conv_reader.forward_page("/", parsed.query,
                                                     self.headers.get("Accept-Encoding", ""))
