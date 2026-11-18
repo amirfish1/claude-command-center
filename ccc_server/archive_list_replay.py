@@ -5,10 +5,53 @@
 Entries contain only immutable bytes and offsets. Decoding on replay gives
 ticket processing its own mutable rows without reprojecting the archive.
 """
+import hashlib
+import io
 import json
 import pickle
 import struct
 import zlib
+
+from ccc_server.bounded_cache import ByteBudgetCache
+
+
+# Snapshot versions change when only a few rows change. Keep small encoded
+# runs reusable across those versions, bounded independently of full bodies.
+_RUN_CACHE = ByteBudgetCache(32 * 1024 * 1024, 512)
+_RUN_ROWS = 64
+
+
+class _GuardPickler(pickle.Pickler):
+    def reducer_override(self, value):
+        # Only the built-in JSON containers/scalars use pickle's fast paths.
+        # Custom reducers must not hide a JSON-visible mutation in the guard.
+        raise TypeError('custom values are not encoding cache guards')
+
+
+def _encoded_run(rows):
+    try:
+        buffer = io.BytesIO()
+        _GuardPickler(buffer, protocol=pickle.HIGHEST_PROTOCOL).dump(rows)
+        guard = buffer.getvalue()
+    except (TypeError, pickle.PicklingError):
+        raw = json.dumps(rows).encode()[1:-1]
+        return raw, _deflate_fragment(raw)
+    key = hashlib.sha256(guard).digest()
+    entry = _RUN_CACHE.get(key)
+    if entry is not None and entry[0] == guard:
+        return entry[1], entry[2]
+    raw = json.dumps(rows).encode()[1:-1]
+    compressed = _deflate_fragment(raw)
+    _RUN_CACHE.put(key, (guard, raw, compressed),
+                   len(guard) + len(raw) + len(compressed) + 512)
+    return raw, compressed
+
+
+class _EncodedRows(bytes):
+    def __new__(cls, raw, fixed):
+        result = super().__new__(cls, raw)
+        result.fixed = fixed
+        return result
 
 
 class TicketContextEntry(tuple):
@@ -73,8 +116,9 @@ def encode_payload(payload):
 
 
 def encode_rows(rows, overlay_ids):
-    """Encode archive runs in bulk, recording only overlay row offsets."""
-    chunks, spans = [], []
+    """Reuse immutable archive chunks, recording only overlay row offsets."""
+    chunks, spans, fixed = [], [], []
+    pending = [_deflate_fragment(b'[')]
     offset = 1  # opening bracket
     index = 0
     while index < len(rows):
@@ -83,19 +127,30 @@ def encode_rows(rows, overlay_ids):
         overlay = sid in overlay_ids
         index += 1
         if not overlay:
-            while index < len(rows):
+            while index < len(rows) and index - start < _RUN_ROWS:
                 sid = str(rows[index].get('session_id') or rows[index].get('id') or '')
                 if sid in overlay_ids:
                     break
                 index += 1
-        raw = json.dumps(rows[start:index]).encode()[1:-1]
+        if overlay:
+            raw = json.dumps(rows[start:index]).encode()[1:-1]
+        else:
+            raw, compressed = _encoded_run(rows[start:index])
         if chunks:
             offset += 2  # comma and space
+            pending.append(_deflate_fragment(b', '))
         if overlay:
             spans.append((start, offset, offset + len(raw)))
+            fixed.append(b''.join(pending))
+            pending = []
+        else:
+            pending.append(compressed)
         chunks.append(raw)
         offset += len(raw)
-    return b''.join((b'[', b', '.join(chunks), b']')), tuple(spans)
+    pending.append(_deflate_fragment(b']'))
+    fixed.append(b''.join(pending))
+    raw = b''.join((b'[', b', '.join(chunks), b']'))
+    return _EncodedRows(raw, tuple(fixed)), tuple(spans)
 
 
 def replay_rows(entry, overlays, *, overlay_order=None):
@@ -145,6 +200,8 @@ def encode_replay(entry, rows):
 
 def compressed_entry(raw, spans):
     """Keep immutable DEFLATE fragments for archive runs, not mutable rows."""
+    if isinstance(raw, _EncodedRows):
+        return bytes(raw), spans, raw.fixed
     fixed, offset = [], 0
     for _, start, end in spans:
         fixed.append(_deflate_fragment(raw[offset:start]))

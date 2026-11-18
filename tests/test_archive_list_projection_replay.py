@@ -266,6 +266,62 @@ def test_offsets_cover_empty_interleaved_and_multibyte_runs():
         assert replay.encode_replay((raw, spans), rows) == raw
 
 
+def test_encoding_chunks_reuse_only_exact_projected_values(monkeypatch):
+    cache = server.ByteBudgetCache(1 << 22, 512)
+    monkeypatch.setattr(replay, '_RUN_CACHE', cache)
+    rows = [{'id': str(i), 'title': 'שלום', 'nested': {'values': [i, None, False]}}
+            for i in range(150)]
+    overlays = {'65', '149'}
+
+    def check(current):
+        raw, spans = replay.encode_rows(current, overlays)
+        assert raw == json.dumps(current).encode()
+        entry = replay.compressed_entry(raw, spans)
+        encoded = replay.compress_replay(entry, current)
+        assert zlib.decompress(encoded + b'\x03\x00', -15) == raw
+        return entry
+
+    first = check(rows)
+    count = len(cache)
+    check(copy.deepcopy(rows))
+    assert len(cache) == count, 'new row objects with the same values reuse chunks'
+    rows[70]['nested']['values'][1] = 'changed in place'
+    second = check(rows)
+    assert len(cache) == count + 1, 'only the changed archive chunk is encoded'
+    assert first[2][0] == second[2][0]
+    rows[65]['title'] = 'changed overlay'
+    check(rows)
+    assert len(cache) == count + 1, 'live slots never enter the archive run cache'
+    rows[70]['nested']['added'] = None
+    check(rows)
+    rows[70]['nested'].pop('added')
+    check(rows)
+    check(list(reversed(rows)))
+
+
+def test_encoding_chunk_budget_and_custom_json_values(monkeypatch):
+    cache = server.ByteBudgetCache(1, 1)
+    monkeypatch.setattr(replay, '_RUN_CACHE', cache)
+    rows = [{'id': 'archive', 'state': {'values': (1, 2), 'keys': {1: 'one'}}}]
+    for _ in range(2):
+        raw, spans = replay.encode_rows(rows, set())
+        assert raw == json.dumps(rows).encode()
+        assert replay.replay_rows(replay.compressed_entry(raw, spans), {}) == json.loads(raw)
+    assert len(cache) == 0 and cache.bytes == 0
+
+    class CustomDict(dict):
+        def __reduce__(self):
+            return dict, ()  # does not describe its JSON-visible contents
+
+    monkeypatch.setattr(replay, '_RUN_CACHE', server.ByteBudgetCache(1 << 20, 10))
+    rows[0]['state'] = CustomDict(value=1)
+    first, _ = replay.encode_rows(rows, set())
+    rows[0]['state']['value'] = 2
+    second, _ = replay.encode_rows(rows, set())
+    assert first != second and second == json.dumps(rows).encode()
+    assert len(replay._RUN_CACHE) == 0
+
+
 def test_compressed_runs_preserve_json_and_fresh_overlay_and_envelope():
     for rows in ([], [{'id': 'a'}], [{'id': 'live'}],
                  [{'id': 'a'}, {'id': 'live', 'title': 'שלום'},
