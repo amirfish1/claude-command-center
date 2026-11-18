@@ -33,7 +33,7 @@ def _open_url(home: Path) -> str:
     """Source install.sh under an isolated HOME and ask which URL it opens."""
     return subprocess.run(
         ["bash", "-c", 'source "$1" && dashboard_open_url', "_", str(INSTALL_SH)],
-        env={**os.environ, "HOME": str(home)},
+        env={**os.environ, "HOME": str(home), "PORT": "8090"},
         capture_output=True, text=True, check=True,
     ).stdout.strip()
 
