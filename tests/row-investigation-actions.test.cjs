@@ -143,7 +143,7 @@ test('continuation chips render on desktop and phone, reject stale clicks and se
         const before = button.getBoundingClientRect().toJSON();
         _rowInvestigationChecks.get(row.session_id).until = 0;
         syncActions();
-        await new Promise(requestAnimationFrame);
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         const retained = document.querySelector(host + ' .conv-quick-action') === button;
         const during = button.getBoundingClientRect().toJSON();
         release();
@@ -162,6 +162,7 @@ test('continuation chips render on desktop and phone, reject stale clicks and se
       window.fetch = async () => ({ok:false});
       _rowInvestigationChecks.get(row.session_id).until = 0;
       syncActions();
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       await _rowInvestigationChecks.get(row.session_id).pending;
       syncActions();
       window.fetch = savedFetch;

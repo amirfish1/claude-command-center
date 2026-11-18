@@ -7557,11 +7557,13 @@
     });
   }
 
-  function syncRowQuickActions(sid) {
+  function syncRowQuickActions(sid, visibilityOnly = false) {
     const selector = rowActionSelector(sid);
     // Only transcript checks consume visibility. Ordinary action/feedback
     // updates must not force layout of a freshly rebuilt sidebar. Keep all
     // necessary reads ahead of the writes, including mixed row batches.
+    // Transcript eligibility reads wait until the new rows have painted;
+    // action controls still update synchronously, and clicks revalidate.
     const rows = Array.from(document.querySelectorAll(selector));
     // A bulk repaint used to scan the full archive up to three times per
     // mounted row. Index once for this synchronous update; keeping the first
@@ -7584,9 +7586,11 @@
           && sharedState._rowInvestigationChecksInFlight < 4) {
         const base = rowFor(row.dataset.sessionId);
         candidate = base && rowQuickActionSource(_ultraFreshCurrent(base), true);
+        const check = candidate && sharedState._rowInvestigationChecks.get(candidate.sid);
+        if (check && check.key === candidate.key && (check.pending || check.until > Date.now())) candidate = null;
       }
       const needsReply = innerWidth <= 1200 && !!row.querySelector('.wa-decision-reply');
-      return { candidate, rect: needsReply || candidate?.investigation ? row.getBoundingClientRect() : null };
+      return { candidate, needsReply, rect: visibilityOnly && (needsReply || candidate?.investigation) ? row.getBoundingClientRect() : null };
     });
     rows.forEach((row, rowIndex) => {
       const { rect, candidate } = checks[rowIndex];
@@ -7601,6 +7605,7 @@
           }
         }
       }
+      if (visibilityOnly) return;
       const base = rowFor(row.dataset.sessionId);
       const source = base ? rowQuickActionSource(_ultraFreshCurrent(base)) : null;
       const feedback = sharedState._rowQuickActionFeedback.get(row.dataset.sessionId);
@@ -7625,6 +7630,13 @@
         return;
       }
       const outcome = row.querySelector('.conv-outcome.is-next, .conv-outcome.is-plan');
+      const prior = candidate?.investigation && sharedState._rowInvestigationChecks.get(candidate.sid);
+      if (!source && outcome && prior?.key === candidate?.key && prior?.idle === true
+          && row.querySelector('.conv-quick-action-slot')?.dataset.quickActionKey === candidate.key) {
+        // Preserve an existing confirmation while its visible-row refresh is
+        // queued. This never creates a chip or authorizes its click to send.
+        return;
+      }
       if (!source || !outcome) {
         row.querySelectorAll('.conv-quick-action-slot').forEach(slot => slot.remove());
         return;
@@ -7641,7 +7653,12 @@
         paintRowQuickAction(slot, source);
       });
     });
-    syncRowPopouts(sid, rowFor);
+    if (!visibilityOnly) {
+      syncRowPopouts(sid, rowFor);
+      if (checks.some(({candidate, needsReply}) => candidate?.investigation || needsReply)) {
+        requestAnimationFrame(() => requestAnimationFrame(() => syncRowQuickActions(sid, true)));
+      }
+    }
   }
 
   function _compactRunActive() {
