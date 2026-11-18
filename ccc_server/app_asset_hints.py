@@ -5,6 +5,17 @@ import re
 from . import app_routines
 
 
+# These bundles are all consumed by the canonical conversation page. Hint the
+# extension phases too: a preloaded renderer still waits for their downloads
+# before its normal initialization can finish. Hints never execute scripts.
+_ASSETS = (
+    ("conversation-app.js", "script"), ("app.css", "style"),
+    ("conversation-extensions.js", "script"),
+    ("conversation-deferred.js", "script"),
+    ("conversation-extensions.css", "style"),
+)
+
+
 def send(handler, app_id, apps_dir, asset_url):
     """Send one informational response; leave the final response untouched.
 
@@ -26,7 +37,7 @@ def send(handler, app_id, apps_dir, asset_url):
     if not isinstance(session, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", session):
         return False
     links = []
-    for name, kind in (("conversation-app.js", "script"), ("app.css", "style")):
+    for name, kind in _ASSETS:
         url = asset_url(name)
         if not re.fullmatch(r"/static/" + re.escape(name) + r"\?v=[A-Za-z0-9_.-]{1,128}", url):
             return False

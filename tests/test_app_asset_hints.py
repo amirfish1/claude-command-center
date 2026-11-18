@@ -60,6 +60,32 @@ def test_fixed_asset_urls_cannot_inject_headers_and_http10_is_unchanged(apps):
     assert not handler.wfile.getvalue()
 
 
+def test_hints_match_current_canonical_bundles_and_validate_all_before_writing(apps):
+    from pathlib import Path
+    from ccc_server.app_embed import conversation_page
+    from ccc_server.app_asset_hints import _ASSETS
+    from ccc_server.conversation_assets import ConversationScript
+    static = Path(__file__).resolve().parents[1] / 'static'
+    html = conversation_page((static / 'index.html').read_text())
+    handler = SimpleNamespace(request_version="HTTP/1.1", headers=HEADERS, wfile=io.BytesIO())
+
+    def current_url(name):
+        version = ConversationScript(static, name).metadata()[0] if name.startswith('conversation-') else 'current'
+        return f'/static/{name}?v={version}'
+
+    assert send(handler, 'example', apps, current_url)
+    hints = handler.wfile.getvalue().decode()
+    assert len(_ASSETS) == 5
+    for name, kind in _ASSETS:
+        assert f'Link: <{current_url(name)}>; rel=preload; as={kind}\r\n' in hints
+        assert f'/{name}"' in html
+    # A bad last URL must not leave a partial informational response behind.
+    handler.wfile = io.BytesIO()
+    assert not send(handler, 'example', apps, lambda name:
+                    current_url(name) if name != _ASSETS[-1][0] else '/static/other.css?v=current')
+    assert not handler.wfile.getvalue()
+
+
 def test_dashboard_route_keeps_canonical_final_html_after_hints(apps, monkeypatch):
     from tests.test_static_asset_caching import _get, _server
     server = _server()
@@ -105,6 +131,9 @@ def test_real_connection_sees_hints_before_page_and_reuses_final_framing(apps):
             assert stream.readline() == b'HTTP/1.1 103 Early Hints\r\n'
             assert stream.readline() == b'Link: </static/conversation-app.js?v=current>; rel=preload; as=script\r\n'
             assert stream.readline() == b'Link: </static/app.css?v=current>; rel=preload; as=style\r\n'
+            assert stream.readline() == b'Link: </static/conversation-extensions.js?v=current>; rel=preload; as=script\r\n'
+            assert stream.readline() == b'Link: </static/conversation-deferred.js?v=current>; rel=preload; as=script\r\n'
+            assert stream.readline() == b'Link: </static/conversation-extensions.css?v=current>; rel=preload; as=style\r\n'
             assert stream.readline() == b'\r\n'
             assert not release.is_set()
             release.set()
