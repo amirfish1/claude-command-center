@@ -655,6 +655,25 @@ class CodexLiveTurnRestartGateTests(unittest.TestCase):
         # No adopt and, crucially, no drain left behind by a refusal.
         self.assertEqual(calls, ["codex.restart_freeze"])
 
+    def test_loaded_threads_are_not_reported_as_running_turns(self):
+        (ok, err, _, _), _ = self._precheck(
+            {"ok": True, "frozen": False, "reason": "threads_loaded",
+             "live_turns": 1, "threads": ["idle-thread"]},
+        )
+        self.assertFalse(ok)
+        self.assertEqual(err["code"], "codex_state_unavailable")
+        self.assertNotIn("1 Codex turn(s) are running", err["error"])
+        self.assertIn("loaded", err["error"])
+
+    def test_failed_proof_is_not_reported_as_running_turn(self):
+        (ok, err, _, _), _ = self._precheck(
+            {"ok": True, "frozen": False, "reason": "process_table_unreadable",
+             "live_turns": 1, "threads": []},
+        )
+        self.assertFalse(ok)
+        self.assertEqual(err["code"], "codex_state_unavailable")
+        self.assertNotIn("1 Codex turn(s) are running", err["error"])
+
     def test_old_worker_without_gate_fails_safe(self):
         (ok, err, _, _), calls = self._precheck(
             {"ok": False, "code": "method_not_found"},

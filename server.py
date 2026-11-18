@@ -21602,6 +21602,19 @@ def _codex_restart_freeze(reason, *, allow_codex_interrupt=False):
         }
     if resp.get("ok") and resp.get("frozen"):
         resp = {"ok": False, "error": "worker froze without a lease token"}
+    if resp.get("ok") and resp.get("reason") not in (None, "live_turns"):
+        reason = str(resp.get("reason") or "unknown")
+        detail = ("Codex threads are loaded, so a turn could still start"
+                  if reason == "threads_loaded" else
+                  "the worker could not confirm that Codex is idle")
+        return False, {
+            "ok": False,
+            "code": "codex_state_unavailable",
+            "error": ("Worker restart deferred: " + detail + ". "
+                      "Retry when Codex is idle." + hint),
+            "threads": resp.get("threads") or [],
+            "reason": reason,
+        }
     if resp.get("ok"):
         turns = int(resp.get("live_turns") or 0)
         return False, {
