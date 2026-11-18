@@ -123,6 +123,26 @@ def test_document_json_does_not_turn_child_markup_into_parent_markup():
     assert _document_payload(html, 'cccAppStartupDocument') == {'url': '/view/demo', 'html': document}
 
 
+def test_cached_json_escaping_tracks_mutated_values_and_bounds_both_strings(monkeypatch):
+    from ccc_server import app_embed
+    from ccc_server.bounded_cache import ByteBudgetCache
+    cache = ByteBudgetCache(max_bytes=4096, max_entries=32)
+    monkeypatch.setattr(app_embed, '_JSON_ELEMENTS', cache)
+    data = {'text': '</script><img id=escaped>&'}
+    for number in range(30):
+        data['version'] = number
+        first = app_embed.application_json('<head></head>', 'payload', data)
+        assert first == app_embed.application_json('<head></head>', 'payload', data)
+        assert _document_payload(first, 'payload') == data
+        assert '<img' not in first and first.count('</script>') == 1
+        assert cache.bytes <= cache.max_bytes
+    retained = cache.bytes
+    data['text'] = 'x' * cache.max_bytes
+    html = app_embed.application_json('<head></head>', 'payload', data)
+    assert _document_payload(html, 'payload') == data
+    assert cache.bytes <= retained
+
+
 def test_initial_tail_uses_current_canonical_read_and_escaped_payload(monkeypatch):
     server = _server()
     calls = []

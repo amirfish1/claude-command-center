@@ -47,3 +47,20 @@ def test_source_edits_invalidate_embedded_bytes_and_failures_keep_http(tmp_path)
 def test_empty_http_equiv_attribute_does_not_break_app_loading(tmp_path):
     (tmp_path / "app-kit.js").write_bytes(b"window.example = true;")
     assert script_url('<meta http-equiv>', tmp_path, '/static/app-kit.js').startswith('data:')
+
+
+def test_cached_policy_rechecks_edited_source_and_has_a_byte_bound(tmp_path, monkeypatch):
+    from ccc_server import app_kit_delivery as kit
+    from ccc_server.bounded_cache import ByteBudgetCache
+    cache = ByteBudgetCache(max_bytes=2048, max_entries=16)
+    monkeypatch.setattr(kit, '_POLICIES', cache)
+    (tmp_path / 'app-kit.js').write_bytes(b'window.example = true;')
+    fallback = '/static/app-kit.js'
+    page = '<head></head>'
+    assert script_url(page, tmp_path, fallback).startswith('data:')
+    restricted = page.replace('</head>', '<meta http-equiv="Content-Security-Policy"></head>')
+    assert script_url(restricted, tmp_path, fallback) == fallback
+    assert script_url(page, tmp_path, fallback).startswith('data:')
+    for number in range(30):
+        script_url(page + '<!--' + str(number) + 'x' * 512 + '-->', tmp_path, fallback)
+        assert cache.bytes <= cache.max_bytes

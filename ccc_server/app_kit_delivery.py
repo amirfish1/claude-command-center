@@ -5,8 +5,10 @@ from functools import lru_cache
 from html.parser import HTMLParser
 
 from .asset_versions import STATIC_ASSET_VERSIONS
+from .bounded_cache import ByteBudgetCache
 
 MAX_BYTES = 64 * 1024
+_POLICIES = ByteBudgetCache(max_bytes=4 << 20, max_entries=16)
 
 
 class _ScriptPolicy(HTMLParser):
@@ -36,7 +38,11 @@ def _source_url(static_dir, version):
 def script_url(html, static_dir, fallback):
     """No app-controlled path or source is embedded; restrictive apps keep HTTP."""
     try:
-        if _ScriptPolicy(html).external:
+        external = _POLICIES.get(html)
+        if external is None:
+            external = _ScriptPolicy(html).external
+            _POLICIES.put(html, external, 4 * len(html) + 64)
+        if external:
             return fallback
         version, = STATIC_ASSET_VERSIONS.read(static_dir, ("app-kit.js",))
         return _source_url(static_dir, version) or fallback
