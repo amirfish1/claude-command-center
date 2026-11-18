@@ -11562,30 +11562,8 @@
       view.style.paddingBottom = clearancePx;
       if (view._pinnedToBottom) view.scrollTop = view.scrollHeight;
     }
-    // The floating speaker tops the same right-hand column, so every floating
-    // control covers one narrow strip instead of a second one on the left.
+    // Read-aloud lives in the reserved view toolbar, outside the scroller.
     const speakBtn = view._convSpeakButton;
-    // Mid-drag the pointer owns the speaker: a scroll/poll re-layout here
-    // would yank it back to its old slot under the user's finger.
-    if (speakBtn && !speakBtn.classList.contains('is-dragging')) {
-      const saved = _speakBtnSavedPos();
-      if (saved) {
-        // Dragged somewhere by the user: keep it there (stored as fractions
-        // of the pane so it survives rotation/resizes), clamped on screen.
-        const w = speakBtn.offsetWidth || 56, h = speakBtn.offsetHeight || 56;
-        const left = Math.min(Math.max(14, saved.x * hostRect.width), Math.max(14, hostRect.width - w - 28));
-        const top = Math.min(Math.max(14, saved.y * hostRect.height), Math.max(14, hostRect.height - h - 24));
-        speakBtn.style.left = Math.round(left) + 'px';
-        speakBtn.style.top = Math.round(top) + 'px';
-        speakBtn.style.right = 'auto';
-        speakBtn.style.bottom = 'auto';
-      } else {
-        speakBtn.style.right = (right + 22) + 'px';
-        speakBtn.style.left = 'auto';
-        speakBtn.style.top = 'auto';
-        speakBtn.style.bottom = (above + 28) + 'px';
-      }
-    }
     if (speakBtn) _syncSpeakerTools(speakBtn);
   }
 
@@ -11828,7 +11806,11 @@
       _syncSpeakFloatPlayback(speakBtn);
 
 
-      const showSpeak = !!speakBtn._speakTarget;
+      const hasTarget = !!speakBtn._speakTarget;
+      const showSpeak = hasTarget || !!speakBtn.closest('.conv-reader-audio');
+      speakBtn.disabled = !hasTarget;
+      speakBtn.title = hasTarget ? 'Read the message on screen aloud'
+        : 'Scroll to an assistant message to read aloud';
 
       speakBtn.classList.toggle('visible', showSpeak);
       speakBtn.setAttribute('aria-hidden', showSpeak ? 'false' : 'true');
@@ -12223,7 +12205,8 @@
   function _visibleSpeakButton(view) {
     if (!view) return null;
     const vr = view.getBoundingClientRect();
-    const circle = view._convSpeakButton?.getBoundingClientRect();
+    const circle = view._convSpeakButton?.closest('.conv-reader-audio')
+      ? null : view._convSpeakButton?.getBoundingClientRect();
     const anchor = Math.max(vr.top, Math.min(vr.bottom,
       circle && circle.height ? (circle.top + circle.bottom) / 2 : (vr.top + vr.bottom) / 2));
     let best = null, bestDistance = Infinity, fallback = null, fallbackVis = 0;
@@ -12322,7 +12305,17 @@
     // pane, so the tiny per-turn speaker icons aren't the only way to start a
     // read. Clicking it again on the same turn pauses/resumes (same as the
     // per-turn button, which it delegates to).
-    let speakBtn = host.querySelector(':scope > .conv-scroll-speak-btn');
+    const toolbar = host.querySelector('[data-role="presentation-toolbar"]');
+    let audioDock = toolbar && toolbar.querySelector('.conv-reader-audio');
+    if (toolbar && !audioDock) {
+      audioDock = document.createElement('div');
+      audioDock.className = 'conv-reader-audio';
+      audioDock.setAttribute('role', 'group');
+      audioDock.setAttribute('aria-label', 'Read aloud');
+      toolbar.appendChild(audioDock);
+    }
+    const audioHost = audioDock || host;
+    let speakBtn = audioHost.querySelector(':scope > .conv-scroll-speak-btn');
     if (!speakBtn) {
       speakBtn = document.createElement('button');
       speakBtn.type = 'button';
@@ -12330,11 +12323,10 @@
       speakBtn.title = 'Read the message on screen aloud';
       speakBtn.setAttribute('aria-label', 'Read the message on screen aloud');
       _syncSpeakFloatPlayback(speakBtn);
-      host.appendChild(speakBtn);
+      audioHost.appendChild(speakBtn);
     }
     speakBtn._convTargetView = view;
-    _attachSpeakerTools(speakBtn, host);
-    _makeSpeakBtnDraggable(speakBtn, host);
+    _attachSpeakerTools(speakBtn, audioHost);
     speakBtn.addEventListener('click', () => {
       const v = speakBtn._convTargetView || view;
       if (_ttsReadSelectionIfAny(v.closest('.conv-pane')?.getAttribute('data-pane-id') || (0, sharedState.activePaneId)())) return;

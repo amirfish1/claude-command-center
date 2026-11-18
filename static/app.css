@@ -35613,3 +35613,52 @@ body.ccc-app-embed.conversation-popout .main > .toolbar {
     cursor: pointer;
   }
   .sidebar-read-pause button:hover { background: var(--surface); }
+
+/* Read-aloud belongs to the view toolbar, never over transcript text. */
+.conv-presentation-toolbar { flex-wrap: wrap; }
+.conv-presentation-toolbar.is-reader-only > :not(.conv-reader-audio) { display: none !important; }
+.conv-reader-audio {
+  position: relative;
+  flex: 0 0 204px;
+  height: 64px;
+  margin-left: auto;
+}
+.conv-reader-audio > .conv-scroll-speak-btn {
+  left: 12px;
+  top: 12px;
+  right: auto;
+  bottom: auto;
+  width: 40px;
+  height: 40px;
+  box-shadow: none;
+  transform: none;
+  touch-action: manipulation;
+}
+.conv-reader-audio > .speaker-tools,
+.conv-reader-audio .speaker-rate-dial { width: 64px; height: 64px; }
+.conv-reader-audio .speaker-dock {
+  top: 10px;
+  left: 68px;
+  transform: none;
+  height: 44px;
+  padding: 0;
+  gap: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: none;
+}
+.conv-reader-audio .speaker-next-sentence,
+.conv-reader-audio .speaker-voice-switch { width: 44px; height: 44px; font-size: 18px; }
+.conv-reader-audio .speaker-rate-value { min-width: 40px; padding: 0; font-size: 11px; }
+.conv-reader-audio .speaker-voice-name {
+  bottom: 0;
+  left: 68px;
+  transform: none;
+  max-width: 136px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 10px;
+  line-height: 12px;
+}
+.conv-reader-audio > .conv-scroll-speak-btn:disabled { opacity: 0.4; cursor: default; }

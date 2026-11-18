@@ -119,16 +119,20 @@ const buildTtsDataFromElements = elements => {
   return {mapping: node.spoken.map(r => ({node:{nodeValue:'Spoken answer.', rect:r},nodeOffsetStart:0,start:0,end:14}))};
 };
 function Range() { this.setStart = node => {this.node=node}; this.setEnd=()=>{}; this.getClientRects=()=>[this.node.rect]; }
-const view = {getBoundingClientRect:()=>rect(0,700), _convSpeakButton:{getBoundingClientRect:()=>circle}, querySelectorAll:()=>[old,current]};
+const view = {getBoundingClientRect:()=>rect(0,700), _convSpeakButton:{closest:()=>null,getBoundingClientRect:()=>circle}, querySelectorAll:()=>[old,current]};
 """ + selector + """
 const below = _visibleSpeakButton(view).id;
 circle = rect(20,80);
 const above = _visibleSpeakButton(view).id;
+view._convSpeakButton.closest = () => ({});
+circle = rect(-100, -40); // Docked controls must use the transcript center.
+const docked = _visibleSpeakButton(view).id;
+view._convSpeakButton.closest = () => null;
 old.closest('').spoken = []; // Only the excluded status footer remains visible.
 const footerExcluded = _visibleSpeakButton(view).id;
-console.log(JSON.stringify({below,above,footerExcluded}));
+console.log(JSON.stringify({below,above,docked,footerExcluded}));
 """)
-        self.assertEqual(result, {"below":"current", "above":"older", "footerExcluded":"current"})
+        self.assertEqual(result, {"below":"current", "above":"older", "docked":"current", "footerExcluded":"current"})
 
 if __name__ == "__main__":
     unittest.main()

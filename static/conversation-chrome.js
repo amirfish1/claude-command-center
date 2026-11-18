@@ -2487,7 +2487,9 @@
   function syncPresentationToolbar(pane, mode, hasAnswers) {
     const toolbar = pane && pane.querySelector('[data-role="presentation-toolbar"]');
     if (!toolbar) return;
-    toolbar.hidden = !presentationFeatureEnabled() || !hasAnswers;
+    const presentationEnabled = presentationFeatureEnabled();
+    toolbar.classList.toggle('is-reader-only', !presentationEnabled);
+    toolbar.hidden = !hasAnswers;
     toolbar.querySelectorAll('[data-presentation-mode]').forEach(button => {
       const active = button.dataset.presentationMode === mode;
       button.setAttribute('aria-pressed', active ? 'true' : 'false');
@@ -2774,7 +2776,7 @@
       ? normalizePresentationMode(pane.dataset.presentationMode || presentationModeForSession(sessionId))
       : 'off';
     pane.dataset.presentationMode = mode;
-    const hasAnswers = !!view.querySelector('.event.assistant .assistant-text, .stream-bubble .assistant-text');
+    const hasAnswers = !!view.querySelector('.event.assistant .assistant-text, .stream-bubble .assistant-text, [data-read-assistant-message], [data-read-agent-answer]');
     syncPresentationToolbar(pane, mode, hasAnswers);
     if (mode === 'off' || !hasAnswers) {
       disconnectPresentationProjection(view);

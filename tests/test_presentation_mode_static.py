@@ -129,7 +129,9 @@ class TestPresentationModeStatic(unittest.TestCase):
         toolbar = _javascript_function_source("syncPresentationToolbar")
         refresh = _javascript_function_source("refreshPresentationForPane")
         setter = _javascript_function_source("setPresentationMode")
-        self.assertIn("!presentationFeatureEnabled() || !hasAnswers", toolbar)
+        self.assertIn("presentationEnabled = presentationFeatureEnabled()", toolbar)
+        self.assertIn("toolbar.classList.toggle('is-reader-only', !presentationEnabled)", toolbar)
+        self.assertIn("toolbar.hidden = !hasAnswers", toolbar)
         self.assertIn("presentationFeatureEnabled()\n      ?", refresh)
         self.assertIn("presentationFeatureEnabled() ? normalizePresentationMode(mode) : 'off'", setter)
 
