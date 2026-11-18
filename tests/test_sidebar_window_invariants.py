@@ -158,7 +158,7 @@ def test_sidebar_uses_additive_list_endpoint_and_search_widens_history(app_js):
     assert 'path == "/api/conversations/all"' in source
     assert "_archive_list_source_rows_cached(" in source
     assert "force_refresh=not stale_ok" in source
-    list_source = inspect.getsource(server._archive_list_source_rows_cached)
+    list_source = inspect.getsource(server._archive_list_source_rows_read)
     assert "copy_rows=False" in list_source
     assert "force_refresh=force_refresh" in list_source
     assert "'/api/conversations/list'" in app_js

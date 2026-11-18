@@ -18816,7 +18816,49 @@ def _archive_list_rows_cached(cache_options, *, window="all", now=None):
     return _archive_list_project_rows(rows, window=window, now=now), from_cache
 
 
+_ARCHIVE_LIST_SOURCE_FLIGHTS = {}
+_ARCHIVE_LIST_SOURCE_FLIGHTS_LOCK = threading.Lock()
+
+
 def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phases=None, window="all"):
+    """Share a snapshot only with reads already running for the same scope.
+
+    Initial and full sidebar requests may overlap. Neither needs a duplicate
+    scan of the live engine overlays. Nothing is retained after a read ends;
+    explicit freshness requests always perform their own read.
+    """
+    if force_refresh:
+        return _archive_list_source_rows_read(
+            cache_options, force_refresh=True, phases=phases, window=window)
+    key = (_archive_response_cache_key(**cache_options), window)
+    with _ARCHIVE_LIST_SOURCE_FLIGHTS_LOCK:
+        flight = _ARCHIVE_LIST_SOURCE_FLIGHTS.get(key)
+        owner = flight is None
+        if owner:
+            flight = {"event": threading.Event(), "value": None}
+            _ARCHIVE_LIST_SOURCE_FLIGHTS[key] = flight
+    if not owner:
+        started = time.perf_counter()
+        flight["event"].wait()
+        if flight["value"] is not None:
+            if phases is not None:
+                phases.update(coalesced=True, wait_ms=round(
+                    (time.perf_counter() - started) * 1000.0, 1))
+            return flight["value"]
+        # A failed owner must not strand followers or cache its exception.
+        return _archive_list_source_rows_read(
+            cache_options, force_refresh=False, phases=phases, window=window)
+    try:
+        flight["value"] = _archive_list_source_rows_read(
+            cache_options, force_refresh=False, phases=phases, window=window)
+        return flight["value"]
+    finally:
+        with _ARCHIVE_LIST_SOURCE_FLIGHTS_LOCK:
+            _ARCHIVE_LIST_SOURCE_FLIGHTS.pop(key, None)
+            flight["event"].set()
+
+
+def _archive_list_source_rows_read(cache_options, *, force_refresh=False, phases=None, window="all"):
     """Read-only full snapshot feeding the projected sidebar list.
 
     The list response immediately projects a small 1d/7d window into fresh
