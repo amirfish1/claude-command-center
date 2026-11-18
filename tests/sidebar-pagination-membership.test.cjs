@@ -20,7 +20,8 @@ function setup(rows, {engine = '', cutoff = 0, f2 = {}, workerIds = [], ticketVi
     _uxqHealthCache: {worker_session_ids: workerIds}, _wtWorkersCache: {}, _wtWorkerConvsCache: {},
     classifyKanbanColumn: row => row.archived ? 'archived' : row.source === 'backlog' ? 'backlog' : 'active',
     isApprovalAskRow: row => !!row.approval,
-    _archiveEngineAllowsRow: row => !engine || row.engine === engine,
+    _archiveEngineFilter: () => engine,
+    _archiveEngineAllowsRow: (row, filter = engine) => !filter || row.engine === filter,
     _archiveWindowCutoff: () => cutoff,
     _archiveWindowAllowsRow: row => !cutoff || row.modified >= cutoff,
     _archiveWindowRowTs: row => row.modified || 0,
@@ -220,4 +221,27 @@ test('helper parent classification skips full facts for ordinary rows and preser
   ordinary.worker_origin = {role: 'assessor'};
   ordinary.helperTicket = 'TEST-1';
   assert.equal(context._sidebarLaneModel([owner, ordinary]).parentId(ordinary), 'owner');
+});
+
+
+test('each lane model snapshots preferences and the next model adopts changes', () => {
+  const rows = [row('codex', {idea_ticket: {ref: 'TEST-1'}}),
+    row('claude', {engine: 'claude', modified: 200, idea_ticket: {ref: 'TEST-2'}})];
+  const {context} = setup(rows);
+  let engine = 'codex', cutoff = 0, engineReads = 0, cutoffReads = 0;
+  context._archiveEngineFilter = () => { engineReads++; return engine; };
+  context._archiveWindowCutoff = () => { cutoffReads++; return cutoff; };
+  context._archiveWindowAllowsRow = (row, value) => !value || row.modified >= value;
+  const first = context._sidebarLaneModel(rows);
+  assert.equal(first.matches(rows[0], 'alltickets', false), true);
+  engine = 'claude'; cutoff = 150;
+  assert.equal(first.matches(rows[1], 'ideas', false), false);
+  assert.equal(first.matches(rows[0], 'ideas', false), true);
+  assert.equal(engineReads, 1);
+  assert.equal(cutoffReads, 1);
+  const next = context._sidebarLaneModel(rows);
+  assert.equal(next.matches(rows[0], 'alltickets', false), false);
+  assert.equal(next.matches(rows[1], 'alltickets', false), true);
+  assert.equal(engineReads, 2);
+  assert.equal(cutoffReads, 2);
 });

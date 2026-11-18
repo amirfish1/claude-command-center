@@ -22304,6 +22304,10 @@
   // Pagination and rendering must classify the complete session set identically.
   // Keep this model cheap: it builds membership, never row HTML.
   function _sidebarLaneModel(rows) {
+    // One synchronous model must use one set of view preferences. Reading
+    // localStorage per row repeats this work across counts and membership.
+    const engineFilter = _archiveEngineFilter();
+    const windowCutoff = _archiveWindowCutoff();
     const _allTabLaneOverride = (c) => {
       const lane = String((c && c.all_lane_override) || '').trim();
       return (lane === 'coding' || lane === 'workers' || lane === 'messages' || lane === 'other') ? lane : '';
@@ -22485,7 +22489,7 @@
     const sessionAllowed = c => baseAllowed(c) && c.source !== 'github_pr'
       && (classifyKanbanColumn(c) !== 'backlog' || isApprovalAskRow(c));
     const codingCount = rows.filter(c => sessionAllowed(c) && !c.trashed
-      && _archiveEngineAllowsRow(c) && laneFor(c) === 'coding').length;
+      && _archiveEngineAllowsRow(c, engineFilter) && laneFor(c) === 'coding').length;
     // This threshold is a property of the full list, not the current page.
     const ticketlessInAll = _ideaTicketsOn && codingCount <= 50;
     const otherLane = c => {
@@ -22504,8 +22508,8 @@
     const ticketViewLane = lane => lane === 'ideas' || lane === 'smallbugs'
       || (ticketlessInAll && lane === 'coding');
     const directMatch = (c, tab) => {
-      if (!sessionAllowed(c) || !_archiveEngineAllowsRow(c)
-          || !_archiveWindowAllowsRow(c, _archiveWindowCutoff())) return false;
+      if (!sessionAllowed(c) || !_archiveEngineAllowsRow(c, engineFilter)
+          || !_archiveWindowAllowsRow(c, windowCutoff)) return false;
       const lane = laneFor(c);
       if (ticketView && tab === 'workers') return lane === 'workers' || ticketViewLane(lane);
       if (tab === 'alltickets') return lane === 'ideas' || lane === 'smallbugs'
@@ -22554,7 +22558,7 @@
       // fleet, so a busy queue cannot push a Features ticket off it.
       priority: (c, tab) => ticketView && tab === 'workers' && ticketViewLane(laneFor(c)),
       otherCount: rows.filter(c => sessionAllowed(c) && !c.trashed
-        && _archiveEngineAllowsRow(c) && otherLane(c)).length };
+        && _archiveEngineAllowsRow(c, engineFilter) && otherLane(c)).length };
   }
 
   // Legacy fallback for callers without a full membership model. The live

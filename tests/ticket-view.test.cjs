@@ -112,7 +112,7 @@ function lanes(rows, { ticketView = true, f2 = {} } = {}) {
     ideaTicketsOn: () => true, ticketViewOn: () => ticketView,
     _uxqHealthCache: { worker_session_ids: [] }, _wtWorkersCache: {}, _wtWorkerConvsCache: {},
     classifyKanbanColumn: row => (row.archived ? 'archived' : 'active'),
-    isApprovalAskRow: () => false, _archiveEngineAllowsRow: () => true,
+    isApprovalAskRow: () => false, _archiveEngineFilter: () => '', _archiveEngineAllowsRow: () => true,
     _archiveWindowCutoff: () => 0, _archiveWindowAllowsRow: () => true,
     _archiveWindowRowTs: row => row.modified || 0 };
   vm.runInNewContext(foldCode + modelCode + budgetCode, context);
