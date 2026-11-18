@@ -23,7 +23,7 @@ class AppAssetHintsMixin:
         return super().handle_one_request()
 
     def end_headers(self):
-        links = self._ccc_final_asset_hints
+        links = getattr(self, "_ccc_final_asset_hints", ())
         self._ccc_final_asset_hints = ()
         for link in links:
             self.send_header("Link", link)
