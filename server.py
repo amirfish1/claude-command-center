@@ -18467,12 +18467,18 @@ def _archive_list_row_ts(row):
     newest = 0
     for key in ("modified", "mtime", "last_interacted", "last_activity", "last_mtime",
                 "archived_at", "closed_at", "started_at"):
+        value = (row or {}).get(key)
+        if not value:
+            continue
         try:
-            ts = float((row or {}).get(key) or 0)
+            ts = float(value)
         except (TypeError, ValueError):
             continue
         if math.isfinite(ts) and ts > 0:
-            newest = max(newest, ts / 1000 if ts > 100000000000 else ts)
+            if ts > 100000000000:
+                ts /= 1000
+            if ts > newest:
+                newest = ts
     try:
         moved_at = float(((row or {}).get("idea_ticket") or {}).get("moved_at") or 0)
         if math.isfinite(moved_at):
