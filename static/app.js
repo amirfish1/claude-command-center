@@ -22772,6 +22772,12 @@
       try { return normalizeSidebarTabKey(window.CCCNavigation.getTab()); }
       catch (_) { return 'coding'; }
     })();
+    // Only the selected tab's HTML is mounted below. Keep its data/counts,
+    // but avoid building the entire Active object tree behind other tabs.
+    const _renderActiveTab = !_ipSearchActive && ![
+      'issues', 'queues', 'jobs', 'decisions', 'decisions2', 'archived',
+      'coding', 'workers', 'ideas', 'smallbugs', 'alltickets',
+    ].includes(_sidebarTab);
     const _sidebarScope = JSON.stringify([_sidebarTab, _ipSearchValue.toLowerCase(),
       _archiveWindow(), _archiveEngineFilter()]);
     if (_sidebarScope !== _sidebarRenderScope) {
@@ -25592,7 +25598,9 @@
     _subagentExpandedParents = _subagentClustersExpandedSet();
     _subagentCollapsedParents = _subagentClustersCollapsedSet();
     let _activeRowsHtml;
-    if (_shouldGroupByObjects) {
+    if (!_renderActiveTab) {
+      _activeRowsHtml = '';
+    } else if (_shouldGroupByObjects) {
       // Resolve a session to its grouping node (CCC-83 + CCC-88):
       //  - nearest explicit Flow-object ancestor → that object;
       //  - explicit chain that tops out at a repo node → that repo
@@ -26632,7 +26640,7 @@
     // the _gcItems build and the _activeRowsHtml merge above.
     let _inProgressHtml = '';
     const _gcCountForSection = _hideGroupChatsForSearch ? 0 : (_gcActiveChats || []).length;
-    if (_sessionConvs.length > 0 || _gcCountForSection > 0) {
+    if (_renderActiveTab && (_sessionConvs.length > 0 || _gcCountForSection > 0)) {
       // 1d / 7d / All and by-project / by-time toggles, only when there are
       // folder chips (otherwise the controls are not meaningful). Inline
       // spans avoid nested-button HTML; click handlers stop propagation.
@@ -26716,7 +26724,7 @@
     // "In progress" so action items don't get buried under live work.
     // Expanded by default — these are the highest-leverage clicks.
     let _readyToMergeHtml = '';
-    if (_readyToMergeConvs.length > 0) {
+    if (_renderActiveTab && _readyToMergeConvs.length > 0) {
       const _rtmCollapsed = localStorage.getItem('ccc-readytomerge-collapsed') === '1';
       const _rtmArrow = _rtmCollapsed ? '▸' : '▾';
       const _rtmRows = _readyToMergeConvs.map(c => _renderRow(c, { lifecycleContext: 'active', suppressFolderChip: _isSpecificFolderFilter })).join('');
@@ -26771,7 +26779,7 @@
     // is shown only when we actually have issues (don't display a number we
     // don't know yet).
     const _ghHidden = getViewGhPref() === 'hide';
-    if (!_ghHidden || _ghIssueConvs.length > 0) {
+    if (!_ipSearchActive && _sidebarTab === 'issues' && (!_ghHidden || _ghIssueConvs.length > 0)) {
       const _ghCollapsed = localStorage.getItem('ccc-ghissues-collapsed') === '1';
       const _ghArrow = _ghCollapsed ? '▸' : '▾';
       const _ghHasFolderChips = _ghIssueConvs.some(c => c.folder_label_chip);

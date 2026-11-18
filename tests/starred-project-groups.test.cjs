@@ -8,13 +8,14 @@ const { findChromePath } = require('../puppeteer-browser-config.js');
 const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
 const marker = '\n})();\n\n/* === Hero: Fleet Pulse === */';
 assert.ok(app.includes(marker));
-const exposed = app.replace(marker, `
-  window.projectGroupTest = {seed(grouping='project', starred=true) {
+const exposed = app.replace('const _renderRow = (c, opts = {}) => {',
+  'const _renderRow = (c, opts = {}) => { window.projectGroupRowsBuilt++;').replace(marker, `
+  window.projectGroupTest = {seed(grouping='project', starred=true, tab='alltickets') {
     // API fixtures are empty; keep their background refresh from replacing
     // the explicit rows under test while exercising the real list renderer.
     renderArchiveList=()=>{};
     window.__CCC_FLAGS__={idea_tickets:true};
-    window.CCCNavigation.setTab('alltickets');
+    window.CCCNavigation.setTab(tab);
     localStorage.setItem('ccc-archived-grouping',grouping);
     localStorage.setItem('ccc-archive-window','all');
     const now=Date.now()/1000;
@@ -27,6 +28,7 @@ const exposed = app.replace(marker, `
       row('child-lane',4,{parent_session_id:'regular-topic',idea_ticket:{ref:'IDEAS-2',queue:'IDEAS'}})];
     _todayStars=starred ? {'starred-topic':now} : {};
     conversationsData=rows; archiveData=rows; archiveLoaded=true; archiveDataWindow="all";
+    window.projectGroupRowsBuilt=0;
     renderConversationList(rows);
 
   }};
@@ -83,5 +85,15 @@ test('Today stars keep a project together while chronological mode retains its T
     assert.equal(await page.$(active+' .today-star-group [data-session-id="regular-topic"]'),null);
     await page.evaluate(()=>projectGroupTest.seed('project',false));
     assert.equal(await page.$$eval(active+' .conv-folder-group',els=>els.length),2,'unstarred project grouping also stays intact');
+    for (const tab of ['decisions', 'jobs', 'queues', 'issues']) {
+      await page.evaluate(tab=>projectGroupTest.seed('project',true,tab),tab);
+      assert.equal(await page.evaluate(()=>window.projectGroupRowsBuilt),0,
+        tab+' must not construct invisible Active session rows');
+      assert.equal(await page.$$eval('#convList .conv-item[data-session-id]',els=>els.length),0);
+    }
+    await page.evaluate(()=>projectGroupTest.seed());
+    assert.deepEqual(await page.$$eval(active+' .conv-item[data-session-id]',els=>els.map(el=>el.dataset.sessionId)),
+      ['starred-topic','regular-topic','child-lane','other-topic'],
+      'returning to All restores the full visible hierarchy');
   } finally {await browser.close();}
 });
