@@ -31519,9 +31519,11 @@ def _load_application_html(name, *, conversation_document=False):
             agent = app_routines.load_state(folder).get("agent")
             agent_id = (agent.get("session_id") or "") if isinstance(agent, dict) else ""
         from ccc_server import app_initial_reads
+        from ccc_server.app_kit_delivery import script_url
+        source = target.read_text(encoding="utf-8")
         html = application_page(
-            target.read_text(encoding="utf-8"), app_id=name, agent_id=agent_id,
-            kit_url=_static_asset_url("app-kit.js"))
+            source, app_id=name, agent_id=agent_id,
+            kit_url=script_url(source, STATIC_DIR, _static_asset_url("app-kit.js")))
         html = _stamp_static_urls(app_initial_reads.application_page(html, name, USER_APPS_DIR))
         if conversation_document and agent_id and re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", agent_id):
             from ccc_server.app_embed import application_document

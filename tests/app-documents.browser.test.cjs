@@ -32,6 +32,10 @@ with tempfile.TemporaryDirectory() as tmp:
     server._conversation_open_response=lambda *_args,**_kwargs: {'body':json.dumps(current).encode(),'encoding':None,'cache':'miss'}
     selected={'id':'document-test','nav':'/view/document-test','label':'Test app'}
     pages={'shell':server._load_app_shell_html(selected),'app':server._load_application_html('document-test'),'conversation':server._load_index_html(app_embed=True)}
+    original=(app/'index.html').read_text()
+    (app/'index.html').write_text(original.replace('<script src="/static/app-kit.js" data-app="document-test" data-ready="event" defer></script>', "<script>const kit=document.createElement('script');kit.src='/static/app-kit.js';kit.dataset.app='document-test';kit.dataset.ready='event';document.head.appendChild(kit)</script>"))
+    pages['dynamic_shell']=server._load_app_shell_html(selected)
+    (app/'index.html').write_text(original)
     server._conversation_open_response=lambda *_args,**_kwargs: None
     pages['failed_shell']=server._load_app_shell_html(selected)
     print(json.dumps(pages))
@@ -41,12 +45,12 @@ const bundles = JSON.parse(execFileSync('python3', ['-c',
 
 test('first response boots both canonical documents with URLs, controls and reload drafts intact', async () => {
   const requests=[],errors=[];
-  let failRead=false, streamEnabled=false;
+  let failRead=false, streamEnabled=false, dynamicKit=false;
   const server=http.createServer((request,response)=>{
     const url=new URL(request.url,'http://localhost');requests.push(url.pathname+url.search);
     response.setHeader('Content-Type','application/json');
     if(url.pathname==='/') {
-      response.setHeader('Content-Type','text/html');response.end(url.searchParams.has('ccc_app')?(failRead?pages.failed_shell:pages.shell):pages.conversation);
+      response.setHeader('Content-Type','text/html');response.end(url.searchParams.has('ccc_app')?(failRead?pages.failed_shell:dynamicKit?pages.dynamic_shell:pages.shell):pages.conversation);
     } else if(url.pathname==='/view/document-test') {
       response.setHeader('Content-Type','text/html');response.end(pages.app);
     } else if(url.pathname==='/app-static/document-test/items.json') {
@@ -85,6 +89,8 @@ test('first response boots both canonical documents with URLs, controls and relo
     const agent=page.frames().find(frame=>frame.url().includes('embed=app'));
     assert.ok(!requests.some(url=>/\/static\/app-(?:shell|embed|read)-boot\.js/.test(url)),
       'both canonical startup bridges arrive with their owning document');
+    assert.ok(!requests.some(url=>url.startsWith('/static/app-kit.js')),
+      'the unchanged static kit loader executes canonical bytes carried in HTML');
     assert.ok(app&&agent,'both canonical frame URLs remain observable');
     assert.equal(await app.$eval('#appReads',node=>node.textContent),'Current startup item Current startup choice');
     assert.equal(requests.filter(url=>url.startsWith('/app-static/document-test/')||url.startsWith('/api/apps/data?')).length,0,
@@ -128,6 +134,20 @@ test('first response boots both canonical documents with URLs, controls and relo
     await page.waitForFunction(()=>document.getElementById('cccMobileAppFrame')?.contentWindow?.cccAppReady,{timeout:20000});
     const again=page.frames().find(frame=>frame.url().includes('embed=app'));
     assert.equal(await again.$eval('#convInput',input=>input.value),'A draft across document delivery');
+    dynamicKit=true;
+    const dynamicContext=await browser.createBrowserContext();
+    const dynamic=await dynamicContext.newPage();
+    await dynamic.setRequestInterception(true);
+    dynamic.on('request',request=>new URL(request.url()).origin===base?request.continue():request.respond({status:200,body:'{}'}));
+    await dynamic.goto(base+'/?ccc_app=document-test',{waitUntil:'domcontentloaded'});
+    await dynamic.waitForFunction(()=>document.getElementById('cccMobileAppFrame')?.contentWindow?.cccAppReady,{timeout:20000});
+    const dynamicAgent=dynamic.frames().find(frame=>frame.url().includes('embed=app'));
+    assert.equal(await dynamicAgent.$$eval('#conversationsView .event',elements=>elements.length),2);
+    assert.equal(await dynamicAgent.$eval('#convInput',input=>input.disabled),false);
+    assert.ok(!requests.some(url=>url.startsWith('/static/app-kit.js')),
+      'dynamic script creation retains its datasets without a kit HTTP request');
+    await dynamicContext.close();
+    dynamicKit=false;
     // No saved transcript in this context: a failed read must never release
     // the app-ready promise just because the document itself was supplied.
     failRead=true;

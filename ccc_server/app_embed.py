@@ -148,7 +148,8 @@ def application_page(html, app_id, agent_id=None, kit_url="/static/app-kit.js"):
     # Apps can append the kit dynamically after their own data loads. Keep
     # its metadata separate from the script tag so both loading styles work.
     metadata = _json_element("cccAppAgent", {"app": app_id, "session_id": agent_id})
-    metadata += f'<link rel="preload" as="script" href="{kit_url}">'
+    if not kit_url.startswith("data:"):
+        metadata += f'<link rel="preload" as="script" href="{kit_url}">'
     if agent_id:
         metadata += (f'<link rel="preload" as="script" href="/static/{SCRIPT_NAME}">'
                      '<link rel="preload" as="style" href="/static/app.css">')
