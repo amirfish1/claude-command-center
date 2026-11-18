@@ -1,0 +1,1 @@
+- The last message you scrolled past now sits in the read-aloud row beside the speaker controls, so it no longer floats over the transcript.

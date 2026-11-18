@@ -621,9 +621,19 @@ window.addEventListener('resize', () => {
     return (first && view.querySelector(':scope > .event')) ? { text: first, el: null, original: true } : null;
   }
 
+  // The read-aloud row already reserves a full-width strip above the
+  // transcript; while it shows, the ask fills its empty left side instead of
+  // floating over the transcript text.
+  function _frozenAskHost(view) {
+    const pane = view.closest('.conv-pane') || view.closest('.conv-panel');
+    const toolbar = pane && pane.querySelector('[data-role="presentation-toolbar"]');
+    const dock = toolbar && !toolbar.hidden && toolbar.querySelector(':scope > .conv-reader-audio');
+    return dock ? { parent: toolbar, before: dock } : { parent: view, before: view.firstChild };
+  }
+
   function _frozenAskUpdate(view) {
     view._frozenAskRaf = false;
-    let bar = view.querySelector(':scope > .conv-frozen-ask');
+    let bar = view._frozenAskBar || view.querySelector(':scope > .conv-frozen-ask');
     const pick = view.isConnected ? _frozenAskPick(view) : null;
     if (!pick) {
       if (bar) bar.hidden = true;
@@ -652,7 +662,10 @@ window.addEventListener('resize', () => {
         }
       });
     }
-    if (bar.parentNode !== view) view.insertBefore(bar, view.firstChild);
+    view._frozenAskBar = bar;
+    const host = _frozenAskHost(view);
+    if (bar.parentNode !== host.parent) host.parent.insertBefore(bar, host.before);
+    bar.classList.toggle('is-docked', host.parent !== view);
     bar._askEl = pick.el;
     if (pick.original) bar.dataset.original = '1'; else delete bar.dataset.original;
     const msg = bar.querySelector('.user-msg');

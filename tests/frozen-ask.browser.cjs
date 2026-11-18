@@ -9,6 +9,7 @@ const base = process.env.CCC_FROZEN_ASK_TEST_URL;
 if (!base) throw new Error('Set CCC_FROZEN_ASK_TEST_URL to a running dashboard');
 const source = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
 const anchor = '  // Shared conversation-core.js: positionConversationEndAffordance.';
+const rowGetter = 'get convRowForPane() { return convRowForPane; },';
 const fixture = `
   window.__frozenAskFill = (withUser) => {
     const view = getConvView();
@@ -31,10 +32,10 @@ const fixture = `
       view.scrollTop = el.offsetTop + el.offsetHeight + 200;
     }
   };
-  window.__frozenAskRow = (row) => { convRowForPane = () => row; };
+  window.__frozenAskRow = (row) => { window.__frozenAskRowFn = () => row; };
   window.__frozenAskState = () => {
     const view = getConvView();
-    const bar = view.querySelector(':scope > .conv-frozen-ask');
+    const bar = view._frozenAskBar || view.querySelector(':scope > .conv-frozen-ask');
     const bubble = bar && bar.firstElementChild;
     const visible = !!bar && !bar.hidden && bubble.getClientRects().length > 0;
     return {
@@ -42,11 +43,23 @@ const fixture = `
       scrollHeight: view.scrollHeight,
       height: visible ? Math.round(bubble.getBoundingClientRect().height) : null,
       offset: visible ? Math.round(bubble.getBoundingClientRect().top - view.getBoundingClientRect().top) : null,
+      docked: !!bar && !!bar.parentNode && bar.parentNode !== view,
+      bubbleBottom: visible ? Math.round(bubble.getBoundingClientRect().bottom) : null,
+      bubbleRight: visible ? Math.round(bubble.getBoundingClientRect().right) : null,
+      viewTop: Math.round(view.getBoundingClientRect().top),
     };
+  };
+  window.__frozenAskToolbar = (show) => {
+    const toolbar = getConvView().closest('.conv-pane').querySelector('[data-role="presentation-toolbar"]');
+    toolbar.classList.add('is-reader-only');
+    toolbar.hidden = !show;
+    const dock = toolbar.querySelector('.conv-reader-audio');
+    return { height: Math.round(toolbar.getBoundingClientRect().height), dockLeft: dock ? Math.round(dock.getBoundingClientRect().left) : null };
   };
 `;
 (async () => {
   assert.ok(source.includes(anchor), 'fixture anchor exists');
+  assert.ok(source.includes(rowGetter), 'row getter anchor exists');
   const browser = await puppeteer.launch({executablePath:findChromePath(), args:['--no-sandbox']});
   try {
     const page = await browser.newPage();
@@ -62,7 +75,7 @@ const fixture = `
     page.on('request', request => {
       const url = new URL(request.url());
       if (respondConversationAsset(request)) return;
-      if (url.pathname === '/static/app.js') return request.respond({contentType:'text/javascript', body:source.replace(anchor, fixture + anchor)});
+      if (url.pathname === '/static/app.js') return request.respond({contentType:'text/javascript', body:source.replace(anchor, fixture + anchor).replace(rowGetter, 'get convRowForPane() { return window.__frozenAskRowFn || convRowForPane; },')});
       if (url.pathname.startsWith('/api/')) return request.respond({contentType:'application/json', body:JSON.stringify(url.pathname === '/api/sessions' ? [] : url.pathname === '/api/conversations/list' ? {conversations:[], total:0} : {})});
       return request.continue();
     });
@@ -95,11 +108,26 @@ const fixture = `
       await page.click('.conv-frozen-ask__bubble .user-msg');
       await settle();
       const jumped = await page.evaluate(() => {
-        const view = document.querySelector('.conv-frozen-ask').parentNode;
+        const view = document.querySelector('.conv-frozen-ask__bubble').closest('.conv-pane').querySelector('.conversations-view');
         const first = view.querySelector('.event.user_text');
         return Math.round(first.getBoundingClientRect().top - view.getBoundingClientRect().top);
       });
       assert.ok(Math.abs(jumped) < 60, 'clicking it jumps to the message');
+
+      // With the read-aloud row showing, the ask moves into its empty left
+      // side: the row keeps its height and nothing covers the transcript.
+      const row = await page.evaluate(() => window.__frozenAskToolbar(true));
+      const docked = await at('Third question');
+      assert.equal(docked.visible, true, 'the ask still shows with the read-aloud row');
+      assert.equal(docked.docked, true, 'it sits in the read-aloud row');
+      assert.ok(docked.bubbleBottom <= docked.viewTop, 'it no longer covers transcript text');
+      assert.ok(row.dockLeft != null && docked.bubbleRight <= row.dockLeft, 'it stays left of the speaker controls');
+      assert.equal((await page.evaluate(() => window.__frozenAskToolbar(true))).height, row.height, 'the row does not grow');
+      assert.equal(docked.scrollHeight, bottom.scrollHeight, 'docking never changes the scroll height');
+      if (process.env.CCC_FROZEN_ASK_SHOTS) await page.screenshot({path:'/tmp/ccc-frozen-ask-docked-' + width + '.png'});
+      assert.equal((await at('end')).visible, false, 'the docked ask is released at the end');
+      await page.evaluate(() => window.__frozenAskToolbar(false));
+      assert.equal((await at('Third question')).docked, false, 'it floats again once the row is gone');
 
       // A transcript with no user message falls back to the session's first message.
       await page.evaluate(() => window.__frozenAskFill(false));

@@ -31903,6 +31903,16 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 }
 .conv-frozen-ask__bubble > .user-msg :is(img, .msg-image) { display: none; }
 .conv-frozen-ask__bubble { max-height: 64px; overflow: hidden; }
+/* Docked: the read-aloud row is already on screen, so the ask takes its empty
+   left side and never covers transcript text. */
+.conv-presentation-toolbar > .conv-frozen-ask {
+  position: static; height: auto;
+  flex: 1 1 0; min-width: 0; align-self: center;
+}
+.conv-presentation-toolbar > .conv-frozen-ask > .conv-frozen-ask__bubble {
+  position: relative; top: 0;
+  box-shadow: none;
+}
 
 /* CCC-1206: (+) on the Original ask opens it in a large-font reading modal. */
 .original-ask-expand {
@@ -35631,7 +35641,7 @@ body.ccc-app-embed.conversation-popout .main > .toolbar {
 
 /* Read-aloud belongs to the view toolbar, never over transcript text. */
 .conv-presentation-toolbar { flex-wrap: wrap; }
-.conv-presentation-toolbar.is-reader-only > :not(.conv-reader-audio) { display: none !important; }
+.conv-presentation-toolbar.is-reader-only > :not(.conv-reader-audio, .conv-frozen-ask) { display: none !important; }
 .conv-reader-audio {
   position: relative;
   flex: 0 0 204px;
