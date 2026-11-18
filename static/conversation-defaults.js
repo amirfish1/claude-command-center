@@ -152,7 +152,7 @@
         return _startupApiReleaseTimer;
       },
       _archiveBootstrapUrl() {
-        const _archiveBootstrapUrl = '/api/conversations/list?window=' + encodeURIComponent(sharedState._archiveBootstrapWindow) + '&stale_ok=1';
+        const _archiveBootstrapUrl = '/api/conversations/list?window=' + encodeURIComponent(sharedState._archiveBootstrapWindow) + '&stale_ok=1&initial=1';
         return _archiveBootstrapUrl;
       },
       _archiveBootstrapFetchPromise() {

@@ -1,0 +1,1 @@
+Load the latest 500 archived sessions, pinned sessions and required ancestors first while the full selected archive loads in the background. Mark search and counts as incomplete until completion, and record initial and full loading times separately.

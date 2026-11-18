@@ -43366,12 +43366,13 @@
     // early-returns above, so this really is "rows are visible", not merely
     // "fetch returned". Fires once per page load, and only if the loading
     // placeholder was actually shown (non-archive-mode loads never set t0).
-    if (_perfArchiveT0 !== null && !_perfArchiveFired) {
+    if (_perfArchiveT0 !== null && !_perfArchiveFired && window.__cccArchiveProgress?.complete) {
       _perfArchiveFired = true;
       try {
         const _perfEnd = performance.now();
         const _perfWall = _perfEnd - _perfArchiveT0;
         const _perfActive = _perfActiveElapsed(_perfArchiveT0, _perfEnd);
+        _perfEvent('archive_full_load', _perfActive, { detail: { rows: archiveRows.length, window: archiveDataWindow } });
         _perfEvent('archive_load', _perfActive, {
           detail: {
             rows: archiveRows.length,
@@ -43382,6 +43383,12 @@
           },
         });
       } catch (_) {}
+    }
+    if (_perfArchiveT0 !== null && !window.__cccArchiveInitialPaint && window.__cccArchiveProgress?.ready) {
+      window.__cccArchiveInitialPaint = true;
+      _perfEvent('archive_initial_load', _perfActiveElapsed(_perfArchiveT0, performance.now()), {
+        detail: { rows: archiveRows.length, complete: window.__cccArchiveProgress.complete },
+      });
     }
     _finishArchiveRender();
     _markArchiveFirstLoaded();

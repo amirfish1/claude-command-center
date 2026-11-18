@@ -19958,6 +19958,7 @@
       params.set('resolve_worktrees', '1');
       params.set('background', '1');
     }
+    if (opts.initial) params.set('initial', '1');
     const url = '/api/conversations/list' + (params.toString() ? '?' + params.toString() : '');
     const pending = sharedState._archiveAllInflight.get(url);
     if (pending) return pending;
@@ -20129,7 +20130,8 @@
         else if (etag) sharedState._archiveAllEtag.set(url, etag);
         if (d.delta_token) sharedState._archiveAllDelta.set(url, d.delta_token);
         else sharedState._archiveAllDelta.delete(url);
-        if (!opts.includePrs) _scheduleArchiveSidebarCache(convs, params.get('window'));
+        if (!opts.includePrs && !opts.initial) _scheduleArchiveSidebarCache(convs, params.get('window'));
+        if (typeof opts.onPage === 'function') opts.onPage(d);
         return convs;
       } catch (e) {
         _perfListLog(0, 'threw');
@@ -20360,6 +20362,22 @@
     }
   }
 
+  function _setArchiveCompleteness(win, complete, count, failed = false, ready = false) {
+    window.__cccArchiveProgress = { window: win, complete, count, failed, ready: ready || complete };
+    let notice = document.getElementById('archiveCompleteness');
+    if (!notice) {
+      notice = document.createElement('div');
+      notice.id = 'archiveCompleteness';
+      notice.setAttribute('role', 'status');
+      notice.style.cssText = 'padding:8px 12px;font-size:12px;color:var(--text-secondary);background:var(--surface-2);flex-shrink:0';
+      document.getElementById('convList')?.before(notice);
+    }
+    notice.hidden = complete;
+    notice.textContent = complete ? '' : (failed
+      ? 'Full archive could not load. Search and counts are incomplete; retrying on refresh.'
+      : 'Loading full archive… Search and counts are incomplete (' + count + ' sessions loaded).');
+  }
+
   async function refreshArchiveData(opts = {}) {
     if (sharedState._archiveRefreshPromise) {
       _clientLog('[ARCHIVE-DIAG] refreshArchiveData deduped onto in-flight promise');
@@ -20376,7 +20394,32 @@
       // ('1d'/'7d') window would swap the data back under the user's feet —
       // the visible "result count flips between small and full" flicker.
       const requestedWindow = opts.window || (_archiveQuery().trim() ? 'all' : _archiveWindow());
+      const isCurrentWindow = () => requestedWindow === (_archiveQuery().trim() ? 'all' : _archiveWindow());
+      const progress = window.__cccArchiveProgress;
+      if (!opts.includePrs && (!progress || progress.window !== requestedWindow || !progress.complete)) {
+        _setArchiveCompleteness(requestedWindow, false, sharedState.archiveData.length);
+        const first = await loadArchiveAll({ staleOk: true, window: requestedWindow, initial: true });
+        if (Array.isArray(first) && isCurrentWindow()) {
+          sharedState.archiveData = _applyPendingDashboardConversationPatches(
+            _mergeArchivePrSnapshot(first, sharedState.archiveData));
+          sharedState.archiveDataWindow = requestedWindow;
+          sharedState.archiveLoaded = true;
+          _setArchiveCompleteness(requestedWindow, false, first.length, false, true);
+          (0, hostServices.renderArchiveList)(_archiveQuery(), { force: true });
+          // Give the initial rows a paint before parsing and merging history.
+          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        }
+      }
+      if (!isCurrentWindow()) {
+        sharedState._archiveRefreshAfterInflight = true;
+        return sharedState.archiveData;
+      }
       const convs = await loadArchiveAll({ staleOk: opts.staleOk !== false && !opts.force, window: requestedWindow });
+      if (!isCurrentWindow()) {
+        sharedState._archiveRefreshAfterInflight = true;
+        return sharedState.archiveData;
+      }
+      if (!Array.isArray(convs)) _setArchiveCompleteness(requestedWindow, false, sharedState.archiveData.length, true);
       if (!Array.isArray(convs)) {
         _clientLog('[ARCHIVE-DIAG] refreshArchiveData keeping previous rows='
           + (Array.isArray(sharedState.archiveData) ? sharedState.archiveData.length : -1)
@@ -20391,6 +20434,7 @@
         }
       }
       sharedState._archiveFromLocalCache = false;
+      _setArchiveCompleteness(requestedWindow, true, convs.length);
       sharedState.archiveData = _applyPendingDashboardConversationPatches(
         _mergeArchivePrSnapshot(convs, sharedState.archiveData)
       );
@@ -20399,6 +20443,7 @@
       sharedState.archiveDataWindow = requestedWindow;
         sharedState.archiveLoaded = true;
         _clientLog('[ARCHIVE-DIAG] refreshArchiveData merged ' + (Array.isArray(sharedState.archiveData) ? sharedState.archiveData.length : -1) + ' rows, archiveLoaded=true');
+        (0, hostServices.renderArchiveList)(_archiveQuery(), { force: true });
         // Base rows are useful immediately. Let the live/approval overlay land
         // afterward instead of holding first paint behind a contended status
         // read; the unified session watcher also pushes those state changes.

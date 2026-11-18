@@ -19452,6 +19452,37 @@ def _queue_health_stats(rows, *, now=None):
     }
 
 
+def _archive_list_initial_payload(rows, *, window="all", now=None, cached=None):
+    """Project recent rows first without changing the complete-list protocol."""
+    now = time.time() if now is None else now
+    parents = _session_graph.parent_snapshot()
+    ideas = _idea_tickets.idea_ticket_rows_map()
+    selected = _archive_list_window_rows(
+        rows, _archive_list_window_cutoff(window, now=now), ideas, parents)
+    recent = sorted(selected, key=_archive_list_row_ts, reverse=True)[:500]
+    wanted = {id(row) for row in recent}
+    wanted.update(id(row) for row in selected if row.get("pinned"))
+    by_sid = {_archive_row_sid(row): row for row in selected}
+    initial = [row for row in selected if id(row) in wanted]
+    index = 0
+    while index < len(initial):
+        row = initial[index]
+        index += 1
+        sid = _archive_row_sid(row)
+        parent_sid = (row.get("parent_session_id") or row.get("hermes_parent_session_id")
+                      or row.get("continued_from") or parents.get(sid))
+        parent = by_sid.get(parent_sid)
+        ticket = ideas.get(parent_sid) or (parent or {}).get("idea_ticket") or {}
+        if (parent is not None and id(parent) not in wanted and not parent.get("trashed")
+                and not parent.get("explicitly_archived", ticket.get("explicitly_archived"))):
+            wanted.add(id(parent))
+            initial.append(parent)
+    inputs = (_load_usage_limit_resumes(), parents, ideas, initial)
+    payload = _archive_list_payload(rows, window=window, now=now, cached=cached, _inputs=inputs)
+    payload.update(complete=len(initial) == len(selected), selected_count=len(selected), initial=True)
+    return payload
+
+
 def _archive_list_payload(rows, *, window="all", now=None, cached=None, phases=None, _inputs=None):
     window = _archive_list_window(window)
     projected = _archive_list_project_rows(rows, window=window, now=now, phases=phases, _inputs=_inputs)
@@ -36013,7 +36044,8 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
             _src_phases = {}
             list_cache_key = _archive_response_cache_key(**cache_options)
             since = (qs.get("since", [""])[0] or "").strip()
-            _disk = _archive_list_disk_candidate(list_cache_key, window, since)
+            initial = qs.get("initial", ["0"])[0] == "1"
+            _disk = None if initial else _archive_list_disk_candidate(list_cache_key, window, since)
             if _disk is not None:
                 _archive_list_start_warm(
                     (list_cache_key, window),
@@ -36041,6 +36073,16 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
                 phases=_src_phases,
                 window=window,
             )
+            if initial:
+                # No delta token or persisted full-body cache entry can ever
+                # describe this intentionally partial response.
+                self.send_json(_archive_list_initial_payload(rows, window=window, cached=from_cache))
+                record_diag("list_server", (time.perf_counter() - _lt0) * 1000.0, {
+                    "window": window, "initial": True, "status": 200,
+                    "rows_src": len(rows or []),
+                    "cpu_ms": round((time.thread_time() - _lc0) * 1000.0, 1),
+                })
+                return
             _lt1 = time.perf_counter()
             _payload_ms = []
             _payload_phases = {}
