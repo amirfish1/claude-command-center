@@ -9,8 +9,8 @@ from . import app_data, app_routines
 from .app_embed import application_json
 
 MAX_READS = 16
-MAX_FILE_BYTES = 64 * 1024
-MAX_TOTAL_BYTES = 128 * 1024
+MAX_FILE_BYTES = 128 * 1024
+MAX_TOTAL_BYTES = 256 * 1024
 _FILE = re.compile(r'^[a-z0-9][a-z0-9_.-]{0,79}\.json$')
 
 
