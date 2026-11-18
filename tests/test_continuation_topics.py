@@ -609,3 +609,78 @@ def test_precise_token_invalidates_when_schema_changes(store):
     store.execute('CREATE TABLE unrelated_schema_change (value)')
     store.commit()
     assert topics._db_state_token(store) != before
+
+
+def test_topic_cache_ignores_equivalent_native_title_snapshot_replacement(store, monkeypatch):
+    data = {'native': {'title': 'NATIVE', 'agent_nickname': 'Helper', 'first_user_message': 'old'}}
+    monkeypatch.setattr(server, '_codex_titles_cache', {'data': data})
+    topics.attach_topics([row('root', 'ROOT: task'), row('child', origin='root')], names={})
+    topics.attach_topics([row('child')], names={})
+    before = topics._db_state_token(store)
+    server._codex_titles_cache['data'] = {
+        'native': {'title': 'NATIVE', 'agent_nickname': 'Helper', 'first_user_message': 'new',
+                   'agent_role': 'reviewer', 'agent_path': 'different'},
+    }
+    assert topics._db_state_token(store) == before
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError('equivalent native titles must not reproject topics')
+
+    monkeypatch.setattr(topics, '_Batch', unexpected)
+    child = row('child')
+    topics.attach_topics([child], names={})
+    assert child['continuation_topic_title'] == 'ROOT'
+
+
+@pytest.mark.parametrize('native', [
+    {'title': 'DISCOVERED: task', 'agent_nickname': ''},
+    {'title': '', 'agent_nickname': 'DISCOVERED: task'},
+])
+def test_topic_cache_discovers_native_title_or_nickname_after_empty_snapshot(store, monkeypatch, native):
+    monkeypatch.setattr(server, '_codex_titles_cache', {'data': {}})
+    topics.attach_topics([row('root')], names={})
+    topics.attach_topics([row('root')], names={})
+    before = topics._db_state_token(store)
+    server._codex_titles_cache['data'] = {'root': native}
+    assert topics._db_state_token(store) != before
+    topics.attach_topics([row('root')], names={})
+    assert store.execute("SELECT topic_title FROM continuation_topics WHERE sid='root'").fetchone()[0] == 'DISCOVERED'
+    child = row('child', origin='root')
+    topics.attach_topics([child], names={})
+    assert child['continuation_topic_title'] == 'DISCOVERED'
+    assert store.execute("SELECT topic_title FROM continuation_topics WHERE sid='root'").fetchone()[0] == 'DISCOVERED'
+
+
+@pytest.mark.parametrize('replacement', [
+    {'native': {'title': 'AFTER', 'agent_nickname': 'Helper'}},
+    {'native': {'title': 'BEFORE', 'agent_nickname': 'Changed'}},
+    {'different': {'title': 'BEFORE', 'agent_nickname': 'Helper'}},
+    {},
+    {'native': None},
+])
+def test_external_title_signature_keeps_real_native_changes(monkeypatch, replacement):
+    monkeypatch.setattr(server, '_codex_titles_cache', {
+        'data': {'native': {'title': 'BEFORE', 'agent_nickname': 'Helper'}},
+    })
+    before = topics._external_title_cache_sig()
+    server._codex_titles_cache['data'] = replacement
+    assert topics._external_title_cache_sig() != before
+
+
+def test_external_title_signature_compares_only_once_per_native_snapshot(monkeypatch):
+    class Snapshot(dict):
+        scans = 0
+
+        def items(self):
+            self.scans += 1
+            return super().items()
+
+    monkeypatch.setattr(server, '_codex_titles_cache', {
+        'data': {'native': {'title': 'SAME', 'agent_nickname': ''}},
+    })
+    before = topics._external_title_cache_sig()
+    replacement = Snapshot({'native': {'title': 'SAME', 'agent_nickname': ''}})
+    server._codex_titles_cache['data'] = replacement
+    for _ in range(20):
+        assert topics._external_title_cache_sig() == before
+    assert replacement.scans == 1

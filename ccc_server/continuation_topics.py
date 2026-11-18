@@ -29,6 +29,7 @@ _CACHE_GEN = 0
 _TOPIC_CACHE: dict[str, object] = {'token': None, 'entries': {}}
 _REVISION_CACHE: dict[str, object] = {'token': None, 'value': 0}
 _PRECISE_TOKENS = OrderedDict()
+_NATIVE_TITLE_STATE = {'data': None, 'generation': 0}
 _TRACKED_TABLES = {
     'continuation_topics': ('sid', 'origin', 'root_sid', 'topic_title', 'user_named'),
     'continuation_topic_meta': ('id', 'revision'),
@@ -136,10 +137,29 @@ def _external_title_cache_sig():
     codex_cache = getattr(_core, '_codex_titles_cache', None)
     codex_data = codex_cache.get('data') if isinstance(codex_cache, dict) else None
     codex_lookup = getattr(_core, '_codex_thread_row', None)
+    # Native snapshots publish a new dictionary every refresh, including when
+    # only prompts or activity changed. Topic fallback reads just these two
+    # title fields; compare them once per published snapshot, not per row.
+    with _CACHE_LOCK:
+        previous = _NATIVE_TITLE_STATE['data']
+        if previous is not codex_data:
+            changed = (
+                not isinstance(previous, dict) or not isinstance(codex_data, dict)
+                or len(previous) != len(codex_data)
+                or any(not isinstance(meta, dict)
+                       or not isinstance(previous.get(sid), dict)
+                       or previous[sid].get('title') != meta.get('title')
+                       or previous[sid].get('agent_nickname') != meta.get('agent_nickname')
+                       for sid, meta in codex_data.items())
+            )
+            if changed:
+                _NATIVE_TITLE_STATE['generation'] += 1
+            _NATIVE_TITLE_STATE['data'] = codex_data
+        native_generation = _NATIVE_TITLE_STATE['generation']
     return (
         id(conv_meta),
         len(conv_meta) if isinstance(conv_meta, dict) else 0,
-        id(codex_data),
+        native_generation,
         len(codex_data) if isinstance(codex_data, dict) else 0,
         id(codex_lookup),
     )
