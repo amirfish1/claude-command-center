@@ -19990,6 +19990,7 @@
     // which stretches when a fresh page's main thread is busy booting.
     let _perfHdrAt = 0;
     let _perfBodyMs = 0;
+    let _perfPaintWaitMs = 0;
     // Server list handler time (Server-Timing list;dur) and the fetched URL
     // (its ?since= varies) for the Resource Timing split (CCC-229).
     let _perfServer = null;
@@ -20024,6 +20025,7 @@
               wall_ms: wallMs, hidden_ms: wallMs - ms,
               ttfb_ms: _perfHdrAt ? Math.round(_perfHdrAt - _perfT0) : null,
               body_ms: _perfBodyMs ? Math.round(_perfBodyMs) : null,
+              paint_wait_ms: Math.round(_perfPaintWaitMs),
               start_nav_ms: Math.round(_perfT0),
               server_ms: _perfServer ? _perfServer.ms : null,
               server_cpu_ms: _perfServer ? _perfServer.cpu : null,
@@ -20100,8 +20102,15 @@
         }
         let etag = r.headers.get('ETag');
         let _perfLen = parseInt(r.headers.get('content-length') || '0', 10) || 0;
+        // Fetch history while the initial rows render, but leave its JSON
+        // processing until those rows have had a chance to paint.
+        if (opts.afterPaint) {
+          const waitStart = performance.now();
+          await opts.afterPaint;
+          _perfPaintWaitMs = performance.now() - waitStart;
+        }
         let d = await r.json();
-        _perfBodyMs = performance.now() - _perfHdrAt;
+        _perfBodyMs = performance.now() - _perfHdrAt - _perfPaintWaitMs;
         let _merged = null;
         if (d && d.delta) {
           _merged = _mergeArchiveListDelta(sharedState._archiveAllData.get(url), d);
@@ -20417,6 +20426,7 @@
       _startArchiveProgressPoll();
       _clientLog('[ARCHIVE-DIAG] refreshArchiveData start window=' + (opts.window || _archiveWindow()) + ' staleOk=' + (opts.staleOk !== false && !opts.force));
       let archiveSettled = false;
+      let fullRead = null;
       try {
       // While a sidebar search is active the corpus must stay at the 'all'
       // window: renderArchiveList widens to 'all' so every session is
@@ -20430,21 +20440,28 @@
         _setArchiveCompleteness(requestedWindow, false, sharedState.archiveData.length);
         const first = await loadArchiveAll({ staleOk: true, window: requestedWindow, initial: true });
         if (Array.isArray(first) && isCurrentWindow()) {
-          sharedState.archiveData = _applyPendingDashboardConversationPatches(
-            _mergeArchivePrSnapshot(first, sharedState.archiveData));
-          sharedState.archiveDataWindow = requestedWindow;
-          sharedState.archiveLoaded = true;
-          _setArchiveCompleteness(requestedWindow, false, first.length, false, true);
-          (0, hostServices.renderArchiveList)(_archiveQuery(), { force: true });
-          // Give the initial rows a paint before parsing and merging history.
-          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          let releaseInitialPaint;
+          const afterPaint = new Promise(resolve => { releaseInitialPaint = resolve; });
+          fullRead = loadArchiveAll({ staleOk: opts.staleOk !== false && !opts.force,
+            window: requestedWindow, afterPaint });
+          try {
+            sharedState.archiveData = _applyPendingDashboardConversationPatches(
+              _mergeArchivePrSnapshot(first, sharedState.archiveData));
+            sharedState.archiveDataWindow = requestedWindow;
+            sharedState.archiveLoaded = true;
+            _setArchiveCompleteness(requestedWindow, false, first.length, false, true);
+            (0, hostServices.renderArchiveList)(_archiveQuery(), { force: true });
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          } finally {
+            releaseInitialPaint();
+          }
         }
       }
       if (!isCurrentWindow()) {
         sharedState._archiveRefreshAfterInflight = true;
         return sharedState.archiveData;
       }
-      const convs = await loadArchiveAll({ staleOk: opts.staleOk !== false && !opts.force, window: requestedWindow });
+      const convs = await (fullRead || loadArchiveAll({ staleOk: opts.staleOk !== false && !opts.force, window: requestedWindow }));
       if (!isCurrentWindow()) {
         sharedState._archiveRefreshAfterInflight = true;
         return sharedState.archiveData;

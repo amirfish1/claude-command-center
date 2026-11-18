@@ -83,3 +83,29 @@ test('list telemetry includes early request time before the loader initialized',
   assert.equal(event.detail.ttfb_ms,100);
   assert(event.ms>=1000,'time before application initialization stays in the metric');
 });
+
+test('overlapped history fetches immediately but parses only after initial paint', async () => {
+  const core = fs.readFileSync(require.resolve('../static/conversation-core.js'), 'utf8');
+  const start = core.indexOf('  async function loadArchiveAll(');
+  const source = core.slice(start, core.indexOf('\n  }\n', start) + 4);
+  let releasePaint, reads = 0, parses = 0;
+  const afterPaint = new Promise(resolve => { releasePaint = resolve; });
+  const response = {ok: true, status: 200, headers: {get: () => null},
+    json: async () => { parses++; return {conversations: [{id: 'one'}]}; }};
+  const state = {_archiveAllInflight: new Map(), _archiveAllEtag: new Map(),
+    _archiveAllData: new Map(), _archiveAllDelta: new Map(), ARCHIVE_ALL_FETCH_TIMEOUT_MS: 45000};
+  const context = {sharedState: state, window: {}, performance, URLSearchParams, AbortController,
+    setTimeout: () => 0, clearTimeout() {}, _clientLog() {}, _scheduleArchiveSidebarCache() {},
+    backgroundApiFetch: async () => { reads++; return response; }};
+  vm.createContext(context);
+  vm.runInContext(source, context);
+  const loading = context.loadArchiveAll({window: '7d', afterPaint});
+  await new Promise(setImmediate);
+  assert.equal(reads, 1);
+  assert.equal(parses, 0);
+  assert.equal(state._archiveAllData.size, 0);
+  releasePaint();
+  assert.equal((await loading)[0].id, 'one');
+  assert.equal(parses, 1);
+  assert.equal(state._archiveAllInflight.size, 0);
+});
