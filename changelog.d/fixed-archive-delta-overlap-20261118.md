@@ -1,0 +1,1 @@
+- Share matching archive delta response builds across overlapping dashboard reads, reducing duplicate projection and compression work while keeping explicit fresh reads independent.

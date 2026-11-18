@@ -18174,6 +18174,57 @@ def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=
     return payload
 
 
+_ARCHIVE_LIST_DELTA_FLIGHTS = {}
+_ARCHIVE_LIST_DELTA_FLIGHTS_LOCK = threading.Lock()
+
+
+def _archive_list_delta_body(state, since, rows, *, window, cached=None, share=True,
+                             diagnostics=None):
+    """Share encoding only with overlapping reads of the same delta snapshot.
+
+    No result survives its build. Explicit fresh reads bypass the flight, and
+    different source, projection, overlay, client-token or window states never
+    join it. Immutable response bytes keep callers from editing shared rows.
+    """
+    def build():
+        payload = _archive_list_delta_payload(state, since, rows, window=window, cached=cached)
+        if payload is None:
+            return None
+        payload["delta_token"] = state["token"]
+        raw = _list_replay.encode_payload(payload)
+        compressed = (gzip.compress(raw, compresslevel=1)
+                      if len(raw) >= _ARCHIVE_LIST_GZIP_MIN_BYTES else None)
+        return raw, compressed, '"' + hashlib.sha1(raw).hexdigest() + '"'
+
+    if not share:
+        return build()
+    key = (state["token"], since, window, cached)
+    with _ARCHIVE_LIST_DELTA_FLIGHTS_LOCK:
+        flight = _ARCHIVE_LIST_DELTA_FLIGHTS.get(key)
+        owner = flight is None
+        if owner:
+            flight = {"event": threading.Event(), "value": None, "done": False}
+            _ARCHIVE_LIST_DELTA_FLIGHTS[key] = flight
+    if not owner:
+        started = time.perf_counter()
+        flight["event"].wait()
+        if diagnostics is not None:
+            diagnostics.update(delta_coalesced=flight["done"],
+                               wait_ms=round((time.perf_counter() - started) * 1000, 1))
+        # Failed builders do not cache an exception or suppress a retry.
+        return flight["value"] if flight["done"] else build()
+    try:
+        if diagnostics is not None:
+            diagnostics["delta_coalesced"] = False
+        flight["value"] = build()
+        flight["done"] = True
+        return flight["value"]
+    finally:
+        with _ARCHIVE_LIST_DELTA_FLIGHTS_LOCK:
+            _ARCHIVE_LIST_DELTA_FLIGHTS.pop(key, None)
+            flight["event"].set()
+
+
 def _archive_serve_ver_for_rows(key, rows):
     """The serve entry's version IFF it currently holds exactly this row list
     (identity) — 0 otherwise. Body prebuilding keys off this so a response
@@ -36400,14 +36451,14 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     _status = 304
                 else:
                     _pt0 = time.perf_counter()
-                    _dp = _archive_list_delta_payload(
+                    _delta_body = _archive_list_delta_body(
                         _delta, since, rows, window=window, cached=from_cache,
+                        share=stale_ok, diagnostics=_body_cache_diag,
                     )
-                    if _dp is not None:
-                        _dp["delta_token"] = _delta["token"]
+                    if _delta_body is not None:
                         _payload_ms.append((time.perf_counter() - _pt0) * 1000.0)
-                        self.send_json(_dp)
-                        _status = "delta"
+                        _delta_status = self._send_archive_list_body(*_delta_body)
+                        _status = "delta" if _delta_status == 200 else _delta_status
                     elif _since_diag == "ok":
                         _since_diag = "unmergeable"
 
