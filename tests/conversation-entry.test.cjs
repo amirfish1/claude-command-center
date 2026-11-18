@@ -244,6 +244,48 @@ test('embedded entry binds real controls before readiness and keeps drafts live'
     assert.equal(issueActions.find(item=>item.url.endsWith('/close')).body.reason,'not planned');
     assert.equal(issueActions.find(item=>item.url.endsWith('/reply')).body.action,'needs_attention');
     assert.match(issueActions.find(item=>item.url==='/api/sessions/spawn').body.prompt,/Implementation instructions/);
+    // Clipped results expand both in visible context and after opening history.
+    for (const [lines, folded] of [[2, false], [40, false], [40, true]]) {
+      await frame.evaluate(({lines, folded}) => {
+        const c = cccConversation;
+        const view = c.getConvViewForPane(c.activePaneId());
+        document.body.classList.remove('conv-compact');
+        view.closest('.conv-pane').classList.remove('is-codex-session', 'is-kimi-session', 'is-webui-session');
+        const group = document.createElement('div');
+        group.id = 'fixture-output-group';
+        group.className = 'tool-call-group';
+        group.innerHTML = '<div class="tool-call-group-header">Tool output</div>'
+          + '<div class="tool-call-group-body"><div class="event tool-call"'
+          + ' data-tool-use-id="output-fixture" data-tool-name="Bash"></div></div>'
+          + (folded ? '' : '<span class="acp-needs-approval">Tool context</span>');
+        view.appendChild(group);
+        c._currentToolGroup = group;
+        c._currentToolCount = 1;
+        c.renderConversationEvents([{type:'tool_result', tool_use_id:'output-fixture',
+          text:Array.from({length:lines},(_,i)=>'Fixture error line '+i).join('\n'),
+          is_error:true, line:1000+lines}], c.activePaneId(), {initialLoad:true});
+        if (folded) {
+          if (!group.classList.contains('activity-run-source')) throw new Error('History did not fold');
+          group.previousElementSibling.querySelector('.activity-run-toggle').click();
+        }
+      }, {lines, folded});
+      await frame.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const result = await frame.evaluate(() => {
+        const group = document.getElementById('fixture-output-group');
+        const output = group.querySelector('.tool-result-output');
+        const toggle = group.querySelector('.tool-result-expand-toggle');
+        if (!output) throw new Error('Fixture output did not render');
+        const before = output.clientHeight;
+        toggle?.click();
+        const after = output.clientHeight;
+        group.remove();
+        cccConversation._currentToolGroup = null;
+        cccConversation._currentToolCount = 0;
+        return {toggle:!!toggle, before, after};
+      });
+      assert.equal(result.toggle, lines === 40, `${lines}-line output, folded=${folded}`);
+      if (lines === 40) assert.ok(result.after > result.before, 'Show full result expands clipped output');
+    }
     await frame.evaluate(async()=>{
       const c=cccConversation;
       c.conversationsData.push({id:'backlog-todo',source:'backlog',display_name:'A todo',first_message:'Todo body'},

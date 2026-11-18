@@ -4,6 +4,20 @@
   function createRenderer({ state, text, helpers }) {
     const { escapeAttr, escapeHtml, linkifyPastedImages, truncate, parseTaskNotificationBlock, renderTaskNotificationBlock, renderMarkdown, renderDevinSummaryBlock, _linkifyEscapedUrls } = text;
     const { activePaneId, paneByPaneId, _ultraFreshFeed, getConvViewForPane, _refreshTokenEconomizerAnnotation, _viewIsWebUiPane, isConversationAtBottom, resetTtsOnNewTurn, formatModelEffort, rowReasoningEffort, _freeServedText, _kimiRegroupTools, isRoutineCodexCoordination, _confirmedResultForTurn, _removeStaleProvisionalsForTurn, queuedRowDeliveryId, _turnOrdinalBefore, eventStamp, nowStamp, _isOriginalAskText, convRowForPane, cleanIssuePrompt, originalAskTextForEvent, syncMobileOriginalAsk, _uxFixesHandledTicketsForRow, _uxFixesQueueProgressForRow, splitFirstSentence, renderImageDescriptors, breadcrumbSpawnedByChipHtml, pastedImageThumbsHtml, _applyStatusRailLayout, _dynAskSchedule, _updateStickyAskSlots, renderSessionTimelineIntoSticky, renderSessionWorkspaceIntoSticky, renderIssueInConvPane, repoPathForIssueNumber, tsSpan, _formatCompactDuration, _formatTokens, _compactEngineLabel, clearSessionSending, syncPendingSendsMapForConv, _stripKimiControlXml, syncPaneLastUserMessage, renderCompactResumeCard, completeCompactRun, _compactRunAnchorTo, userMessageSteerHtml, renderSkillLoadedCard, renderDevinHandoffCard, renderCodexUserText, formatPeerMessageHtml, debugModeEnabled, _convPaneSeedTaskInfo, _kimiToolRowHtml, _kimiThinkingHtml, renderCodexSkillLoadedCard, _planEntriesHtml, _turnDiffBlockHtml, _imageGenerationBlockHtml, assistantMessageActionsHtml, _formatAntigravityTokenChips, _cacheAdjustedInlineHtml, _kimiAppendAssistantEvent, attachPresentationArtifactToAssistant, toolDisplayName, toolBlockSource, formatToolCallDetail, renderToolInputDisclosure, renderToolCommandDisclosure, renderEditDisclosure, _ccOrchScan, isFileToolName, inlineToolImageHtml, _compactRunAdoptDevinSummary, _cacheMissCallout, _recordCacheMissLog, _isNoopAckText, loadToolInputDisclosure, _resultOutcomeInfo, _convPaneMarkTaskCompleted, eventTextString, _ccOrchResultLabels, _kimiUpdateToolGroupHead, _loadCompleteToolOutput, _kimiToolPeekHtml, _toolResultImageKey, _toolResultImagesCardHtml, toolCallForResult, isSuccessfulCommandToolResult, isRoutineSuccessfulToolResult, stampCurrentToolGroup, updateToolGroupLabel, renderToolCodePreview, toolResultOutputLabel, _codexRequestCardHtml, convVerboseOn, _lastRealTranscriptChild, toolGroupCarriesConversationContext, toolCallLooksLikeCodeRead, _upsertProvisionalNode, _findMatchingProvisionalNode, _convLiveRevealNewText, _kimiFlushRegroups, _convPaneSyncJsonlTaskTabs, updateLiveToolStrip, updateCodexStateBadge, clearOptimisticAgentIndicator, clearLiveGeneratingIndicator, fetchSessionUsage, _compactRunClaimSummary, _compactRunMount, _compactRunAdoptBoundary, _foldCompactRecords, _reanchorToTailUnlessOnlyTransientBetween, syncQueuedSteerTray, takeQueuedSendAcknowledgement, _anchorWakeBreakdown, updateSessionOutcomeBanner, _syncThinkingRuns, _ccMarkRuns, anchorCodexStateBadge, updateConversationEndAffordance, scrollConversationToEnd, ffcRefreshForCurrent, _firePhoneModeReadIfDone, _ensureFirstUserPinned, _syncLiveQuestionDuplicateHide, syncUserMessageSteerButtons, _convReplaySweepNewItems, refreshPresentationForPane, _reconcileAnnotationsForPane, markSpawnAssistantPaint, convPaneElById } = helpers;
+  let resultOverflowObserver;
+  function addResultOverflowToggles(outputs) {
+    // ResizeObserver delivers after layout. Keep all reads ahead of the writes.
+    const overflowing = outputs.filter(output => output.isConnected
+      && output.scrollHeight > output.clientHeight + 1);
+    for (const output of overflowing) {
+      const expandBtn = document.createElement('button');
+      expandBtn.type = 'button';
+      expandBtn.className = 'tool-result-expand-toggle';
+      expandBtn.setAttribute('data-toggle-tool-result', '');
+      expandBtn.textContent = 'Show full result';
+      output.insertAdjacentElement('afterend', expandBtn);
+    }
+  }
   function renderConversationEvents(events, paneId, opts) {
     if (!Array.isArray(events)) return true;  // defensive: backlog/unknown responses
     // Do not defer transcript rendering while the composer is focused.
@@ -40,10 +54,9 @@
     // fresh open: bottom-follow and saved-open restores belong to the reader
     // already on screen, whose position the prepend restores after rendering.
     const wasAtBottom = !opts.prepending && isConversationAtBottom($view);
-    // CCC-500 overflow toggles are decided in ONE read pass after the loop
-    // (see _overflowChecks flush below). Reading scrollHeight per tool
-    // result inside the loop forced a style recalc + layout per result:
-    // ~30 recalcs, ~700ms, on a 60-event open.
+    // Measure tool output after layout, including history revealed later.
+    // Reading scrollHeight while building the transcript forces expanded
+    // tool layouts that the final folding pass immediately invalidates.
     const _overflowChecks = [];
     // Visual "Clear" watermark (CCC-474): events at or below this jsonl line
     // were wiped from the screen for recording — keep them hidden if a poll
@@ -1871,19 +1884,8 @@
     } finally {
       if (_ownsRegroupBatch) _kimiFlushRegroups();
     }
-    // Batched CCC-500 overflow check: one layout read for all results
-    // appended above, then the writes. Reads-then-writes = one recalc.
-    if (_overflowChecks.length) {
-      const _overflowing = _overflowChecks.filter(o => o.isConnected && o.scrollHeight > o.clientHeight + 1);
-      for (const o of _overflowing) {
-        const expandBtn = document.createElement('button');
-        expandBtn.type = 'button';
-        expandBtn.className = 'tool-result-expand-toggle';
-        expandBtn.setAttribute('data-toggle-tool-result', '');
-        expandBtn.textContent = 'Show full result';
-        o.insertAdjacentElement('afterend', expandBtn);
-      }
-    }
+    // Older browsers retain the original synchronous expansion check.
+    if (_overflowChecks.length && typeof ResizeObserver !== 'function') addResultOverflowToggles(_overflowChecks);
     // Defensive sweep: a tool group whose body has no events renders as a
     // "Ran 1 command" header over an empty box (CCC-80 — seen after live-
     // stream races). It carries no information; drop it.
@@ -2028,6 +2030,16 @@
     _syncThinkingRuns($view);
     if (document.body.classList.contains('conv-compact')) _ccMarkRuns($view);
     anchorCodexStateBadge($view);
+    // Fold first so hidden tool history does not force an expanded layout.
+    // Its observer measures the output if the reader later opens the history.
+    if (_overflowChecks.length && typeof ResizeObserver === 'function') {
+      if (!resultOverflowObserver) resultOverflowObserver = new ResizeObserver(entries => {
+        const measurable = entries.filter(entry => !entry.target.isConnected || entry.contentRect.height > 0);
+        for (const entry of measurable) resultOverflowObserver.unobserve(entry.target);
+        addResultOverflowToggles(measurable.map(entry => entry.target));
+      });
+      for (const output of _overflowChecks) resultOverflowObserver.observe(output);
+    }
     // When a compact-resume event just landed, scroll the boundary
     // INTO VIEW (top of the resume card) instead of the very bottom.
     // The collapsed card sits at the top of the user's gaze; the
