@@ -19790,9 +19790,10 @@
 body.status-pos-right .conv-pane.has-status-rail {
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--status-rail-width, 260px);
-  grid-template-rows: auto 1fr auto auto auto auto auto auto;
+  grid-template-rows: auto auto 1fr auto auto auto auto auto auto;
   grid-template-areas:
     "header  rail"
+    "tabs    rail"
     "conv    rail"
     "goal    rail"
     "model   rail"
@@ -19805,6 +19806,7 @@ body.status-pos-right .conv-pane.has-status-rail {
 body.status-pos-right .conv-pane.has-status-rail.has-new-session-context {
   grid-template-areas:
     "header  rail"
+    "tabs    rail"
     "conv    rail"
     "context rail"
     "goal    rail"
@@ -19814,6 +19816,8 @@ body.status-pos-right .conv-pane.has-status-rail.has-new-session-context {
     "hint    rail";
 }
 body.status-pos-right .conv-pane.has-status-rail > .conv-pane-header   { grid-area: header;  min-width: 0; }
+/* Task tabs belong above the transcript, rather than an implicit final row. */
+body.status-pos-right .conv-pane.has-status-rail > .conv-tab-strip { grid-area: tabs; min-width: 0; }
 body.status-pos-right .conv-pane.has-status-rail > .conversations-view { grid-area: conv;    min-width: 0; min-height: 0; }
 body.status-pos-right .conv-pane.has-status-rail > .conv-goal-strip    { grid-area: goal;    min-width: 0; }
 body.status-pos-right .conv-pane.has-status-rail > .conv-model-picker-strip { grid-area: model; min-width: 0; }
@@ -20506,6 +20510,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail {
   grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
     "header"
+    "tabs"
     "conv"
     "goal"
     "model"
@@ -20517,6 +20522,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail {
 body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail.has-new-session-context {
   grid-template-areas:
     "header"
+    "tabs"
     "conv"
     "context"
     "goal"
@@ -27710,10 +27716,11 @@ body.has-gc-reader .pwa-install-banner {
    an explicit row for the per-pane selector so it does not fall
    into implicit-grid placement or displaces the composer. */
 body.status-pos-right .conv-pane.has-status-rail {
-  grid-template-rows: auto auto 1fr auto auto auto auto auto auto;
+  grid-template-rows: auto auto auto 1fr auto auto auto auto auto auto;
   grid-template-areas:
     "header rail"
     "present-toolbar rail"
+    "tabs rail"
     "conv rail"
     "goal rail"
     "model rail"
@@ -27726,6 +27733,7 @@ body.status-pos-right .conv-pane.has-status-rail.has-new-session-context {
   grid-template-areas:
     "header rail"
     "present-toolbar rail"
+    "tabs rail"
     "conv rail"
     "context rail"
     "goal rail"
@@ -27739,6 +27747,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail {
   grid-template-areas:
     "header"
     "present-toolbar"
+    "tabs"
     "conv"
     "goal"
     "model"
@@ -27751,6 +27760,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail.has-new-s
   grid-template-areas:
     "header"
     "present-toolbar"
+    "tabs"
     "conv"
     "context"
     "goal"
@@ -28820,6 +28830,7 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
     grid-template-areas:
       "header"
       "present-toolbar"
+      "tabs"
       "conv"
       "context"
       "goal"
@@ -28869,10 +28880,12 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
     font: 600 12px/1 inherit;
   }
   body.popout-rail-forced .conv-pane.has-status-rail {
-    grid-template-rows: auto 1fr auto auto auto auto auto auto;
+    grid-template-rows: auto auto auto 1fr auto auto auto auto auto auto;
     grid-template-columns: minmax(0, 1fr) var(--status-rail-width, 260px);
     grid-template-areas:
       "header  rail"
+      "present-toolbar rail"
+      "tabs    rail"
       "conv    rail"
       "goal    rail"
       "model   rail"
@@ -28923,6 +28936,7 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
     grid-template-areas:
       "header"
       "present-toolbar"
+      "tabs"
       "conv"
       "goal"
       "model"
@@ -28939,6 +28953,7 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
     grid-template-areas:
       "header"
       "present-toolbar"
+      "tabs"
       "conv"
       "goal"
       "model"
