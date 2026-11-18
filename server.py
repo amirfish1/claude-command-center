@@ -19524,6 +19524,27 @@ def _archive_list_payload(rows, *, window="all", now=None, cached=None, phases=N
 _ARCHIVE_LIST_PROJECTION_CACHE = ByteBudgetCache(
     _cache_budget_bytes("CCC_LIST_PROJECTION_CACHE_MB", 64), 8)
 
+_ARCHIVE_LIST_PROJECTION_DIAG_KEYS = collections.OrderedDict()
+_ARCHIVE_LIST_PROJECTION_DIAG_LOCK = threading.Lock()
+
+
+def _archive_list_projection_diag(window, key, hit):
+    """Describe replay invalidation without logging row identities or values."""
+    names = ("window", "cached", "snapshot", "context", "overlay", "graph", "topics")
+    with _ARCHIVE_LIST_PROJECTION_DIAG_LOCK:
+        previous = _ARCHIVE_LIST_PROJECTION_DIAG_KEYS.get(window)
+        changed = [name for name, before, after in zip(names, previous or (), key)
+                   if before != after]
+        _ARCHIVE_LIST_PROJECTION_DIAG_KEYS[window] = key
+        _ARCHIVE_LIST_PROJECTION_DIAG_KEYS.move_to_end(window)
+        while len(_ARCHIVE_LIST_PROJECTION_DIAG_KEYS) > 8:
+            _ARCHIVE_LIST_PROJECTION_DIAG_KEYS.popitem(last=False)
+    cache = _ARCHIVE_LIST_PROJECTION_CACHE
+    return {"hit": hit, "reason": "hit" if hit else "first-observed" if previous is None
+            else "key-changed" if changed else "not-retained",
+            "changed": changed, "entries": len(cache), "bytes": cache.bytes,
+            "budget_bytes": cache.max_bytes}
+
 
 def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=None, phases=None):
     if not delta or not delta.get("extra"):
@@ -19565,6 +19586,8 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
     key = (window, bool(cached), delta["ver"], delta["ctx"], guard,
            _session_graph.projection_revision(), continuation_topics.revision())
     entry = _ARCHIVE_LIST_PROJECTION_CACHE.get(key)
+    if phases is not None:
+        phases["projection_cache"] = _archive_list_projection_diag(window, key, entry is not None)
     if entry is None:
         payload = _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
                                        _inputs=(resumes, parents, ideas, selected))

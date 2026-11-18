@@ -373,3 +373,22 @@ def test_overlay_window_membership_swap_invalidates_even_with_same_slot_count(in
     actual = read(rows, window='8h', now=40000)
     assert inputs['calls'] == 2
     assert [row['session_id'] for row in actual['conversations']] == ['archive', 'right']
+
+
+def test_diagnostics_distinguish_replay_and_metadata_invalidation(inputs, monkeypatch):
+    import collections
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_PROJECTION_DIAG_KEYS', collections.OrderedDict())
+    rows = fixture_rows()
+    delta = {'ver': 1, 'ctx': 'context', 'extra': rows[1:]}
+    phases = {}
+    first = server._archive_list_replay_payload(rows, delta, now=10000, phases=phases)
+    assert phases['projection_cache']['reason'] == 'first-observed'
+    rows[1]['mtime'] += 1
+    again = server._archive_list_replay_payload(rows, delta, now=10000, phases=phases)
+    assert phases['projection_cache']['hit'] is True
+    assert again['conversations'][1]['mtime'] != first['conversations'][1]['mtime']
+    rows[1]['display_name'] = 'Renamed'
+    changed = server._archive_list_replay_payload(rows, delta, now=10000, phases=phases)
+    assert phases['projection_cache']['changed'] == ['overlay']
+    assert not phases['projection_cache']['hit']
+    assert changed['conversations'][1]['display_name'] == 'Renamed'
