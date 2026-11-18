@@ -18528,7 +18528,9 @@ def _archive_list_preview(text, limit=140):
         cached = _ARCHIVE_LIST_PREVIEW_CACHE.get(text)
         if cached is not None:
             return cached
-    t = _PREVIEW_STATE_RE.sub(" ", str(text)[:2000])
+    t = str(text)[:2000]
+    if "<session-state>" in t:
+        t = _PREVIEW_STATE_RE.sub(" ", t)
     t = _PREVIEW_MD_RE.sub(lambda m: m.group(1) or " ", t)
     t = " ".join(t.split())
     preview = t if len(t) <= limit else t[: limit - 1].rstrip() + "\u2026"

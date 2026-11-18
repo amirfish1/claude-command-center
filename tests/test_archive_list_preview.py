@@ -17,6 +17,15 @@ def test_preview_caps_length_and_handles_empty():
     assert server._archive_list_preview(None) == ''
 
 
+def test_preview_preserves_text_around_commented_or_unfinished_state():
+    server = importlib.import_module('server')
+    assert server._archive_list_preview(
+        'Before. <!--\n <session-state>Private status</session-state> --> After.'
+    ) == 'Before. After.'
+    assert server._archive_list_preview('Visible reply. <session-state>Unfinished status') == 'Visible reply.'
+    assert server._archive_list_preview('**שלום.** Read [the notes](https://example.invalid/notes).') == 'שלום. Read the notes.'
+
+
 def test_projection_adds_preview_only_when_there_is_text():
     server = importlib.import_module('server')
     row = {'session_id': 's1', 'parent_session_id': 'p', 'last_assistant_text': 'All set.'}
