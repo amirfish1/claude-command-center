@@ -5,6 +5,7 @@ import json
 import tempfile
 import types
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -79,6 +80,16 @@ class TakeoverBridgeTest(unittest.TestCase):
         self.assertFalse(self.handoff()["adoption_pending"])
         self.assertEqual(self.injects, [])
 
+    def test_repeated_failed_adoption_retries_without_rewriting_or_restamping(self):
+        with mock.patch.object(tickets, "_wt", return_value=(-1, "connection lost")):
+            self.assertFalse(tickets.handoff("session-a")["ok"])
+            with mock.patch.object(tickets, "_save_state") as save, \
+                    mock.patch.object(tickets, "_restamp_rows") as restamp:
+                bridge.sync_once()
+        save.assert_not_called()
+        restamp.assert_not_called()
+        self.assertTrue(self.handoff()["adoption_pending"])
+
     def test_answer_has_one_delivery_owner(self):
         tickets.handoff("session-a")
         self.calls.clear()
@@ -126,6 +137,74 @@ class TakeoverBridgeTest(unittest.TestCase):
         self.assertEqual(self.handoff()["supervision_id"], "sup-a")
         self.assertTrue(self.handoff()["auto"])
         self.assertEqual(self.calls, [])
+
+    def test_unchanged_sync_preserves_state_file_and_archive_snapshot(self):
+        bridge.sync_once({"session-a": self.response})
+        before = tickets._state_path().read_bytes()
+        with mock.patch.object(tickets, "_save_state", wraps=tickets._save_state) as save, \
+                mock.patch.object(tickets, "_restamp_rows") as restamp:
+            bridge.sync_once({"session-a": self.response})
+        save.assert_not_called()
+        restamp.assert_not_called()
+        self.assertEqual(tickets._state_path().read_bytes(), before)
+
+    def test_changed_sync_persists_and_restamps_once(self):
+        bridge.sync_once({"session-a": self.response})
+        updated = {**self.response, "state": "needs_input", "question": "Choose a folder"}
+        with mock.patch.object(tickets, "_save_state", wraps=tickets._save_state) as save, \
+                mock.patch.object(tickets, "_restamp_rows") as restamp:
+            bridge.sync_once({"session-a": updated})
+        self.assertEqual(self.handoff()["question"], "Choose a folder")
+        self.assertEqual(self.handoff()["state"], "blocked")
+        save.assert_called_once()
+        restamp.assert_called_once()
+
+    def test_completed_mirror_closes_atomically_and_repeated_sync_is_quiet(self):
+        bridge.sync_once({"session-a": self.response})
+        completed = {**self.response, "state": "completed"}
+        with mock.patch.object(tickets, "_save_state", wraps=tickets._save_state) as save, \
+                mock.patch.object(tickets, "_restamp_rows") as restamp:
+            bridge.sync_once({"session-a": completed})
+        saved = save.call_args.args[0]["tickets"]["DEMO-1"]
+        self.assertTrue(saved["closed"])
+        self.assertEqual(saved["handoff"]["state"], "closed")
+        save.assert_called_once()
+        restamp.assert_called_once()
+        with mock.patch.object(tickets, "_save_state") as save, \
+                mock.patch.object(tickets, "_restamp_rows") as restamp:
+            bridge.sync_once({"session-a": completed})
+        save.assert_not_called()
+        restamp.assert_not_called()
+
+    def test_noop_handoff_update_still_observes_external_state_changes(self):
+        tickets._set_handoff("DEMO-1", state="waiting", question="Choose a folder")
+        data = json.loads(tickets._state_path().read_text())
+        data["tickets"]["DEMO-1"]["handoff"]["question"] = "Choose a repository instead"
+        data["tickets"]["DEMO-1"]["external_field"] = "preserve"
+        tickets._state_path().write_text(json.dumps(data))
+        tickets._set_handoff("DEMO-1", state="waiting", question="Choose a folder")
+        result = tickets.load_state()["tickets"]["DEMO-1"]
+        self.assertEqual(result["handoff"]["question"], "Choose a folder")
+        self.assertEqual(result["external_field"], "preserve")
+
+    def test_sync_observes_state_changed_while_waiting_for_effect_lock(self):
+        bridge.sync_once({"session-a": self.response})
+        original_lock = tickets.handoff_effect_lock
+
+        @contextmanager
+        def external_update(ref):
+            with original_lock(ref):
+                data = json.loads(tickets._state_path().read_text())
+                data["tickets"][ref]["handoff"]["question"] = "External question"
+                data["tickets"][ref]["external_field"] = "preserve"
+                tickets._state_path().write_text(json.dumps(data))
+                yield
+
+        # A missing remote status leaves the fresh local question intact.
+        with mock.patch.object(tickets, "handoff_effect_lock", external_update):
+            bridge.sync_once({})
+        self.assertEqual(self.handoff()["question"], "External question")
+        self.assertEqual(tickets.load_state()["tickets"]["DEMO-1"]["external_field"], "preserve")
 
     def test_legacy_takeback_imports_cancellation_suppression(self):
         tickets._set_handoff("DEMO-1", state="taken_back", session="session-a", at=100)

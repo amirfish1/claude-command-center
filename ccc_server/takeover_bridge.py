@@ -69,7 +69,7 @@ def _mirror(ref, result, *, auto=False):
               "completed": "closed"}
     state = result.get("state")
     if state not in states:
-        return
+        return False
     session = result.get("session") or {}
     sid = session.get("session_id") if isinstance(session, dict) else session
     supervision = result.get("supervision") or {}
@@ -85,30 +85,35 @@ def _mirror(ref, result, *, auto=False):
               "nudges": supervision.get("reminders", 0)}
     if sid:
         fields["session"] = sid
-    tickets._set_handoff(ref, **fields)
-    if state == "completed":
-        tickets._mutate(lambda d: d["tickets"].get(ref, {}).__setitem__("closed", True))
+    _handoff, changed = tickets._update_handoff(ref, fields, completed=state == "completed")
+    return changed
 
 
 def adopt(sid, ref, *, auto=False, legacy=None):
     from . import idea_tickets as tickets
     # Caller holds the effect lock, which also guards all old CCC effects.
     current = (tickets.load_state()["tickets"].get(ref) or {}).get("handoff") or {}
-    tickets._set_handoff(ref, owner="watchtower", session=sid,
-                         state=current.get("state") or "running", auto=bool(auto),
-                         adoption_pending=True)
+    _handoff, changed = tickets._update_handoff(ref, {
+        "owner": "watchtower", "session": sid,
+        "state": current.get("state") or "running", "auto": bool(auto),
+        "adoption_pending": True,
+    })
     args = [sid, "--ticket", ref]
     if legacy is not None:
         args += ["--legacy-json", json.dumps(legacy, separators=(",", ":"))]
     result = _call(args)
     if result.get("ok"):
-        _mirror(ref, result, auto=auto)
+        changed |= _mirror(ref, result, auto=auto)
     else:
         error = result.get("error") or "Adoption failed"
-        tickets._set_handoff(ref, sync_error=error, state="waiting",
-                             supervision_state="paused_unreachable",
-                             waiting_on="WatchTower adoption: " + error)
-    tickets._restamp_rows()
+        _handoff, failure_changed = tickets._update_handoff(ref, {
+            "sync_error": error, "state": "waiting",
+            "supervision_state": "paused_unreachable",
+            "waiting_on": "WatchTower adoption: " + error,
+        })
+        changed |= failure_changed
+    if changed:
+        tickets._restamp_rows()
     return {**result, "ref": ref}
 
 
@@ -150,6 +155,7 @@ def answer(sid, ref, text):
 def sync_once(statuses=None):
     """Import fenced legacy records, then refresh presentation from WT truth."""
     from . import idea_tickets as tickets
+    changed = False
     canonical_bindings = {(row.get("ticket"), row.get("supervision_id")): row
                           for row in (statuses or {}).values()
                           if row.get("ok") and row.get("supervision_id")}
@@ -162,7 +168,7 @@ def sync_once(statuses=None):
             with tickets.handoff_effect_lock(ref):
                 local = tickets.load_state()["tickets"].get(ref) or {}
                 if not local.get("handoff"):
-                    _mirror(ref, result, auto=True)
+                    changed |= _mirror(ref, result, auto=True)
     data = tickets.load_state()
     for ref, ticket in list(data["tickets"].items()):
         h = ticket.get("handoff") or {}
@@ -173,7 +179,9 @@ def sync_once(statuses=None):
         if h.get("owner") != "watchtower" and h.get("state") not in legacy_states:
             continue
         with tickets.handoff_effect_lock(ref):
-            tickets._state_cache["key"] = None
+            # load_state checks the current file signature, including writes
+            # made while we waited for the effect lock. Do not force a full
+            # state parse for every unchanged handoff in the same snapshot.
             current = (tickets.load_state()["tickets"].get(ref) or {}).get("handoff") or {}
             # A failed adoption from a continuation may have overwritten the
             # local session while retaining the original supervision ID. WT
@@ -181,7 +189,7 @@ def sync_once(statuses=None):
             # including cancelled bindings that must never be re-enrolled.
             canonical = canonical_bindings.get((ref, current.get("supervision_id")))
             if canonical and (canonical.get("session") or {}).get("session_id") != sid:
-                _mirror(ref, canonical, auto=current.get("auto", False))
+                changed |= _mirror(ref, canonical, auto=current.get("auto", False))
                 continue
             if current.get("state") == "unsupported" and not current.get("supervision_id"):
                 # Recover requests incorrectly rejected by the former engine
@@ -215,8 +223,9 @@ def sync_once(statuses=None):
                 continue
             result = (statuses.get(sid) or {}) if statuses is not None else _call(["status", sid])
             if result.get("ok") and result.get("ticket") == ref:
-                _mirror(ref, result, auto=current.get("auto", False))
-    tickets._restamp_rows()
+                changed |= _mirror(ref, result, auto=current.get("auto", False))
+    if changed:
+        tickets._restamp_rows()
 
 
 def publish_candidates(*, enabled=True):

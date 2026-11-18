@@ -1597,15 +1597,35 @@ def _inject(sid, text, source):
 
 
 def _set_handoff(ref, **fields):
-    def _record(d):
-        t = d["tickets"].get(ref)
-        if t is None:
-            return None
-        h = dict(t.get("handoff") or {})
-        h.update(fields)
-        t["handoff"] = h
-        return h
-    return _mutate(_record)
+    handoff, _changed = _update_handoff(ref, fields)
+    return handoff
+
+
+def _update_handoff(ref, fields, *, completed=False):
+    """Persist a changed handoff under the state lock; report actual changes.
+
+    Status synchronization repeatedly observes identical records. Rewriting
+    them invalidates both the ticket projection and the archive response,
+    even though the sidebar has nothing new to display.
+    """
+    with _file_lock(), _lock:
+        data = load_state()
+        ticket = data["tickets"].get(ref)
+        if ticket is None:
+            return None, False
+        previous = ticket.get("handoff") or {}
+        handoff = dict(previous)
+        handoff.update(fields)
+        if handoff == previous and (not completed or ticket.get("closed") is True):
+            return handoff, False
+        # Never mutate the projected/cache-owned state on the no-op path.
+        data = json.loads(json.dumps(data))
+        ticket = data["tickets"][ref]
+        ticket["handoff"] = handoff
+        if completed:
+            ticket["closed"] = True
+        _save_state(data)
+        return handoff, True
 
 
 def handoff(session_id, *, auto=False):
