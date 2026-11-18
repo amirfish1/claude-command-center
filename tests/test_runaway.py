@@ -20,6 +20,24 @@ BIG = {"input_tokens": 10, "cache_read_input_tokens": 2_000_000, "cache_creation
        "output_tokens": 20_000}
 
 
+def test_compact_scan_cache_roundtrip_and_atomic_replace(tmp_path, monkeypatch):
+    target = tmp_path / 'nested' / 'scan.json'
+    states = {'session:"one': {'size': 20, 'streak': {'turns': 3},
+                              'title': 'Unicode \u2603 and newline\n', 'partial': False},
+              'session:two': {'seen': NOW, 'last': None}}
+    runaway._write_scan_state(target, states)
+    assert json.loads(target.read_text()) == states
+    assert not target.with_suffix('.json.tmp').exists()
+    before = target.read_bytes()
+
+    def fail_replace(*_args):
+        raise OSError('test failure')
+
+    monkeypatch.setattr(runaway.os, 'replace', fail_replace)
+    runaway._write_scan_state(target, {'replacement': {}})
+    assert target.read_bytes() == before
+
+
 def iso(ts):
     return datetime.fromtimestamp(ts, timezone.utc).isoformat().replace("+00:00", "Z")
 

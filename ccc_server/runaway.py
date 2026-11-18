@@ -952,6 +952,24 @@ def _write_json(path, data):
     _rr._write_json(path, data)
 
 
+def _write_scan_state(path, states):
+    # This machine cache can contain thousands of records. Pretty encoding
+    # walks every field in Python; encoding the entire cache in C instead
+    # would hold the GIL for the whole document. Encode individual records
+    # in C so request threads can run between them, then replace atomically.
+    records = (json.dumps({key: value}, separators=(",", ":"))[1:-1]
+               for key, value in states.items())
+    payload = "{" + ",".join(records) + "}"
+    path = Path(path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(payload, encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
 def _log_new_flags(flag_log, entries, now):
     """Append each newly flagged session to the JSONL history, once per
     (session, autonomous streak). The live set only keeps current flags, so
@@ -1041,7 +1059,7 @@ def scan(now=None, projects_root=None, codex_root=None, state_file=None, debug=F
             watch.append(_entry(engine, path, st, []))
     states = {p: s for p, s in states.items()
               if isinstance(s, dict) and now - (s.get("seen") or 0) < PRUNE_AFTER_S}
-    _write_json(state_file, states)
+    _write_scan_state(state_file, states)
     _log_new_flags(flag_log, flagged, now)
     flagged.sort(key=lambda e: -e["cost_tokens"])
     watch.sort(key=lambda e: -e["cost_tokens"])
