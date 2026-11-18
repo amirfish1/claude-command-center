@@ -186,9 +186,12 @@ def test_metadata_cache_is_scanned_at_most_once_per_batch(store, monkeypatch):
     assert cache.scans == 1
     assert all(item['continuation_topic_title'] == 'TOPIC' for item in rows)
     selects = [query for query in queries if query.startswith('SELECT ')]
-    # Indexed point or batched-PK lookups only, never a table scan.
+    # Session reads stay indexed; tracking also reads one counter and the
+    # fixed set of trigger names from SQLite's small schema catalog.
     assert all(' WHERE sid=' in query or ' WHERE sid IN (' in query
                or 'FROM wanted w LEFT JOIN continuation_topics t ON t.sid=w.sid' in query
+               or query.startswith("SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name IN (")
+               or query.startswith("SELECT revision, (SELECT count(*) FROM sqlite_master WHERE type='trigger' ")
                for query in selects)
     for query in selects:
         if 'FROM wanted w LEFT JOIN' in query:
@@ -457,3 +460,152 @@ def test_topic_prefetch_preserves_sparse_and_missing_index_rows(store):
     assert batch.records['child'] == ('root', 'root', 'TOPIC', 0)
     assert batch.records['absent'] == ('', '', '', 0)
     assert batch.indexed_origins == {'child': '', 'absent': ''}
+
+
+def test_topic_cache_survives_unrelated_peer_writes_and_noop_updates(store, monkeypatch):
+    store.execute('PRAGMA journal_mode=WAL')
+    topics.attach_topics([row('root', 'TOPIC: task'), row('child', origin='root')], names={})
+    topics.attach_topics([row('child')], names={})
+    filename = store.execute('PRAGMA database_list').fetchone()[2]
+    before = topics._db_state_token(store)
+    assert before[0] == 'topics-v1'
+    with sqlite3.connect(filename) as peer:
+        peer.execute('INSERT INTO session_meta VALUES (?, ?)', ('unrelated', ''))
+        peer.execute('UPDATE continuation_topics SET topic_title=topic_title')
+    assert topics._db_state_token(store) == before
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError('unchanged topics must not be resolved again')
+
+    monkeypatch.setattr(topics, '_Batch', unexpected)
+    fresh = row('child')
+    topics.attach_topics([fresh], names={})
+    assert fresh['continuation_topic_title'] == 'TOPIC'
+
+
+@pytest.mark.parametrize('table,insert,update,delete', [
+    ('continuation_topics',
+     "INSERT INTO continuation_topics VALUES ('tracked', '', 'tracked', 'TITLE', 0)",
+     "UPDATE continuation_topics SET sid='moved' WHERE sid='tracked'",
+     "DELETE FROM continuation_topics WHERE sid='moved'"),
+    ('continuation_topic_meta',
+     'INSERT INTO continuation_topic_meta VALUES (99, 10)',
+     'UPDATE continuation_topic_meta SET id=100 WHERE id=99',
+     'DELETE FROM continuation_topic_meta WHERE id=100'),
+    ('session_meta',
+     "INSERT INTO session_meta VALUES ('tracked', 'root')",
+     "UPDATE session_meta SET sid='moved' WHERE sid='tracked'",
+     "DELETE FROM session_meta WHERE sid='moved'"),
+])
+def test_precise_topic_token_tracks_peer_identity_insert_update_delete(store, table, insert, update, delete):
+    topics._connection(store)
+    filename = store.execute('PRAGMA database_list').fetchone()[2]
+    previous = topics._db_state_token(store)
+    assert previous[0] == 'topics-v1'
+    with sqlite3.connect(filename) as peer:
+        for sql in (insert, update, delete):
+            peer.execute(sql)
+            peer.commit()
+            current = topics._db_state_token(store)
+            assert current != previous, (table, sql)
+            previous = current
+
+
+def test_topic_cache_uses_live_indexed_origin_after_peer_update(store):
+    topics.attach_topics([row('root', 'ROOT: task'), row('other', 'OTHER: task'),
+                          row('child', origin='root')], names={})
+    store.execute('INSERT INTO session_meta VALUES (?, ?)', ('child', 'root'))
+    store.commit()
+    topics.attach_topics([row('child')], names={})
+    filename = store.execute('PRAGMA database_list').fetchone()[2]
+    with sqlite3.connect(filename) as peer:
+        peer.execute("UPDATE continuation_topics SET origin='other', root_sid='other' WHERE sid='child'")
+        peer.execute("UPDATE session_meta SET continuation_origin='other' WHERE sid='child'")
+    child = row('child')
+    topics.attach_topics([child], names={})
+    assert child['continuation_topic_title'] == 'OTHER'
+    assert child['continuation_topic_root_session_id'] == 'other'
+
+
+def test_precise_token_handles_uncommitted_changes_rollback_and_missing_trigger(store):
+    topics._connection(store)
+    baseline = topics._db_state_token(store)
+    assert baseline[0] == 'topics-v1'
+    store.execute("INSERT INTO session_meta VALUES ('child', 'root')")
+    assert topics._db_state_token(store) != baseline
+    store.rollback()
+    assert topics._db_state_token(store) == baseline
+    store.execute('DROP TRIGGER ccc_topic_cache_session_meta_update')
+    store.commit()
+    assert topics._db_state_token(store)[0] != 'topics-v1'
+
+
+def test_tracking_install_never_waits_for_writer_or_commits_caller(store):
+    topics._connection(store)
+    filename = store.execute('PRAGMA database_list').fetchone()[2]
+    for name, in store.execute("SELECT name FROM sqlite_master WHERE name LIKE 'ccc_topic_cache_%'").fetchall():
+        store.execute('DROP TRIGGER ' + name)
+    store.execute('DROP TABLE continuation_topic_cache_state')
+    store.commit()
+    with sqlite3.connect(filename) as peer:
+        peer.execute('BEGIN IMMEDIATE')
+        topics._install_topic_tracking(store)
+        assert topics._db_state_token(store)[0] != 'topics-v1'
+    store.execute("INSERT INTO session_meta VALUES ('pending', '')")
+    topics._install_topic_tracking(store)
+    assert store.in_transaction
+    store.rollback()
+    assert store.execute("SELECT count(*) FROM session_meta WHERE sid='pending'").fetchone()[0] == 0
+
+
+def test_precise_token_without_thread_connection_reuses_peer_revision(store, monkeypatch):
+    from types import SimpleNamespace
+    from pathlib import Path
+    store.execute('PRAGMA journal_mode=WAL')
+    topics._connection(store)
+    filename = store.execute('PRAGMA database_list').fetchone()[2]
+    monkeypatch.setattr(topics._sg, '_get_connection', topics._ORIG_GET_CONNECTION)
+    monkeypatch.setattr(topics._sg, '_tls', SimpleNamespace())
+    monkeypatch.setattr(topics._sg, '_get_db_path', lambda: Path(filename))
+    before = topics._db_state_token()
+    assert before[0] == 'topics-v1'
+    with sqlite3.connect(filename) as peer:
+        peer.execute("INSERT INTO session_meta VALUES ('unrelated', '')")
+    assert topics._db_state_token() == before
+    with sqlite3.connect(filename) as peer:
+        peer.execute("UPDATE session_meta SET continuation_origin='root' WHERE sid='unrelated'")
+    assert topics._db_state_token() != before
+
+
+def test_topic_cache_discovers_new_indexed_origin_after_peer_write(store):
+    topics.attach_topics([row('root', 'ROOT: task'), row('standalone', 'CHILD: task')], names={})
+    store.execute("INSERT INTO session_meta VALUES ('standalone', '')")
+    store.commit()
+    topics.attach_topics([row('standalone')], names={})
+    filename = store.execute('PRAGMA database_list').fetchone()[2]
+    with sqlite3.connect(filename) as peer:
+        peer.execute("UPDATE session_meta SET continuation_origin='root' WHERE sid='standalone'")
+    child = row('standalone')
+    topics.attach_topics([child], names={})
+    assert child['continuation_topic_title'] == 'ROOT'
+    assert child['continuation_topic_root_session_id'] == 'root'
+
+
+def test_topic_cache_observes_direct_peer_root_rename(store):
+    topics.attach_topics([row('root', 'BEFORE: task'), row('child', origin='root')], names={})
+    topics.attach_topics([row('child')], names={})
+    filename = store.execute('PRAGMA database_list').fetchone()[2]
+    with sqlite3.connect(filename) as peer:
+        peer.execute("UPDATE continuation_topics SET topic_title='AFTER' WHERE sid='root'")
+    child = row('child')
+    topics.attach_topics([child], names={})
+    assert child['continuation_topic_title'] == 'AFTER'
+
+
+def test_precise_token_invalidates_when_schema_changes(store):
+    store.execute('PRAGMA journal_mode=WAL')
+    topics._connection(store)
+    before = topics._db_state_token(store)
+    store.execute('CREATE TABLE unrelated_schema_change (value)')
+    store.commit()
+    assert topics._db_state_token(store) != before
