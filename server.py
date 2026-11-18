@@ -18556,7 +18556,8 @@ _ARCHIVE_LIST_ROW_TEMPLATES = ByteBudgetCache(
 _ARCHIVE_LIST_TEMPLATE_UNREAD = object()
 
 
-def _archive_list_row_template(row, cached=_ARCHIVE_LIST_TEMPLATE_UNREAD):
+def _archive_list_row_template(row, cached=_ARCHIVE_LIST_TEMPLATE_UNREAD, *,
+                               _fields_by_shape=None):
     """Reuse scalar projection work while copying current containers per call.
 
     Snapshot refreshes replace row dictionaries even when their contents did
@@ -18571,10 +18572,20 @@ def _archive_list_row_template(row, cached=_ARCHIVE_LIST_TEMPLATE_UNREAD):
            if cached is _ARCHIVE_LIST_TEMPLATE_UNREAD else cached)
     if hit is not None and hit[0] == row:
         return hit[1], hit[2]
+    # Cold rows commonly share a parser's field layout. Resolve absent fields
+    # once per layout in this batch, retaining the canonical projection order.
+    # This map belongs to the request, and warm templates never consult it.
+    if _fields_by_shape is None:
+        fields = (key for key in _ARCHIVE_LIST_FIELDS if key in row)
+    else:
+        shape = tuple(row)
+        fields = _fields_by_shape.get(shape)
+        if fields is None:
+            fields = tuple(key for key in _ARCHIVE_LIST_FIELDS if key in row)
+            if len(_fields_by_shape) < 128:
+                _fields_by_shape[shape] = fields
     scalars, containers = {}, []
-    for key in _ARCHIVE_LIST_FIELDS:
-        if key not in row:
-            continue
+    for key in fields:
         value = row[key]
         if isinstance(value, (dict, list)):
             containers.append(key)
@@ -18593,7 +18604,7 @@ def _archive_list_row_template(row, cached=_ARCHIVE_LIST_TEMPLATE_UNREAD):
 
 
 def _archive_list_project_row(row, *, resumes=None, parents=None,
-                              _template=_ARCHIVE_LIST_TEMPLATE_UNREAD):
+                              _template=_ARCHIVE_LIST_TEMPLATE_UNREAD, _fields_by_shape=None):
     """Project one row for the sidebar list. Bulk callers pass `resumes` /
     `parents` snapshots so the per-row work is dict lookups, not a stat() or
     lock acquisition each (those cost a GIL hand-off apiece)."""
@@ -18605,7 +18616,8 @@ def _archive_list_project_row(row, *, resumes=None, parents=None,
     # CCC-142: a dict comprehension plus a C-level copy of flat containers
     # (cost_breakdown_usd sits on nearly every row) cut this ~1.5x; deepcopy
     # runs only for the rare container that nests another container.
-    scalars, containers = _archive_list_row_template(row, _template)
+    scalars, containers = _archive_list_row_template(
+        row, _template, _fields_by_shape=_fields_by_shape)
     out = dict(scalars)
     for key in containers:
         v = row[key]
@@ -18721,8 +18733,10 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _in
         if row.get("session_id") or row.get("id") else id(row)
         for row in window_rows
     )
+    fields_by_shape = {}
     projected = [
-        _archive_list_project_row(row, resumes=resumes, parents=parents, _template=template)
+        _archive_list_project_row(row, resumes=resumes, parents=parents, _template=template,
+                                  _fields_by_shape=fields_by_shape)
         for row, template in zip(window_rows, templates)
     ]
     phase("rows")

@@ -105,3 +105,51 @@ def test_bulk_projection_uses_one_cache_read_and_validates_current_rows(monkeypa
     assert projected[0]['display_name'] == 'After'
     projected[0]['question_options'].append('caller edit')
     assert rows[0]['question_options'] == ['a']
+
+
+def test_batch_field_layouts_preserve_canonical_output_and_current_value_types(monkeypatch):
+    cache = server.ByteBudgetCache(1 << 20, 20)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_ROW_TEMPLATES', cache)
+    rows = [
+        {'display_name': 'First', 'session_id': 'one', 'goal': 'text',
+         'question_options': ['a'], 'parser_only': 'private metadata'},
+        {'display_name': 'Second', 'session_id': 'two', 'goal': {'text': 'nested'},
+         'question_options': 'plain', 'parser_only': 'private metadata'},
+        {'session_id': 'three', 'display_name': 'Third', 'pinned': True},
+    ]
+    expected = [server._archive_list_project_row(row, resumes={}, parents={}) for row in rows]
+    cache.clear()
+    layouts = {}
+    actual = [server._archive_list_project_row(row, resumes={}, parents={},
+              _fields_by_shape=layouts) for row in rows]
+    assert server.json.dumps(actual) == server.json.dumps(expected)
+    assert 'parser_only' not in actual[0]
+    actual[1]['goal']['text'] = 'caller edit'
+    assert rows[1]['goal']['text'] == 'nested'
+
+    # Existing layouts must not hide added/removed fields or freeze a field's
+    # scalar/container type when a later snapshot replaces the row.
+    rows[0]['goal'] = {'text': 'now structured'}
+    del rows[0]['question_options']
+    rows[0]['pinned'] = False
+    out = server._archive_list_project_row(rows[0], resumes={}, parents={},
+                                          _fields_by_shape=layouts)
+    assert out['goal'] == {'text': 'now structured'}
+    assert 'question_options' not in out
+    assert out['pinned'] is False
+
+
+def test_warm_templates_skip_batch_field_discovery(monkeypatch):
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_ROW_TEMPLATES', server.ByteBudgetCache(1 << 20, 20))
+    row = {'session_id': 'one', 'display_name': 'Same', 'question_options': ['a']}
+    server._archive_list_project_row(row, resumes={}, parents={})
+
+    class NoDiscovery(dict):
+        def get(self, *args):
+            raise AssertionError('warm template repeated field discovery')
+
+    out = server._archive_list_project_row(dict(row), resumes={}, parents={},
+                                          _fields_by_shape=NoDiscovery())
+    assert out['display_name'] == 'Same'
+    out['question_options'].append('caller edit')
+    assert row['question_options'] == ['a']
