@@ -77,3 +77,35 @@ def test_different_keys_do_not_block_each_other():
     assert time.perf_counter() - t0 < 0.1
     release.set()
     t.join(2)
+
+
+@pytest.mark.parametrize("key,expected", [
+    (("savings", "example-scope"), "swr-refresh:savings"),
+    (("throughput-daily", "example-date", "example-engine"),
+     "swr-refresh:throughput-daily"),
+    (("unknown-category", "example-scope"), "swr-refresh"),
+])
+def test_refresh_attribution_preserves_stale_response_and_hides_scope(key, expected):
+    started, release = threading.Event(), threading.Event()
+    names = []
+    swr_cache.cached(key, lambda: {"version": 1}, fresh_s=30)
+
+    def compute():
+        names.append(threading.current_thread().name)
+        started.set()
+        release.wait(2)
+        return {"version": 2}
+
+    try:
+        assert swr_cache.cached(key, compute, fresh_s=0) == {"version": 1}
+        assert started.wait(2)
+        assert names == [expected]
+        # An in-flight refresh must still be shared, without losing its name.
+        assert swr_cache.cached(key, compute, fresh_s=0) == {"version": 1}
+        assert names == [expected]
+    finally:
+        release.set()
+        for thread in threading.enumerate():
+            if thread.name == expected:
+                thread.join(2)
+    assert swr_cache.cached(key, compute, fresh_s=30) == {"version": 2}
