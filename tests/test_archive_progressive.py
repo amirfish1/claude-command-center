@@ -22,14 +22,16 @@ def test_latest_500_keep_pin_ancestor_cycles_and_source_unchanged(monkeypatch):
     _isolate(monkeypatch)
     rows = [{'session_id': str(i), 'mtime': i} for i in range(600)]
     rows[599]['parent_session_id'] = '1'
+    rows[599]['continued_from_session_id'] = '3'
+    rows[3]['hermes_continued_from'] = '4'
     rows[1]['parent_session_id'] = '2'
     rows[2]['parent_session_id'] = '1'
     rows[0]['pinned'] = True
     original = json.dumps(rows)
     p = server._archive_list_initial_payload(rows)
     ids = {r['session_id'] for r in p['conversations']}
-    assert ids == {str(i) for i in range(100, 600)} | {'0', '1', '2'}
-    assert p['count'] == 503 and p['selected_count'] == 600
+    assert ids == {str(i) for i in range(100, 600)} | {'0', '1', '2', '3', '4'}
+    assert p['count'] == 505 and p['selected_count'] == 600
     assert p['complete'] is False and p['initial'] is True
     assert 'delta_token' not in p
     assert json.dumps(rows) == original

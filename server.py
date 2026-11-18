@@ -18619,6 +18619,15 @@ def _archive_list_title_overlays():
     return titles
 
 
+def _archive_list_parent_ids(row, parents):
+    sid = _archive_row_sid(row)
+    return {str(value) for value in (
+        row.get("parent_session_id"), row.get("hermes_parent_session_id"),
+        row.get("continued_from_session_id"), row.get("hermes_continued_from"),
+        parents.get(sid),
+    ) if isinstance(value, str) and value}
+
+
 def _archive_list_window_rows(rows, cutoff, idea_tickets_by_sid, parents):
     """Window activity together with its loaded parent-topic context."""
     source_rows = [row for row in (rows or []) if isinstance(row, dict)]
@@ -18637,15 +18646,14 @@ def _archive_list_window_rows(rows, cutoff, idea_tickets_by_sid, parents):
             row = window_rows[index]
             index += 1
             sid = str(row.get("session_id") or row.get("id") or "")
-            parent_sid = str(row.get("parent_session_id") or row.get("hermes_parent_session_id")
-                             or parents.get(sid) or "")
-            parent = by_sid.get(parent_sid)
-            ticket = idea_tickets_by_sid.get(parent_sid) or (parent or {}).get("idea_ticket") or {}
-            if (not parent or parent_sid in included or parent.get("trashed")
-                    or parent.get("explicitly_archived", ticket.get("explicitly_archived"))):
-                continue
-            included.add(parent_sid)
-            window_rows.append(parent)
+            for parent_sid in _archive_list_parent_ids(row, parents):
+                parent = by_sid.get(parent_sid)
+                ticket = idea_tickets_by_sid.get(parent_sid) or (parent or {}).get("idea_ticket") or {}
+                if (not parent or parent_sid in included or parent.get("trashed")
+                        or parent.get("explicitly_archived", ticket.get("explicitly_archived"))):
+                    continue
+                included.add(parent_sid)
+                window_rows.append(parent)
     return window_rows
 
 
@@ -19456,7 +19464,10 @@ def _archive_list_initial_payload(rows, *, window="all", now=None, cached=None):
     """Project recent rows first without changing the complete-list protocol."""
     now = time.time() if now is None else now
     parents = _session_graph.parent_snapshot()
-    ideas = _idea_tickets.idea_ticket_rows_map()
+    try:
+        ideas = _idea_tickets.idea_ticket_rows_map()
+    except Exception:
+        ideas = {}
     selected = _archive_list_window_rows(
         rows, _archive_list_window_cutoff(window, now=now), ideas, parents)
     recent = sorted(selected, key=_archive_list_row_ts, reverse=True)[:500]
@@ -19468,15 +19479,13 @@ def _archive_list_initial_payload(rows, *, window="all", now=None, cached=None):
     while index < len(initial):
         row = initial[index]
         index += 1
-        sid = _archive_row_sid(row)
-        parent_sid = (row.get("parent_session_id") or row.get("hermes_parent_session_id")
-                      or row.get("continued_from") or parents.get(sid))
-        parent = by_sid.get(parent_sid)
-        ticket = ideas.get(parent_sid) or (parent or {}).get("idea_ticket") or {}
-        if (parent is not None and id(parent) not in wanted and not parent.get("trashed")
-                and not parent.get("explicitly_archived", ticket.get("explicitly_archived"))):
-            wanted.add(id(parent))
-            initial.append(parent)
+        for parent_sid in _archive_list_parent_ids(row, parents):
+            parent = by_sid.get(parent_sid)
+            ticket = ideas.get(parent_sid) or (parent or {}).get("idea_ticket") or {}
+            if (parent is not None and id(parent) not in wanted and not parent.get("trashed")
+                    and not parent.get("explicitly_archived", ticket.get("explicitly_archived"))):
+                wanted.add(id(parent))
+                initial.append(parent)
     inputs = (_load_usage_limit_resumes(), parents, ideas, initial)
     payload = _archive_list_payload(rows, window=window, now=now, cached=cached, _inputs=inputs)
     payload.update(complete=len(initial) == len(selected), selected_count=len(selected), initial=True)

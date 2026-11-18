@@ -20419,8 +20419,9 @@
         sharedState._archiveRefreshAfterInflight = true;
         return sharedState.archiveData;
       }
-      if (!Array.isArray(convs)) _setArchiveCompleteness(requestedWindow, false, sharedState.archiveData.length, true);
       if (!Array.isArray(convs)) {
+        _setArchiveCompleteness(requestedWindow, false, sharedState.archiveData.length, true);
+        _scheduleArchiveStaleRetry();
         _clientLog('[ARCHIVE-DIAG] refreshArchiveData keeping previous rows='
           + (Array.isArray(sharedState.archiveData) ? sharedState.archiveData.length : -1)
           + ' (fetch failed)');

@@ -28,7 +28,7 @@ function setup() {
     _mergeArchivePrSnapshot: rows => rows, _mergeIntoMasterRows() {}, _resetArchiveUnknownPatchIds() {},
     hostServices: { renderArchiveList: () => paints.push(state.archiveData.map(r => r.session_id)) },
     refreshLiveSessionsActivity: async () => {}, _queueDashboardArchiveRender() {},
-    _markArchiveFirstLoaded() {}, _hydrateArchiveSideData() {},
+    _markArchiveFirstLoaded() {}, _hydrateArchiveSideData() {}, _scheduleArchiveStaleRetry() { context.retryScheduled = true; },
     requestAnimationFrame: fn => setImmediate(fn), setTimeout: () => 0,
     queueMicrotask: fn => deferred.push(fn),
   };
@@ -59,6 +59,7 @@ test('full failure retains usable rows and explicitly incomplete results', async
   f.resolveFull(null); await task;
   assert.equal(f.state.archiveData[0].session_id, 'recent');
   assert.match(f.notice.textContent, /could not load.*incomplete/);
+  assert.equal(f.context.retryScheduled, true);
   assert.equal(f.context.window.__cccArchiveProgress.complete, false);
 });
 test('obsolete full response cannot replace a newly selected window', async () => {
