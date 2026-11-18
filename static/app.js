@@ -28206,6 +28206,7 @@
     if (_flipBefore.size > 0 && !document.hidden) {
       const _flipNewRows = $convList.querySelectorAll('[data-id]');
       const _flipMoves = [];
+      const _flipMatched = [];
       const _flipSeen = new Set();
       let _flipLastOrder = -1;
       let _flipReordered = false;
@@ -28222,6 +28223,12 @@
         const oldOrder = _flipBeforeOrder.get(id);
         if (oldOrder < _flipLastOrder) _flipReordered = true;
         _flipLastOrder = oldOrder;
+        _flipMatched.push({ row, oldTop });
+      }
+      // Stable relative order already suppresses animation below. Check it
+      // before geometry reads: measuring the new list after decorator writes
+      // otherwise forces layout even though no row will animate.
+      if (_flipReordered) for (const { row, oldTop } of _flipMatched) {
         const newTop = row.getBoundingClientRect().top;
         const delta = oldTop - newTop;
         if (Math.abs(delta) < 1) continue;
