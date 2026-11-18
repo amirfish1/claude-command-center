@@ -19797,7 +19797,9 @@
       const key = _archiveRowStableKey(row);
       if (key) seen.add(key);
       const prev = key ? prevByKey.get(key) : null;
-      const merged = Object.assign({}, row);
+      // Keep the network snapshot independent without growing a wide row
+      // property by property into V8's slower dictionary representation.
+      const merged = { ...row };
       if (key) {
         const override = sharedState._recentRenameOverrides.get(key);
         if (override) {
