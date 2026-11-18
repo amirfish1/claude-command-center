@@ -299,6 +299,51 @@ def test_encoding_chunks_reuse_only_exact_projected_values(monkeypatch):
     check(list(reversed(rows)))
 
 
+@pytest.mark.parametrize('change', ['insert', 'remove', 'reorder', 'overlay'])
+def test_encoding_reuses_unchanged_runs_after_membership_changes(monkeypatch, change):
+    cache = server.ByteBudgetCache(1 << 22, 512)
+    monkeypatch.setattr(replay, '_RUN_CACHE', cache)
+    rows = [{'session_id': f'session-{i}', 'nested': {'text': f'row {i}'}}
+            for i in range(1000)]
+    overlays = {'session-500'}
+
+    def check(current):
+        raw, spans = replay.encode_rows(current, overlays)
+        assert raw == json.dumps(current).encode()
+        entry = replay.compressed_entry(raw, spans)
+        assert zlib.decompress(replay.compress_replay(entry, current) + b'\x03\x00', -15) == raw
+        assert [current[index]['session_id'] for index, _, _ in spans] == [
+            row['session_id'] for row in current if row['session_id'] in overlays]
+
+    check(rows)
+    original_runs = len(cache)
+    assert original_runs > 5, 'fixture exercises multiple reusable runs'
+    changed = copy.deepcopy(rows)
+    if change == 'insert':
+        changed.insert(0, {'session_id': 'new-session', 'nested': {'text': 'new'}})
+    elif change == 'remove':
+        changed.pop(0)
+    elif change == 'reorder':
+        changed.insert(0, changed.pop(1))
+    else:
+        changed.insert(0, changed.pop(500))
+        changed[0]['mtime'] = 123
+    check(changed)
+    assert len(cache) - original_runs <= 3, 'distant archive runs survive a local list change'
+    check(rows)
+    assert len(cache) - original_runs <= 3, 'the original immutable runs remain reusable'
+
+
+def test_encoding_caps_runs_without_identity_boundaries(monkeypatch):
+    lengths = []
+    encode = replay._encoded_run
+    monkeypatch.setattr(replay, '_encoded_run', lambda rows: (lengths.append(len(rows)), encode(rows))[1])
+    rows = [{'title': str(i)} for i in range(1000)]
+    raw, _ = replay.encode_rows(rows, set())
+    assert raw == json.dumps(rows).encode()
+    assert len(lengths) > 1 and max(lengths) <= 256
+
+
 def test_encoding_chunk_budget_and_custom_json_values(monkeypatch):
     cache = server.ByteBudgetCache(1, 1)
     monkeypatch.setattr(replay, '_RUN_CACHE', cache)

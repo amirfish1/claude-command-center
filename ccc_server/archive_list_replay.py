@@ -18,7 +18,8 @@ from ccc_server.bounded_cache import ByteBudgetCache
 # Snapshot versions change when only a few rows change. Keep small encoded
 # runs reusable across those versions, bounded independently of full bodies.
 _RUN_CACHE = ByteBudgetCache(32 * 1024 * 1024, 512)
-_RUN_ROWS = 64
+_RUN_MAX_ROWS = 256
+_RUN_BOUNDARY_MASK = 63
 
 
 class _GuardPickler(pickle.Pickler):
@@ -127,9 +128,15 @@ def encode_rows(rows, overlay_ids):
         overlay = sid in overlay_ids
         index += 1
         if not overlay:
-            while index < len(rows) and index - start < _RUN_ROWS:
+            while index < len(rows) and index - start < _RUN_MAX_ROWS:
                 sid = str(rows[index].get('session_id') or rows[index].get('id') or '')
                 if sid in overlay_ids:
+                    break
+                # Anchor boundaries to identities rather than list positions:
+                # an insertion should not invalidate every subsequent run.
+                # The complete content guard still decides cache validity.
+                previous_sid = str(rows[index - 1].get('session_id') or rows[index - 1].get('id') or '')
+                if zlib.crc32(previous_sid.encode()) & _RUN_BOUNDARY_MASK == 0:
                     break
                 index += 1
         if overlay:
