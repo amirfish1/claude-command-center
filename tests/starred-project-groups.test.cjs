@@ -60,6 +60,8 @@ test('Today stars keep a project together while chronological mode retains its T
     await page.waitForFunction(()=>!!window.projectGroupTest);
     await page.waitForNetworkIdle({idleTime:200});
     await page.evaluate(()=>projectGroupTest.seed());
+    assert.ok(await page.evaluate(()=>window.projectGroupRowsBuilt <= 6),
+      'four visible rows and their family routing must not build a discarded duplicate tree');
     const active='[data-session-section="active"]';
     const groups=await page.$$eval(active+' .conv-folder-group',els=>els.map(el=>({
       name:el.querySelector('.conv-folder-group-chip').textContent.trim(),

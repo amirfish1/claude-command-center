@@ -27315,6 +27315,13 @@
         + '</div>';
     };
 
+    const _ticketLifecycleView = _allTabView === 'ideas' || _allTabView === 'smallbugs' || _allTabView === 'alltickets';
+    // Ticket tabs render their rows in lifecycle sections below. Preserve
+    // their controls without building a first row tree that gets discarded.
+    if (_ticketLifecycleView && !_ipSearchActive && _arcGrouping === 'cost'
+        && typeof _refreshQuotaCostCalibration === 'function') {
+      _refreshQuotaCostCalibration();
+    }
     let _arcRows = '';
     let _arcCount = 0;
     let _arcFolderCollapseKeys = [];
@@ -27359,6 +27366,7 @@
         const orphan = root.folder_chip_orphan ? ' is-orphan' : '';
         const collapseKey = root.folder_path || folder;
         _arcFolderCollapseKeys.push(_folderGroupStorageKey('archived', collapseKey));
+        if (_ticketLifecycleView) return '';
         const collapsed = _isFolderGroupCollapsed('archived', collapseKey);
         const archivedRepoPath = root.folder_path || '';
         // Badge rides inside the existing count cell (not a new grid column)
@@ -27373,7 +27381,7 @@
         ? _allTabGroupChatItems.map(it => it.allHtml || it.html).join('') + _mainArchivedGroupChats.map(gc => _renderArchivedGcRow(gc, 'all-main')).join('')
         : '');
       _arcCount = _allTabConvs.length + _archivedGroupChatsForRender.length + _allTabGroupChatItems.length + _allTabTrashConvs.length;
-    } else {
+    } else if (!_ticketLifecycleView) {
       // Flat chronological (or cost-sorted) list — original behavior plus
       // the "by cost" mode, which reuses the same pinned-first structure but
       // orders by estimated $ spend instead of recency.
@@ -27537,7 +27545,6 @@
     // belong to a queue, not the user, so there's nothing to restore there.
     let _trashHtml = '';
     let _ideaArchivedHtml = '';
-    const _ticketLifecycleView = _allTabView === 'ideas' || _allTabView === 'smallbugs' || _allTabView === 'alltickets';
     const _sessionsByState = (() => {
       try { return localStorage.getItem('ccc-session-state-grouping') !== 'list'; }
       catch (_) { return true; }
