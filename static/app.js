@@ -22756,7 +22756,7 @@
     };
   }
 
-  function renderConversationList(convs) {
+  function renderConversationList(convs, opts) {
     const _readTiming = _readSidebarTiming();
     try {
     refreshSessionDriverHeaders(convs);
@@ -22816,6 +22816,7 @@
       };
     }
     if (!convs.length) {
+      opts?.beforeReplace?.();
       _convListRenderSig = null;
       $convList.innerHTML = firstRunEmptyHtml();
       return;
@@ -28031,6 +28032,9 @@
     }
     _convListRenderSig = _structSig;
     if (_readTiming) _readTiming.result = 'rebuild';
+    // Archive scroll geometry is only needed when this render replaces rows.
+    // Capture beside the other pre-swap reads, after the no-op guard.
+    opts?.beforeReplace?.();
     //
     // FLIP-style reorder animation: capture each existing row's top
     // BEFORE the innerHTML reset, then on the new DOM, translate
@@ -42835,12 +42839,14 @@
         .then(() => renderArchiveList(_archiveQuery()))
         .catch(() => {});
     }
-    const scrollState = _captureArchiveListScroll(q, $list);
+    let scrollState = null;
+    const captureScroll = () => { scrollState = _captureArchiveListScroll(q, $list); };
     const _finishArchiveRender = () => {
       _lastArchiveRenderFilter = q;
       _restoreArchiveListScroll(scrollState, $list);
     };
     const _renderArchiveEmpty = (html) => {
+      captureScroll();
       if (kanbanView) {
         conversationsData = [];
         renderKanbanSidebar([]);
@@ -43354,16 +43360,18 @@
     if (kanbanView) {
       if ($list) $list.style.display = 'none';
       if ($flow) $flow.style.display = 'none';
+      captureScroll();
       renderKanbanSidebar(filterConversations(''));
     } else if (isFlowView()) {
       if ($list) $list.style.display = 'none';
       if ($kanban) $kanban.style.display = 'none';
+      captureScroll();
       renderFlowSidebar(filterConversations(''));
     } else {
       if ($kanban) $kanban.style.display = 'none';
       if ($flow) $flow.style.display = 'none';
       $list.style.display = '';
-      renderConversationList(conversationsData);
+      renderConversationList(conversationsData, { beforeReplace: captureScroll });
     }
     if (archiveSelectionSwap) {
       rebindCurrentSelectionToRealCard(archiveSelectionSwap.realCard);

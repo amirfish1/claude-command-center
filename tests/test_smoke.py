@@ -2277,7 +2277,7 @@ class TestServerImports(unittest.TestCase):
     def test_archive_search_flag_is_scoped_for_all_render_branches(self):
         app_js = conversation_source()
         renderer = app_js[
-            app_js.index("function renderConversationList(convs) {"):
+            app_js.index("function renderConversationList(convs, opts) {"):
             app_js.index("async function setArchiveMode()")
         ]
         declaration = (
@@ -7087,7 +7087,7 @@ class TestServerImports(unittest.TestCase):
     def test_visible_search_results_keep_session_name_matches_first(self):
         """The final sidebar render must not let UUID ranking bury a title hit."""
         app_js = conversation_source()
-        start = app_js.index("function renderConversationList(convs) {")
+        start = app_js.index("function renderConversationList(convs, opts) {")
         body = app_js[start:start + 900]
         self.assertIn("convs = _prioritizeNameMatches(", body)
         self.assertIn("_prioritizeSessionIdMatches(convs, document.getElementById('convSearch')?.value || '')", body)
