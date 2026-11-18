@@ -546,8 +546,8 @@ def _try_attach_from_cache(rows, conn, names, diagnostics=None):
             entry = entries.get(sid)
             if entry is None:
                 return miss('new-session')
-            cached_origin, has_persisted_title, root, topic_title = entry
-            if _origin(item) != cached_origin:
+            accepted_origins, has_persisted_title, root, topic_title = entry
+            if _origin(item) not in accepted_origins:
                 return miss('origin-changed')
             if not has_persisted_title:
                 if resolved_names is None:
@@ -589,14 +589,21 @@ def _store_cache(conn, batch, rows):
             if not sid:
                 continue
             origin, root, persisted_title, _ = batch.record(sid)
+            raw_origin = _origin(item)
+            # A missing source edge falls back to this persisted edge during
+            # resolution. Readers that omit it and readers that repeat it
+            # therefore have the same topic, under the same database token.
+            # Keep conflicting/unresolved explicit edges separate.
+            accepted_origins = ((('', origin) if origin else ('',))
+                                if raw_origin in ('', origin) else (raw_origin,))
             if origin and root:
                 topic_title = item.get('continuation_topic_title') or ''
                 if not topic_title:
                     entries.pop(sid, None)
                     continue
-                entries[sid] = (_origin(item), True, root, topic_title)
+                entries[sid] = (accepted_origins, True, root, topic_title)
             else:
-                entries[sid] = (_origin(item), bool(persisted_title), '', '')
+                entries[sid] = (accepted_origins, bool(persisted_title), '', '')
 
 
 def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnostics=None):

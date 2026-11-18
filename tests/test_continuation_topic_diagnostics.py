@@ -67,3 +67,43 @@ def test_new_row_is_not_misreported_as_database_invalidation(store):
     topics.attach_topics([{'session_id': 'existing'}, {'session_id': 'new'}],
                          names={}, diagnostics=detail)
     assert detail == {'hit': False, 'reason': 'new-session'}
+
+
+@pytest.mark.parametrize('explicit_first', [False, True])
+def test_equivalent_persisted_edges_reuse_cache_without_sql(store, explicit_first):
+    topics.record_continuation('root', 'child', title='ROOT: task')
+    explicit = [{'session_id': 'child', 'continued_from_session_id': 'root'}]
+    implicit = [{'session_id': 'child'}]
+    first, second = (explicit, implicit) if explicit_first else (implicit, explicit)
+    warm(first)
+    queries = []
+    store.set_trace_callback(queries.append)
+    detail = {}
+    topics.attach_topics(second, names={}, diagnostics=detail)
+    assert detail == {'hit': True, 'reason': 'hit'}
+    assert queries == []
+    assert second[0]['continuation_topic_title'] == 'ROOT'
+    assert second[0]['continuation_topic_root_session_id'] == 'root'
+
+
+def test_different_explicit_edge_still_invalidates_cache(store):
+    topics.record_continuation('root', 'child', title='ROOT: task')
+    topics.attach_topics([{'session_id': 'other', 'display_name': 'OTHER: task'}], names={})
+    warm([{'session_id': 'child'}])
+    rows = [{'session_id': 'child', 'continued_from_session_id': 'other'}]
+    detail = {}
+    topics.attach_topics(rows, names={}, diagnostics=detail)
+    assert detail == {'hit': False, 'reason': 'origin-changed'}
+    assert rows[0]['continuation_topic_title'] == 'OTHER'
+    assert rows[0]['continuation_topic_root_session_id'] == 'other'
+
+
+def test_invalid_explicit_edge_does_not_poison_implicit_root(store):
+    warm([{'session_id': 'root', 'display_name': 'ROOT: task'}])
+    invalid = [{'session_id': 'root', 'continued_from_session_id': 'root'}]
+    topics.attach_topics(invalid, names={})
+    detail = {}
+    rows = [{'session_id': 'root'}, {'session_id': 'child', 'continued_from_session_id': 'root'}]
+    topics.attach_topics(rows, names={}, diagnostics=detail)
+    assert detail == {'hit': False, 'reason': 'origin-changed'}
+    assert rows[1]['continuation_topic_title'] == 'ROOT'
