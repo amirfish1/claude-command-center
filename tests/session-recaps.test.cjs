@@ -6,7 +6,7 @@ const vm = require('node:vm');
 function load() {
   const window = {};
   vm.runInNewContext(fs.readFileSync(require.resolve('../static/session-recaps.js'), 'utf8'), {
-    window, document: { addEventListener() {} }, Date, Map, Set, JSON
+    window, document: { readyState: 'loading', addEventListener() {} }, Date, Map, Set, JSON
   });
   return window.CCCSessionRecaps;
 }

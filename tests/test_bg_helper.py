@@ -13,6 +13,7 @@ import pytest
 
 import server
 from ccc_server import bg_helper, session_fts, ship_graph
+from ccc_server import usage_stats
 
 
 class _FakeServer:
@@ -88,6 +89,17 @@ def helper(monkeypatch):
         with server._ux_fixes_list_cache_lock:
             server._ux_fixes_list_cache.pop(("", ""), None)
         tmp.cleanup()
+
+
+def test_daily_ticket_counts_use_helper_wire_protocol(helper, monkeypatch):
+    calls = []
+    expected = {"available": True, "opened": 3, "closed": 2, "still_open": 5}
+    def count(start, end):
+        calls.append((start, end))
+        return expected
+    monkeypatch.setattr(usage_stats, "_throughput_daily_ticket_counts_local", count)
+    assert usage_stats._throughput_daily_ticket_counts(100, 200) == expected
+    assert calls == [(100.0, 200.0)]
 
 
 def test_gh_proxy_mirrors_board_and_version(helper):

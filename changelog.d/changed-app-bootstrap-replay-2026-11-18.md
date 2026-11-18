@@ -1,0 +1,1 @@
+Reduce repeated app page preparation by caching identical script-policy checks and escaped bootstrap JSON within fixed memory bounds. Current app source, data and conversation tails still determine every response.

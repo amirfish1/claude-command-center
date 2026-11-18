@@ -3,7 +3,7 @@
   'use strict';
   function createRenderer(adapters) {
     const { cleanIssuePrompt, sidebarRowDisplayTitle, shortSessionId, sessionCompletionDetails } = adapters;
-  
+
 
   // CCC-121: string replace, not a throwaway <div> per call. Every built sidebar
   // row calls this dozens of times, so createElement + textContent + innerHTML

@@ -1692,7 +1692,6 @@ def _register_self(port, bind_host):
         "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "version": _core.__version__,
         "pending_input_protocol": 1,
-        "managed_recovery_protocol": 1,
     }
     if os.environ.get("CCC_ALLOW_DUPLICATE_REPO"):
         payload["allow_duplicate"] = True

@@ -19,6 +19,7 @@ function harness() {
       removeItem: key => storage.delete(key),
     },
     window: { requestIdleCallback: fn => idle.push(fn) },
+    _whenDashboardUncovered: async () => {}, // This fixture has no covering app.
     _archiveWindow: () => '7d',
     _archiveQuery: () => '',
     renderArchiveList: (query, options) => paints.push({ query, options }),
@@ -81,6 +82,21 @@ test('bad, expired, future, oversized and wrong-window caches are ignored', () =
   assert.doesNotThrow(() => c.write([{ id: 'one' }], '7d'));
 });
 
+test('nearly full previews retain clipped titles and later small rows', () => {
+  const { context: c } = harness();
+  c.write([
+    { id: 'filler', folder_path: 'f'.repeat(260800) },
+    { id: 'too-large', folder_path: 'x'.repeat(2000) },
+    { id: 'clipped', first_message: 'p'.repeat(20000), display_name: 't'.repeat(20000) },
+    { id: 'tiny', display_name: '"\\\n☃' },
+  ], '7d');
+  const rows = c.read('7d');
+  assert.deepEqual(Array.from(rows, row => row.id), ['filler', 'clipped', 'tiny']);
+  assert.equal(rows[1].first_message.length, 400);
+  assert.equal(rows[1].display_name.length, 400);
+  assert.equal(rows[2].display_name, '"\\\n☃');
+});
+
 test('writes coalesce after paint and cached rows never claim a complete window', () => {
   const { context: c, idle, paints, storage } = harness();
   c.schedule([{ id: 'old' }], '7d');
@@ -123,18 +139,24 @@ test('network failure keeps the preview; successful empty history removes it', a
     c.write([{ id: 'cached' }], '7d');
     c.paint();
     Object.assign(c, {
+      document: { getElementById: () => ({}) },
+      requestAnimationFrame: callback => callback(),
       _clientLog() {}, _startArchiveProgressPoll() {}, _stopArchiveProgressPoll() {},
-      _markArchiveFirstLoaded() {}, _mergeIntoMasterRows() {}, _resetArchiveUnknownPatchIds() {},
+      _markArchiveFirstLoaded() {}, _releaseStartupApiReads() {},
+      _mergeIntoMasterRows() {}, _resetArchiveUnknownPatchIds() {},
+      _scheduleArchiveStaleRetry() {},
       loadArchiveAll: async () => response,
       _mergeArchivePrSnapshot: fresh => fresh,
       _applyPendingDashboardConversationPatches: rows => rows,
       refreshLiveSessionsActivity: async () => {},
       _queueDashboardArchiveRender() {}, setTimeout() {},
     });
+    vm.runInContext(require('./conversation-source.cjs').functionSource('_setArchiveCompleteness'), c);
     const start = app.indexOf('  let _archiveRefreshPromise = null;');
     const end = app.indexOf('  async function refreshGhIssuesSection()', start);
     vm.runInContext(app.slice(start, end) + '\nthis.refresh = refreshArchiveData;', c);
     await c.refresh();
+    assert.equal(c.window.__cccArchiveProgress.complete, Array.isArray(response));
     if (response === null) {
       assert.equal(c.state().archiveData[0].id, 'cached');
       assert.equal(c.state()._archiveFromLocalCache, true);

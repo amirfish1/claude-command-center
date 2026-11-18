@@ -1,0 +1,1 @@
+Keep optional startup probes queued while the full session archive loads, including when cached or recent rows have already painted. The sidebar stays usable and explicit user actions remain immediate.

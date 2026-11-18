@@ -5,7 +5,11 @@ import re
 from functools import lru_cache
 from html.parser import HTMLParser
 
+from .bounded_cache import ByteBudgetCache
 from .conversation_assets import SCRIPT_NAME, SCRIPTS, EXTENSIONS, DEFERRED, STYLES
+
+
+_JSON_ELEMENTS = ByteBudgetCache(max_bytes=16 << 20, max_entries=32)
 
 
 # Keep the renderer, composer, speech, recovery and conversation extensions on
@@ -119,8 +123,18 @@ def conversation_page(html):
 
 
 def _json_element(element_id, data):
-    text = json.dumps(data).replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
-    return f'<script type="application/json" id="{element_id}">{text}</script>'
+    # Serialize the current value before looking up a pure escaping result.
+    # Mutable app data and changing conversation tails never use a TTL.
+    text = json.dumps(data)
+    key = (element_id, text)
+    element = _JSON_ELEMENTS.get(key)
+    if element is None:
+        escaped = text.replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
+        element = f'<script type="application/json" id="{element_id}">{escaped}</script>'
+        # Include the retained source key as well as the output, allowing
+        # four bytes per character for Python's widest string representation.
+        _JSON_ELEMENTS.put(key, element, 4 * (len(element_id) + len(text) + len(element)))
+    return element
 
 
 def application_document(html, element_id, url, document):
@@ -148,7 +162,8 @@ def application_page(html, app_id, agent_id=None, kit_url="/static/app-kit.js"):
     # Apps can append the kit dynamically after their own data loads. Keep
     # its metadata separate from the script tag so both loading styles work.
     metadata = _json_element("cccAppAgent", {"app": app_id, "session_id": agent_id})
-    metadata += f'<link rel="preload" as="script" href="{kit_url}">'
+    if not kit_url.startswith("data:"):
+        metadata += f'<link rel="preload" as="script" href="{kit_url}">'
     if agent_id:
         metadata += (f'<link rel="preload" as="script" href="/static/{SCRIPT_NAME}">'
                      '<link rel="preload" as="style" href="/static/app.css">')

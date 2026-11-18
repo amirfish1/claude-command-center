@@ -1,0 +1,99 @@
+/* Narrow sidebar (dragged below 320px on a desktop window).
+   sidebar-narrow.js sets .is-narrow from the sidebar's own width, because the
+   viewport media queries cannot see a resized column. Every rule here is
+   scoped to that class, so the default-width layout is untouched. */
+
+/* Header: short name, identity only. Version and Discord stay in the "..." menu. */
+.sidebar.is-narrow .sidebar-header { padding: 12px 14px 10px; gap: 6px; }
+.sidebar.is-narrow .sidebar-header-brand { flex: 1 1 auto; width: 100%; }
+.sidebar.is-narrow .sidebar-header-brand .sh-title-row { width: 100%; gap: 7px; }
+.sidebar.is-narrow .sidebar-header-brand .sh-title-link { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
+.sidebar.is-narrow .sidebar-header-brand .sh-title-main { font-size: 0; }
+.sidebar.is-narrow .sidebar-header-brand .sh-title-main::after { content: 'Command Center'; font-size: 15px; }
+.sidebar.is-narrow .sidebar-header-brand .sh-version,
+.sidebar.is-narrow .sidebar-header-brand .sh-discord-btn { display: none; }
+
+/* Actions: New session and Ticket share the first line; search, collapse and
+   "..." share the second. Nothing wraps on its own. */
+.sidebar.is-narrow .new-session-panel { padding: 10px 14px; }
+.sidebar.is-narrow .new-session-primary-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 6px;
+  align-items: center;
+}
+.sidebar.is-narrow .new-session-primary-row #sidebarNewBtn { grid-column: 1; grid-row: 1; width: 100%; min-width: 0; }
+.sidebar.is-narrow .new-session-primary-row #sidebarNewTicketBtn { grid-column: 2 / span 2; grid-row: 1; }
+.sidebar.is-narrow .new-session-primary-row .search-wrap { grid-column: 1; grid-row: 2; min-width: 0; }
+.sidebar.is-narrow .new-session-primary-row #convSearch { width: 100%; min-height: 32px; padding: 6px 22px 6px 9px; font-size: 12.5px; }
+.sidebar.is-narrow .new-session-primary-row .conv-list-collapse-btn { grid-column: 2; grid-row: 2; justify-self: end; }
+.sidebar.is-narrow .new-session-primary-row .sh-more-wrap { grid-column: 3; grid-row: 2; }
+
+/* Tabs: tighter, and a soft right edge so a clipped tab reads as "scroll". */
+.sidebar.is-narrow #convList.session-workspace { padding-inline: 8px; }
+.sidebar.is-narrow #convList.session-workspace .conv-tab-bar {
+  padding-right: 22px;
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 22px), transparent);
+  mask-image: linear-gradient(90deg, #000 calc(100% - 22px), transparent);
+  scrollbar-width: none;
+}
+.sidebar.is-narrow #convList.session-workspace .conv-tab-bar::-webkit-scrollbar { display: none; }
+.sidebar.is-narrow #convList.session-workspace .conv-tab { padding: 8px 6px; }
+
+/* Sections: less air between the filters, headings and empty states. */
+.sidebar.is-narrow #convList.session-workspace .session-lifecycle-section { margin-bottom: 8px; }
+.sidebar.is-narrow #convList.session-workspace .session-lifecycle-heading { margin: 8px 6px 2px; }
+.sidebar.is-narrow #convList.session-workspace .session-lifecycle-empty { padding: 2px 6px 8px; }
+
+/* Rows: the title gets the width. The report button appears on hover or
+   focus, beside the row menu, instead of holding a permanent 30px slot. */
+.sidebar.is-narrow #convList#convList.session-workspace .conv-item:not(.is-current-child-row) {
+  padding-top: 10px !important;
+  padding-bottom: 10px !important;
+  padding-right: 6px !important;
+}
+.sidebar.is-narrow #convList#convList.session-workspace .conv-item .conv-main-row .conv-title {
+  font-size: 14px !important;
+  line-height: 19px !important;
+}
+.sidebar.is-narrow #convList#convList.session-workspace .conv-item .conv-main-row.has-inline-step > .conv-outcome .conv-outcome-step {
+  font-size: 12.5px;
+  line-height: 17px;
+}
+.sidebar.is-narrow #convList#convList .conv-item .conv-main-row > .conv-row-end:has(> .conv-decision-report-btn) {
+  padding-left: 0;
+  flex-basis: auto;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+}
+.sidebar.is-narrow #convList .conv-row-end > .conv-decision-report-btn {
+  left: auto;
+  right: 22px;
+  opacity: 0;
+  pointer-events: none;
+  background: var(--surface-2);
+}
+.sidebar.is-narrow #convList .conv-item:hover .conv-row-end > .conv-decision-report-btn,
+.sidebar.is-narrow #convList .conv-row-end > .conv-decision-report-btn:focus-visible,
+.sidebar.is-narrow #convList .conv-row-end > .conv-decision-report-btn[aria-expanded="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Footer: the status pill shrinks with an ellipsis; tools show icons only
+   (each keeps its title and accessible name). */
+.sidebar.is-narrow .sidebar-footer { min-width: 0; }
+.sidebar.is-narrow .sidebar-footer > * { min-width: 0; }
+.sidebar.is-narrow .sidebar-footer > :has(> .sidebar-footer-pill) { flex: 0 1 auto; }
+.sidebar.is-narrow .sidebar-footer .sidebar-footer-pill { max-width: 100%; }
+.sidebar.is-narrow .sidebar-footer :has(> .sidebar-footer-tools) { flex: 0 0 auto; width: auto; }
+.sidebar.is-narrow .sidebar-footer-tool > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.sidebar.is-narrow .sidebar-footer-tool { position: relative; }

@@ -46,7 +46,7 @@ for (const width of [1280, 390]) test('one expandable CI row per commit at ' + w
     assert.equal(await page.$$eval('#localCiMobileList .local-ci-group', es => es.length), 2);
     assert.equal(await page.$eval('#localCiMobileList details', el => el.open), false);
     assert.equal(await page.$eval('#localCiMobileList .local-ci-runner', el => el.getAttribute('aria-label')), 'GitHub-hosted runner');
-    assert.equal(await page.$eval('#localCiMobileList .local-ci-group:last-child .local-ci-runner', el => el.getAttribute('aria-label')), 'Machine-hosted runner');
+    assert.equal(await page.$eval('#localCiMobileList .local-ci-group:last-child .local-ci-runner', el => el.getAttribute('aria-label')), 'Self-hosted runner');
     assert.match(await page.$eval('#localCiMobileList summary', el => el.textContent), /TEST-42 \+2.*aaaaaaa.*71%/);
 
     assert.match(await page.$eval('#localCiMobileList summary .local-ci-elapsed', el => el.textContent), /^5:\d{2}$/);
@@ -55,7 +55,7 @@ for (const width of [1280, 390]) test('one expandable CI row per commit at ' + w
     assert.equal(await page.$eval('#localCiMobileList', el => el.scrollWidth <= el.clientWidth), true);
     assert.equal(await page.$eval('#localCiMobileList .local-ci-group:last-child', el => el.dataset.outcome), 'failure');
     if (width <= 1200) {
-      assert.match(await page.$eval('#localCiMobileList .local-ci-mobile-toggle', el => el.textContent), /^CI: GH 71% 5:\d{2}, Self 1 failed · 100% 5:\d{2}$/);
+      assert.match(await page.$eval('#localCiMobileList .local-ci-mobile-toggle', el => el.textContent), /^CI: GitHub 71% 5:\d{2}, Self 1 failed · 100% 5:\d{2}$/);
       assert.equal(await page.$eval('#localCiMobileList', el => el.getBoundingClientRect().height), 45, 'one 44px disclosure plus border');
       assert.equal(await page.$eval('#localCiMobileList .local-ci-group', el => getComputedStyle(el).display), 'none');
       await page.screenshot({path:'/tmp/ccc-ci-mobile-line.png'});
@@ -63,7 +63,7 @@ for (const width of [1280, 390]) test('one expandable CI row per commit at ' + w
       await page.keyboard.press('Enter');
       assert.equal(await page.$eval('.local-ci-mobile-toggle', el => el.getAttribute('aria-expanded')), 'true');
     }
-    assert.equal(await page.$eval('#localCiMobileList .local-ci-summary-name', el => el.scrollWidth <= el.clientWidth), true);
+    assert.equal(await page.$eval('#localCiMobileList .local-ci-summary-name', el => el.clientWidth > 0 && getComputedStyle(el).overflow === 'hidden' && getComputedStyle(el).textOverflow === 'ellipsis'), true);
     await page.screenshot({path:'/tmp/ccc-ci-grouped-' + width + '.png'});
     await page.focus('#localCiMobileList summary');
     await page.keyboard.press('Enter');

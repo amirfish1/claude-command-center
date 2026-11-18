@@ -1,9 +1,9 @@
-// Optional listener-side English voice. Off until this browser explicitly opts in.
+// Default English read-aloud, with an explicit per-browser off switch.
 (() => {
   'use strict';
-  const key = 'ccc-browser-voice-pilot';
-  let enabled = false;
-  try { enabled = localStorage.getItem(key) === '1'; } catch (_) {}
+  const key = 'ccc-browser-voice';
+  let enabled = true;
+  try { enabled = localStorage.getItem(key) !== '0'; } catch (_) {}
   let worker, context, loading, ready = false, epoch = 0, nextId = 0, active = null, voiceList = [];
   let message = enabled ? 'Preparing browser voice…' : 'Off. Your current voice is used.';
   const emit = detail => window.dispatchEvent(new CustomEvent('ccc:browser-voice', { detail }));
@@ -186,5 +186,22 @@
     get voices() { return voiceList; },
     get status() { return message; } };
   paint();
-  if (enabled) warm();
+  // AudioContext construction and model setup must not hold up the first
+  // conversation paint. Explicit opt-in and speaker warmup remain immediate.
+  if (enabled) {
+    const prepare = () => setTimeout(() => { if (enabled) warm(); }, 0);
+    if (window.parent !== window && new URLSearchParams(location.search).get('embed') === 'app') {
+      window.addEventListener('ccc:conversation-drawn', prepare, { once: true });
+    } else if (document.getElementById('convList') && !window.__CCC_CONVERSATION_POPOUT__) {
+      // Document load precedes the complete sidebar. Avoid constructing audio
+      // and starting the model download while that archive is still rendering.
+      const afterArchivePaint = () => requestAnimationFrame(() => requestAnimationFrame(prepare));
+      if (window.__cccArchiveSettled) afterArchivePaint();
+      else window.addEventListener('ccc:archive-settled', afterArchivePaint, { once: true });
+    } else if (document.readyState === 'complete') {
+      prepare();
+    } else {
+      window.addEventListener('load', prepare, { once: true });
+    }
+  }
 })();

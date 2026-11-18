@@ -1292,6 +1292,13 @@ _SESSION_STATE_RE = re.compile(
     r"(?:<!--\s*)?<session-state>\s*(.*?)\s*</session-state>(?:\s*-->)?",
     re.IGNORECASE | re.DOTALL,
 )
+# Parsing needs only the inner fields. Starting at the literal tag lets the
+# regex engine skip ordinary reply text; wrapper removal still uses the
+# comment-aware pattern above so it cannot leave dangling HTML comments.
+_SESSION_STATE_PARSE_RE = re.compile(
+    r"<session-state>\s*(.*?)\s*</session-state>",
+    re.IGNORECASE | re.DOTALL,
+)
 _SESSION_STATE_FIELD_RE = re.compile(
     r"^(?:<!--[ \t]*)?(DID|INSIGHT|NEXT_STEP_USER|NEXT_ACTION|COMPLETION)[ \t]*:[ \t]*(.*?)[ \t]*(?:-->)?[ \t]*$",
     re.IGNORECASE | re.MULTILINE,
@@ -1692,7 +1699,7 @@ def _parse_session_state(text):
     """Parse the last footer, preserving legacy fields and optional assessment."""
     if not text:
         return None
-    matches = list(_SESSION_STATE_RE.finditer(text))
+    matches = list(_SESSION_STATE_PARSE_RE.finditer(text))
     if not matches:
         return None
     body = matches[-1].group(1)

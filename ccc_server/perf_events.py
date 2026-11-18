@@ -212,6 +212,8 @@ def _in_warmup(now=None):
     return (t - _PROCESS_STARTED_AT) < WARMUP_S
 
 
+_CLIENT_DIAG_KINDS = ("archive_initial_load", "archive_full_load")
+
 _VALID_KINDS = ("archive_load", "conv_open", "list_read", "live_build",
                 "tts_start", "tts_gap", "conv_open_cached",
                 "view_switch", "rail_apps", "app_ready", "app_freeze")
@@ -367,13 +369,17 @@ def record_event(kind, ms, boot_id="", conv_id="", detail=None):
     permission denied) are swallowed — a perf beacon must never itself
     become the thing that's slow or broken.
     """
-    if kind not in _VALID_KINDS:
+    if kind not in _VALID_KINDS and kind not in _CLIENT_DIAG_KINDS:
         raise ValueError(f"invalid kind: {kind!r}")
     if isinstance(ms, bool) or not isinstance(ms, (int, float)):
         raise ValueError(f"non-numeric ms: {ms!r}")
     ms_f = float(ms)
     if not math.isfinite(ms_f) or ms_f < 0:
         raise ValueError(f"invalid ms: {ms!r}")
+
+    if kind in _CLIENT_DIAG_KINDS:
+        record_diag(kind, ms_f, detail)
+        return {"ok": True, "kind": kind}
 
     now = time.time()
     warmup = _in_warmup(now)
@@ -458,7 +464,7 @@ def record_event(kind, ms, boot_id="", conv_id="", detail=None):
 # (the list is polled every few seconds per tab).
 # live_read (CCC-319) is the wait the sidebar's live-status poll really sees,
 # now that live_build can run in the background behind a saved status.
-_DIAG_KINDS = ("list_server", "archive_rebuild", "live_read", "gc_pause")
+_DIAG_KINDS = ("list_server", "archive_rebuild", "live_read", "gc_pause") + _CLIENT_DIAG_KINDS
 
 
 def record_diag(kind, ms, detail=None):

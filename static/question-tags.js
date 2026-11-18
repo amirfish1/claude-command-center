@@ -6,8 +6,8 @@
  * Decisions owns the current queue count. Question history is reached from
  * its header, while tags found in transcripts remain history (see classify()).
  *
- * A question a ticket blocked on goes by that ticket instead: its chip shows
- * the ticket ref and opens the ticket, and "Needs you" gains Talk to worker.
+ * Linked questions keep their question preview chip beside a ticket shortcut;
+ * "Needs you" also offers Talk to worker.
  *
  * Self-contained: one MutationObserver, one cached index fetch (refreshed
  * lazily on a chip tap / panel open and every 60s while visible).
@@ -119,7 +119,7 @@
       var walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT, {
         acceptNode: function (n) {
           if (!HAS_REF_RE.test(n.nodeValue)) return NodeFilter.FILTER_REJECT;
-          if (n.parentElement && n.parentElement.closest('.qtag-chip, pre, code, textarea, script')) return NodeFilter.FILTER_REJECT;
+          if (n.parentElement && n.parentElement.closest('.qtag-chip, .qtag-ticket-chip, pre, code, textarea, script')) return NodeFilter.FILTER_REJECT;
           return NodeFilter.FILTER_ACCEPT;
         },
       });
@@ -160,11 +160,30 @@
   }
 
   function paintTicketChip(chip, q) {
-    var label = followsRef(chip, q.ticket.ref) ? (q.ticket.open ? 'open question' : 'question') : q.ticket.ref;
-    // Writing unchanged text would wake the observer that repaints chips.
+    // Question context and ticket navigation are separate actions. Preserve
+    // the original explanation even when this question blocks a ticket.
+    var label = 'Q' + q.n;
     if (chip.textContent !== label) chip.textContent = label;
-    chip.title = q.ticket.ref + ' (' + q.tag + ') — open ticket';
+    chip.title = q.tag + ' — view question and answer';
     chip.setAttribute('aria-label', chip.title);
+    var ticket = chip.nextElementSibling;
+    if (!ticket || ticket.getAttribute('data-qtag-ticket-for') !== String(q.n)) ticket = null;
+    if (followsRef(chip, q.ticket.ref)) {
+      if (ticket) ticket.remove();
+      return;
+    }
+    if (!ticket) {
+      ticket = document.createElement('button');
+      ticket.type = 'button';
+      ticket.className = 'qtag-ticket-chip';
+      ticket.setAttribute('data-qtag-ticket-for', q.n);
+      chip.insertAdjacentElement('afterend', ticket);
+    }
+    ticket.setAttribute('data-qtag-ticket', q.ticket.ref);
+    if (ticket.textContent !== q.ticket.ref) ticket.textContent = q.ticket.ref;
+    ticket.title = q.ticket.ref + ' — open ticket';
+    ticket.setAttribute('aria-label', ticket.title);
+    ticket.classList.toggle('qtag-answered', !!q.answered);
   }
 
   function talkButton(n) {
@@ -201,6 +220,10 @@
       c.classList.toggle('qtag-answered', !!(q && q.answered));
       c.classList.toggle('qtag-unknown', !q);
       if (q && q.ticket) paintTicketChip(c, q);
+      else {
+        var ticket = c.nextElementSibling;
+        if (ticket && ticket.getAttribute('data-qtag-ticket-for') === c.getAttribute('data-qn')) ticket.remove();
+      }
     });
     paintNeedsYou();
   }
@@ -230,7 +253,7 @@
   /* ---------------- UI ---------------- */
   var sheet, activeQuestion, booted = false;
 
-  function questionName(q) { return q.ticket ? q.ticket.ref : q.tag; }
+  function questionName(q) { return q.ticket ? q.tag + ' · ' + q.ticket.ref : q.tag; }
 
   // The Decisions menu items go to the current queue.
   function openQueue() {
@@ -545,12 +568,17 @@
         talkToWorker(+talk.getAttribute('data-qtalk'));
         return;
       }
+      var ticket = ev.target.closest && ev.target.closest('[data-qtag-ticket]');
+      if (ticket) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (window.cccOpenTicket) window.cccOpenTicket(ticket.getAttribute('data-qtag-ticket'));
+        return;
+      }
       var chip = ev.target.closest && ev.target.closest('.qtag-chip[data-qn]');
       if (!chip) return;
       ev.preventDefault();
       ev.stopPropagation();
-      var bound = index.byN[chip.getAttribute('data-qn')];
-      if (bound && bound.ticket && window.cccOpenTicket && window.cccOpenTicket(bound.ticket.ref)) return;
       var row = chip.closest('.conv-item[data-session-id]');
       var sid = row ? row.getAttribute('data-session-id')
         : (typeof window.cccFrontSessionId === 'function' ? window.cccFrontSessionId() : '');

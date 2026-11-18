@@ -5,6 +5,10 @@ import time
 from pathlib import Path
 
 import server
+from ccc_server.static_encoding import _encoder
+
+# Discover the asset encoder during setup, before process-free UI assertions.
+_encoder()
 from ccc_server import engines
 
 base=Path(sys.argv[1])

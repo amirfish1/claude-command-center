@@ -40,7 +40,7 @@ def test_embed_preserves_all_shared_controls_and_conversation_extensions():
     assert shared_pane in conversation_page(SOURCE)
     delivered = {source for url in after.scripts
                  for source in BUNDLES.get(url.removeprefix("/static/"), (url.removeprefix("/static/"),))}
-    for name in ("conversation-entry", "notify", "local-speech", "browser-voice", "codex-live-source",
+    for name in ("conversation-entry", "notify", "browser-voice", "codex-live-source",
                  "question-tags", "restart-transport", "restart-recovery", "session-recaps",
                  "free-runtime", "free-router", "queue-ticket-submit", "limit-failover"):
         assert f"{name}.js" in delivered

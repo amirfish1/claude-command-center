@@ -8,6 +8,7 @@ const foldCode = app.slice(app.indexOf('  function _continuationFoldMaps('), app
 const budgetCode = app.slice(app.indexOf('  function _sidebarBudgetIdeaLane('), app.indexOf('  // What an empty list says'));
 
 function setup(rows, {engine = '', cutoff = 0, f2 = {}, workerIds = [], ticketView = false} = {}) {
+  const classifications = [];
   const context = {
     Map, Set, currentConversation: '',
     workerSelfTicketRef: row => row.selfTicket || '',
@@ -18,9 +19,13 @@ function setup(rows, {engine = '', cutoff = 0, f2 = {}, workerIds = [], ticketVi
     ideaTicketsOn: () => true,
     ticketViewOn: () => ticketView,
     _uxqHealthCache: {worker_session_ids: workerIds}, _wtWorkersCache: {}, _wtWorkerConvsCache: {},
-    classifyKanbanColumn: row => row.archived ? 'archived' : row.source === 'backlog' ? 'backlog' : 'active',
+    classifyKanbanColumn: row => {
+      classifications.push(row.session_id);
+      return row.archived ? 'archived' : row.source === 'backlog' ? 'backlog' : 'active';
+    },
     isApprovalAskRow: row => !!row.approval,
-    _archiveEngineAllowsRow: row => !engine || row.engine === engine,
+    _archiveEngineFilter: () => engine,
+    _archiveEngineAllowsRow: (row, filter = engine) => !filter || row.engine === filter,
     _archiveWindowCutoff: () => cutoff,
     _archiveWindowAllowsRow: row => !cutoff || row.modified >= cutoff,
     _archiveWindowRowTs: row => row.modified || 0,
@@ -30,9 +35,42 @@ function setup(rows, {engine = '', cutoff = 0, f2 = {}, workerIds = [], ticketVi
   const page = (tab, limit = 240, search = false) => context._boundSidebarRowsForRender(rows, limit, tab, {
     matches: row => model.matches(row, tab, search), parentIds: model.parentIds, search,
   });
-  return {context, model, page};
+  return {context, model, page, classifications};
 }
 const row = (id, extra = {}) => ({session_id: id, modified: 100, engine: 'codex', ...extra});
+
+test('counts and repeated membership checks classify eligibility once per model', () => {
+  const ticket = row('ticket', {idea_ticket: {ref: 'TEST-1'}});
+  const unrelated = row('unrelated', {spawned_lane: 'workers'});
+  const {model, classifications} = setup([ticket, unrelated]);
+  for (let i = 0; i < 3; i++) {
+    assert.equal(model.matches(ticket, 'alltickets', false), true);
+    assert.equal(model.matches(unrelated, 'alltickets', false), false);
+  }
+  assert.deepEqual(classifications, ['ticket', 'unrelated']);
+});
+
+test('a new render observes in-place eligibility and utility changes', () => {
+  const changed = row('changed', {source: 'backlog'});
+  assert.equal(setup([changed]).model.matches(changed, 'coding', false), false);
+  changed.source = 'interactive';
+  assert.equal(setup([changed]).model.matches(changed, 'coding', false), true);
+  changed.first_message = 'TE_SIDECALL: inspect this change';
+  assert.equal(setup([changed]).model.laneFor(changed), 'other');
+  changed.first_message = 'Continue the work';
+  assert.equal(setup([changed]).model.laneFor(changed), 'coding');
+});
+
+test('negative membership caching preserves cycle and search behavior', () => {
+  const first = row('first', {parent_session_id: 'second', spawned_lane: 'workers'});
+  const second = row('second', {parent_session_id: 'first', spawned_lane: 'workers'});
+  const {model} = setup([first, second]);
+  for (const item of [first, second, first]) {
+    assert.equal(model.matches(item, 'ideas', false), false);
+    assert.equal(model.matches(item, 'ideas', true), true);
+    assert.equal(model.matches(item, 'workers', false), true);
+  }
+});
 
 test('pagination includes effective F2 family membership that the old lane guess missed', () => {
   const parent = row('parent', {idea_ticket: {ref: 'TEST-1'}});
@@ -220,4 +258,27 @@ test('helper parent classification skips full facts for ordinary rows and preser
   ordinary.worker_origin = {role: 'assessor'};
   ordinary.helperTicket = 'TEST-1';
   assert.equal(context._sidebarLaneModel([owner, ordinary]).parentId(ordinary), 'owner');
+});
+
+
+test('each lane model snapshots preferences and the next model adopts changes', () => {
+  const rows = [row('codex', {idea_ticket: {ref: 'TEST-1'}}),
+    row('claude', {engine: 'claude', modified: 200, idea_ticket: {ref: 'TEST-2'}})];
+  const {context} = setup(rows);
+  let engine = 'codex', cutoff = 0, engineReads = 0, cutoffReads = 0;
+  context._archiveEngineFilter = () => { engineReads++; return engine; };
+  context._archiveWindowCutoff = () => { cutoffReads++; return cutoff; };
+  context._archiveWindowAllowsRow = (row, value) => !value || row.modified >= value;
+  const first = context._sidebarLaneModel(rows);
+  assert.equal(first.matches(rows[0], 'alltickets', false), true);
+  engine = 'claude'; cutoff = 150;
+  assert.equal(first.matches(rows[1], 'ideas', false), false);
+  assert.equal(first.matches(rows[0], 'ideas', false), true);
+  assert.equal(engineReads, 1);
+  assert.equal(cutoffReads, 1);
+  const next = context._sidebarLaneModel(rows);
+  assert.equal(next.matches(rows[0], 'alltickets', false), false);
+  assert.equal(next.matches(rows[1], 'alltickets', false), true);
+  assert.equal(engineReads, 2);
+  assert.equal(cutoffReads, 2);
 });

@@ -261,7 +261,11 @@
     heading.textContent = 'Usage left';
     grid = document.createElement('div');
     grid.className = 'hb-grid';
+    // Savings may finish loading first; move its existing button so its
+    // click handler and displayed value survive either initialization order.
+    var savings = document.getElementById('cccSavingsTicker');
     strip.replaceChildren(heading, grid);
+    if (savings) grid.appendChild(savings);
     return strip;
   }
 
@@ -428,7 +432,9 @@
     var controller = new AbortController();
     var timeout = setTimeout(function () { controller.abort(); }, 10000);
     inflight = Promise.resolve().then(function () {
-      return fetch('/api/headroom', { cache: 'no-store', signal: controller.signal });
+      // This visible header must not wait behind the startup background gate,
+      // whose hold can exceed this request's ten-second deadline.
+      return fetch('/api/headroom', { cache: 'no-store', signal: controller.signal, cccPriority: 'user' });
     }).then(function (r) {
       if (r.status === 404) {
         // Engine not merged or installed: hide for good and stop the timers.

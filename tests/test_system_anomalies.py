@@ -54,7 +54,6 @@ class AnomalyTests(unittest.TestCase):
             row(51, 50, "/usr/bin/python3 -m ccc_server.bg_helper --sock /x", rss_mb=4000, etime_min=900),
             row(52, 50, "/usr/bin/python3 -m ccc_server.conv_reader --sock /x", rss_mb=4000, etime_min=900),
             row(53, 1, "python3 /srv/claude-command-center/ccc_worker.py", rss_mb=4000, etime_min=900),
-            row(54, 1, "/venv/bin/python /srv/x/scripts/local_tts_server.py", rss_mb=4000, etime_min=900),
             row(55, 50, "python3 /x/server.py --archive-refresh-worker e30 /dev/shm/r", rss_mb=4000, etime_min=90),
         ]
         self.assertEqual(self.server._sys_anomalies(rows, total_mb=15000), [])

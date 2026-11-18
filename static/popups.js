@@ -22,7 +22,6 @@
   } catch (_) { window.cccFirstRunLoad = true; }
 
   var ALL = [
-    'local-voice-install',
     'moment-zero',
     'savings-milestone',
     'notify-permission',

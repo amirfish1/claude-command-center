@@ -58,3 +58,44 @@ test('cccPriority user bypasses the pool even with no recent gesture', () => {
   h.window.fetch('/api/conversations/xyz?tail=80', { cccPriority: 'user' });
   assert.ok(h.sent.includes('/api/conversations/xyz?tail=80'));
 });
+
+test('visible sidebar reads lead queued polls in FIFO order while keeping the user slot free', async () => {
+  const h = gateHarness(), gate = h.window.__cccConnectionGate;
+  for (let i = 0; i < 12; i++) h.window.fetch('/api/poll-' + i);
+  const first = '/api/conversations/list?window=7d&initial=1';
+  const second = '/api/conversations/list?window=7d';
+  h.window.fetch(first);
+  h.window.fetch(second);
+  assert.equal(h.sent.length, 5, 'list reads must still wait for a pool slot');
+  assert.equal(gate.directActive, 0);
+  h.pending[0].resolve({status:200, body:null});
+  await new Promise(setImmediate);
+  assert.equal(h.sent[5], first, 'initial rows go before optional queued polls');
+  h.pending[1].resolve({status:200, body:null});
+  await new Promise(setImmediate);
+  assert.equal(h.sent[6], second, 'full archive follows earlier sidebar reads');
+  assert.equal(gate.active, 5);
+  assert.equal(gate.directActive, 0);
+  h.window.fetch('/api/user-action', {cccPriority:'user'});
+  assert.equal(h.sent[7], '/api/user-action', 'user actions still have their reserved slot');
+  h.pending.find(p => p.input === '/api/user-action').resolve({status:200, body:null});
+  await new Promise(setImmediate);
+  h.pending[2].resolve({status:200, body:null});
+  await new Promise(setImmediate);
+  assert.equal(h.sent[8], '/api/poll-5', 'ordinary polls retain FIFO order too');
+});
+
+test('aborting a queued sidebar read removes it without consuming a connection', async () => {
+  const h = gateHarness(), gate = h.window.__cccConnectionGate;
+  for (let i = 0; i < 8; i++) h.window.fetch('/api/poll-' + i);
+  const controller = new AbortController();
+  const request = h.window.fetch('/api/conversations/list?window=7d', {signal:controller.signal});
+  const queued = gate.queued;
+  controller.abort();
+  await assert.rejects(request);
+  assert.equal(gate.queued, queued - 1);
+  h.pending[0].resolve({status:200, body:null});
+  await new Promise(setImmediate);
+  assert.equal(h.sent[5], '/api/poll-5');
+  assert.equal(gate.active, 5);
+});

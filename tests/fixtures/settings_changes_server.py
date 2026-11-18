@@ -3,6 +3,10 @@ import json
 import sys
 from pathlib import Path
 import server
+from ccc_server.static_encoding import _encoder
+
+# Discover the asset encoder during setup, before process-free UI assertions.
+_encoder()
 
 base=Path(sys.argv[1]);server.SPAWN_DEFAULTS_FILE=base/'spawn-defaults.json';server._wt_config_path=lambda:base/'queue-config.json'
 def forbidden(*a,**kw):raise AssertionError('No secrets, catalogs, probes, writes or services')

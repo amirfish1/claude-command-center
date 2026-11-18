@@ -152,13 +152,16 @@
         return _startupApiReleaseTimer;
       },
       _archiveBootstrapUrl() {
-        const _archiveBootstrapUrl = '/api/conversations/list?window=' + encodeURIComponent(sharedState._archiveBootstrapWindow) + '&stale_ok=1';
+        const _archiveBootstrapUrl = '/api/conversations/list?window=' + encodeURIComponent(sharedState._archiveBootstrapWindow) + '&stale_ok=1&initial=1';
         return _archiveBootstrapUrl;
       },
       _archiveBootstrapFetchPromise() {
         const _archiveBootstrapFetchPromise = Promise.resolve().then(async () => {
     if (window.__CCC_CONVERSATION_POPOUT__) return null;
     await (0, sharedState._whenDashboardUncovered)();
+    const early = window.__cccArchiveBootstrap;
+    delete window.__cccArchiveBootstrap;
+    if (early && early.url === sharedState._archiveBootstrapUrl) return early.promise;
     const _archiveBootstrapController = new AbortController();
     const _archiveBootstrapTimeout = setTimeout(() => {
       try { _archiveBootstrapController.abort(); } catch (_) {}
@@ -820,10 +823,6 @@
   };
         return RAIL_SPAWNED_VIA_LABELS;
       },
-      _ttsHoverTimer() {
-        const _ttsHoverTimer = null;
-        return _ttsHoverTimer;
-      },
       $convInputBar() {
         const $convInputBar = document.getElementById('convInputBar');
         return $convInputBar;
@@ -1162,188 +1161,17 @@
         const _ttsStreaming = false;
         return _ttsStreaming;
       },
-      _ttsAudio() {
-        const _ttsAudio = null;
-        return _ttsAudio;
-      },
-      _ttsNeural() {
-        const _ttsNeural = null;
-        return _ttsNeural;
-      },
-      _ttsNeuralToken() {
-        const _ttsNeuralToken = 0;
-        return _ttsNeuralToken;
-      },
-      _ttsNeuralCooldownUntil() {
-        const _ttsNeuralCooldownUntil = 0;
-        return _ttsNeuralCooldownUntil;
+      _ttsPlaybackToken() {
+        const _ttsPlaybackToken = 0;
+        return _ttsPlaybackToken;
       },
       _ttsBrowserPlayback() {
         const _ttsBrowserPlayback = null;
         return _ttsBrowserPlayback;
       },
-      _ttsPriorityClient() {
-        const _ttsPriorityClient = Array.from(crypto.getRandomValues(new Uint8Array(16)),
-    n => n.toString(16).padStart(2, '0')).join('');
-        return _ttsPriorityClient;
-      },
-      _ttsPrioritySeq() {
-        const _ttsPrioritySeq = 0;
-        return _ttsPrioritySeq;
-      },
-      _ttsPriorityTimer() {
-        const _ttsPriorityTimer = null;
-        return _ttsPriorityTimer;
-      },
-      _ttsPriorityStarted() {
-        const _ttsPriorityStarted = false;
-        return _ttsPriorityStarted;
-      },
-      _ttsKeepVoice() {
-        const _ttsKeepVoice = '';
-        return _ttsKeepVoice;
-      },
-      _ttsNeuralCooldownWhy() {
-        const _ttsNeuralCooldownWhy = '';
-        return _ttsNeuralCooldownWhy;
-      },
-      _ttsStartWhy() {
-        const _ttsStartWhy = '';
-        return _ttsStartWhy;
-      },
-      _TTS_FAIL_COOL_MS() {
-        const _TTS_FAIL_COOL_MS = 20000;
-        return _TTS_FAIL_COOL_MS;
-      },
-      _ttsCoolMs() {
-        const _ttsCoolMs = (status) => status === 429 ? 60000 : status === 0 ? 15000 : sharedState._TTS_FAIL_COOL_MS;
-        return _ttsCoolMs;
-      },
-      _TTS_HEAD_CHARS() {
-        const _TTS_HEAD_CHARS = 80;
-        return _TTS_HEAD_CHARS;
-      },
-      _ttsHeadCache() {
-        const _ttsHeadCache = new Map();
-        return _ttsHeadCache;
-      },
-      _ttsPrefetchTimer() {
-        const _ttsPrefetchTimer = null;
-        return _ttsPrefetchTimer;
-      },
-      _ttsPrefetchTarget() {
-        const _ttsPrefetchTarget = null;
-        return _ttsPrefetchTarget;
-      },
-      _ttsCacheDebug() {
-        const _ttsCacheDebug = false;
-        return _ttsCacheDebug;
-      },
-      _ttsCacheDebugFrame() {
-        const _ttsCacheDebugFrame = null;
-        return _ttsCacheDebugFrame;
-      },
-      _ttsCacheDebugObserver() {
-        const _ttsCacheDebugObserver = null;
-        return _ttsCacheDebugObserver;
-      },
-      _ttsCacheDebugResizeObserver() {
-        const _ttsCacheDebugResizeObserver = null;
-        return _ttsCacheDebugResizeObserver;
-      },
-      _ttsDebugJobs() {
-        const _ttsDebugJobs = [];
-        return _ttsDebugJobs;
-      },
-      _ttsPrefetchTargets() {
-        const _ttsPrefetchTargets = new Map();
-        return _ttsPrefetchTargets;
-      },
-      _ttsChainTokens() {
-        const _ttsChainTokens = {};
-        return _ttsChainTokens;
-      },
-      TTS_QUEUE_POS_KEY() {
-        const TTS_QUEUE_POS_KEY = 'ccc-tts-queue-pos';
-        return TTS_QUEUE_POS_KEY;
-      },
       _ttsEnabled() {
         const _ttsEnabled = true;
         return _ttsEnabled;
-      },
-      _ttsTogglePending() {
-        const _ttsTogglePending = false;
-        return _ttsTogglePending;
-      },
-      _ttsInFlightAborts() {
-        const _ttsInFlightAborts = new Set();
-        return _ttsInFlightAborts;
-      },
-      _ttsServerQueueSnap() {
-        const _ttsServerQueueSnap = { at: 0, extraInFlight: 0, sessionWaiting: 0, active: 0, fg: 0, bg: 0 };
-        return _ttsServerQueueSnap;
-      },
-      _TTS_SECOND_CHARS() {
-        const _TTS_SECOND_CHARS = 160;
-        return _TTS_SECOND_CHARS;
-      },
-      _ttsCacheState() {
-        const _ttsCacheState = new Map();
-        return _ttsCacheState;
-      },
-      _TTS_OFFSCREEN_BODY_CLASSES() {
-        const _TTS_OFFSCREEN_BODY_CLASSES = [
-    'ccc-core-app-open',
-    'ccc-mobile-app-open',
-    'ccc-simple-home-open',
-    'ccc-simple-screen-open',
-    'mobile-ask-open',
-  ];
-        return _TTS_OFFSCREEN_BODY_CLASSES;
-      },
-      _ttsLastScreenVisible() {
-        const _ttsLastScreenVisible = null;
-        return _ttsLastScreenVisible;
-      },
-      _ttsScreenSyncTimer() {
-        const _ttsScreenSyncTimer = null;
-        return _ttsScreenSyncTimer;
-      },
-      _ttsHoverBtn() {
-        const _ttsHoverBtn = null;
-        return _ttsHoverBtn;
-      },
-      _ttsChainQueue() {
-        const _ttsChainQueue = Promise.resolve();
-        return _ttsChainQueue;
-      },
-      _TTS_PREFETCH_CLIPS() {
-        const _TTS_PREFETCH_CLIPS = 4;
-        return _TTS_PREFETCH_CLIPS;
-      },
-      _TTS_PREFETCH_CLIPS_QUIET() {
-        const _TTS_PREFETCH_CLIPS_QUIET = 1;
-        return _TTS_PREFETCH_CLIPS_QUIET;
-      },
-      _ttsChainRunning() {
-        const _ttsChainRunning = new Set();
-        return _ttsChainRunning;
-      },
-      _TTS_PREFETCH_WIDTH() {
-        const _TTS_PREFETCH_WIDTH = 1;
-        return _TTS_PREFETCH_WIDTH;
-      },
-      _ttsCanStream() {
-        const _ttsCanStream = () => typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported('audio/mpeg');
-        return _ttsCanStream;
-      },
-      _TTS_CHAIN_AHEAD_S() {
-        const _TTS_CHAIN_AHEAD_S = 40;
-        return _TTS_CHAIN_AHEAD_S;
-      },
-      _ttsChainBroken() {
-        const _ttsChainBroken = false;
-        return _ttsChainBroken;
       },
       _ttsPrimed() {
         const _ttsPrimed = false;
@@ -1357,17 +1185,9 @@
         const _ttsPerfState = null;
         return _ttsPerfState;
       },
-      _ttsFgAbort() {
-        const _ttsFgAbort = null;
-        return _ttsFgAbort;
-      },
       $convTtsRate() {
         const $convTtsRate = document.getElementById('convTtsRate');
         return $convTtsRate;
-      },
-      _ttsForceBridge() {
-        const _ttsForceBridge = false;
-        return _ttsForceBridge;
       },
       $cpLaunchChoiceBtnGlobal() {
         const $cpLaunchChoiceBtnGlobal = document.getElementById('cpLaunchChoiceBtn');
@@ -4294,18 +4114,6 @@
     { id: 'sage', label: 'Sage', bg: '#edf7f2' },
   ];
         return CONV_BG_PALETTE;
-      },
-      TTS_VOICE_DEFAULT_KEY() {
-        const TTS_VOICE_DEFAULT_KEY = 'ccc-tts-voice-default';
-        return TTS_VOICE_DEFAULT_KEY;
-      },
-      TTS_VOICE_BY_SESSION_KEY() {
-        const TTS_VOICE_BY_SESSION_KEY = 'ccc-tts-voice-by-session';
-        return TTS_VOICE_BY_SESSION_KEY;
-      },
-      _ttsVoiceOptions() {
-        const _ttsVoiceOptions = [];
-        return _ttsVoiceOptions;
       },
       CONV_ROWSTYLE_STORAGE_KEY() {
         const CONV_ROWSTYLE_STORAGE_KEY = 'ccc-conv-rowstyle';

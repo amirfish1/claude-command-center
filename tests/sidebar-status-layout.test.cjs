@@ -19,6 +19,7 @@ function row() {
     escapeHtml: String, escapeAttr: String,
     rowDraggableAttr: () => 'false', isMobileChromeActive: () => false,
     _uxFixesWorkerHistoryHtml: () => '', _continuationChainBadgeHtml: () => '',
+    sessionDriverHtml: () => '',
     sessionStuckWarningHtml: () => '', workerOriginBadgeHtml: () => '',
     ideaTicketChipHtml: () => '', _ideaRowLine: () => '', ticketSessionSection: () => 'active',
     readyToCloseArchiveHtml: () => '', _nyaRowBlockHtml: () => '',

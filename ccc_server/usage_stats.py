@@ -3382,7 +3382,18 @@ def _throughput_local_day_bounds(date_str=None):
 
 
 def _throughput_daily_ticket_counts(start_epoch, end_epoch):
-    """WatchTower queue activity for the day: one queue read, no per-row work.
+    """Keep the all-queue scan off the dashboard's request interpreter."""
+    from ccc_server import bg_helper
+    if bg_helper.enabled() and not bg_helper.is_child():
+        reply = bg_helper.call("throughput_ticket_counts", start_epoch=start_epoch,
+                               end_epoch=end_epoch)
+        if reply is not None and isinstance(reply.get("data"), dict):
+            return reply["data"]
+    return _throughput_daily_ticket_counts_local(start_epoch, end_epoch)
+
+
+def _throughput_daily_ticket_counts_local(start_epoch, end_epoch):
+    """WatchTower queue activity for the day: one queue read.
 
     The queue has no explicit "failed" state (open/in_progress/closed), so the
     digest reports opened/closed plus what was still open at day end.

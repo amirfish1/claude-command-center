@@ -1,1 +1,0 @@
-- Skip background text-to-speech prepare-ahead synthesis when a session or its latest message is off screen (covered by Queues, rail apps, modals, Simple Mode screens, or the mobile session list), cancel pending continuation clips on hide, and resume preparation when the session returns to view.

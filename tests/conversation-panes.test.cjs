@@ -9,7 +9,7 @@ function fixture() {
   _convPaneHost:()=>({querySelectorAll:()=>panes.map((p,i)=>({getAttribute:()=>p.id,classList:{contains:()=>classes[i],toggle:(name,on)=>{classes[i]=on;}}}))})};
  Object.defineProperty(state,'currentConversation',{get:()=>panes[state.splitState.activeIndex].conversationId});
  const helpers={};
- for(const name of ['stopSpeechRecognition','syncConversationNavigationFocus','updateSubagentsPanel','updateOrchestrationPane','mountStatusRailForActivePane','saveSplitState','updatePaneHeader','setCopyableSessionId','fetchCodexDiagnostics','_codexDiagHidePanel','updateInputBar','updateResumeButton','updateAnnounceButton','updateJumpButton','updateSplitToolbar','scheduleTtsPrefetch','pollVercelDeploy','resetLocalhostPill','pollLocalhost','_applyStatusRailLayout'])helpers[name]=(...args)=>calls.push([name,...args]);
+ for(const name of ['stopSpeechRecognition','syncConversationNavigationFocus','updateSubagentsPanel','updateOrchestrationPane','mountStatusRailForActivePane','saveSplitState','updatePaneHeader','setCopyableSessionId','fetchCodexDiagnostics','_codexDiagHidePanel','updateInputBar','updateResumeButton','updateAnnounceButton','updateJumpButton','updateSplitToolbar','pollVercelDeploy','resetLocalhostPill','pollLocalhost','_applyStatusRailLayout'])helpers[name]=(...args)=>calls.push([name,...args]);
  const ctx={window:{}};vm.runInNewContext(fs.readFileSync(require.resolve('../static/conversation-panes.js'),'utf8'),ctx);
  return {panes,state,calls,classes,controller:ctx.window.CCCConversationPanes.createController({state,helpers})};
 }

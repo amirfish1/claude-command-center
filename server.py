@@ -16,7 +16,7 @@ Usage:
 
 from __future__ import annotations
 
-__version__ = "6.0.0"
+__version__ = "7.0.0"
 
 import sender_envelope as _attribution
 from ccc_server import session_driver as _driver
@@ -36,6 +36,7 @@ import errno
 import http.server
 import ipaddress
 import json
+import marshal
 import math
 import os
 import platform
@@ -144,6 +145,9 @@ from ccc_server.index_page_cache import IndexPageCache
 from ccc_server.bounded_cache import ByteBudgetCache
 from ccc_server.static_encoding_cache import StaticEncodingCache
 from ccc_server.response_timing import ResponseTimingMixin
+from ccc_server.app_asset_hints import AppAssetHintsMixin
+from ccc_server.http_read_keepalive import ReadKeepAliveMixin
+from ccc_server.http_admission import ConnectionAdmissionMixin
 _cpu_accounting.install_thread_exit_accounting()
 from ccc_server import idea_tickets as _idea_tickets
 from ccc_server import headroom as _headroom
@@ -11101,7 +11105,7 @@ def _spawn_model_for_engine(engine, explicit_model=None):
     return _spawn_default_model_for_engine(engine)
 
 
-def _settings_launch_overview():
+def _settings_launch_overview(*, only_queue=None):
     """Read-only saved routing plus actual consumer facts, never a quota probe."""
     from ccc_server.launch_preview import snapshot
     from ccc_server.settings_insights import queue_overview, revision
@@ -11123,18 +11127,21 @@ def _settings_launch_overview():
         raw = {}
     defaults = _load_spawn_defaults(persist=False)
     config = _wt_read_config()
+    selected_config = ({name: conf for name, conf in config.items() if name == only_queue}
+                       if only_queue is not None else config)
     session_facts = {}
     try:
-        engine, model = _spawn_request_engine_and_model({}, defaults)
-        session_facts = {"verified": True, "engine": engine, "model": model,
-                         "effort": _spawn_request_reasoning_effort({}, engine, defaults)}
-        if engine == "codex":
-            canonical, error = _validate_codex_model(model, require_available=False)
-            if canonical != model and not error:
-                session_facts.update(model=canonical, model_source="consumer_validation",
-                                     model_explanation="Codex launch validation resolves this model alias.")
-            if error:
-                session_facts["warnings"] = ["Session launch would be rejected by model validation: " + error]
+        if only_queue is None:
+            engine, model = _spawn_request_engine_and_model({}, defaults)
+            session_facts = {"verified": True, "engine": engine, "model": model,
+                             "effort": _spawn_request_reasoning_effort({}, engine, defaults)}
+            if engine == "codex":
+                canonical, error = _validate_codex_model(model, require_available=False)
+                if canonical != model and not error:
+                    session_facts.update(model=canonical, model_source="consumer_validation",
+                                         model_explanation="Codex launch validation resolves this model alias.")
+                if error:
+                    session_facts["warnings"] = ["Session launch would be rejected by model validation: " + error]
     except Exception:
         session_facts = {"warnings": ["Session consumer resolution unavailable; showing configured values only."]}
 
@@ -11150,8 +11157,8 @@ def _settings_launch_overview():
             from watchtower import workers as consumer
             policy = native.worker_fallback_policy()
             chain = list(dict.fromkeys(engine for engine in native.fallback_chain() if engine))
-            for name in [None, *config]:
-                if name is not None and (not isinstance(config[name], dict) or config[name].get("archived")):
+            for name in ([only_queue] if only_queue is not None else [None, *config]):
+                if name is not None and (not isinstance(config.get(name), dict) or config[name].get("archived")):
                     continue
                 try:
                     engine, model, effort = native.engine(name), native.model(name), native.effort(name)
@@ -11187,14 +11194,14 @@ def _settings_launch_overview():
     # configuration changed during the read instead of presenting it as actual.
     if before != read_raw() or revision(config) != revision(_wt_read_config()):
         raise ValueError("Launch settings changed while reading. Refresh the preview.")
-    plans = snapshot(defaults, raw, config, session_facts, facts)
+    plans = snapshot(defaults, raw, selected_config, session_facts, facts)
     plans["observed_at"] = datetime.now(timezone.utc).isoformat()
     by_queue = {plan["id"][6:]: plan for plan in plans["plans"] if plan["id"].startswith("queue:")}
     def resolve(name):
         fields = by_queue[name]["fields"]
         return tuple(fields[key]["value"] or ("Unresolved" if key == "engine" else "Engine default")
                      for key in ("engine", "model", "effort"))
-    result = queue_overview(config, defaults, resolve)
+    result = queue_overview(selected_config, defaults, resolve)
     result["launch_preview"] = plans
     return result
 
@@ -11217,7 +11224,7 @@ def _queue_policy_action_unlocked(payload, *, source_check=None):
     rev = policy.state_revision(config, raw)
     key = policy.entry(config, payload.get("queue"))
     if action == "read":
-        overview = _settings_launch_overview()
+        overview = _settings_launch_overview(only_queue=key)
         if policy.state_revision(policy.read(path), policy.defaults_text(SPAWN_DEFAULTS_FILE)) != rev:
             raise policy.StalePreview("Queue settings changed while reading. Refresh again.")
         plan = next((p for p in overview["launch_preview"]["plans"] if p["id"] == "queue:" + key), None)
@@ -13022,7 +13029,7 @@ _SYS_WRAPPER_BASES = frozenset(("npm", "npx", "sh", "dash", "pnpm", "yarn"))
 # CCC itself, from any install. A second dashboard on the same machine used to
 # offer to kill the first one, and a worker's tree holds every running session.
 _SYS_CCC_PROCESS_RE = re.compile(
-    r"(?:^|[\s/])(?:ccc_worker\.py|local_tts_server\.py)(?:\s|$)"
+    r"(?:^|[\s/])ccc_worker\.py(?:\s|$)"
     r"|\bccc_server\.(?:bg_helper|conv_reader)\b"
     r"|claude-command-center/server\.py(?:\s|$)"
     r"|server\.py\s+--archive-refresh-worker\b"
@@ -13572,7 +13579,6 @@ def _build_system_processes_uncached():
     parent_pid = os.getppid()
     ccc_server_path = os.path.join(_CCC_SOURCE_DIR, "server.py")
     ccc_worker_path = os.path.join(_CCC_SOURCE_DIR, "ccc_worker.py")
-    ccc_tts_path = os.path.join(_CCC_SOURCE_DIR, "scripts", "local_tts_server.py")
     empty_files = {"cwd": None, "cwd_exists": True, "fd0": None, "fd0_type": None, "fd0_exists": True}
 
     # ── pass 1: parse + classify every row (no scoring yet) ──────────────
@@ -13612,7 +13618,6 @@ def _build_system_processes_uncached():
             pid in (my_pid, parent_pid)
             or ccc_server_path in cmd
             or ccc_worker_path in cmd
-            or ccc_tts_path in cmd
             or cmd_base == "ccc_worker.py"
             or "watchtower.cli" in cmd
             or (label or "").startswith(("com.github.claude-command-center", "ai.watchtower", "ccc.", "ccc-", "watchtower."))
@@ -17607,12 +17612,13 @@ def _archive_list_body_get_or_build(cache_key, window, from_cache, build_payload
             diagnostics["reason"] = ("hit" if raw is not None else
                                      "version-miss" if snap_ver else "unversioned")
         if raw is None:
-            raw = _list_replay.encode_payload(build_payload())
+            payload = build_payload()
+            raw = _list_replay.encode_payload(payload)
             etag_val = '"' + hashlib.sha1(raw).hexdigest() + '"'
             # Level 1 halves compression time on the multi-MB 7d body
             # (~240ms -> ~120ms) for ~30% more bytes on a local poll.
             gzip_body = (
-                gzip.compress(raw, compresslevel=1)
+                (_list_replay.encode_gzip_payload(payload, raw) or gzip.compress(raw, compresslevel=1))
                 if len(raw) >= _ARCHIVE_LIST_GZIP_MIN_BYTES else None
             )
             if snap_ver:
@@ -17979,8 +17985,15 @@ def _archive_list_delta_state(key, rows, window, from_cache):
     titles = _archive_list_title_overlays()
     from ccc_server import continuation_topics
     topic_revision = continuation_topics.revision()
+    graph_revision = _session_graph.projection_revision()
     ctx = hashlib.sha1(json.dumps(
-        [key, window, _session_graph.projection_revision(), resumes, ideas, titles, topic_revision],
+        [key, window, graph_revision, resumes, ideas, titles, topic_revision],
+        sort_keys=True, separators=(",", ":"), default=str,
+    ).encode()).hexdigest()[:12]
+    # Ticket updates run on every projection replay. They still invalidate
+    # HTTP bodies/delta tokens, without reprojecting unchanged archive rows.
+    projection_ctx = hashlib.sha1(json.dumps(
+        [key, window, graph_revision, resumes, titles, topic_revision],
         sort_keys=True, separators=(",", ":"), default=str,
     ).encode()).hexdigest()[:12]
     _archive_delta_ctx_remember(ctx, key, window, resumes, ideas, titles, topic_revision)
@@ -17991,7 +18004,7 @@ def _archive_list_delta_state(key, rows, window, from_cache):
         "token": f"{_ARCHIVE_DELTA_NONCE}.{ver}.{ctx}.{ovl}",
         "nonce": _ARCHIVE_DELTA_NONCE, "ver": ver, "ctx": ctx,
         "track_since": track_since, "row_rev": row_rev,
-        "base": base, "extra": extra,
+        "base": base, "extra": extra, "projection_ctx": projection_ctx,
     }
 
 
@@ -18464,12 +18477,18 @@ def _archive_list_row_ts(row):
     newest = 0
     for key in ("modified", "mtime", "last_interacted", "last_activity", "last_mtime",
                 "archived_at", "closed_at", "started_at"):
+        value = (row or {}).get(key)
+        if not value:
+            continue
         try:
-            ts = float((row or {}).get(key) or 0)
+            ts = float(value)
         except (TypeError, ValueError):
             continue
         if math.isfinite(ts) and ts > 0:
-            newest = max(newest, ts / 1000 if ts > 100000000000 else ts)
+            if ts > 100000000000:
+                ts /= 1000
+            if ts > newest:
+                newest = ts
     try:
         moved_at = float(((row or {}).get("idea_ticket") or {}).get("moved_at") or 0)
         if math.isfinite(moved_at):
@@ -18491,6 +18510,7 @@ def _archive_list_window_allows_row(row, cutoff, idea_tickets_by_sid=None):
 
 _PREVIEW_STATE_RE = re.compile(r"(?:<!--\s*)?<session-state>.*?(</session-state>\s*-->|</session-state>|$)", re.S)
 _PREVIEW_MD_RE = re.compile(r"[`*_#>|]+|\[([^\]]*)\]\([^)]*\)")
+_PREVIEW_MD_TEXT_RE = re.compile(r"[`*_#>|]+")
 
 
 # Most list polls re-derive the same previews from the same cached row
@@ -18510,8 +18530,18 @@ def _archive_list_preview(text, limit=140):
         cached = _ARCHIVE_LIST_PREVIEW_CACHE.get(text)
         if cached is not None:
             return cached
-    t = _PREVIEW_STATE_RE.sub(" ", str(text)[:2000])
-    t = _PREVIEW_MD_RE.sub(lambda m: m.group(1) or " ", t)
+    t = str(text)[:2000]
+    if "<session-state>" in t:
+        t = _PREVIEW_STATE_RE.sub(" ", t)
+    if "](" not in t:
+        # Without link targets, cleanup only replaces punctuation and folds
+        # whitespace. A prefix already longer than the display limit proves
+        # the same truncated preview without cleaning the rest of the reply.
+        prefix = (" ".join(_PREVIEW_MD_TEXT_RE.sub(" ", t[:2 * limit]).split())
+                  if limit > 0 and len(t) > 2 * limit else "")
+        t = prefix if len(prefix) > limit else _PREVIEW_MD_TEXT_RE.sub(" ", t)
+    else:
+        t = _PREVIEW_MD_RE.sub(lambda m: m.group(1) or " ", t)
     t = " ".join(t.split())
     preview = t if len(t) <= limit else t[: limit - 1].rstrip() + "\u2026"
     if limit == 140:
@@ -18524,9 +18554,12 @@ def _archive_list_preview(text, limit=140):
 
 _ARCHIVE_LIST_ROW_TEMPLATES = ByteBudgetCache(
     _cache_budget_bytes("CCC_LIST_ROW_CACHE_MB", 128), 30000)
+_ARCHIVE_LIST_TEMPLATE_UNREAD = object()
+_ARCHIVE_LIST_TEMPLATE_ENCODER = json.JSONEncoder(default=str)
 
 
-def _archive_list_row_template(row):
+def _archive_list_row_template(row, cached=_ARCHIVE_LIST_TEMPLATE_UNREAD, *,
+                               _fields_by_shape=None):
     """Reuse scalar projection work while copying current containers per call.
 
     Snapshot refreshes replace row dictionaries even when their contents did
@@ -18537,15 +18570,27 @@ def _archive_list_row_template(row):
     """
     sid = row.get("session_id") or row.get("id")
     cache_key = (row.get("source"), sid) if sid else id(row)
-    hit = _ARCHIVE_LIST_ROW_TEMPLATES.get(cache_key)
+    hit = (_ARCHIVE_LIST_ROW_TEMPLATES.get(cache_key)
+           if cached is _ARCHIVE_LIST_TEMPLATE_UNREAD else cached)
     if hit is not None and hit[0] == row:
         return hit[1], hit[2]
+    # Cold rows commonly share a parser's field layout. Resolve absent fields
+    # once per layout in this batch, retaining the canonical projection order.
+    # This map belongs to the request, and warm templates never consult it.
+    if _fields_by_shape is None:
+        fields = (key for key in _ARCHIVE_LIST_FIELDS if key in row)
+    else:
+        shape = tuple(row)
+        fields = _fields_by_shape.get(shape)
+        if fields is None:
+            fields = tuple(key for key in _ARCHIVE_LIST_FIELDS if key in row)
+            if len(_fields_by_shape) < 128:
+                _fields_by_shape[shape] = fields
     scalars, containers = {}, []
-    for key in _ARCHIVE_LIST_FIELDS:
-        if key not in row:
-            continue
+    container_types = (dict, list)
+    for key in fields:
         value = row[key]
-        if isinstance(value, (dict, list)):
+        if isinstance(value, container_types):
             containers.append(key)
         else:
             scalars[key] = value
@@ -18554,14 +18599,23 @@ def _archive_list_row_template(row):
     if preview:
         scalars["last_assistant_preview"] = preview
     source = dict(row)
-    # Estimate retained JSON metadata with room for Python containers. Only
-    # misses serialize; warm rows never walk nested parser metadata again.
-    weight = 4 * len(json.dumps(source, default=str).encode()) + 2 * sys.getsizeof(source)
+    # Estimate retained metadata with room for Python containers. Marshal's
+    # builtin encoder avoids JSON escaping on every cold row. Version 2 also
+    # skips reference tracking, charging repeated values conservatively.
+    # These bytes are only measured, never stored or deserialized. Returned
+    # JSON and the cache limits are unchanged. Unusual parser values retain
+    # the existing JSON/default=str sizing fallback.
+    try:
+        encoded_size = len(marshal.dumps(source, 2))
+    except (TypeError, ValueError):
+        encoded_size = len(_ARCHIVE_LIST_TEMPLATE_ENCODER.encode(source))
+    weight = 4 * encoded_size + 2 * sys.getsizeof(source)
     _ARCHIVE_LIST_ROW_TEMPLATES.put(cache_key, (source, scalars, containers), weight)
     return scalars, containers
 
 
-def _archive_list_project_row(row, *, resumes=None, parents=None):
+def _archive_list_project_row(row, *, resumes=None, parents=None,
+                              _template=_ARCHIVE_LIST_TEMPLATE_UNREAD, _fields_by_shape=None):
     """Project one row for the sidebar list. Bulk callers pass `resumes` /
     `parents` snapshots so the per-row work is dict lookups, not a stat() or
     lock acquisition each (those cost a GIL hand-off apiece)."""
@@ -18573,7 +18627,8 @@ def _archive_list_project_row(row, *, resumes=None, parents=None):
     # CCC-142: a dict comprehension plus a C-level copy of flat containers
     # (cost_breakdown_usd sits on nearly every row) cut this ~1.5x; deepcopy
     # runs only for the rare container that nests another container.
-    scalars, containers = _archive_list_row_template(row)
+    scalars, containers = _archive_list_row_template(
+        row, _template, _fields_by_shape=_fields_by_shape)
     out = dict(scalars)
     for key in containers:
         v = row[key]
@@ -18614,6 +18669,15 @@ def _archive_list_title_overlays():
     return titles
 
 
+def _archive_list_parent_ids(row, parents):
+    sid = _archive_row_sid(row)
+    return {str(value) for value in (
+        row.get("parent_session_id"), row.get("hermes_parent_session_id"),
+        row.get("continued_from_session_id"), row.get("hermes_continued_from"),
+        parents.get(sid),
+    ) if isinstance(value, str) and value}
+
+
 def _archive_list_window_rows(rows, cutoff, idea_tickets_by_sid, parents):
     """Window activity together with its loaded parent-topic context."""
     source_rows = [row for row in (rows or []) if isinstance(row, dict)]
@@ -18632,15 +18696,14 @@ def _archive_list_window_rows(rows, cutoff, idea_tickets_by_sid, parents):
             row = window_rows[index]
             index += 1
             sid = str(row.get("session_id") or row.get("id") or "")
-            parent_sid = str(row.get("parent_session_id") or row.get("hermes_parent_session_id")
-                             or parents.get(sid) or "")
-            parent = by_sid.get(parent_sid)
-            ticket = idea_tickets_by_sid.get(parent_sid) or (parent or {}).get("idea_ticket") or {}
-            if (not parent or parent_sid in included or parent.get("trashed")
-                    or parent.get("explicitly_archived", ticket.get("explicitly_archived"))):
-                continue
-            included.add(parent_sid)
-            window_rows.append(parent)
+            for parent_sid in _archive_list_parent_ids(row, parents):
+                parent = by_sid.get(parent_sid)
+                ticket = idea_tickets_by_sid.get(parent_sid) or (parent or {}).get("idea_ticket") or {}
+                if (not parent or parent_sid in included or parent.get("trashed")
+                        or parent.get("explicitly_archived", ticket.get("explicitly_archived"))):
+                    continue
+                included.add(parent_sid)
+                window_rows.append(parent)
     return window_rows
 
 
@@ -18673,9 +18736,19 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _in
     window_rows = (selected if _inputs is not None else _archive_list_window_rows(
         rows, _archive_list_window_cutoff(window, now=now), idea_tickets_by_sid, parents))
     phase("window")
-    projected = [
-        _archive_list_project_row(row, resumes=resumes, parents=parents)
+    # Concurrent full-list builders otherwise hand the cache lock between
+    # threads once per row. Hold request-local references to immutable
+    # templates, validating each against its current row as usual.
+    templates = _ARCHIVE_LIST_ROW_TEMPLATES.get_many(
+        (row.get("source"), row.get("session_id") or row.get("id"))
+        if row.get("session_id") or row.get("id") else id(row)
         for row in window_rows
+    )
+    fields_by_shape = {}
+    projected = [
+        _archive_list_project_row(row, resumes=resumes, parents=parents, _template=template,
+                                  _fields_by_shape=fields_by_shape)
+        for row, template in zip(window_rows, templates)
     ]
     phase("rows")
     # Persisted row snapshots may predate the title or this projection field.
@@ -18691,7 +18764,10 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _in
     # Resolve topic identity independently of which ancestors are loaded in
     # this response, after applying the current explicit title overrides.
     from ccc_server import continuation_topics
-    continuation_topics.attach_topics(projected)
+    if phases is None:
+        continuation_topics.attach_topics(projected)
+    else:
+        continuation_topics.attach_topics(projected, diagnostics=phases.setdefault('topic_cache', {}))
     phase("topics")
     _archive_list_ticket_updates(projected, idea_tickets_by_sid)
     phase("tickets")
@@ -18743,7 +18819,49 @@ def _archive_list_rows_cached(cache_options, *, window="all", now=None):
     return _archive_list_project_rows(rows, window=window, now=now), from_cache
 
 
+_ARCHIVE_LIST_SOURCE_FLIGHTS = {}
+_ARCHIVE_LIST_SOURCE_FLIGHTS_LOCK = threading.Lock()
+
+
 def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phases=None, window="all"):
+    """Share a snapshot only with reads already running for the same scope.
+
+    Initial and full sidebar requests may overlap. Neither needs a duplicate
+    scan of the live engine overlays. Nothing is retained after a read ends;
+    explicit freshness requests always perform their own read.
+    """
+    if force_refresh:
+        return _archive_list_source_rows_read(
+            cache_options, force_refresh=True, phases=phases, window=window)
+    key = (_archive_response_cache_key(**cache_options), window)
+    with _ARCHIVE_LIST_SOURCE_FLIGHTS_LOCK:
+        flight = _ARCHIVE_LIST_SOURCE_FLIGHTS.get(key)
+        owner = flight is None
+        if owner:
+            flight = {"event": threading.Event(), "value": None}
+            _ARCHIVE_LIST_SOURCE_FLIGHTS[key] = flight
+    if not owner:
+        started = time.perf_counter()
+        flight["event"].wait()
+        if flight["value"] is not None:
+            if phases is not None:
+                phases.update(coalesced=True, wait_ms=round(
+                    (time.perf_counter() - started) * 1000.0, 1))
+            return flight["value"]
+        # A failed owner must not strand followers or cache its exception.
+        return _archive_list_source_rows_read(
+            cache_options, force_refresh=False, phases=phases, window=window)
+    try:
+        flight["value"] = _archive_list_source_rows_read(
+            cache_options, force_refresh=False, phases=phases, window=window)
+        return flight["value"]
+    finally:
+        with _ARCHIVE_LIST_SOURCE_FLIGHTS_LOCK:
+            _ARCHIVE_LIST_SOURCE_FLIGHTS.pop(key, None)
+            flight["event"].set()
+
+
+def _archive_list_source_rows_read(cache_options, *, force_refresh=False, phases=None, window="all"):
     """Read-only full snapshot feeding the projected sidebar list.
 
     The list response immediately projects a small 1d/7d window into fresh
@@ -18773,9 +18891,13 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phas
         defer_cold=True,
     )
     _phase("serve_ms")
-    codex_overlay = _archive_overlay_codex_sessions(rows)
+    # Every gap filler sees the same snapshot plus preceding overlays. Build
+    # membership once per request; still read every engine's current source.
+    existing_ids = _archive_overlay_existing_ids(rows)
+    codex_overlay = _archive_overlay_codex_sessions(rows, existing_ids=existing_ids)
     if codex_overlay:
         rows = list(rows or []) + codex_overlay
+        existing_ids.update(_archive_overlay_existing_ids(codex_overlay))
     _phase("codex_ms")
     # ACP sessions (Kimi/GLM) live in memory before their first transcript
     # lands and before the archive background refresh picks them up. Without
@@ -18784,31 +18906,34 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phas
     # because the cached snapshot has not refreshed yet, then reappears ~30s
     # later when the refresh completes. Merge in-memory attached sessions
     # cheaply so the sidebar never drops them in that window.
-    overlay = _archive_overlay_acp_sessions(rows)
+    overlay = _archive_overlay_acp_sessions(rows, existing_ids=existing_ids)
     if overlay:
         rows = list(rows or []) + overlay
+        existing_ids.update(_archive_overlay_existing_ids(overlay))
     _phase("acp_ms")
     # Same gap for Devin CLI: the session row exists in sessions.db within a
     # second of spawn, but the archive snapshot only picks it up after the
     # next full background rebuild (~20s+ on a large corpus). The Devin CLI
     # list is memoized per session, so asking it here costs a few stat()s on
     # a cached poll and ~0.1s when the DB changed.
-    devin_overlay = _archive_overlay_devin_cli_sessions(rows)
+    devin_overlay = _archive_overlay_devin_cli_sessions(rows, existing_ids=existing_ids)
     if devin_overlay:
         rows = list(rows or []) + devin_overlay
+        existing_ids.update(_archive_overlay_existing_ids(devin_overlay))
     _phase("devin_ms")
     # WatchTower already knows the engine session before the archive scan.
     # Keep that worker in its normal session/queue group during the gap.
-    worker_overlay = _archive_overlay_wt_worker_sessions(rows)
+    worker_overlay = _archive_overlay_wt_worker_sessions(rows, existing_ids=existing_ids)
     if worker_overlay:
         rows = list(rows or []) + worker_overlay
+        existing_ids.update(_archive_overlay_existing_ids(worker_overlay))
     _phase("wt_ms")
     # CCC-153: a session started in a terminal (Claude writes
     # ~/.claude/sessions/<pid>.json at launch) was invisible until the next
     # snapshot refresh: >=5 min at the serve TTL, and never while the load
     # gate holds refreshes off a saturated host. Overlay those live
     # registry-only rows; the work runs only when the registry dir changes.
-    claude_overlay = _archive_overlay_claude_registry_sessions(rows)
+    claude_overlay = _archive_overlay_claude_registry_sessions(rows, existing_ids=existing_ids)
     if claude_overlay:
         rows = list(rows or []) + claude_overlay
     _phase("claude_reg_ms")
@@ -18826,13 +18951,40 @@ _ARCHIVE_CLAUDE_REG_CACHE = {"sig": None, "rows": [], "changed_at": 0.0, "built_
 _ARCHIVE_CLAUDE_REG_LOCK = threading.Lock()
 
 
-def _archive_claude_registry_rows():
-    """Archive-shaped rows for every live ~/.claude/sessions entry, rebuilt
-    only when that directory's mtime changes (a launch adds a pid file, an
-    exit removes one). Same producer the archive build uses for
-    registry-only sessions, so the row shape matches."""
+def _archive_claude_registry_snapshot():
+    """Read candidate identities with the same launch/exit gate as row builds."""
     try:
         sig = SESSIONS_REGISTRY.stat().st_mtime_ns
+    except OSError:
+        return {}
+    now = time.monotonic()
+    cache = _ARCHIVE_CLAUDE_REG_CACHE
+    if (cache.get("registry_sig") == sig
+            and (now - cache.get("registry_changed_at", 0.0) > 5.0
+                 or now - cache.get("registry_built_at", 0.0) < 1.0)):
+        return cache.get("registry", {})
+    if not _ARCHIVE_CLAUDE_REG_LOCK.acquire(blocking=False):
+        return cache.get("registry", {})
+    try:
+        registry = _load_session_registry()
+        if cache.get("registry_sig") != sig:
+            cache["registry_changed_at"] = now
+        cache.update(registry_sig=sig, registry_built_at=now, registry=registry)
+        return registry
+    finally:
+        _ARCHIVE_CLAUDE_REG_LOCK.release()
+
+
+def _archive_claude_registry_rows(*, candidate_ids=None, registry=None):
+    """Archive-shaped live registry rows, optionally limited to missing IDs.
+
+    Both registry membership and the requested candidate set guard reuse:
+    another archive snapshot can have different gaps without a launch/exit.
+    The archive build uses the same row producer for registry-only sessions.
+    """
+    try:
+        sig = (SESSIONS_REGISTRY.stat().st_mtime_ns,
+               frozenset(candidate_ids) if candidate_ids is not None else None)
     except OSError:
         return []
     now = time.monotonic()
@@ -18849,7 +19001,15 @@ def _archive_claude_registry_rows():
         out = []
         try:
             archived, trashed = _load_conversation_lifecycle_sets()
-            for sid, meta in _load_session_registry().items():
+            source = registry if registry is not None else _load_session_registry()
+            if registry is None:
+                if _ARCHIVE_CLAUDE_REG_CACHE.get("registry_sig") != sig[0]:
+                    _ARCHIVE_CLAUDE_REG_CACHE["registry_changed_at"] = now
+                _ARCHIVE_CLAUDE_REG_CACHE.update(
+                    registry_sig=sig[0], registry_built_at=now, registry=source)
+            for sid, meta in source.items():
+                if candidate_ids is not None and sid not in candidate_ids:
+                    continue
                 if sid in archived or sid in trashed:
                     continue
                 try:
@@ -18871,14 +19031,19 @@ def _archive_claude_registry_rows():
         _ARCHIVE_CLAUDE_REG_LOCK.release()
 
 
-def _archive_overlay_codex_sessions(rows, now=None):
+def _archive_overlay_existing_ids(rows):
+    """Share identity scans within one list read, never across snapshots."""
+    return {str(row.get("session_id") or row.get("id") or "")
+            for row in rows or [] if isinstance(row, dict)}
+
+
+def _archive_overlay_codex_sessions(rows, now=None, *, existing_ids=None):
     """Recent indexed threads stay visible while a full rebuild is deferred.
 
     One bounded, signature-cached bulk query across account homes; never read
     transcripts or ask an engine about each row on this polling path.
     """
-    existing = {str(r.get("session_id") or r.get("id") or "")
-                for r in rows or [] if isinstance(r, dict)}
+    existing = _archive_overlay_existing_ids(rows) if existing_ids is None else existing_ids
     columns = ("id", "title", "cwd", "model", "reasoning_effort",
                "created_at", "created_at_ms", "updated_at", "updated_at_ms", "archived")
     try:
@@ -18936,12 +19101,22 @@ def _archive_overlay_codex_sessions(rows, now=None):
     return out
 
 
-def _archive_overlay_claude_registry_sessions(rows):
+def _archive_overlay_claude_registry_sessions(rows, *, existing_ids=None):
     """Live terminal Claude sessions missing from the cached snapshot."""
-    reg_rows = _archive_claude_registry_rows()
+    existing = _archive_overlay_existing_ids(rows) if existing_ids is None else existing_ids
+    try:
+        archived, trashed = _load_conversation_lifecycle_sets()
+        registry = _archive_claude_registry_snapshot()
+        candidates = set(registry) - existing - archived - trashed
+        if not candidates:
+            return []
+    except Exception:
+        return []
+    # Building launch titles, repository metadata and branch information is
+    # only useful when the current registry can actually fill a snapshot gap.
+    reg_rows = _archive_claude_registry_rows(candidate_ids=candidates, registry=registry)
     if not reg_rows:
         return []
-    existing = {str(r.get("session_id") or r.get("id") or "") for r in rows or [] if isinstance(r, dict)}
     return [r for r in reg_rows if str(r.get("session_id") or r.get("id") or "") not in existing]
 
 
@@ -18975,12 +19150,12 @@ def _archive_live_wt_workers():
         _ARCHIVE_WT_WORKERS_LOCK.release()
 
 
-def _archive_overlay_wt_worker_sessions(rows):
+def _archive_overlay_wt_worker_sessions(rows, *, existing_ids=None):
     """Missing live worker sessions, until their real archive rows arrive."""
     workers = _archive_live_wt_workers()
     if not workers:
         return []
-    existing = {str(r.get("session_id") or r.get("id") or "") for r in rows or [] if isinstance(r, dict)}
+    existing = _archive_overlay_existing_ids(rows) if existing_ids is None else existing_ids
     normalized = []
     for w in workers:
         # WT records a devin worker's session_id as the raw CLI slug while
@@ -19093,7 +19268,7 @@ def _archive_list_body_ver(key, rows, extra):
 _ARCHIVE_DEVIN_OVERLAY_WINDOW_S = 15 * 60
 
 
-def _archive_overlay_devin_cli_sessions(rows, now=None):
+def _archive_overlay_devin_cli_sessions(rows, now=None, *, existing_ids=None):
     """Archive-shaped Devin CLI rows that are live or recent but missing from
     the cached snapshot. Rows come from the same producer that feeds the
     archive build, so their shape is identical."""
@@ -19102,11 +19277,7 @@ def _archive_overlay_devin_cli_sessions(rows, now=None):
             return []
     except OSError:
         return []
-    existing = set()
-    for r in (rows or []):
-        sid = r.get("session_id") or r.get("id")
-        if sid:
-            existing.add(str(sid))
+    existing = _archive_overlay_existing_ids(rows) if existing_ids is None else existing_ids
     try:
         # Never block /list (and therefore trash POSTs queued behind it) on a
         # multi-second Devin CLI sessions.db rebuild. Serve cache/stale rows;
@@ -19129,14 +19300,14 @@ def _archive_overlay_devin_cli_sessions(rows, now=None):
     return out
 
 
-def _archive_overlay_acp_sessions(rows):
+def _archive_overlay_acp_sessions(rows, *, existing_ids=None):
     """Return archive-shaped rows for ACP sessions live in memory but missing
     from the cached archive snapshot. Called by the lightweight /list path so
     new Kimi/GLM sessions stay visible between creation and the next archive
     refresh."""
     if not _ACP_HARNESSES:
         return []
-    existing = None
+    existing = existing_ids
     # Gate by candidacy (CCC-142): the sidecar loads below cost O(all spawn
     # markers) -- ~4k files, re-stat'd on nearly every poll behind a 2s memo
     # -- yet are only needed to build a row for an attached ACP session that
@@ -19179,7 +19350,7 @@ def _archive_overlay_acp_sessions(rows):
         # CCC-142: never queue a sidebar poll behind _ACP_LOCK (held ~18s
         # while ACP state loads at boot). The overlay is a best-effort gap
         # filler; a lock-free shallow copy (atomic under the GIL) is enough.
-        if _ACP_LOCK.acquire(timeout=0.05):
+        if _ACP_LOCK.acquire(blocking=False):
             try:
                 sessions = dict(_ACP_SESSION_STATE.get(harness) or {})
             finally:
@@ -19194,11 +19365,7 @@ def _archive_overlay_acp_sessions(rows):
             if not sid:
                 continue
             if existing is None:
-                existing = set()
-                for r in (rows or []):
-                    rsid = r.get("session_id") or r.get("id")
-                    if rsid:
-                        existing.add(str(rsid))
+                existing = _archive_overlay_existing_ids(rows)
             if sid in existing:
                 continue
             if not (state and state.get("attached")):
@@ -19436,8 +19603,44 @@ def _queue_health_stats(rows, *, now=None):
         "queued_items": queued_items,
         "stale_queued_items": stale_items,
         "stale_queued_wait_s": round(stale_wait_s, 1),
-        "tts": _free_runtime.tts_queue_stats(),
     }
+
+
+def _archive_list_initial_payload(rows, *, window="all", now=None, cached=None, phases=None):
+    """Project recent rows first without changing the complete-list protocol."""
+    wall, cpu = time.perf_counter(), time.thread_time()
+    now = time.time() if now is None else now
+    parents = _session_graph.parent_snapshot()
+    try:
+        ideas = _idea_tickets.idea_ticket_rows_map()
+    except Exception:
+        ideas = {}
+    selected = _archive_list_window_rows(
+        rows, _archive_list_window_cutoff(window, now=now), ideas, parents)
+    recent = sorted(selected, key=_archive_list_row_ts, reverse=True)[:500]
+    wanted = {id(row) for row in recent}
+    wanted.update(id(row) for row in selected if row.get("pinned"))
+    by_sid = {_archive_row_sid(row): row for row in selected}
+    initial = [row for row in selected if id(row) in wanted]
+    index = 0
+    while index < len(initial):
+        row = initial[index]
+        index += 1
+        for parent_sid in _archive_list_parent_ids(row, parents):
+            parent = by_sid.get(parent_sid)
+            ticket = ideas.get(parent_sid) or (parent or {}).get("idea_ticket") or {}
+            if (parent is not None and id(parent) not in wanted and not parent.get("trashed")
+                    and not parent.get("explicitly_archived", ticket.get("explicitly_archived"))):
+                wanted.add(id(parent))
+                initial.append(parent)
+    inputs = (_load_usage_limit_resumes(), parents, ideas, initial)
+    if phases is not None:
+        phases["selection"] = {"wall_ms": round((time.perf_counter() - wall) * 1000, 1),
+                               "cpu_ms": round((time.thread_time() - cpu) * 1000, 1)}
+    payload = _archive_list_payload(rows, window=window, now=now, cached=cached,
+                                    _inputs=inputs, phases=phases)
+    payload.update(complete=len(initial) == len(selected), selected_count=len(selected), initial=True)
+    return payload
 
 
 def _archive_list_payload(rows, *, window="all", now=None, cached=None, phases=None, _inputs=None):
@@ -19463,6 +19666,27 @@ def _archive_list_payload(rows, *, window="all", now=None, cached=None, phases=N
 # change can reuse the immutable archive projection inside that new body.
 _ARCHIVE_LIST_PROJECTION_CACHE = ByteBudgetCache(
     _cache_budget_bytes("CCC_LIST_PROJECTION_CACHE_MB", 64), 8)
+
+_ARCHIVE_LIST_PROJECTION_DIAG_KEYS = collections.OrderedDict()
+_ARCHIVE_LIST_PROJECTION_DIAG_LOCK = threading.Lock()
+
+
+def _archive_list_projection_diag(window, key, hit):
+    """Describe replay invalidation without logging row identities or values."""
+    names = ("window", "cached", "snapshot", "context", "overlay", "graph", "topics")
+    with _ARCHIVE_LIST_PROJECTION_DIAG_LOCK:
+        previous = _ARCHIVE_LIST_PROJECTION_DIAG_KEYS.get(window)
+        changed = [name for name, before, after in zip(names, previous or (), key)
+                   if before != after]
+        _ARCHIVE_LIST_PROJECTION_DIAG_KEYS[window] = key
+        _ARCHIVE_LIST_PROJECTION_DIAG_KEYS.move_to_end(window)
+        while len(_ARCHIVE_LIST_PROJECTION_DIAG_KEYS) > 8:
+            _ARCHIVE_LIST_PROJECTION_DIAG_KEYS.popitem(last=False)
+    cache = _ARCHIVE_LIST_PROJECTION_CACHE
+    return {"hit": hit, "reason": "hit" if hit else "first-observed" if previous is None
+            else "key-changed" if changed else "not-retained",
+            "changed": changed, "entries": len(cache), "bytes": cache.bytes,
+            "budget_bytes": cache.max_bytes}
 
 
 def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=None, phases=None):
@@ -19493,25 +19717,77 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
     # Keep presence in the guard, and every other overlay field unchanged.
     overlay_guard = [({k: v for k, v in row.items() if k not in ("mtime", "modified")},
                       [k for k in ("mtime", "modified") if k in row]) for row in extra]
-    guard = hashlib.sha1(json.dumps([overlay_guard, ids, ideas, resume_fields],
+    # Recency changes reorder the overlay tail without changing its projected
+    # metadata. Keep archive positions fixed; replay overlay slots by identity.
+    overlay_set = set(overlay_ids)
+    overlay_order = [sid for sid in ids if sid in overlay_set]
+    guard_ids = [None if sid in overlay_set else sid for sid in ids]
+    overlay_guard.sort(key=lambda item: _archive_row_sid(item[0]))
+    projection_ctx = delta.get("projection_ctx")
+    guard_ideas = ideas if projection_ctx is None else None
+    guard = hashlib.sha1(json.dumps([overlay_guard, guard_ids, sorted(overlay_order), guard_ideas, resume_fields],
                                    sort_keys=True, default=str).encode()).hexdigest()
     from ccc_server import continuation_topics
-    key = (window, bool(cached), delta["ver"], delta["ctx"], guard,
+    key = (window, bool(cached), delta["ver"], projection_ctx or delta["ctx"], guard,
            _session_graph.projection_revision(), continuation_topics.revision())
     entry = _ARCHIVE_LIST_PROJECTION_CACHE.get(key)
+    if phases is not None:
+        phases["projection_cache"] = _archive_list_projection_diag(window, key, entry is not None)
     if entry is None:
         payload = _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
                                        _inputs=(resumes, parents, ideas, selected))
         raw, spans = _list_replay.encode_rows(payload["conversations"], set(overlay_ids))
-        _ARCHIVE_LIST_PROJECTION_CACHE.put(key, (raw, spans), len(raw) + 256 * len(spans) + 1024)
+        entry = _list_replay.compressed_entry(raw, spans)
+        if projection_ctx is not None:
+            entry = _list_replay.TicketContextEntry(entry, delta["ctx"])
+        _ARCHIVE_LIST_PROJECTION_CACHE.put(key, entry, _list_replay.entry_weight(entry))
+        compressed = _list_replay.compress_replay(entry, payload["conversations"])
     else:
         wall, cpu = time.perf_counter(), time.thread_time()
-        projected = _list_replay.replay_rows(entry, dict(zip(overlay_ids, extra)))
-        changed = _archive_list_ticket_updates(projected, ideas)
+        projected = _list_replay.replay_rows(
+            entry, dict(zip(overlay_ids, extra)), overlay_order=overlay_order)
+        if len(entry) == 3:
+            # Pay clone preparation only on reuse, never on the cold build.
+            # Charge the additional bytes to the same bounded cache.
+            entry = _list_replay.with_owned_rows(entry, projected)
+            if _list_replay.entry_weight(entry) > _ARCHIVE_LIST_PROJECTION_CACHE.max_bytes:
+                # Keep the usable JSON entry without retrying an oversized
+                # clone on every subsequent read.
+                entry = (_list_replay.TicketContextEntry((*entry[:3], None), entry.ticket_context)
+                         if isinstance(entry, _list_replay.TicketContextEntry) else (*entry[:3], None))
+            _ARCHIVE_LIST_PROJECTION_CACHE.put(key, entry, _list_replay.entry_weight(entry))
+        if projection_ctx is not None and getattr(entry, "ticket_context", None) != delta["ctx"]:
+            # Cached rows contain the earlier ticket overlay. All ticket
+            # routines must instead see the same snapshot inputs as a fresh
+            # projection, including when an overlay was removed entirely.
+            absent = object()
+            ticket_fields = ("idea_ticket", "explicitly_archived")
+            before = [tuple(row.get(field, absent) for field in ticket_fields)
+                      for row in projected]
+            source_by_sid = {_archive_row_sid(row): row for row in selected}
+            for row in projected:
+                source = source_by_sid[_archive_row_sid(row)]
+                for field in ticket_fields:
+                    if field not in source:
+                        row.pop(field, None)
+                    elif row.get(field, absent) != source[field]:
+                        row[field] = copy.deepcopy(source[field])
+            _archive_list_ticket_updates(projected, ideas)
+            changed = any(previous != tuple(row.get(field, absent) for field in ticket_fields)
+                          for previous, row in zip(before, projected))
+        else:
+            changed = _archive_list_ticket_updates(projected, ideas)
         if window == "all":
             _trace_row_flicker(projected, now=now)
-        raw = (json.dumps(projected).encode() if changed
-               else _list_replay.encode_replay(entry, projected))
+        if changed:
+            # Ticket work may change archive rows outside the live spans.
+            # Validate every current run, reusing only exact encoded content.
+            raw, spans = _list_replay.encode_rows(projected, set(overlay_ids))
+            updated = _list_replay.compressed_entry(raw, spans)
+            compressed = _list_replay.compress_replay(updated, projected)
+        else:
+            raw = _list_replay.encode_replay(entry, projected)
+            compressed = _list_replay.compress_replay(entry, projected)
         payload = {
             "ok": True, "conversations": projected, "count": len(projected),
             "total_count": sum(isinstance(row, dict) for row in (rows or [])),
@@ -19522,9 +19798,10 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
             payload["cached"] = bool(cached)
         if phases is not None:
             phases["projection_replay"] = {
+                "ticket_rows_changed": bool(changed),
                 "wall_ms": round((time.perf_counter() - wall) * 1000, 1),
                 "cpu_ms": round((time.thread_time() - cpu) * 1000, 1)}
-    return _list_replay.EncodedListPayload(payload, raw)
+    return _list_replay.EncodedListPayload(payload, raw, compressed)
 
 
 def _stamp_archive_state(rows):
@@ -20929,9 +21206,7 @@ def _compute_server_code_rev():
             stderr=subprocess.DEVNULL, timeout=2,
         ).decode("utf-8", "replace").strip()
         return out or ""
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, RuntimeError):
-        # A measured Python profile denies native Git execution. This optional
-        # display stamp is not an artifact identity or runtime acceptance.
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return ""
 
 
@@ -23902,7 +24177,8 @@ def _quiesce_http_for_restart(timeout=_RESTART_DRAIN_TIMEOUT_S, *, force=False):
     return True
 
 
-class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+class ThreadedHTTPServer(ConnectionAdmissionMixin, socketserver.ThreadingMixIn,
+                         http.server.HTTPServer):
     allow_reuse_address = True
     daemon_threads = True
     request_queue_size = 128
@@ -24156,14 +24432,14 @@ def _car_mode_effective_keys():
 
 
 def _car_mode_speech_engine():
-    """"local" (default: whisper.cpp + Kokoro, unmetered) or "deepgram" (opt-in
+    """"local" (default: whisper.cpp dictation + browser voice, unmetered) or "deepgram" (opt-in
     with CCC_VOICE_ENGINE=deepgram, metered)."""
     v = os.environ.get("CCC_VOICE_ENGINE", "").strip().lower()
     return "deepgram" if v == "deepgram" else "local"
 
 
 _CAR_MODE_ENGINE_LABELS = {
-    "local": "Kokoro + whisper.cpp (local, free)",
+    "local": "whisper.cpp + browser voice (local, free)",
     "deepgram": "Deepgram nova-3 + aura-2 (metered)",
 }
 
@@ -24175,8 +24451,6 @@ def _car_mode_status_mode(keys, engine=None):
         return "unavailable_no_anthropic"
     if engine == "deepgram" and not keys["deepgram"]:
         return "degraded_no_deepgram"  # dispatcher works, but no STT/TTS -> no hands-free voice
-    if engine == "local" and not _free_runtime.local_tts_installed():
-        return "degraded_no_local_speech"  # Kokoro voice files not installed yet
     return "voice"
 
 
@@ -28956,13 +29230,23 @@ def _conv_overlay_fingerprint(session_id):
             rq = list(_pending_resume_queue.get(session_id) or ())
         with _pending_terminal_input_lock:
             tq = list(_pending_terminal_input_queue.get(session_id) or ())
+        captures = _codex_capture_fingerprint(session_id)
+        # A real Claude transcript does not depend on the Codex worker's
+        # whole thread-state map. Keep unknown sessions and any discovered
+        # Codex state/capture on the original resolved-owner path.
+        with _CONV_PATH_CACHE_LOCK:
+            source = _CONV_PATH_CACHE.get(session_id)
+        with _CODEX_APP_SERVER_LOCK:
+            local_codex_state = _CODEX_APP_SERVER_THREAD_STATE.get(session_id)
+        known_claude = (source and Path(source).name == session_id + ".jsonl"
+                        and _detect_session_engine(session_id) == "claude")
         try:
-            state = _codex_thread_state_resolved(session_id)
+            state = ({} if known_claude and not local_codex_state and not captures
+                     else _codex_thread_state_resolved(session_id))
         except Exception:
             state = None
         if state is None:
             return None
-        captures = _codex_capture_fingerprint(session_id)
         if not rq and not tq and not state and not captures:
             return ()
         return json.dumps([rq, tq, state, captures], sort_keys=True, default=str)
@@ -31487,9 +31771,11 @@ def _load_application_html(name, *, conversation_document=False):
             agent = app_routines.load_state(folder).get("agent")
             agent_id = (agent.get("session_id") or "") if isinstance(agent, dict) else ""
         from ccc_server import app_initial_reads
+        from ccc_server.app_kit_delivery import script_url
+        source = target.read_text(encoding="utf-8")
         html = application_page(
-            target.read_text(encoding="utf-8"), app_id=name, agent_id=agent_id,
-            kit_url=_static_asset_url("app-kit.js"))
+            source, app_id=name, agent_id=agent_id,
+            kit_url=script_url(source, STATIC_DIR, _static_asset_url("app-kit.js")))
         html = _stamp_static_urls(app_initial_reads.application_page(html, name, USER_APPS_DIR))
         if conversation_document and agent_id and re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", agent_id):
             from ccc_server.app_embed import application_document
@@ -31625,11 +31911,7 @@ def _car_mode_start() -> dict:
     if mode == "degraded_no_deepgram":
         return {"ok": False, "error": "CCC_VOICE_ENGINE=deepgram needs a Deepgram API key. "
                 "Add one in Car Mode settings, or unset CCC_VOICE_ENGINE to use the free "
-                "local voice (Kokoro + whisper.cpp).", "mode": mode, "running": False}
-    if mode == "degraded_no_local_speech":
-        return {"ok": False, "error": "The local voice isn't installed yet. Run "
-                "scripts/install_local_speech.sh in the CCC folder (one time, about 400 MB), "
-                "then press Start again.", "mode": mode, "running": False}
+                "local voice (whisper.cpp + browser voice).", "mode": mode, "running": False}
 
     launcher = _CAR_MODE_DIR / "run.sh"
     if not launcher.exists():
@@ -31901,7 +32183,7 @@ def _memory_scope(qs):
     return "all" if (qs.get("scope", ["local"])[0] or "").strip().lower() == "all" else "local"
 
 
-class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandler):
+class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimingMixin, http.server.BaseHTTPRequestHandler):
     def _is_morning_path(self, path):
         """True if the request targets the (opt-in) Morning sub-feature."""
         return (
@@ -32027,6 +32309,9 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
             app_id = query.get("ccc_app", [""])[0]
             app_shell = bool(app_id and app_id not in ("sessions", "queues")
                              and not query.get("ccc_popout") and not query.get("popout"))
+            if app_shell:
+                from ccc_server.app_asset_hints import send as send_app_asset_hints
+                send_app_asset_hints(self, app_id, USER_APPS_DIR, _static_asset_url)
             if app_shell or app_embed:
                 prepared = _conv_reader.forward_page("/", parsed.query,
                                                     self.headers.get("Accept-Encoding", ""))
@@ -32972,42 +33257,6 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
                     ).lower()
                 ]
             self.send_json(rows)
-        elif path == "/api/local-speech/status":
-            from ccc_server import local_speech
-            local_speech.handle_api(self)
-        elif path == "/api/free-runtime/tts-voices":
-            self.send_json({"ok": True, "voices": _free_runtime.tts_voice_options()})
-        elif path.startswith("/api/free-runtime/tts-session/"):
-            # Continuous read (CCC-144): <id> is one mp3 stream for the whole
-            # message, played by a plain <audio src>; <id>/marks says where
-            # each clip starts, for word highlighting. The unguessable id is
-            # the capability; sessions are created by a same-origin POST.
-            rest = path[len("/api/free-runtime/tts-session/"):]
-            sid, _, sub = rest.partition("/")
-            session = _free_runtime.tts_session_get(sid)
-            if session is None:
-                self.send_json({"ok": False, "error": "unknown session"}, 404)
-            elif sub == "marks":
-                self.send_json(dict(session.info(), ok=True))
-            elif sub:
-                self.send_json({"ok": False, "error": "not found"}, 404)
-            else:
-                try:
-                    self.send_response(200)
-                    self.send_header("Content-Type", "audio/mpeg")
-                    self.send_header("X-CCC-Voice", session.voice)
-                    # Length is unknown while it is made: close-delimited,
-                    # no ranges (Safari then plays it like a radio stream).
-                    self.send_header("Accept-Ranges", "none")
-                    self.send_header("Cache-Control", "no-store")
-                    self.send_header("Connection", "close")
-                    self.end_headers()
-                    self.close_connection = True
-                    for _buf in session.iter_bytes():
-                        self.wfile.write(_buf)
-                        self.wfile.flush()
-                except Exception:
-                    pass
         elif path == "/api/free-runtime/status":
             # $0 spawn runtime readiness for the UI's Free chip. Cheap: one
             # state-file read + one loopback TCP probe (400ms cap). Never
@@ -33030,7 +33279,6 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
                 "ok": True,
                 "ready": all(v["ready"] for v in per_engine.values()),
                 "engines": per_engine,
-                "tts_queue": _free_runtime.tts_queue_stats(),
             })
         elif path == "/api/idea-tickets/activity":
             from ccc_server import session_activity
@@ -36020,7 +36268,8 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
             _src_phases = {}
             list_cache_key = _archive_response_cache_key(**cache_options)
             since = (qs.get("since", [""])[0] or "").strip()
-            _disk = _archive_list_disk_candidate(list_cache_key, window, since)
+            initial = qs.get("initial", ["0"])[0] == "1"
+            _disk = None if initial else _archive_list_disk_candidate(list_cache_key, window, since)
             if _disk is not None:
                 _archive_list_start_warm(
                     (list_cache_key, window),
@@ -36048,6 +36297,25 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
                 phases=_src_phases,
                 window=window,
             )
+            if initial:
+                # No delta token or persisted full-body cache entry can ever
+                # describe this intentionally partial response.
+                _initial_source_end = time.perf_counter()
+                _initial_phases = {}
+                _initial_payload = _archive_list_initial_payload(
+                    rows, window=window, cached=from_cache, phases=_initial_phases)
+                _initial_payload_end = time.perf_counter()
+                self.send_json(_initial_payload)
+                record_diag("list_server", (time.perf_counter() - _lt0) * 1000.0, {
+                    "window": window, "initial": True, "status": 200,
+                    "rows_src": len(rows or []),
+                    "source_ms": round((_initial_source_end - _lt0) * 1000, 1),
+                    "payload_ms": round((_initial_payload_end - _initial_source_end) * 1000, 1),
+                    "send_ms": round((time.perf_counter() - _initial_payload_end) * 1000, 1),
+                    "src": _src_phases, "projection": _initial_phases,
+                    "cpu_ms": round((time.thread_time() - _lc0) * 1000.0, 1),
+                })
+                return
             _lt1 = time.perf_counter()
             _payload_ms = []
             _payload_phases = {}
@@ -36928,166 +37196,6 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
             result = codex_client_call(action, data)
             self.send_json(result, 200 if result.get("ok") else 409)
             return
-        if path == "/api/local-speech/install":
-            from ccc_server import local_speech
-            local_speech.handle_api(self, install=True)
-            return
-        if path == "/api/free-runtime/tts-playback":
-            # Same-origin is enforced by do_POST. This only renews an already
-            # enabled local trial; browser requests cannot enable CPU policy.
-            from ccc_server import tts_priority
-            try:
-                length = int(self.headers.get("Content-Length", "0") or 0)
-                if not 0 < length <= 1024:
-                    raise ValueError("invalid playback lease")
-                payload = json.loads(self.rfile.read(length))
-                if not isinstance(payload, dict):
-                    raise ValueError("expected object")
-                result = tts_priority.playback(payload)
-            except (ValueError, OSError):
-                self.send_json({"ok": False, "error": "invalid playback lease"}, 400)
-                return
-            self.send_json({"ok": True, **result})
-            return
-        if path == "/api/free-runtime/tts-log":
-            # Browser-side Speak decisions (which voice, and why the Mac voice)
-            # land in activity.log next to the server's own SPEAK lines.
-            try:
-                length = int(self.headers.get("Content-Length", "0") or 0)
-                payload = json.loads(self.rfile.read(length)) if 0 < length <= 4096 else {}
-            except (ValueError, OSError):
-                payload = {}
-            if isinstance(payload, dict):
-                _log_activity("tts", str(payload.get("verb") or "NOTE")[:9].upper(),
-                              str(payload.get("detail") or "")[:300])
-            self.send_json({"ok": True})
-            return
-        if path == "/api/free-runtime/tts-enabled":
-            try:
-                length = int(self.headers.get("Content-Length", "0") or 0)
-                payload = json.loads(self.rfile.read(length)) if 0 < length <= 4096 else None
-            except (ValueError, OSError):
-                payload = None
-            if not isinstance(payload, dict) or "enabled" not in payload:
-                self.send_json({"ok": False, "error": "bad request"}, 400)
-                return
-            enabled = _free_runtime.set_tts_enabled(bool(payload.get("enabled")))
-            _log_activity("tts", "TOGGLE", "enabled=%d" % int(enabled))
-            self.send_json({"ok": True, "enabled": enabled, "tts": _free_runtime.tts_queue_stats()})
-            return
-        if path == "/api/free-runtime/tts-session":
-            # Continuous read for browsers without MediaSource (CCC-144):
-            # {texts: [clip, ...], voice} -> {id}; GET .../<id> plays it.
-            try:
-                length = int(self.headers.get("Content-Length", "0") or 0)
-                payload = json.loads(self.rfile.read(length)) if 0 < length <= 256 * 1024 else None
-            except (ValueError, OSError):
-                payload = None
-            texts = payload.get("texts") if isinstance(payload, dict) else None
-            if not isinstance(texts, list):
-                self.send_json({"ok": False, "error": "bad request"}, 400)
-                return
-            if not _free_runtime.tts_enabled():
-                self.send_json({"ok": False, "disabled": True, "error": "tts disabled"}, 503)
-                return
-            sid = _free_runtime.tts_session_create(texts, str(payload.get("voice") or ""))
-            if not sid:
-                self.send_json({"ok": False, "error": "local voice cannot stream"}, 503)
-                return
-            _log_activity("tts", "SESSION", "clips=%d chars=%d voice=%s" % (
-                len(texts), sum(len(str(t or "")) for t in texts), str(payload.get("voice") or "-")))
-            self.send_json({"ok": True, "id": sid})
-            return
-        if path.startswith("/api/free-runtime/tts-session/") and path.endswith("/cancel"):
-            sid = path[len("/api/free-runtime/tts-session/"):-len("/cancel")]
-            self.send_json({"ok": _free_runtime.tts_session_cancel(sid)})
-            return
-        if path == "/api/free-runtime/tts":
-            # Speak button: text -> free neural voice via the router. The
-            # router key never leaves the server; the browser gets audio only.
-            try:
-                length = int(self.headers.get("Content-Length", "0") or 0)
-                payload = json.loads(self.rfile.read(length)) if 0 < length <= 64 * 1024 else None
-            except (ValueError, OSError):
-                payload = None
-            if not isinstance(payload, dict):
-                self.send_json({"ok": False, "error": "bad request"}, 400)
-                return
-            if not _free_runtime.tts_enabled():
-                self.send_json({"ok": False, "disabled": True, "error": "tts disabled"}, 503)
-                return
-            _t0 = time.time()
-            if payload.get("stream"):
-                # Relay mp3 as it is made: playback starts at the first bytes
-                # instead of after the whole clip. Deepgram only when explicitly
-                # enabled; otherwise local Kokoro, which streams per sentence.
-                _voice_in = str(payload.get("voice") or "")
-                # "bg" = prepare-ahead; the local voice serves "fg" reads first.
-                _prio = "bg" if payload.get("prio") == "bg" else "fg"
-                _resp, _label = _free_runtime.deepgram_open(
-                    payload.get("text"), _voice_in, "encoding=mp3")
-                if (_resp is None and _free_runtime.local_tts_installed()
-                        and _voice_in not in _free_runtime.TTS_VOICES):
-                    _resp, _label = _free_runtime.local_tts_open(payload.get("text"), _voice_in, _prio)
-                if _resp is not None:
-                    _sent = 0
-                    _first_ms = -1
-                    try:
-                        self.send_response(200)
-                        self.send_header("Content-Type", "audio/mpeg")
-                        self.send_header("X-CCC-Voice", _label)
-                        if _label.startswith("Kokoro"):
-                            self.send_header("X-CCC-Model", _free_runtime.local_tts_precision())
-                        self.send_header("X-CCC-Stream", "1")
-                        # Perf pane "speaker cache" column: was this clip
-                        # replayed from the clip cache or made just now?
-                        self.send_header("X-CCC-Cache", "hit" if isinstance(
-                            _resp, _free_runtime._CachedClip) else "miss")
-                        self.send_header("Cache-Control", "no-store")
-                        self.send_header("Connection", "close")
-                        self.end_headers()
-                        self.close_connection = True
-                        with _resp:
-                            while True:
-                                _buf = _resp.read(4096)
-                                if not _buf:
-                                    break
-                                if _first_ms < 0:
-                                    _first_ms = int((time.time() - _t0) * 1000)
-                                self.wfile.write(_buf)
-                                self.wfile.flush()
-                                _sent += len(_buf)
-                    except Exception:
-                        pass
-                    finally:
-                        try:
-                            if hasattr(_resp, "close"):
-                                _resp.close()
-                        except Exception:
-                            pass
-                    # first = ms until the first audio bytes (the wait before
-                    # sound); ms = until the whole clip was made.
-                    _log_activity("tts", "SPEAK", "chars=%d status=200 spoke=%s ms=%d first=%d bytes=%d stream=1 prio=%s" % (
-                        len(str(payload.get("text") or "")), _label,
-                        int((time.time() - _t0) * 1000), _first_ms, _sent, _prio))
-                    return
-            status, audio, ctype, voice = _free_runtime.tts(payload.get("text"), str(payload.get("voice") or ""))
-            _log_activity("tts", "SPEAK", "chars=%d status=%d spoke=%s ms=%d bytes=%d" % (
-                len(str(payload.get("text") or "")), status, voice or "-",
-                int((time.time() - _t0) * 1000), len(audio)))
-            if status != 200:
-                self.send_json({"ok": False, "error": "tts unavailable", "voice": voice}, status)
-                return
-            self.send_response(200)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(len(audio)))
-            self.send_header("X-CCC-Voice", voice)
-            if voice.startswith("Kokoro"):
-                self.send_header("X-CCC-Model", _free_runtime.local_tts_precision())
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(audio)
-            return
         if path.startswith("/api/free-router"):
             # Free-model router lifecycle (install/start/stop). Same-origin
             # was already enforced at the top of do_POST.
@@ -37889,14 +37997,14 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
                 body = self.rfile.read(content_len)
                 data = json.loads(body)
                 messages = data.get("messages", [])
-                
+
                 session_id = str(uuid.uuid4())
                 brain_dir = Path.home() / ".gemini" / "antigravity" / "brain" / session_id
                 logs_dir = brain_dir / ".system_generated" / "logs"
                 logs_dir.mkdir(parents=True, exist_ok=True)
-                
+
                 transcript_path = logs_dir / "transcript.jsonl"
-                
+
                 with open(transcript_path, "w", encoding="utf-8") as f:
                     for i, msg in enumerate(messages):
                         role = msg.get("role", "USER_INPUT")
@@ -37911,7 +38019,7 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
                             "content": msg.get("content", "")
                         }
                         f.write(json.dumps(row) + "\n")
-                
+
                 self.send_json({"ok": True, "session_id": session_id})
                 return
             except Exception as e:
@@ -38236,22 +38344,12 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
             _spawn_timeline_save()
             self.send_json({"ok": True, "timeline": _spawn_timeline_get(sid)})
             return
-        if path == '/api/restart/managed':
-            # Explicit source-only opt-in. The mutable dashboard never selects
-            # a barrier: only the root-pinned one-shot image can accept proof,
-            # freeze, stop its exact worker and admit the replacement.
-            from ccc_server.execution_restart import launch, MAX_PACKET
-            try:
-                length = int(self.headers.get('Content-Length', '0'))
-                if not 0 < length <= MAX_PACKET:
-                    raise ValueError('managed request exceeds packet bound')
-                result = launch(json.loads(self.rfile.read(length)))
-            except Exception as exc:
-                self.send_json({'ok': False, 'code': 'codex_restart_pending',
-                    'fallback': 'queue', 'outcome': 'unknown',
-                    'error': 'Managed transition unproven; reconcile before retry: ' + str(exc)[:200]}, 409)
-                return
-            self.send_json(result)
+        if path == "/api/restart/managed":
+            # Compatibility refusal only; this endpoint cannot launch a
+            # controller or alter worker lifecycle.
+            self.send_json({"ok": False, "code": "codex_restart_pending",
+                "fallback": "queue", "outcome": "unknown",
+                "error": "Managed restart is unavailable; use guarded worker restart."}, 409)
             return
         if path == "/api/restart/worker":
             # Restart ONLY the execution worker. The common case after a
@@ -38321,22 +38419,11 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
             # the handoff below succeeds: adopt/drain need a live worker, so
             # restarting it first would strand this dashboard's sessions.
             restart_all = path.endswith("/all")
-            # Routine restarts (`ccc restart` without --now) wait while a read
-            # is playing, so the stream is not cut and the retry does not hit
-            # a cold voice (CCC-144). Bounded (restart_hold); the button, the
-            # updater and `--now` send no "routine" flag and are never held.
             try:
                 _rlen = int(self.headers.get("Content-Length", "0") or 0)
                 _rbody = json.loads(self.rfile.read(_rlen)) if 0 < _rlen <= 4096 else {}
             except (ValueError, OSError):
                 _rbody = {}
-            if isinstance(_rbody, dict) and _rbody.get("routine"):
-                _hold = _free_runtime.restart_hold()
-                if _hold:
-                    _log_activity("restart", "HELD", "read-aloud playing: %s" % json.dumps(_hold))
-                    self.send_json({"ok": False, "error": "read-aloud is playing; restart deferred",
-                                    "read_aloud": _hold}, 409)
-                    return
             # The body was consumed above; only the explicit JSON boolean
             # permits interruption, as on the worker-only endpoint.
             allow_codex_interrupt = (
@@ -44206,7 +44293,7 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
             display_name = (payload.get("display_name") or "").strip()
             if not display_name and session_id:
                 display_name = _group_chat_resolve_session_display_name(session_id)
-            
+
             if (not chat_path and not chat_uuid) or not session_id:
                 self.send_json({"ok": False, "error": "missing chat_id/chat_path or session_id"})
                 return
@@ -47158,6 +47245,10 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
             raise
         finally:
             _inflight_end(self)
+            # A reused connection resets its handler clock after the idle
+            # request-line wait; use that same clock for logs and accounting.
+            _t0 = self._ccc_req_t0
+            _c0 = self._ccc_req_cpu0
             # Threshold-gated slow-request log. Fast requests stay silent;
             # only the hot endpoints surface, e.g.:
             #   [SLOW] GET /api/group-chat/active 1840ms
@@ -48277,7 +48368,7 @@ def _get_onboarding_status():
     import json
     import os
     from pathlib import Path
-    
+
     # 1. Check if onboarding is completed
     onboarding_file = COMMAND_CENTER_STATE_DIR / "onboarding.json"
     completed = False
@@ -48297,7 +48388,7 @@ def _get_onboarding_status():
     claude_bin = claude_info.get("bin")
     claude_logged_in = False
     claude_email = None
-    
+
     claude_config_file = Path.home() / ".claude.json"
     if claude_config_file.is_file():
         try:
@@ -48315,7 +48406,7 @@ def _get_onboarding_status():
     codex_available = codex_info.get("available", False)
     codex_bin = codex_info.get("bin")
     codex_logged_in = False
-    
+
     codex_auth_file = codex_home() / "auth.json"
     if codex_auth_file.is_file():
         try:
@@ -48332,7 +48423,7 @@ def _get_onboarding_status():
     antigravity_bin = antigravity_info.get("bin")
     antigravity_logged_in = False
     antigravity_email = None
-    
+
     # Check google_accounts.json
     gemini_accounts_file = Path.home() / ".gemini" / "google_accounts.json"
     if gemini_accounts_file.is_file():
@@ -48357,7 +48448,7 @@ def _get_onboarding_status():
     cursor_bin = cursor_info.get("bin")
     cursor_logged_in = False
     cursor_email = None
-    
+
     cursor_config_file = Path.home() / ".cursor" / "cli-config.json"
     if cursor_config_file.is_file():
         try:
@@ -48376,7 +48467,7 @@ def _get_onboarding_status():
     kimi_bin = kimi_info.get("bin")
     kimi_logged_in = False
     kimi_email = None
-    
+
     kimi_creds_file = Path.home() / ".kimi-code" / "credentials.json"
     if kimi_creds_file.is_file():
         try:
@@ -49232,11 +49323,11 @@ def _launch_login_terminal(engine):
     if not command_info.get("ok"):
         return command_info
     command = command_info["command"]
-        
+
     # AppleScript string needs the command embedded; escape backslashes and double quotes
     cmd_lit = command.replace("\\", "\\\\").replace('"', '\\"')
     target = _preferred_terminal_app()
-    
+
     if target == "iTerm2":
         script = f'''
         tell application "iTerm2"
@@ -49256,7 +49347,7 @@ def _launch_login_terminal(engine):
         end tell
         return "ok"
         '''
-        
+
     try:
         # Launch terminal in background
         subprocess.Popen(["osascript", "-e", script])
@@ -49756,11 +49847,6 @@ def main():
     # inline on the request thread (60s+ on a real corpus, MEMO-FIX-12);
     # warming here means that parse is already done, or well underway, by the
     # time any real request arrives. Cheap/no-op once already warm.
-    if not os.environ.get("CCC_EPHEMERAL"):
-        # Installed local voice: load it now and keep it up, so the first
-        # Speak doesn't wait ~30 s for the model.
-        threading.Thread(target=_free_runtime.local_tts_keepalive, daemon=True,
-                         name="local-tts-keepalive").start()
     if not os.environ.get("CCC_EPHEMERAL"):
         from ccc_server import session_fts as _session_fts_warm
         from ccc_server import ship_graph as _ship_graph_warm

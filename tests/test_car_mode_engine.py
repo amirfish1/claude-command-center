@@ -12,10 +12,7 @@ class CarModeSpeechEngineTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("CCC_VOICE_ENGINE", None)
             self.assertEqual(server._car_mode_speech_engine(), "local")
-            with mock.patch.object(server._free_runtime, "local_tts_installed", return_value=True):
-                self.assertEqual(server._car_mode_status_mode(self.KEYS), "voice")
-            with mock.patch.object(server._free_runtime, "local_tts_installed", return_value=False):
-                self.assertEqual(server._car_mode_status_mode(self.KEYS), "degraded_no_local_speech")
+            self.assertEqual(server._car_mode_status_mode(self.KEYS), "voice")
 
     def test_deepgram_engine_is_opt_in_and_still_needs_its_key(self):
         with mock.patch.dict(os.environ, {"CCC_VOICE_ENGINE": "deepgram"}):

@@ -238,11 +238,48 @@
     return at && bt ? at - bt : at ? -1 : bt ? 1 : 0;
   }
 
+  // Display-only explanation: never changes ownership or authorizes an action.
+  function blockReason(it, opts) {
+    var a = project(it, Object.assign({explain:true}, opts));
+    if (!a || (!a.blocked && !['deferred', 'readiness', 'review'].includes(a.key))) return null;
+    var proposal = it.block_proposal || {};
+    var raw = str(a.key === 'deferred' ? it.defer_reason || '' : it.block_question || '');
+    var why = raw.match(/^(?:Why (?:it needs you|blocked|this needs you)|Reason):\s*(.+)$/im);
+    var text = why ? why[1] : str(proposal.major_detail) || raw.split('\n').find(function (line) {
+      return line.trim() && !/^\s*\[(?:auto-approval|Q\d+[^\]]*\]\s*$)/i.test(line);
+    }) || (a.key === 'blocked' ? 'Blocker reason not recorded.' : a.title.split('\n')[0]);
+    text = str(text).replace(/\[Q\d+(?::[a-z0-9-]+)?\]/gi, '').replace(/^[\s#*:-]+/, '').trim();
+    if (!text) text = 'Blocker reason not recorded.';
+    var explicit = str(proposal.major_because).toLowerCase();
+    var category = '';
+    if (/money|spend|price|payment/.test(explicit)) category = 'Money';
+    else if (/customer|send|public/.test(explicit)) category = 'Customer impact';
+    else if (/owner-only|policy/.test(explicit)) category = 'Policy';
+    // Only the actual blocker explanation is classified, never the whole ticket
+    // or session's historical summary. The tooltip identifies this as a hint.
+    var recordedCategory = !!category;
+    var rules = [
+      ['Policy', /\b(?:explicit prohibition|policy|restrictions|owner.only|forbidden)\b/i],
+      ['Money', /(?:\$\d|\b(?:billing|refund|payment|price change|ad spend|paid backend|spend approval)\b)/i],
+      ['Access', /\b(?:credentials?|permission denied|access denied|authentication|login|protected branch|protected ref)\b/i],
+      ['Measurement', /\b(?:measurements?|representative|sample|profiling|exposure|collect.{0,30}evidence)\b/i],
+      ['Scope', /\b(?:promot\w*.{0,20}deep|scope|structural|budget.{0,15}minutes?)\b/i],
+      ['Technical', /\b(?:mechanical|compile|tests? fail|CI fail|migration|deployment|rate limit|quota)\b/i],
+      ['Customer impact', /\b(?:send.{0,25}(?:customer|client|email)|customer consent|client approval)\b/i],
+    ];
+    if (!category) for (var i = 0; i < rules.length; i++) if (rules[i][1].test(text)) { category = rules[i][0]; break; }
+    if (!category) category = a.key === 'dependency' ? 'Dependency' : a.key === 'external' ? 'External'
+      : a.key === 'worker' ? 'Worker' : a.key === 'review' ? 'Review' : a.key === 'deferred' ? 'Scheduled'
+      : a.owner ? 'Decision' : 'Blocker';
+    return {text:text, full:raw || text, category:category, owner:a.owner, kind:a.key,
+      categorySource:recordedCategory ? 'Recorded blocker classification' : 'Category inferred from the recorded blocker'};
+  }
+
   // The "needs you" predicate for counts and filters.
   function needsOwner(it, opts) {
     var a = project(it, opts);
     return !!(a && a.owner);
   }
 
-  return { compareDeferred: compareDeferred, project: project, needsOwner: needsOwner, currentWait: currentWait, commentsSinceBlock: commentsSinceBlock, WAIT_ON: WAIT_ON };
+  return { blockReason: blockReason, compareDeferred: compareDeferred, project: project, needsOwner: needsOwner, currentWait: currentWait, commentsSinceBlock: commentsSinceBlock, WAIT_ON: WAIT_ON };
 });

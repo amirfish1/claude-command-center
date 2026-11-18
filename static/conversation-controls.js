@@ -1007,8 +1007,7 @@ document.addEventListener('keydown', _handleSttUserInteraction);
 
   function speakTextDirect(text, convId, paneId, sourceBtn, domElements) {
     if (typeof sharedState._ttsEnabled !== 'undefined' && !sharedState._ttsEnabled) return false;
-    if (sourceBtn && window.cccLocalSpeech) window.cccLocalSpeech.offer();
-    if (!window.speechSynthesis) return false;
+    if (!window.speechSynthesis && !window.cccBrowserVoice?.ready) return false;
     sharedState._ttsSelectionReadText = '';
     let domData = null;
     if (domElements && domElements.length) {
@@ -1022,7 +1021,6 @@ document.addEventListener('keydown', _handleSttUserInteraction);
     // Starting a fresh read supersedes any prior utterance.
     if (sharedState._ttsActive || sharedState._ttsPaused || sharedState._ttsUtterance) {
       sharedState._ttsChunkState = null;
-      (0, sharedState._ttsScheduleCacheDebug)();
       try { (0, sharedState._ttsEngineCancel)(); } catch (_) {}
     }
     (0, sharedState._setTtsDirectBtnState)(sourceBtn || null, sourceBtn ? 'speaking' : null);

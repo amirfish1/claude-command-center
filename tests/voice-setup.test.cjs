@@ -13,7 +13,6 @@ const vars=between("  const $voiceModeBtn = document.getElementById('voiceModeBt
 const car=between('  // ── Car Mode (hands-free voice operator)', '  // ── Voice mode (Codex realtime)');
 const prefs=between("  const VOICE_MOBILE_BTN_STORAGE_KEY =",'  function applyTheme(');
 const access=between("  const $voiceCallBtnToggle =",'  if ($voicePanelHideBtn)');
-const tts=between("  const TTS_VOICE_DEFAULT_KEY =",'  renderAllConversationBackgroundPalettes();');
 const wiring=between("  if ($voiceSettingsBtn) $voiceSettingsBtn.addEventListener",'  // Tab close/navigation:');
 const search=between('  function ensureSettingsRowCrumb(', '  function clearSettingsSearch(');
 const encoded=JSON.stringify(html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'')).replace(/</g,'\\u003c');
@@ -26,7 +25,7 @@ window.__toasts=[];function showOpToast(...v){window.__toasts.push(v);}let curre
 // Hold background voice reads indefinitely to exercise opening Settings during startup.
 const nativeFetch=window.fetch.bind(window);window.__priorityVoiceReads=[];window.__parkedVoiceReads=[];
 window.fetch=(url,init)=>{
- if(['/api/free-runtime/tts-voices','/api/voice/config','/api/voice/voices'].includes(url)&&(!init?.method||init.method==='GET')){
+ if(['/api/voice/config','/api/voice/voices'].includes(url)&&(!init?.method||init.method==='GET')){
   if(init?.cccPriority!=='user'){window.__parkedVoiceReads.push(url);return new Promise(()=>{});}
   window.__priorityVoiceReads.push(url);
  }
@@ -44,12 +43,12 @@ ${prefs}
 ${config}
 ${access}
 ${car}
-${tts}
+
 ${wiring}
 window.__open=part=>window.cccVoiceSetup.open(part);
-window.cccVoiceSetup.mount({navigate:()=>{window.__closed=false;const disclosure=document.querySelector('#settingsSection-voice>details');if(disclosure)disclosure.open=true;},load:loadVoiceConfig,loadOperator:fetchCarModeStatus,refreshVoices:()=>refreshTtsVoiceOptions({userInitiated:true})});
-window.__refreshTts=refreshTtsVoiceOptions;
-</script><script src="/static/local-speech.js"></script></body></html>`;
+window.cccVoiceSetup.mount({navigate:()=>{window.__closed=false;const disclosure=document.querySelector('#settingsSection-voice>details');if(disclosure)disclosure.open=true;},load:loadVoiceConfig,loadOperator:fetchCarModeStatus,});
+
+</script></body></html>`;
 let child,browser,url,original;const file=path.join(scratch,'voice','voice.json');
 test.before(async()=>{fs.writeFileSync(path.join(scratch,'fixture.html'),fixture);child=spawn('python3',['-u','tests/fixtures/voice_setup_server.py',scratch],{cwd:root,env:{...process.env,PYTHONPATH:root,CCC_EPHEMERAL:'1'}});let stderr='';child.stderr.on('data',d=>stderr+=d);const lines=readline.createInterface({input:child.stdout});url=(await Promise.race([once(lines,'line').then(([line])=>JSON.parse(line)),once(child,'exit').then(()=>{throw new Error(stderr);})])).url;original=fs.readFileSync(file,'utf8');browser=await puppeteer.launch({executablePath:findChromePath(),args:['--no-sandbox']});});
 test.after(async()=>{await browser?.close();if(child){child.kill();await once(child,'exit');}console.log('Voice setup screenshots:',scratch);});
@@ -62,15 +61,14 @@ async function open(t,width=1440,fragment='',part='conversation'){
 const read=()=>JSON.parse(fs.readFileSync(file,'utf8'));
 for(const width of [1440,390])test('one native workflow with truthful input/output scopes and no writes at '+width,async t=>{
  const{page,posts}=await open(t,width,'',null);assert.equal(fs.readFileSync(file,'utf8'),original);assert.deepEqual(posts,[]);
- assert.deepEqual(await page.evaluate(()=>window.__parkedVoiceReads),['/api/free-runtime/tts-voices']);
- assert.deepEqual((await page.evaluate(()=>window.__priorityVoiceReads)).sort(),['/api/free-runtime/tts-voices','/api/voice/config','/api/voice/voices']);
- assert(await page.$eval('#settingsTtsVoiceDefault',n=>n.options.length>0));
- for(const id of ['voiceSelect','settingsTtsVoiceDefault','settingsBrowserVoiceToggle','settingsVoiceCallBtnToggle','localSpeechInstall','carModeAnthropicKey'])assert.equal(await page.$$eval('#'+id,n=>n.length),1);
+ assert.deepEqual(await page.evaluate(()=>window.__parkedVoiceReads),[]);
+ assert.deepEqual((await page.evaluate(()=>window.__priorityVoiceReads)).sort(),['/api/voice/config','/api/voice/voices']);
+ for(const id of ['voiceSelect','settingsTtsEnabledToggle','settingsBrowserVoiceToggle','settingsVoiceCallBtnToggle','carModeAnthropicKey'])assert.equal(await page.$$eval('#'+id,n=>n.length),1);
  assert.equal(await page.$eval('#settingsBrowserVoiceToggle',n=>n.closest('.voice-setup-section').id),'voiceSetup-reading');
- assert.equal(await page.$eval('#settingsBrowserVoiceToggle',n=>n.getAttribute('aria-checked')),'false');
+ assert.equal(await page.$eval('#settingsBrowserVoiceToggle',n=>n.getAttribute('aria-checked')),'true');
  assert.equal(await page.$eval('#voiceModal',n=>n.hidden),true);assert.equal(await page.$eval('#carModeModal',n=>n.hidden),true);assert.equal(await page.$eval('#settingsSoundsToggle',n=>n.closest('.settings-section').id),'settingsSection-notifications');assert.equal(await page.$eval('#voiceSetupLegacy #settingsVoiceMobileToggle',n=>!!n),true);
- assert.match(await page.$eval('#voiceSetupListeningStatus',n=>n.textContent),/permission.*not been checked/);assert.match(await page.$eval('#voiceSetup-reading',n=>n.textContent),/speaker button/);assert.match(await page.$eval('#voiceSetup-offline',n=>n.textContent),/Does not enable offline dictation/);
- assert.equal(await page.$$eval('#voiceSetup details:not([open])',n=>n.length),4);await page.$eval('#voiceSetup',n=>n.scrollIntoView({block:'start'}));await page.screenshot({path:path.join(scratch,'setup-'+width+'.png'),fullPage:true});const bounds=await page.$eval('#voiceSetup',n=>({scroll:n.scrollWidth,width:n.clientWidth}));assert(bounds.scroll<=bounds.width+1);
+ assert.match(await page.$eval('#voiceSetupListeningStatus',n=>n.textContent),/permission.*not been checked/);assert.match(await page.$eval('#voiceSetup-reading',n=>n.textContent),/speaker button/);
+ assert.equal(await page.$$eval('#voiceSetup details:not([open])',n=>n.length),3);await page.$eval('#voiceSetup',n=>n.scrollIntoView({block:'start'}));await page.screenshot({path:path.join(scratch,'setup-'+width+'.png'),fullPage:true});const bounds=await page.$eval('#voiceSetup',n=>({scroll:n.scrollWidth,width:n.clientWidth}));assert(bounds.scroll<=bounds.width+1);
 });
 test('saved unavailable voice and profile remain selected; no-op Save never writes or changes visibility',async t=>{
  const{page,posts}=await open(t);assert.equal(await page.$eval('#voiceSelect',n=>n.value),'coral');assert.equal(await page.$eval('#voiceProfileSelect',n=>n.value),'Missing profile');assert.match(await page.$eval('#voiceProfileSelect',n=>n.selectedOptions[0].textContent),/key unavailable/);const before=await page.evaluate(()=>({...localStorage}));await page.click('#voiceModalSaveBtn');await page.waitForFunction(()=>document.querySelector('#voiceSetupCallStatus').textContent.includes('No call settings changed'));assert.deepEqual(posts,[]);assert.equal(fs.readFileSync(file,'utf8'),original);assert.deepEqual(await page.evaluate(()=>({...localStorage})),before);
@@ -84,34 +82,18 @@ test('failed save leaves browser preferences and server config unchanged; invali
 test('call access is one explicit browser action updating both saved gates, independent of server call settings',async t=>{
  const{page,posts}=await open(t,390);await page.evaluate(()=>{localStorage.setItem('ccc-voice-call-button','1');localStorage.setItem('ccc-voice-mobile-btn','0');window.cccVoiceSetup.refreshAccess();});assert.equal(await page.$eval('#settingsVoiceCallBtnToggle',n=>n.getAttribute('aria-checked')),'false');await page.focus('#settingsVoiceCallBtnToggle');await page.keyboard.press('Enter');assert.deepEqual(await page.evaluate(()=>[localStorage.getItem('ccc-voice-call-button'),localStorage.getItem('ccc-voice-mobile-btn')]),['1','1']);assert.equal(fs.readFileSync(file,'utf8'),original);assert.deepEqual(posts,[]);await page.click('#settingsVoiceCallBtnToggle');assert.deepEqual(await page.evaluate(()=>[localStorage.getItem('ccc-voice-call-button'),localStorage.getItem('ccc-voice-mobile-btn')]),['0','0']);
 });
-test('read-aloud selection stays separate from call voice and retains a saved unavailable output voice',async t=>{
- const{page,posts}=await open(t);await page.evaluate(()=>localStorage.setItem('ccc-tts-voice-default','Retained output'));await page.click('#voiceSetupReadingRefresh');await page.waitForFunction(()=>document.querySelector('#settingsTtsVoiceDefault').value==='Retained output');assert.match(await page.$eval('#settingsTtsVoiceDefault',n=>n.selectedOptions[0].textContent),/unavailable/);await page.select('#settingsTtsVoiceDefault','Kokoro: af_heart');assert.equal(await page.evaluate(()=>localStorage.getItem('ccc-tts-voice-default')),'Kokoro: af_heart');assert.equal(await page.$eval('#voiceSelect',n=>n.value),'coral');assert.equal(fs.readFileSync(file,'utf8'),original);assert.deepEqual(posts,[]);
-});
+
 test('legacy setup buttons and hash links redirect into actual sections with keyboard focus',async t=>{
- const{page}=await open(t,390);for(const [hash,target] of [['settingsTtsVoiceDefault','reading'],['voiceModal','conversation'],['settings/voice-offline','offline'],['settingsVoiceMobileToggle','access']]){await page.evaluate(h=>{location.hash=h;},hash);await page.waitForFunction(id=>document.activeElement.id===id, {}, 'voiceSetup-'+target);}
+ const{page}=await open(t,390);for(const [hash,target] of [['settingsBrowserVoiceToggle','reading'],['voiceModal','conversation'],['settingsVoiceMobileToggle','access']]){await page.evaluate(h=>{location.hash=h;},hash);await page.waitForFunction(id=>document.activeElement.id===id, {}, 'voiceSetup-'+target);}
  await page.focus('#carModeMenuBtn');await page.keyboard.press('Enter');await page.waitForFunction(()=>document.querySelector('#voiceSetup-operator').open);assert.equal(await page.$eval('#carModeModal',n=>n.classList.contains('open')),false);assert.equal(await page.$eval('#carModeAnthropicKey',n=>n.type),'password');assert.equal(await page.$eval('#carModeAnthropicKey',n=>n.value),'');assert.equal(await page.$eval('#carModeStartBtn',n=>n.disabled),true);assert.match(await page.$eval('#carModeStatusBanner',n=>n.textContent),/launcher is unavailable/);await page.click('#carModeCancelBtn');assert.equal(await page.$eval('#voiceSetup-operator',n=>n.open),false);
  await page.focus('#voiceSettingsBtn');await page.keyboard.press('Enter');await page.waitForFunction(()=>document.activeElement.id==='voiceSetup-conversation');
 });
-test('offline refresh is read-only and never claims local output makes calls offline',async t=>{
- const{page,posts}=await open(t,390);fs.writeFileSync(path.join(scratch,'offline.json'),JSON.stringify({state:'ready',reason:'',progress:''}));await page.evaluate(()=>window.__open('offline'));await page.click('#voiceSetupOfflineRefresh');await page.waitForFunction(()=>document.querySelector('#localSpeechStatus').textContent.includes('Ready'));assert.equal(await page.$eval('#localSpeechInstall',n=>n.disabled),true);assert.match(await page.$eval('#voiceSetup-offline',n=>n.textContent),/Does not enable offline dictation/);assert.deepEqual(posts,[]);fs.writeFileSync(path.join(scratch,'offline.json'),JSON.stringify({state:'not_installed',reason:'',progress:''}));
-});
+
 test('load failure disables Save and retry restores actual saved values',async t=>{
  const{page}=await open(t);fs.writeFileSync(path.join(scratch,'fail-read'),'1');await page.click('#voiceSetupReload');await page.waitForFunction(()=>document.querySelector('#voiceSetupCallStatus').textContent.includes('unavailable'));assert.equal(await page.$eval('#voiceModalSaveBtn',n=>n.disabled),true);assert.equal(fs.readFileSync(file,'utf8'),original);fs.rmSync(path.join(scratch,'fail-read'));await page.click('#voiceSetupReload');await page.waitForFunction(()=>document.querySelector('#voiceSetupCallStatus').textContent.includes('Saved call defaults loaded'));assert.equal(await page.$eval('#voiceSelect',n=>n.value),'coral');
 });
 
-test('catalog failure preserves saved output selection and exposes a working retry', async t => {
- const {page,posts}=await open(t);
- await page.evaluate(()=>localStorage.setItem('ccc-tts-voice-default','Retained output'));
- fs.writeFileSync(path.join(scratch,'fail-catalog'),'1');
- await page.click('#voiceSetupReadingRefresh');
- await page.waitForFunction(()=>document.querySelector('#voiceSetupReadingStatus').textContent.includes('catalog unavailable'));
- assert.equal(await page.$eval('#settingsTtsVoiceDefault',n=>n.value),'Retained output');
- fs.rmSync(path.join(scratch,'fail-catalog'));
- await page.click('#voiceSetupReadingRefresh');
- await page.waitForFunction(()=>document.querySelector('#voiceSetupReadingStatus').textContent.includes('advertised'));
- assert.equal(await page.$eval('#settingsTtsVoiceDefault',n=>n.value),'Retained output');
- assert.deepEqual(posts,[]);
-});
+
 
 test('passive listening availability distinguishes absent API, insecure connection and native bridge', async t => {
  const {page,posts}=await open(t,390);
@@ -139,7 +121,7 @@ test('initial legacy links and Simple setup route to the same native controls', 
 
 test('native Settings search reveals each task with its controls, without reviving duplicate editors', async t => {
  const {page}=await open(t,390);
- for(const [query,id] of [['spoken replies','settingsTtsVoiceDefault'],['fallback profile','voiceProfileSelect'],['offline output','localSpeechInstall'],['floating shortcut','settingsVoiceCallBtnToggle'],['anthropic','carModeAnthropicKey']]){
+ for(const [query,id] of [['spoken replies','settingsBrowserVoiceToggle'],['fallback profile','voiceProfileSelect'],['floating shortcut','settingsVoiceCallBtnToggle'],['anthropic','carModeAnthropicKey']]){
   await page.evaluate(q=>window.__search(q),query);
   assert.equal(await page.$eval('#'+id,n=>!!n.getClientRects().length),true,query);
   assert.equal(await page.$eval('#settingsVoiceMobileToggle',n=>!!n.getClientRects().length),false);

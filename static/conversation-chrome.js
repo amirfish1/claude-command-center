@@ -2487,7 +2487,9 @@
   function syncPresentationToolbar(pane, mode, hasAnswers) {
     const toolbar = pane && pane.querySelector('[data-role="presentation-toolbar"]');
     if (!toolbar) return;
-    toolbar.hidden = !presentationFeatureEnabled() || !hasAnswers;
+    const presentationEnabled = presentationFeatureEnabled();
+    toolbar.classList.toggle('is-reader-only', !presentationEnabled);
+    toolbar.hidden = !hasAnswers;
     toolbar.querySelectorAll('[data-presentation-mode]').forEach(button => {
       const active = button.dataset.presentationMode === mode;
       button.setAttribute('aria-pressed', active ? 'true' : 'false');
@@ -2774,7 +2776,7 @@
       ? normalizePresentationMode(pane.dataset.presentationMode || presentationModeForSession(sessionId))
       : 'off';
     pane.dataset.presentationMode = mode;
-    const hasAnswers = !!view.querySelector('.event.assistant .assistant-text, .stream-bubble .assistant-text');
+    const hasAnswers = !!view.querySelector('.event.assistant .assistant-text, .stream-bubble .assistant-text, [data-read-assistant-message], [data-read-agent-answer]');
     syncPresentationToolbar(pane, mode, hasAnswers);
     if (mode === 'off' || !hasAnswers) {
       disconnectPresentationProjection(view);
@@ -3510,10 +3512,10 @@
 
     // FLIP: remember where every existing node is before we touch the DOM.
     const before = new Map();
-    pane.querySelectorAll('.orch-node[data-lane-id]').forEach(el => {
+    if (lanes.length) pane.querySelectorAll('.orch-node[data-lane-id]').forEach(el => {
       before.set(el.getAttribute('data-lane-id'), el.getBoundingClientRect());
     });
-    const rootRectBefore = rootEl.getBoundingClientRect();
+    const rootRectBefore = lanes.length ? rootEl.getBoundingClientRect() : null;
 
     const paint = (host, list, compact) => {
       const keep = new Set();
@@ -3560,7 +3562,7 @@
     // Animate: moved nodes glide (FLIP); brand-new nodes are born out of
     // the orchestrator node.
     const rootNode = rootEl.querySelector('.orch-node-root');
-    const rootRect = rootNode ? rootNode.getBoundingClientRect() : rootRectBefore;
+    const rootRect = lanes.length && rootNode ? rootNode.getBoundingClientRect() : rootRectBefore;
     const firstPaintForSession = sharedState._orchLastKeys.size === 0 && !sharedState._orchSim && clock === null;
     pane.querySelectorAll('.orch-node[data-lane-id]').forEach(el => {
       const id = el.getAttribute('data-lane-id');
@@ -3604,13 +3606,15 @@
     const svg = document.getElementById('orchMapEdges');
     const rootNode = map && map.querySelector('.orch-node-root');
     if (!map || !svg) return;
+    // With no selected session there are no edges or nodes to measure.
+    // Geometry here would flush the entire freshly rendered dashboard.
+    if (!rootNode) { svg.innerHTML = ''; return; }
     const mapRect = map.getBoundingClientRect();
     const narrow = map.clientWidth < 360;
     map.classList.toggle('is-narrow', narrow);
     svg.setAttribute('width', map.clientWidth);
     svg.setAttribute('height', map.scrollHeight);
     svg.setAttribute('viewBox', '0 0 ' + map.clientWidth + ' ' + map.scrollHeight);
-    if (!rootNode) { svg.innerHTML = ''; return; }
     const r = rootNode.getBoundingClientRect();
     // Wide rail: fan out from the root's bottom centre. Narrow rail (the
     // common case): org-chart elbows off a spine that drops from the

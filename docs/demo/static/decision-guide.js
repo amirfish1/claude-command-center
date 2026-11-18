@@ -10,6 +10,11 @@
   let storageReady = true, rows = [], model = null, loading = false, loaded = false, readError = '', active = null, confirming = null;
   const notices = new Map();
   document.documentElement.classList.toggle('embedded', parent !== window);
+  $('questionHistory').addEventListener('click', event => {
+    if (parent === window) return;
+    event.preventDefault();
+    parent.postMessage({type:'ccc:question-history'}, location.origin);
+  });
   function validAnswer(answer) {
     return answer && uuid(answer.answer_id) && states.includes(answer.state) && typeof answer.text === 'string' && revision(answer.expected_revision);
   }
@@ -145,6 +150,7 @@
     }
     if (row.episode_provenance) card.append(el('p', 'Episode initialized at this time; historical block time is unknown.', 'meta'));
     card.append(el('div', row.body, 'raw'));
+    if ((row.adapter === 'watchtower-block' || row.adapter === 'watchtower-github') && window.cccBlockParams) { const bp = window.cccBlockParams(row.origin_id); if (bp) card.append(bp); }
     if (state.closed[row.request_id]) card.append(el('p', state.closed[row.request_id], 'receipt accepted'));
     if (entry) {
       const reply = el('div', '', 'reply'); reply.append(el('span', 'Your answer', 'speaker'), el('span', entry.payload.text)); card.append(reply);
@@ -379,6 +385,41 @@
     if (parent !== window && event.source === parent && event.origin === location.origin
         && event.data?.type === 'ccc:decision-refresh') refreshVisible();
   });
+
+  // CCC-371: decisions WatchTower made on the owner's behalf, reversals first.
+  async function loadAuto() {
+    const box = $('autoDecisions');
+    try {
+      const data = await (await fetch('/api/decision-inbox/auto-decisions', {cache:'no-store'})).json();
+      const rowsA = data.decisions || [], flags = data.contradictions || [];
+      if (!data.ok || (!rowsA.length && !flags.length)) { box.hidden = true; return; }
+      box.hidden = false; box.replaceChildren(el('h2', 'Decided for you'));
+      flags.forEach(f => box.append(el('p', 'Contradiction on ' + f.ref + ': ' + f.text, 'meta warning')));
+      rowsA.slice(0, 20).forEach(d => {
+        const art = el('article', '', 'question');
+        art.append(el('h2', d.ref + ' ' + d.title), el('div', d.text, 'raw'));
+        const ft = d.followthrough || {};
+        if (ft.state) art.append(el('p', 'Follow-through: ' + ft.state + (ft.reason ? ' — ' + ft.reason : ''), ft.state === 'failed' ? 'meta warning' : 'meta'));
+        if (d.reversed) art.append(el('p', 'Reversed ' + d.reversed_at, 'meta warning'));
+        else if (d.revertable) {
+          const b = el('button', 'Revert'); b.type = 'button';
+          b.onclick = async () => {
+            b.disabled = true;
+            try {
+              const r = await fetch('/api/decision-inbox/auto-decisions/revert', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ref:d.ref})});
+              const j = await r.json();
+              if (!r.ok || !j.ok) throw Error(j.error || 'Revert failed');
+            } catch (error) { art.append(el('p', error.message, 'meta warning')); }
+            loadAuto();
+          };
+          art.append(b);
+        } else art.append(el('p', 'Not revertable from here.', 'meta'));
+        box.append(art);
+      });
+    } catch (error) { box.hidden = true; }
+  }
+  setInterval(() => { if (!document.hidden) loadAuto(); }, 60000);
+  loadAuto();
   setInterval(refreshVisible, 30000);
   refresh();
 })();

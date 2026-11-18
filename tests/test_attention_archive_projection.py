@@ -161,3 +161,36 @@ def test_attention_decode_cache_budget_keeps_oversized_rows_readable(tmp_path, m
                                   build_id=snapshot['build_id'])
     assert first == second
     assert len(cache) == cache.bytes == 0
+
+
+def test_nested_json_round_trip_preserves_order_and_isolates_each_read(tmp_path, monkeypatch):
+    target, key, cold, _, snapshot = setup_archive(tmp_path, monkeypatch)
+    cold[1]['session_state'] = {
+        'text': 'Unicode: é 🙂',
+        'choices': [{'values': [None, False, 1.5, 2 ** 80], 'empty': {}}, []],
+    }
+    cold[1]['issue_labels'] = ['needs-attention', 'example']
+    snapshot['entries'][key]['cached_at'] += 1
+    store.save(target, snapshot, complete=True)
+    load = lambda: store.load_attention(target, key, schema_version=snapshot['schema_version'],
+                                        build_id=snapshot['build_id'])
+    expected = json.dumps(store.attention_row(cold[1]), sort_keys=True)
+    first = load()['rows'][1][1]
+    assert json.dumps(first) == expected
+    first['session_state']['choices'][0]['values'].append('changed')
+    first['session_state']['choices'][1].append({'changed': True})
+    first['issue_labels'].clear()
+    first['question_text'] = 'Changed by consumer'
+    assert json.dumps(load()['rows'][1][1]) == expected
+
+
+def test_missing_projection_invalidates_warm_decoded_rows(tmp_path, monkeypatch):
+    target, key, _, _, snapshot = setup_archive(tmp_path, monkeypatch)
+    load = lambda: store.load_attention(target, key, schema_version=snapshot['schema_version'],
+                                        build_id=snapshot['build_id'])
+    assert load() is not None
+    with sqlite3.connect(store.database_path(target)) as con:
+        con.execute('DELETE FROM session_attention WHERE variant=? AND identity=('
+                    'SELECT identity FROM rows WHERE variant=? ORDER BY position LIMIT 1)',
+                    (key, key))
+    assert load() is None

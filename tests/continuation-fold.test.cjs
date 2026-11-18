@@ -37,7 +37,9 @@ test('the continuation fold preference and its Settings switch are gone', () => 
 
 test('tree builders and ticket leads fold the origin into its successor', () => {
   assert.equal(app.includes('_isContinuationPair'), false);
-  assert.equal((app.match(/const fold = _continuationFoldMaps\(rows, /g) || []).length, 3);
+  // Lane membership now folds continuations too, alongside both trees and
+  // ticket-lead selection. Keep all four consumers covered.
+  assert.equal((app.match(/const fold = _continuationFoldMaps\(rows, /g) || []).length, 4);
   assert.equal((app.match(/if \(!id \|\| fold\.hidden\.has\(id\)\) return;/g) || []).length, 2);
   assert.equal((app.match(/const pid = fold\.headOf\(/g) || []).length, 2);
 });

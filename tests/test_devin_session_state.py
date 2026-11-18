@@ -3,6 +3,8 @@ import importlib
 import json
 import sqlite3
 
+import pytest
+
 
 def test_devin_prompt_reminder_roundtrips_visible_text():
     server = importlib.import_module('server')
@@ -81,3 +83,46 @@ def test_acp_row_overlay_updates_cached_db_rows_without_mutating_them(monkeypatc
     # A newer DB request must also defeat an older ACP answer.
     row['modified']=202
     assert devin.find_devin_cli_conversations()[0] is row
+
+
+@pytest.mark.parametrize('last_event', ['assistant', 'user', 'user_text'])
+def test_acp_row_tail_reads_only_latest_meaningful_event(monkeypatch, tmp_path, last_event):
+    import server
+    from ccc_server import devin
+
+    path = tmp_path / 'latest.jsonl'
+    monkeypatch.setattr(server, '_acp_transcript_path', lambda *_: path)
+    monkeypatch.setattr(devin, '_DEVIN_ACP_ROW_TAIL_CACHE', {})
+    parsed = []
+    monkeypatch.setattr(server, '_parse_session_state', lambda text: parsed.append(text) or {'text': text})
+    answer = 'Newest answer. ' * 160 + '\n<session-state>complete</session-state>'
+    events = [
+        {'type': 'assistant', 'ts': 500, 'text': 'Superseded answer'},
+        {'type': last_event, 'ts': 100, 'blocks': [{'kind': 'text', 'text': answer}]},
+        {'type': 'assistant', 'ts': 600, 'blocks': [{'kind': 'tool', 'text': 'Ignored'}]},
+        {'type': 'tool', 'ts': 700},
+    ]
+    path.write_bytes(b'\n'.join(json.dumps(event).encode() for event in events) + b'\n{broken\n\xff\n')
+    current = devin._devin_acp_row_tail('latest')
+    # Log order wins over timestamps; empty/tool-only assistant events do not
+    # replace the latest answer or a user's reset of that answer.
+    assert current['ts'] == 100
+    assert current['text'] == (answer[:2000] if last_event == 'assistant' else '')
+    assert current['session_state'] == ({'text': answer} if last_event == 'assistant' else None)
+    assert parsed == ([answer] if last_event == 'assistant' else [])
+    assert devin._devin_acp_row_tail('latest') == current
+    assert len(parsed) == (1 if last_event == 'assistant' else 0)
+
+
+def test_acp_row_tail_skips_partial_boundary_and_earlier_events(monkeypatch, tmp_path):
+    import server
+    from ccc_server import devin
+
+    path = tmp_path / 'bounded.jsonl'
+    monkeypatch.setattr(server, '_acp_transcript_path', lambda *_: path)
+    monkeypatch.setattr(devin, '_DEVIN_ACP_ROW_TAIL_CACHE', {})
+    path.write_text(json.dumps({'type': 'assistant', 'ts': 100, 'text': 'x' * 300000})
+                    + '\n' + json.dumps({'type': 'user_text', 'ts': 200}) + '\n')
+    assert devin._devin_acp_row_tail('bounded') == {'ts': 200, 'text': '', 'session_state': None}
+    path.write_text(json.dumps({'type': 'assistant', 'ts': 100, 'text': 'x' * 300000}) + '\n')
+    assert devin._devin_acp_row_tail('bounded') is None

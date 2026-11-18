@@ -30,7 +30,7 @@ test('touching the row report icon or target edge opens its editor without openi
       const clearSelectedConversationRows=()=>{};
       window.opened=[]; window.sent=[];
       const selectConversation=id=>opened.push(id);
-      const _rowDecisionReportSending=new Set(); let _rowDecisionReportEditor=null;
+      const _rowDecisionReportPending=new Map(); const _rowDecisionReportSending=new Set(); let _rowDecisionReportEditor=null;
       const _ultraFreshRow=()=>({session_id:'test-row'});
       const rowDecisionReportSnapshot=()=>({session_id:'test-row',rect:{}});
       const captureRowDecisionScreenshot=async()=>null;

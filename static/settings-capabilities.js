@@ -10,7 +10,7 @@
   const get=id=>document.getElementById(id);
   let hooks, host, data={}, pending;
   const bodies=new Map(), destinations=new Map();
-  function browserVoice(){try{return ['ccc-voice-call-button','ccc-voice-mobile-btn','ccc-tts-voice-default'].some(key=>localStorage.getItem(key)!==null);}catch(_){return false;}}
+  function browserVoice(){try{return ['ccc-voice-call-button','ccc-voice-mobile-btn','ccc-browser-voice'].some(key=>localStorage.getItem(key)!==null);}catch(_){return false;}}
   function configured(id){return data[id]?.configured===true || (id==='voice'&&browserVoice()) || (id==='voice'&&data.operator?.configured===true);}
   function visible(){return true;}
   function reveal(id){

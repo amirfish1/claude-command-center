@@ -53,12 +53,13 @@ function harness(engine = 'codex') {
     isSpawnLogPlaceholderSource: source => source !== 'interactive',
     spawnUsesLogPlaceholder: eng => eng !== 'claude',
     revealSessionInSidebar() {}, savePendingSpawnReceipt() {}, renderSidebar() {}, filterConversations: () => [],
-    _watchPendingSpawnRegistration() {}, setTimeout() {},
+    _watchPendingSpawnRegistration() {}, setTimeout() {}, requestAnimationFrame: fn => fn(),
     selectConversation: (id, paneId = ctx.activePane) => {
       selections.push({ id, paneId }); ctx.currentConversation = id; panes[paneId].conversationId = id;
     },
     clearInputDraftForConversation: id => drafts.delete(id),
     inputDraftKeyForConversation: id => id, setInputDraftForKey: (key, text) => drafts.set(key, text),
+    awaitQueuedSpawnResult: async data => data,
     spawnEndpointForEngine: () => '/api/sessions/spawn', durableActionId: () => 'spawn:test-' + now,
     buildSpawnBody: options => ({ engine: options.engine, prompt: options.prompt, cwd: options.cwd,
       model: options.model, reasoning_effort: options.effort }),
@@ -74,6 +75,9 @@ function harness(engine = 'codex') {
     _failPendingSpawnCard: (id, error) => { failures.push({ id, error }); ctx.pendingSpawns.get(id).spawn_failed = true; },
     releaseClaudeSpawnPaintGate() {}, assignSpawnedSessionToDefaultObject() {}, recordSpawnModeAdviceOutcome() {},
     clearSpawnHandoffSelection() {}, recordSpawnChoice: (...choice) => choices.push(choice),
+    currentSpawnChoice: () => ({ engine, model: ctx.$convInputModelSelect.value, effort: ctx.$convInputEffortSelect.value }),
+    getConvViewForPane: () => null, _currentSidebarTabKey: () => 'coding',
+    trackSpawnView() {},
     spawnStatsBegin() {}, spawnStatsMark() {}, claudeSpawnAwaitingFirstPaint: new Set(),
     stopConvStream: paneId => streams.push({ kind: 'stop', paneId }),
     startSpawnStream: (_id, paneId) => streams.push({ kind: 'start', paneId }),
@@ -197,6 +201,7 @@ test('a still-selected placeholder refreshes normally when its launch is accepte
   const launch = h.launch('First task'); await waitForPost(h);
   h.ctx.$convInputEffortSelect.value = 'low';
   h.held[0].reply(accepted('first-chat')); await launch;
+  assert.deepEqual(h.failures, []);
   assert.equal(h.selections.length, 2);
   assert.match(h.ctx.currentConversation, /^spawning-/);
   assert.equal(h.choices[0][2], 'high', 'history uses the submitted effort, not a later picker value');

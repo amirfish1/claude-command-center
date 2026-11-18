@@ -99,21 +99,9 @@
     refreshSettings();
     return true;
   }
-  function mountNotificationPolicy() {
-    var section = document.getElementById('settingsSection-notifications');
-    if (!section || document.getElementById('notificationPolicy')) return;
-    var row = document.createElement('div');
-    row.className = 'settings-row';
-    row.dataset.keywords = 'quiet mute stop sounds notifications action required alerts policy';
-    row.innerHTML = '<div class="settings-row-main"><label class="settings-row-label" for="notificationPolicy">Notification policy</label><p class="settings-row-desc">Applies in this browser. Action required includes finished tasks and requests for input. Browser permission stays under your control.</p><p id="notificationPolicyStatus" role="status"></p></div><div class="settings-row-control"><select id="notificationPolicy" class="settings-select"><option value="quiet">Quiet</option><option value="action">Action required</option><option value="all">All activity</option><option value="custom">Custom</option></select></div>';
-    var first = section.querySelector('.settings-row');
-    section.insertBefore(row, first || null);
-    row.querySelector('select').addEventListener('change', function(event) {
-      if(event.target.value === 'custom') return;
-      var ok = applyNotificationPolicy(event.target.value);
-      document.getElementById('notificationPolicyStatus').textContent = ok ? 'Policy saved.' : 'Could not save. Your previous preferences were restored where possible.';
-    });
-  }
+  // Settings shows the plain switches only; the named policies stay available
+  // to code through cccNotify.policy().
+  function mountNotificationPolicy() {}
 
 
   function _reducedMotion() {
@@ -582,8 +570,16 @@
   var _PREFS = ['enabled', 'tasks', 'digest', 'milestones'];
 
   function refreshSettings() {
-    var policySelect = document.getElementById('notificationPolicy');
-    if (policySelect) policySelect.value = notificationPolicy();
+    // With the main switch off, the per-kind switches have nothing to control.
+    var master = pref('enabled');
+    ['tasks', 'digest', 'milestones'].forEach(function (name) {
+      var row = document.querySelector('[data-notify-pref="' + name + '"]');
+      row = row && row.closest('.settings-row');
+      if (row) row.hidden = !master;
+    });
+    var permRow = document.getElementById('notifyBrowserPermBtn');
+    permRow = permRow && permRow.closest('.settings-row');
+    if (permRow) permRow.hidden = !master;
     _PREFS.forEach(function (name) {
       var btn = document.querySelector('[data-notify-pref="' + name + '"]');
       if (!btn) return;

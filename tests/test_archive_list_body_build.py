@@ -78,9 +78,12 @@ def test_concurrent_polls_of_one_snapshot_build_the_body_once(monkeypatch, tmp_p
                for d in cache_diagnostics)
     projected = [d['projection'] for d in diagnostics if d['projection']]
     assert len(projected) == 1
-    assert set(projected[0]) == {'inputs', 'window', 'rows', 'titles_drivers', 'topics', 'tickets'}
+    assert set(projected[0]) == {'inputs', 'window', 'rows', 'titles_drivers', 'topics',
+                                 'topic_cache', 'tickets'}
+    assert 'reason' in projected[0]['topic_cache']
     for detail in diagnostics:
-        for phase in [detail['delta_state'], *detail['projection'].values()]:
+        timings = [value for name, value in detail['projection'].items() if name != 'topic_cache']
+        for phase in [detail['delta_state'], *timings]:
             assert set(phase) == {'wall_ms', 'cpu_ms'}
             assert phase['wall_ms'] >= 0 and phase['cpu_ms'] >= 0
 

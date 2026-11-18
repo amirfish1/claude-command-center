@@ -334,14 +334,14 @@ def test_archive_list_source_avoids_copying_full_snapshot(monkeypatch):
 
     monkeypatch.setattr(server, "_archive_serve_rows_versioned", serve)
     monkeypatch.setattr(server, "_archive_list_body_ver", lambda key, rows, extra: 7)
-    monkeypatch.setattr(server, "_archive_overlay_codex_sessions", lambda rows: [])
+    monkeypatch.setattr(server, "_archive_overlay_codex_sessions", lambda rows, **kw: [])
     # The in-memory overlays (ACP, Devin CLI) legitimately append rows when
     # this machine has live sessions; keep the copy assertion about the
     # snapshot itself, not about the host's session state.
-    monkeypatch.setattr(server, "_archive_overlay_acp_sessions", lambda rows: [])
-    monkeypatch.setattr(server, "_archive_overlay_devin_cli_sessions", lambda rows, now=None: [])
-    monkeypatch.setattr(server, "_archive_overlay_wt_worker_sessions", lambda rows: [])
-    monkeypatch.setattr(server, "_archive_overlay_claude_registry_sessions", lambda rows: [], raising=False)
+    monkeypatch.setattr(server, "_archive_overlay_acp_sessions", lambda rows, **kw: [])
+    monkeypatch.setattr(server, "_archive_overlay_devin_cli_sessions", lambda rows, now=None, **kw: [])
+    monkeypatch.setattr(server, "_archive_overlay_wt_worker_sessions", lambda rows, **kw: [])
+    monkeypatch.setattr(server, "_archive_overlay_claude_registry_sessions", lambda rows, **kw: [], raising=False)
     options = {"include_prs": False}
 
     rows, from_cache, body_ver = server._archive_list_source_rows_cached(options)
@@ -5501,33 +5501,6 @@ def test_send_json_reuses_encoded_body_for_memoised_payload():
         assert len(calls) == 2  # identity encoding is a separate entry
     finally:
         server.json.dumps = real
-
-
-def test_tts_clip_cache_does_not_rescan_folder_per_put_or_get(tmp_path, monkeypatch):
-    """Clip put/get must use the in-memory folder index, not a stat per clip."""
-    from ccc_server import free_runtime as fr
-    monkeypatch.setattr(fr, "_LOCAL_TTS_DIR", tmp_path)
-    monkeypatch.setattr(fr, "local_tts_precision", lambda: "int8")
-    fr._CLIP_DISK_INDEX.clear()
-    fr._CLIP_CACHE.clear()
-    voice = next(iter(fr.KOKORO_VOICES))
-    for i in range(300):
-        fr._clip_cache_put(("clip %d" % i, voice), b"x" * 64)
-    scans = []
-    real = os.scandir
-    me = threading.get_ident()  # other tests' background threads also scandir
-    monkeypatch.setattr(os, "scandir", lambda *a, **k: (
-        scans.append(1) if threading.get_ident() == me else None, real(*a, **k))[1])
-    for i in range(300, 340):
-        fr._clip_cache_put(("clip %d" % i, voice), b"x" * 64)
-    fr._CLIP_CACHE.clear()
-    got = fr._clip_cache_get_any_voice("clip 5")
-    assert got and got[0] == voice
-    assert not scans, "clip cache rescanned the folder"
-    # eviction still bounded by the disk cap
-    monkeypatch.setattr(fr, "_CLIP_DISK_MAX_BYTES", 64 * 100)
-    fr._clip_cache_put(("evict", voice), b"x" * 64)
-    assert len(list((tmp_path / "cache" / "int8").glob("*.mp3"))) <= 100
 
 
 def test_question_tags_sources_walk_is_memoised_between_scans(tmp_path, monkeypatch):

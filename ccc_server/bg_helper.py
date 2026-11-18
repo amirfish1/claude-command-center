@@ -21,6 +21,8 @@ the child exits when its parent goes away.
   The index is on-disk SQLite, so dashboard reads see the result.
 * session-fts-warm: ``fts_sync`` does the same for the recall index
   (MEMORY-20); the dashboard re-reads vectors only when ``semb`` changed.
+* daily throughput: ``throughput_ticket_counts`` reads and aggregates all
+  queues here, returning just the four count fields to the dashboard.
 
 Fallback: ``CCC_BG_HELPER=0`` disables the child. Any connect, timeout or
 protocol error runs the old in-process path, so behaviour degrades to what
@@ -320,6 +322,11 @@ class _Child:
     def system_health(self, req):
         return {"ok": True, "data": self.server._build_system_health_uncached()}
 
+    def throughput_ticket_counts(self, req):
+        from ccc_server import usage_stats
+        return {"ok": True, "data": usage_stats._throughput_daily_ticket_counts_local(
+            float(req["start_epoch"]), float(req["end_epoch"]))}
+
     # ship-graph-warm -----------------------------------------------------
     def ship_sync(self, req):
         from ccc_server import ship_graph
@@ -341,6 +348,7 @@ class _Child:
                   "ship_sync": self.ship_sync, "fts_sync": self.fts_sync,
                   "live_activity": self.live_activity,
                   "system_health": self.system_health,
+                  "throughput_ticket_counts": self.throughput_ticket_counts,
                   "ping": lambda r: {"ok": True}}.get(op)
             try:
                 reply = fn(req) if fn else {"ok": False, "error": "unknown op"}

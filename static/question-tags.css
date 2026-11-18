@@ -1,6 +1,6 @@
-.qtag-chip{display:inline;font:inherit;font-size:.9em;padding:1px 7px;margin:0 1px;border-radius:999px;border:1px solid #d9a441;background:rgba(217,164,65,.16);color:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.qtag-chip,.qtag-ticket-chip{display:inline;font:inherit;font-size:.9em;padding:1px 7px;margin:0 1px;border-radius:999px;border:1px solid #d9a441;background:rgba(217,164,65,.16);color:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent}
 .qtag-chip-static{font-size:.9em;padding:1px 7px;border-radius:999px;border:1px solid #d9a441;background:rgba(217,164,65,.16)}
-.qtag-chip.qtag-answered{border-color:#6aa874;background:rgba(106,168,116,.16)}
+.qtag-chip.qtag-answered,.qtag-ticket-chip.qtag-answered{border-color:#6aa874;background:rgba(106,168,116,.16)}
 .qtag-chip.qtag-unknown{border-style:dashed}
 .qtag-flash{outline:2px solid #d9a441;outline-offset:2px}
 .qtag-sheet[hidden]{display:none}
@@ -37,3 +37,6 @@
 .qtag-old{margin-top:14px}.qtag-old>summary{cursor:pointer;opacity:.75;font-size:14px;padding:6px 0}
 .qtag-row-title{font-weight:600;font-size:15px;line-height:1.4}
 .qtag-old .qtag-row-title{font-weight:500;opacity:.85}
+
+.qtag-ticket-chip{max-width:100%;overflow-wrap:anywhere}
+.qtag-chip:focus-visible,.qtag-ticket-chip:focus-visible{outline:2px solid var(--accent,#9bbcff);outline-offset:2px}

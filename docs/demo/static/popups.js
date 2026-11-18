@@ -13,8 +13,15 @@
 (function () {
   'use strict';
 
+  // Capture this before onboarding writes its completion keys. Keep the
+  // decision for this entire page load, including after the welcome closes.
+  try {
+    window.cccFirstRunLoad = !localStorage.getItem('ccc-onboarded')
+      && !localStorage.getItem('ccc-engines-first-run-done')
+      && !localStorage.getItem('ccc-tour-done');
+  } catch (_) { window.cccFirstRunLoad = true; }
+
   var ALL = [
-    'local-voice-install',
     'moment-zero',
     'savings-milestone',
     'notify-permission',
@@ -40,6 +47,7 @@
     'restart-interrupted', // approved 2026-10-22: sessions a machine restart cut off mid-turn
     'notify-session-died', // approved 2026-10-22: a session died mid-turn, nobody was told
     'runaway-session', // approved 2026-10-29: sessions working on their own with nothing changing
+    'fleet-limit', // approved 2026-11-16: engine account at 0% must be loud, not silent
   ];
 
   var NOTIFY_KIND_IDS = {

@@ -256,7 +256,7 @@ html[data-theme="light"] .tp-bq { color: #4a5a70; border-left-color: rgba(53, 92
 .tp-reading-source { border-top: 1px solid var(--border, #38414d); margin-top: 20px; padding-top: 14px; }
 .tp-reading-source > summary { cursor: pointer; font-size: 14px; padding-block: 6px; }
 .tp-reading-source[open] > summary { margin-bottom: 20px; }
-.tp-explain, .tp-reading-reply { font: 600 14px var(--font-ui, system-ui, sans-serif); color: var(--text, #cdd6e4); background: var(--bg-secondary, #202a36); border: 1px solid var(--border, #536477); border-radius: 8px; padding: 10px 14px; cursor: pointer; }
+.tp-explain, .tp-reading-reply { font: 600 14px var(--font-ui, system-ui, sans-serif); color: var(--text, #cdd6e4); background: var(--surface-2, var(--bg-secondary, #202a36)); border: 1px solid var(--border, #536477); border-radius: 8px; padding: 10px 14px; cursor: pointer; }
 .tp-explain:hover, .tp-reading-reply:hover { border-color: var(--accent, #8ab4ff); }
 .tp-explain:disabled { cursor: progress; opacity: .7; }
 .tp-reading-reply { margin-top: 16px; }

@@ -41,6 +41,17 @@ class ByteBudgetCache:
             self._items.move_to_end(key)
             return item[0]
 
+    def get_many(self, keys):
+        """Read and touch a batch in order with one lock acquisition."""
+        with self._lock:
+            values = []
+            for key in keys:
+                item = self._items.get(key)
+                if item is not None:
+                    self._items.move_to_end(key)
+                values.append(None if item is None else item[0])
+            return values
+
     def put(self, key, value, weight):
         weight = max(0, int(weight))
         with self._lock:

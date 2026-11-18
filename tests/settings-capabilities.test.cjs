@@ -18,7 +18,7 @@ const prefs=between('  const VOICE_MOBILE_BTN_STORAGE_KEY =','  function applyTh
 const config=between('  function voiceModalError(', '  // -- wiring');
 const access=between("  const $voiceCallBtnToggle =",'  if ($voicePanelHideBtn)');
 const car=between('  // ── Car Mode (hands-free voice operator)', '  // ── Voice mode (Codex realtime)');
-const tts=between('  const TTS_VOICE_DEFAULT_KEY =','  renderAllConversationBackgroundPalettes();');
+const tts=between('  function renderTtsVoiceStepper(', '  renderAllConversationBackgroundPalettes();');
 const wiring=between('  if ($voiceSettingsBtn) $voiceSettingsBtn.addEventListener','  // Tab close/navigation:');
 const voiceMount=between('  window.cccVoiceSetup?.mount({','  window.cccEngineConnection?.mount({');
 const capMount=between('  window.cccSettingsCapabilities?.mount({','  window.cccSettingsContext?.mount({');
@@ -74,6 +74,16 @@ async function open(t,width=1440,{query='',configured=false,fail=false,browserPr
  return {page,requests,before};
 }
 const posts=rs=>rs.filter(r=>r.method==='POST');
+async function stopFreeRouter(page) {
+ // Status and provider reads paint independently; act on the settled native
+ // control, rather than clicking a node from an intermediate render.
+ await page.waitForNetworkIdle({idleTime:100});
+ await page.waitForSelector('#fsStopBtn',{visible:true});
+ await page.focus('#fsStopBtn');
+ assert.equal(await page.evaluate(()=>document.activeElement.id),'fsStopBtn');
+ await page.keyboard.press('Enter');
+}
+
 for(const width of [1440,390])test('optional setup is inline, runtime unknown is honest and inventory has no side effects '+width,async t=>{
  const {page,requests,before}=await open(t,width);for(const id of ['voice','remote'])assert.equal(await page.$eval('[data-capability-body="'+id+'"]',n=>n.hidden),false);
  assert.match(await page.$eval('#capability-voice',n=>n.textContent),/Off.*No saved setup/);assert.match(await page.$eval('#capability-remote',n=>n.textContent),/Unknown.*No saved setup/);assert.match(await page.$eval('#capability-operator',n=>n.textContent),/Unavailable/);
@@ -100,11 +110,11 @@ for(const section of ['voice','network','free'])test('legacy Settings URL '+sect
  const {page,requests}=await open(t,390,{query:'?ccc_settings='+section});const id={voice:'voice',network:'remote'}[section];if(id)assert.equal(await page.$eval('[data-capability-body="'+id+'"]',n=>n.hidden),false);assert.deepEqual(posts(requests),[]);
 });
 test('free routing native Stop remains reachable and leaves saved configuration intact',async t=>{
- const {page,requests}=await open(t,390,{configured:true});fs.writeFileSync(path.join(scratch,'router-on'),'1');await page.evaluate(()=>window.cccSettingsCapabilities.open('free'));await page.waitForSelector('#fsStopBtn');await page.$eval('#fsStopBtn',n=>{n.focus();n.click();});await page.waitForFunction(()=>document.querySelector('#fsStartBtn'));
+ const {page,requests}=await open(t,390,{configured:true});fs.writeFileSync(path.join(scratch,'router-on'),'1');await page.evaluate(()=>window.cccSettingsCapabilities.open('free'));await page.waitForSelector('#fsStopBtn');await stopFreeRouter(page);await page.waitForFunction(()=>document.activeElement.id==='fsStartBtn');
  assert.equal(await page.evaluate(()=>document.activeElement.id),'fsStartBtn');assert.equal(fs.existsSync(path.join(scratch,'router-on')),false);assert.equal(fs.readFileSync(path.join(scratch,'router.json'),'utf8'),'{}');assert.deepEqual(posts(requests).map(r=>new URL(r.url).pathname),['/api/free-router/stop']);
 });
 test('failed free-router stop stays visible and never claims it stopped',async t=>{
- const {page}=await open(t,390,{configured:true});fs.writeFileSync(path.join(scratch,'router-on'),'1');fs.writeFileSync(path.join(scratch,'fail-save'),'1');await page.evaluate(()=>window.cccSettingsCapabilities.open('free'));await page.waitForSelector('#fsStopBtn');await page.$eval('#fsStopBtn',n=>{n.focus();n.click();});await page.waitForFunction(()=>document.querySelector('#fsRoot').textContent.includes('Fixture router action failed'));assert.equal(await page.evaluate(()=>document.activeElement.id),'fsStopBtn');assert.equal(fs.existsSync(path.join(scratch,'router-on')),true);
+ const {page}=await open(t,390,{configured:true});fs.writeFileSync(path.join(scratch,'router-on'),'1');fs.writeFileSync(path.join(scratch,'fail-save'),'1');await page.evaluate(()=>window.cccSettingsCapabilities.open('free'));await page.waitForSelector('#fsStopBtn');await stopFreeRouter(page);await page.waitForFunction(()=>document.querySelector('#fsRoot').textContent.includes('Fixture router action failed') && document.activeElement.id==='fsStopBtn');assert.equal(await page.evaluate(()=>document.activeElement.id),'fsStopBtn');assert.equal(fs.existsSync(path.join(scratch,'router-on')),true);
 });
 test('opening phone management does not enable a preview flag; configured sharing can be disabled with flag off',async t=>{
  const {page,requests}=await open(t,390,{configured:true});await page.evaluate(()=>window.cccSettingsCapabilities.open('remote'));await page.waitForSelector('.ccc-phone-inline [data-act="disable"]');assert.deepEqual(posts(requests),[]);assert.equal(fs.existsSync(path.join(scratch,'flag-on')),false);
@@ -124,17 +134,18 @@ test('actual Turn on sequences gate then sharing with only inert fixture effects
  await page.click('.ccc-phone-inline [data-act="enable"]');await page.waitForSelector('.ccc-phone-inline [data-act="disable"]');await page.waitForFunction(()=>document.querySelector('[data-role="test-msg"]').textContent.includes('Inert fixture'));
  assert.deepEqual(posts(requests).map(r=>new URL(r.url).pathname),['/api/features/flag','/api/phone-access/enable','/api/phone-access/test']);assert.equal(fs.existsSync(path.join(scratch,'flag-on')),true);assert.equal(fs.existsSync(path.join(scratch,'phone.json')),true);
 });
-test('call stop is inline and viewing settings starts no call or microphone',async t=>{
+test('voice setup exposes current controls without starting a call or microphone',async t=>{
  const {page,requests}=await open(t,390);
- assert.equal(await page.$eval('#voiceSetupStopCall',n=>!!n.getClientRects().length),true);
+ assert.equal(await page.$('#voiceSetupStopCall'),null);
+ assert.equal(await page.$$eval('#voiceSetup-reading,#voiceSetup-listening',ns=>ns.length),2);
  assert.equal(await page.$eval('#settingsModal',n=>n.hidden),false);assert.equal(await page.$eval('#voicePanel',n=>n.hidden),true);assert.deepEqual(posts(requests),[]);assert.deepEqual(await page.evaluate(()=>window.__forbidden),[]);
 });
-test('voice legacy task hash reveals setup without activation or changes',async t=>{
- const {page,requests,before}=await open(t,390,{query:'#settings/voice-offline'});await page.waitForFunction(()=>document.activeElement.id==='voiceSetup-offline');assert.equal(await page.$eval('[data-capability-body="voice"]',n=>n.hidden),false);assert.deepEqual(posts(requests),[]);assert.deepEqual(saved(),before);
+test('browser voice task hash reveals setup without activation or changes',async t=>{
+ const {page,requests,before}=await open(t,390,{query:'#settings/settingsBrowserVoiceToggle'});await page.waitForFunction(()=>document.activeElement.id==='voiceSetup-reading');assert.equal(await page.$eval('[data-capability-body="voice"]',n=>n.hidden),false);assert.deepEqual(posts(requests),[]);assert.deepEqual(saved(),before);
 });
 test('native browser shortcut remains a visibility control and writes only its existing preference keys',async t=>{
  const {page,requests}=await open(t,390);await page.evaluate(()=>window.cccSettingsCapabilities.open('voice'));await page.waitForFunction(()=>document.activeElement.id==='voiceSetup-listening');
- await page.click('#settingsVoiceCallBtnToggle');assert.deepEqual(await page.evaluate(()=>Object.fromEntries(Object.keys(localStorage).map(k=>[k,localStorage.getItem(k)]))),{'ccc-voice-call-button':'1','ccc-voice-mobile-btn':'1'});assert.match(await page.$eval('#voiceSetupAccessStatus',n=>n.textContent),/visibility flags.*no call is started/is);assert.deepEqual(posts(requests),[]);assert.deepEqual(await page.evaluate(()=>window.__forbidden),[]);
+ await page.click('#settingsVoiceCallBtnToggle');assert.deepEqual(await page.evaluate(()=>Object.fromEntries(Object.keys(localStorage).map(k=>[k,localStorage.getItem(k)]))),{'ccc-voice-call-button':'1','ccc-voice-mobile-btn':'1'});assert.equal(await page.$eval('#settingsVoiceCallBtnToggle',n=>n.getAttribute('aria-checked')),'true');assert.deepEqual(posts(requests),[]);assert.deepEqual(await page.evaluate(()=>window.__forbidden),[]);
 });
 for(const failure of [false,true])test('hands-free native Stop preserves keys and reports '+(failure?'failed':'successful')+' requests',async t=>{
  const {page,requests}=await open(t,390,{configured:true});fs.writeFileSync(path.join(scratch,'operator-on'),'1');if(failure)fs.writeFileSync(path.join(scratch,'fail-save'),'1');
@@ -179,7 +190,7 @@ test('phone explicit enable preserves action focus across body replacement',asyn
 test('free Stop settlement preserves a deliberate focus move outside its renderer',async t=>{
  const{page}=await open(t,390,{configured:true});fs.writeFileSync(path.join(scratch,'router-on'),'1');await page.evaluate(()=>window.cccSettingsCapabilities.open('free'));await page.waitForSelector('#fsStopBtn');
  await page.evaluate(()=>{const native=window.fetch;window.fetch=async(...args)=>{if(args[0]==='/api/free-router/stop')await new Promise(resolve=>window.__releaseStop=resolve);return native(...args);};});
- await page.$eval('#fsStopBtn',n=>{n.focus();n.click();});await page.waitForFunction(()=>window.__releaseStop);await page.focus('#settingsSearchInput');await page.evaluate(()=>window.__releaseStop());await page.waitForSelector('#fsStartBtn');
+ await stopFreeRouter(page);await page.waitForFunction(()=>window.__releaseStop);await page.focus('#settingsSearchInput');await page.evaluate(()=>window.__releaseStop());await page.waitForSelector('#fsStartBtn');
  assert.equal(await page.evaluate(()=>document.activeElement.id),'settingsSearchInput');
 });
 
@@ -206,6 +217,6 @@ test('catalog and dedicated sections reuse one inline editor and preserve its dr
  }
  assert.equal(await page.$eval('#capability-voice #voiceSetup',n=>!!n.getClientRects().length),true);
  assert.equal(await page.$eval('#capability-remote #phoneAccessSetup',n=>!!n.getClientRects().length),true);
- assert.deepEqual(await page.$$eval('#settingsCapabilities details:not([open]),#settingsCapabilities .capability-gate,#settingsCapabilities .capability-actions',nodes=>nodes.map(n=>n.outerHTML)),[]);
+ assert.deepEqual(await page.$$eval('#settingsCapabilities > details:not([open]),#settingsCapabilities .capability-gate,#settingsCapabilities .capability-actions',nodes=>nodes.map(n=>n.outerHTML)),[]);
  assert.equal(await page.$$eval('.ccc-phone-backdrop',nodes=>nodes.length),0);assert.deepEqual(posts(requests),[]);
 });

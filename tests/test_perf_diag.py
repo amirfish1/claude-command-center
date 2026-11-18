@@ -39,8 +39,15 @@ class TestRecordDiag(unittest.TestCase):
     def test_diag_kinds_stay_out_of_watchdog_kinds(self):
         for kind in pe._DIAG_KINDS:
             self.assertNotIn(kind, pe._VALID_KINDS)
-            with self.assertRaises(ValueError):
-                pe.record_event(kind, 1)
+            if kind in pe._CLIENT_DIAG_KINDS:
+                self.assertEqual(pe.record_event(kind, 1), {"ok": True, "kind": kind})
+                row = self.rows()[-1]
+                self.assertEqual(row["kind"], kind)
+                self.assertNotIn("breach", row)
+                self.assertNotIn("threshold_ms", row)
+            else:
+                with self.assertRaises(ValueError):
+                    pe.record_event(kind, 1)
 
     def test_unknown_or_bad_values_are_dropped_silently(self):
         pe.record_diag("conv_open", 10)

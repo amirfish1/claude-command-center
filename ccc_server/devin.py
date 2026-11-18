@@ -2093,7 +2093,9 @@ def _devin_acp_row_tail(raw_id):
     except OSError:
         return None
     latest = None
-    for line in lines:
+    # Only the last meaningful event determines the current row. Earlier
+    # assistant footers can be expensive to parse and are discarded anyway.
+    for line in reversed(lines):
         try:
             event = json.loads(line)
         except (ValueError, UnicodeDecodeError):
@@ -2101,6 +2103,7 @@ def _devin_acp_row_tail(raw_id):
         kind = event.get("type")
         if kind in ("user", "user_text"):
             latest = {"ts": _devin_epoch(event.get("ts")), "text": "", "session_state": None}
+            break
         elif kind == "assistant":
             text = "\n".join(str(b.get("text") or "") for b in event.get("blocks", [])
                              if isinstance(b, dict) and b.get("kind") == "text")
@@ -2109,6 +2112,7 @@ def _devin_acp_row_tail(raw_id):
             if text:
                 latest = {"ts": _devin_epoch(event.get("ts")), "text": text[:2000],
                           "session_state": _core._parse_session_state(text)}
+                break
     with _DEVIN_ACP_ROW_TAIL_LOCK:
         _DEVIN_ACP_ROW_TAIL_CACHE[raw_id] = (key, latest)
         if len(_DEVIN_ACP_ROW_TAIL_CACHE) > 256:

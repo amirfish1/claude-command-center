@@ -361,7 +361,8 @@ test('Queue, Workers, Delegation, and composer reveals make the live target visi
     for (let i = 0; i < 40; i++) {
       const snap = await page.evaluate(() => {
         function box(sel) {
-          const el = document.querySelector(sel);
+          const matches = [...document.querySelectorAll(sel)];
+          const el = matches.find(node => {const rect=node.getBoundingClientRect();return rect.width>0&&rect.height>0;}) || matches[0];
           if (!el) return { exists: false, visible: false, w: 0, h: 0 };
           const r = el.getBoundingClientRect();
           return { exists: true, visible: r.width > 0 && r.height > 0, w: r.width, h: r.height };
@@ -379,7 +380,7 @@ test('Queue, Workers, Delegation, and composer reveals make the live target visi
           overlay: !!document.querySelector('.fft-center-card, .fft-card'),
           revealed: state && state.revealed,
           hasSpot: !!spot,
-          workers: box('[data-conv-tab="workers"]'),
+          workers: box('[data-mobile-nav="workers"], [data-conv-tab="workers"]'),
           queueTab: box('[data-rail-tab="queue"]'),
           delegate: box('[data-orch-playbook="delegate"]'),
           composerBar: box('#convInputBar'),
@@ -550,7 +551,8 @@ test('live dashboard walk keeps composer, Queue, Workers, and Delegation on real
     for (let i = 0; i < 40; i++) {
       const snap = await page.evaluate(() => {
         function box(sel) {
-          const el = document.querySelector(sel);
+          const matches = [...document.querySelectorAll(sel)];
+          const el = matches.find(node => {const rect=node.getBoundingClientRect();return rect.width>0&&rect.height>0;}) || matches[0];
           if (!el) return { exists: false, visible: false, w: 0, h: 0 };
           const r = el.getBoundingClientRect();
           return { exists: true, visible: r.width > 0 && r.height > 0, w: Math.round(r.width), h: Math.round(r.height) };
@@ -564,12 +566,13 @@ test('live dashboard walk keeps composer, Queue, Workers, and Delegation on real
           title: title.trim(),
           stepId,
           overlay: !!document.querySelector('.fft-center-card, .fft-card'),
+          total: state && state.total,
           active: !!(state && state.active),
           matched: state && state.revealed && state.revealed.matched,
           composer: box('#convInputBar'),
           engine: box('#convInputEngineSelect'),
           send: box('#convSendBtn'),
-          workers: box('[data-conv-tab="workers"]'),
+          workers: box('[data-mobile-nav="workers"], [data-conv-tab="workers"]'),
           queueTab: box('[data-rail-tab="queue"]'),
           queuePane: box('#statusRailQueuePane'),
           delegate: box('[data-orch-playbook="delegate"]'),
@@ -610,6 +613,11 @@ test('live dashboard walk keeps composer, Queue, Workers, and Delegation on real
     fs.writeFileSync(logLive, lines.join('\n') + '\n', 'utf8');
 
     assert.ok(recorded.length >= 20, 'live walk expected >=20 steps, got ' + recorded.length);
+    assert.ok(recorded[0]?.total > 0, 'the live guide must declare its steps');
+    const visited = await page.evaluate(() => window.cccTour.getState().visited.map(step => step.id));
+    assert.deepEqual(recorded.map(step => step.stepId), visited, 'record every reachable step; unavailable anchors are skipped by the guide');
+    assert.equal(new Set(recorded.map(step => step.stepId)).size, recorded.length,
+      'each guide step must be reached exactly once');
     const byId = {};
     recorded.forEach((s) => { byId[s.stepId] = s; });
     assert.equal(recorded.some((s) => s.stepId === 'cli-setup'), false, 'engines step must not be in the guide');

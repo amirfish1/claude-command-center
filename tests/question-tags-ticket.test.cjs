@@ -20,22 +20,35 @@ async function load(browser, questions, html) {
     window.cccSendQuestionAnswer = async (sid, text) => { sent.push(text); return {ok: true}; };
   }, questions);
   await page.addScriptTag({path: 'static/question-tags.js'});
-  await page.waitForFunction(() => document.querySelector('.qtag-chip')?.title.includes('open ticket'));
+  await page.waitForFunction(() => document.querySelector('.qtag-chip')?.textContent === 'Q' + window.list[0].n);
   return page;
 }
 
 const needsYou = '<div class="session-state-block"><div class="ssb-row ssb-next"><span class="ssb-key">Needs you</span>'
   + 'Answer [Q9:repair]: approve the plan. <span class="ssb-actions"><button class="ssb-action">Approve plan</button></span></div></div>';
 
-test('a ticket question goes by its ticket, and its chip opens the ticket', async () => {
+test('question preview and ticket navigation each take one tap on desktop and phone', async () => {
   const browser = await puppeteer.launch({executablePath: findChromePath(), args: ['--no-sandbox']});
   try {
-    const page = await load(browser, [question(9, true)], needsYou);
-    assert.equal(await page.$eval('.qtag-chip', c => c.textContent), 'OPS-7');
-    assert.match(await page.$eval('.qtag-chip', c => c.title), /\[Q9:repair\]/);
-    await page.click('.qtag-chip');
-    assert.deepEqual(await page.evaluate(() => opened), ['OPS-7']);
-    assert.equal(await page.$('.qtag-sheet:not([hidden])'), null);
+    for (const width of [1440, 390]) {
+      const q = question(9, true);
+      q.first.text += '\nOptions: repair only, or leave unchanged. Keep the existing limits.';
+      const page = await load(browser, [q], '<style>' + fs.readFileSync('static/question-tags.css','utf8') + '</style>' + needsYou);
+      await page.setViewport({width,height:850});
+      assert.equal(await page.$eval('.qtag-chip', c => c.textContent), 'Q9');
+      assert.equal(await page.$eval('.qtag-ticket-chip', c => c.textContent), 'OPS-7');
+      await page.click('.qtag-chip');
+      await page.waitForSelector('.qtag-sheet:not([hidden]) .qtag-text');
+      assert.match(await page.$eval('.qtag-text', c => c.textContent), /Options: repair only, or leave unchanged/);
+      assert.deepEqual(await page.evaluate(() => opened), [], 'preview must not navigate away to a ticket');
+      assert.equal(await page.$('[data-qsend]'), null, 'ticket answers retain the existing ticket flow');
+      if (process.env.QUESTION_CHIP_SCREENSHOTS) await page.screenshot({path:process.env.QUESTION_CHIP_SCREENSHOTS+'/'+width+'.png'});
+      await page.click('.qtag-close');
+      await page.click('.qtag-ticket-chip');
+      assert.deepEqual(await page.evaluate(() => opened), ['OPS-7']);
+      assert.deepEqual(await page.evaluate(() => sent), [], 'preview and navigation send nothing');
+      await page.close();
+    }
   } finally { await browser.close(); }
 });
 
@@ -44,7 +57,7 @@ test('a chip right after its ticket ref names the question, not the ticket again
   try {
     const page = await load(browser, [question(9, true)],
       '<p class="assistant-text"><a>OPS-7</a> stays blocked on [Q9:repair].</p>');
-    assert.equal(await page.$eval('.assistant-text', p => p.textContent), 'OPS-7 stays blocked on open question.');
+    assert.equal(await page.$eval('.assistant-text', p => p.textContent), 'OPS-7 stays blocked on Q9.');
   } finally { await browser.close(); }
 });
 
@@ -80,7 +93,7 @@ test('the question sheet leads to the ticket instead of a chat answer', async ()
     await page.evaluate(() => window.cccQuestionTags.open(9, 'parent'));
     await page.waitForSelector('.qtag-sheet:not([hidden]) [data-qticket]');
     assert.equal(await page.$('[data-qsend]'), null);
-    assert.equal(await page.$eval('.qtag-head strong', h => h.textContent), 'OPS-7');
+    assert.equal(await page.$eval('.qtag-head strong', h => h.textContent), '[Q9:repair] · OPS-7');
     await page.click('.qtag-sheet [data-qtalk]');
     assert.deepEqual(await page.evaluate(() => focused), ['worker']);
     assert.notEqual(await page.$('.qtag-sheet[hidden]'), null);
@@ -190,4 +203,22 @@ test('an origin receipt failure preserves the recorded answer and reports which 
     assert.equal(result.answers,1);
     assert.equal(result.again,null);
   } finally {await browser.close();}
+});
+
+
+test('question and ticket chips stay distinct through rescans and ticket refreshes', async () => {
+  const browser=await puppeteer.launch({executablePath:findChromePath(),args:['--no-sandbox']});
+  try {
+    const page=await load(browser,[question(9,true)],needsYou);
+    await page.evaluate(()=>{
+      for(let i=0;i<5;i++)cccQuestionTags.chipify(document.body);
+    });
+    assert.equal(await page.$$eval('.qtag-ticket-chip',els=>els.length),1);
+    await page.evaluate(()=>{window.list=window.list.map(q=>({...q,ticket:{...q.ticket,ref:'OPS-8'}}));cccQuestionTags.open(9,'parent');});
+    await page.waitForFunction(()=>document.querySelector('.qtag-ticket-chip')?.textContent==='OPS-8');
+    assert.equal(await page.$$eval('.qtag-ticket-chip',els=>els.length),1);
+    await page.evaluate(()=>{window.list=window.list.map(q=>({...q,ticket:null}));cccQuestionTags.open(9,'parent');});
+    await page.waitForFunction(()=>!document.querySelector('.qtag-ticket-chip'));
+    assert.equal(await page.$eval('.qtag-chip',el=>el.textContent),'Q9');
+  }finally{await browser.close();}
 });

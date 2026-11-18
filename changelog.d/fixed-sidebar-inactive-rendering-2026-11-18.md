@@ -1,0 +1,1 @@
+- Avoid building hidden Active and Issues session rows while another sidebar tab or search is displayed.

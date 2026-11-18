@@ -12,13 +12,14 @@ function harness(ready = true) {
   const state = {chunks: [{text: 'A complete long read.', start: 10}], paneId: 'p2', index: 0,
     perf: {stalls: 0, maxStall: 0}};
   const c = vm.createContext({
-    _ttsChunkState: state, _ttsNeuralToken: 0, _ttsUtterance: null, _ttsBrowserPlayback: null,
+    _ttsChunkState: state, _ttsPlaybackToken: 0, _ttsUtterance: null, _ttsBrowserPlayback: null,
     _ttsRate: 1.25, _ttsPaused: false, _ttsLastCharIndex: 0,
     _ttsBoundUtteranceText: '0123456789A complete long read.',
     window: {cccBrowserVoice: {start: (text, opts) => {
       callbacks = opts;
       return ready ? {cancel() {}} : null;
     }}},
+    ttsBrowserVoiceForPane: () => null,
     _ttsLog: (...args) => logs.push(args),
     _ttsPerfStart: (s, how) => starts.push(how), _ttsShowVoice() {}, _ttsSetStreaming() {},
     setTtsButtonsBusy() {}, setTtsButtonsState() {}, _ttsSetPlay() {},
@@ -49,13 +50,13 @@ test('failure resumes the existing splitter from the last word, with pause prese
   h.c._ttsLastCharIndex = 21;
   h.c._ttsPaused = true;
   h.callbacks.onerror(new Error('underrun'));
-  assert.deepEqual(h.restarts[0], ['long read.', 'p2', 21, true]);
+  assert.deepEqual(h.restarts[0], ['long read.', 'p2', 21, true, true]);
   assert.equal(h.c._ttsBrowserPlayback, null);
 });
 
 test('a model that stopped between selection and start falls back without losing the text', () => {
   const h = harness(false);
-  assert.deepEqual(h.restarts[0], ['A complete long read.', 'p2', 10, false]);
+  assert.deepEqual(h.restarts[0], ['A complete long read.', 'p2', 10, false, true]);
 });
 
 test('late callbacks of a cancelled/replaced read cannot change the new read', () => {

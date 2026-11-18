@@ -911,18 +911,12 @@ def _write_pending_input_claim_journal(claim):
     journal_id = hashlib.sha256(
         json.dumps(identity, sort_keys=True).encode("utf-8")
     ).hexdigest()
-    claim["journal_id"] = journal_id
     payload = {
-        "version": 4 if claim.get("managed") else 3,
+        "version": 3,
         "id": journal_id,
         **identity,
         "handoff_path": str(getattr(item, "handoff_path", "") or ""),
     }
-    if claim.get("managed") is not None:
-        from ccc_server import codex_managed_recovery as recovery
-        recovery.validate_handoff(claim["managed"], identity["pending_id"] or identity["handoff_id"])
-        payload["managed"] = dict(claim["managed"])
-        payload["managed_sha256"] = recovery._sha(payload["managed"])
     if not payload["session_id"] or not payload["text"]:
         return "failed"
     directory = _pending_input_claim_journal_dir()
@@ -993,7 +987,8 @@ def _validate_pending_claim_journal(path, payload):
         except (ValueError, AttributeError):
             pass
         if (
-            not identity["session_id"]
+            version not in (1, 2, 3)
+            or not identity["session_id"]
             or identity["queue_name"] not in ("resume", "terminal")
             or identity["index"] < 0
             or not identity["text"]
@@ -1008,15 +1003,6 @@ def _validate_pending_claim_journal(path, payload):
             )
         ):
             raise ValueError
-        if version >= 4 or payload.get("managed") is not None:
-            from ccc_server import codex_managed_recovery as recovery
-            recovery.validate_handoff(payload.get("managed"), identity["pending_id"] or identity["handoff_id"])
-            managed = payload["managed"]
-            if (version != 4 or payload.get("managed_sha256") != recovery._sha(managed)
-                    or managed["ledger_sequence"] != identity["claim_sequence"]
-                    or (managed["phase"] != "claimed" and
-                        managed["params"].get("threadId") != identity["session_id"])):
-                raise ValueError
         payload["version"] = version
         payload["created_ns"] = identity["created_ns"]
         payload["claim_sequence"] = identity["claim_sequence"]
@@ -1025,7 +1011,7 @@ def _validate_pending_claim_journal(path, payload):
                 uuid.NAMESPACE_URL, f"ccc-pending-journal:{journal_id}",
             ))
         return payload
-    except (TypeError, ValueError, OSError):
+    except (TypeError, ValueError):
         try:
             path.replace(path.with_suffix(".invalid"))
         except OSError:
@@ -1096,10 +1082,6 @@ def _pending_input_recovery_blocked(session_id):
         if _pending_input_recovery_registry.get(session_id):
             return True
     directory = _pending_input_claim_journal_dir()
-    if any(directory.glob("*.invalid")):
-        from ccc_server import codex_managed_recovery as recovery
-        if recovery.known_thread(session_id):
-            return True
     for path in directory.glob("*.json"):
         try:
             payload = json.loads(path.read_text())
@@ -1113,10 +1095,6 @@ def _pending_input_recovery_blocked(session_id):
         if payload is None:
             continue
         if str(payload.get("session_id") or "") == str(session_id):
-            if payload.get("managed") is not None:
-                from ccc_server import codex_managed_recovery as recovery
-                if recovery.nonblocking_claim(payload):
-                    continue
             return True
     return False
 
@@ -1376,40 +1354,6 @@ def _recover_pending_input_claim_journals():
         payload = _validate_pending_claim_journal(path, payload)
         if payload is None:
             continue
-        if payload.get("managed") is not None:
-            from ccc_server import codex_managed_recovery as recovery
-            decision = recovery.journal_disposition(payload)
-            if decision == "hold":
-                continue
-            if decision == "consume":
-                # Native RPC ACK identifies this exact input, even if the old
-                # worker died before committing the queue/receipt. No replay.
-                from ccc_server import delivery
-                key = payload.get("pending_id") or payload.get("handoff_id")
-                # A missing row is already consumed; a failed transaction is
-                # unknown. Preserve the ACK journal until both queue views
-                # have been durably checked, even when no row remains.
-                checked = True
-                for field in ("resume", "terminal"):
-                    transaction = _core._apply_pending_input_operations(
-                        payload["session_id"], [{"field": field,
-                            "action": "remove_matching", "identity": "pending_id",
-                            "match": str(key)}])
-                    if not transaction.get("ok"):
-                        checked = False
-                        break
-                    removed = (transaction.get("value") or [None])[0]
-                    if removed is not None:
-                        _core._complete_pending_input_handoff(removed)
-                if not checked:
-                    continue
-                delivery.settle(payload["session_id"], key, "landed")
-                if payload["managed"].get("queue_action_id"):
-                    from ccc_server.codex_queue_owner import finish_native_queue_action
-                    finish_native_queue_action(payload["session_id"], payload["managed"]["queue_action_id"])
-                recovery.remove_claim_journal({"managed": payload["managed"],
-                                               "journal_id": payload["id"]})
-                continue
         try:
             claim_sequence = int(payload.get("claim_sequence"))
             created_ns = int(payload.get("created_ns"))
@@ -1491,8 +1435,6 @@ def _recover_pending_input_claim_journals():
                     getattr(existing, "handoff_id", None) == handoff_id
                     for existing in items
                 ):
-                    return False
-                if not handoff_id and any(getattr(existing, "pending_id", None) == payload.get("pending_id") for existing in items):
                     return False
                 items.insert(min(max(int(payload.get("index") or 0), 0), len(items)), item)
                 if handoff_id:
@@ -2289,14 +2231,10 @@ def _apply_pending_input_operations(
                     elif action == "pop_head":
                         results.append(queue.pop(0) if queue else None)
                     elif action == "pop_head_claim":
-                        claim = {"session_id": session_id, "queue_name": field,
-                                 "index": 0, "item": queue[0] if queue else None,
-                                 "claim_sequence": time.monotonic_ns()}
-                        if queue:
-                            from ccc_server import codex_managed_recovery as recovery
-                            recovery.prepare_claim(claim)
-                            queue.pop(0)
-                        results.append(claim)
+                        results.append({
+                            "item": queue.pop(0) if queue else None,
+                            "claim_sequence": time.monotonic_ns(),
+                        })
                     elif action == "pop_head_if_matching":
                         results.append(
                             queue.pop(0)
@@ -2991,7 +2929,9 @@ def _claim_matching_pending_input(session_id, text, pending_id=None):
                             continue
                     elif _queued_text_key(item) != clean:
                         continue
-                    claimed = items[index]
+                    claimed = items.pop(index)
+                    if not items:
+                        queue.pop(session_id, None)
                     claim = {
                         "session_id": session_id,
                         "queue_name": queue_name,
@@ -2999,11 +2939,6 @@ def _claim_matching_pending_input(session_id, text, pending_id=None):
                         "item": claimed,
                         "claim_sequence": time.monotonic_ns(),
                     }
-                    from ccc_server import codex_managed_recovery as recovery
-                    recovery.prepare_claim(claim)
-                    items.pop(index)
-                    if not items:
-                        queue.pop(session_id, None)
                     break
                 else:
                     continue
@@ -3028,9 +2963,6 @@ def _commit_pending_input_claim(claim):
     """
     if not isinstance(claim, dict) or "item" not in claim:
         return False
-    from ccc_server import codex_managed_recovery as recovery
-    if not recovery.finish_claim(claim, commit=True):
-        return False
     item = claim.get("item")
     if isinstance(item, _PendingInputHandoff):
         if not _core._complete_pending_input_handoff(item):
@@ -3054,15 +2986,11 @@ def _commit_pending_input_claim(claim):
             _inject_receipts.close_receipt(sid, text=str(item))
         except Exception as e:  # pragma: no cover - best-effort bookkeeping
             print(f"  [pending-inputs] receipt settle failed: {e}", flush=True)
-    recovery.remove_claim_journal(claim)
     return True
 
 
 def _restore_pending_input_claim(claim):
     if not isinstance(claim, dict):
-        return False
-    from ccc_server import codex_managed_recovery as recovery
-    if not recovery.finish_claim(claim, commit=False):
         return False
     sid = claim.get("session_id")
     queue_name = claim.get("queue_name")
@@ -3085,18 +3013,11 @@ def _restore_pending_input_claim(claim):
                     for existing in items
                 )
             )
-            if claim.get("managed") is not None:
-                already_restored = already_restored or any(
-                    getattr(existing, "pending_id", None) == getattr(item, "pending_id", None)
-                    for existing in items)
             if not already_restored:
                 index = max(0, min(int(claim.get("index") or 0), len(items)))
                 items.insert(index, item)
         return True
-    restored = bool(_core._mutate_pending_inputs({sid}, restore).get("ok"))
-    if restored:
-        recovery.remove_claim_journal(claim)
-    return restored
+    return bool(_core._mutate_pending_inputs({sid}, restore).get("ok"))
 
 
 def _consume_matching_pending_input(session_id, text, pending_id=None):

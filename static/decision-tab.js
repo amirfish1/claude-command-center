@@ -31,7 +31,7 @@
     // A horizontally scrolled list shifts the host rect left, so the fixed
     // iframe would start under the nav. Keep the list at 0 while a view is up.
     const scroller = document.getElementById('convList');
-    if (scroller && scroller.scrollLeft && views.some(view => view.host && view.host.isConnected)) scroller.scrollLeft = 0;
+    if (views.some(view => view.host && view.host.isConnected) && scroller && scroller.scrollLeft) scroller.scrollLeft = 0;
     for (const view of views) {
       const {frame, host} = view;
       if (!frame) continue;

@@ -50,7 +50,7 @@ class TestLiveWordRevealOrder(unittest.TestCase):
             const { findChromePath } = require('./puppeteer-browser-config.js');
 
             (async () => {
-              const source = fs.readFileSync('static/app.js', 'utf8');
+              const source = require('./tests/legacy-dashboard-source.cjs');
               const start = source.indexOf('function _wrapReplayWordsInHtml');
               const end = source.indexOf('function _gcReplayReceiptsHtml', start);
               if (start < 0 || end < 0) throw new Error('word-reveal helper not found');

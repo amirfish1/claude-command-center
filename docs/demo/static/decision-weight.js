@@ -12,7 +12,14 @@
     ["can't be undone", /\b(?:cannot be undone|can't be undone|irreversible|permanently|erase)\b/i],
   ];
   function decisionWeight(row) {
-    const text = String((row && row.title) || '');
+    let text = String((row && row.title) || '');
+    // A source commit going to a git branch is not a public announcement.
+    // Keep any surrounding consequences so a combined push/deploy stays Major.
+    const sourcePublication = /\bpublish\s+(?:(?:the|tested|verified|git|source)\s+)*commit\s+[a-f0-9]{7,40}\s+to\s+(?:origin\/)?(?:main|master|next|develop|[\w.-]+\/[\w./-]+)(?=\s|[?,.;:]|$)/gi;
+    const sourceOnlyWording = text.replace(sourcePublication, 'update source branch');
+    if (sourceOnlyWording !== text) {
+      text = sourceOnlyWording.replace(/\bwithout\s+(?:starting|triggering|running|performing|initiating)\s+(?:a\s+)?(?:production\s+)?release\b/gi, '');
+    }
     for (const [reason, rule] of major) if (rule.test(text)) return {level: 'Major', reason};
     return {level: 'Minor', reason: 'nothing here looks like real money, customers, public, live product or a permanent change'};
   }

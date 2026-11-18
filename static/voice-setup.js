@@ -31,14 +31,12 @@
   function enter() {
     if(window.cccSettingsCapabilities&&!window.cccSettingsCapabilities.configurationVisible('voice'))return;
     if(!ready)return;listeningStatus();refreshAccess();
-    if(!entered&&!loading){entered=true;reload();hooks.refreshVoices();hooks.loadOperator();}
+    if(!entered&&!loading){entered=true;reload();hooks.loadOperator();}
   }
   async function reload(){if(loading)return;loading=true;get('voiceSetupCallStatus').textContent='Reading saved call settings…';try{await hooks.load();}finally{loading=false;}}
   function loaded(data){if(!ready)return;get('voiceSetupCallStatus').textContent='Saved call defaults loaded. Connection and mic checked when you call.';}
   function loadFailed(){if(ready)get('voiceSetupCallStatus').textContent='Call settings unavailable. Reload to retry; saving is disabled. Dictation and read-aloud are separate.';}
   function saved(message){if(ready)get('voiceSetupCallStatus').textContent=message;}
-  function ttsLoaded(options){if(ready)get('voiceSetupReadingStatus').textContent=options.length?options.length+' voices advertised; playback untested.':'No optional voices found. Random uses the default speech fallback.';}
-  function ttsFailed(){if(ready)get('voiceSetupReadingStatus').textContent='Output voice catalog unavailable. The saved selection is retained; refresh to retry. Playback has not been tested.';}
   function open(part='listening'){
     if(!ready)return false;window.cccSettingsCapabilities?.reveal('voice');hooks.navigate();enter();if(part==='operator')hooks.loadOperator();
     const target=get('voiceSetup-'+part)||get('voiceSetup-listening');
@@ -48,29 +46,25 @@
   }
   function hashRoute(){
     let hash;try{hash=decodeURIComponent(location.hash.slice(1));}catch(_){return;}
-    const aliases={voice:'listening',voiceModal:'conversation',voiceSettingsBtn:'conversation',carModeModal:'operator',carModeMenuBtn:'operator',settingsTtsVoiceDefault:'reading',settingsBrowserVoiceToggle:'reading',localSpeechStatus:'offline',localSpeechInstall:'offline',simpleVoiceMobileRow:'access',settingsVoiceMobileToggle:'access',settingsVoiceCallBtnToggle:'access',voiceShowMobileBtn:'access'};
-    const id=hash.replace(/^settings[\/-]/,'');const task=id.match(/^voice-(listening|reading|conversation|offline|access|operator)$/);if(task)open(task[1]);else if(aliases[id])open(aliases[id]);
+    const aliases={voice:'listening',voiceModal:'conversation',voiceSettingsBtn:'conversation',carModeModal:'operator',carModeMenuBtn:'operator',settingsBrowserVoiceToggle:'reading',simpleVoiceMobileRow:'access',settingsVoiceMobileToggle:'access',settingsVoiceCallBtnToggle:'access',voiceShowMobileBtn:'access'};
+    const id=hash.replace(/^settings[\/-]/,'');const task=id.match(/^voice-(listening|reading|conversation|access|operator)$/);if(task)open(task[1]);else if(aliases[id])open(aliases[id]);
   }
   function mount(integration){
     if(ready)return;
     const root=get('settingsSection-voice');if(!root||!get('voiceModal')||!get('carModeModal'))return;
     hooks=integration;
     const host=create('div',null,'voice-setup');host.id='voiceSetup';
-    host.innerHTML=`<section id="voiceSetup-reading" class="voice-setup-section settings-row" data-keywords="voice speak spoken replies read aloud output voice" tabindex="-1"><h3>Read replies aloud</h3><p>Use a reply’s speaker button. Your default saves in this browser; sessions can override it. $ = paid voice.</p><p id="voiceSetupReadingStatus" role="status">Loading voices…</p><button type="button" id="voiceSetupReadingRefresh" class="settings-action-btn">Refresh voices</button></section>
+    host.innerHTML=`<section id="voiceSetup-reading" class="voice-setup-section settings-row" data-keywords="voice speak spoken replies read aloud output voice" tabindex="-1"><h3>Read replies aloud</h3><p>Use a reply’s speaker button. Browser voice reads English; the device voice handles other languages and fallback. Choose a speaker beside the conversation.</p></section>
       <section id="voiceSetup-access" class="voice-setup-section settings-row" data-keywords="voice call access shortcut floating mobile" tabindex="-1"><p id="voiceSetupAccessStatus" role="status" aria-live="polite"></p></section>
       <details id="voiceSetup-conversation" class="voice-setup-section settings-row" data-keywords="voice realtime live conversation codex call limits fallback profile" tabindex="-1"><summary>Live conversation</summary><p>Experimental · Uses your ChatGPT subscription. Mic audio goes to OpenAI. Actions require confirmation.</p><p id="voiceSetupCallStatus" role="status" aria-live="polite">Open to load settings.</p><button type="button" id="voiceSetupReload" class="settings-action-btn">Reload settings</button><button type="button" data-settings-go="api-keys" class="settings-action-btn">Provider keys</button></details>
       <details id="voiceSetup-listening" class="voice-setup-section settings-row" data-keywords="voice listening dictation microphone speech input" tabindex="-1"><summary>Dictation</summary><p>Use the composer’s mic to dictate English text, then review and send. May require a network connection.</p><p id="voiceSetupListeningStatus" role="status"></p></details>
-      <details id="voiceSetup-offline" class="voice-setup-section settings-row" data-keywords="voice offline output kokoro install repair availability" tabindex="-1"><summary>Offline voices</summary><p>Optional download for reading replies. Does not enable offline dictation or calls.</p><button type="button" id="voiceSetupOfflineRefresh" class="settings-action-btn">Refresh status</button></details>
       <details id="voiceSetup-operator" class="voice-setup-section settings-row" data-keywords="voice hands free car mode operator credentials local" tabindex="-1"><summary>Car Mode</summary><p>Separate hands-free operator. Requires a paid Anthropic API key. Blank fields keep saved keys.</p></details>`;
     const disclosure=root.querySelector(':scope > details'), destination=disclosure||root;
     destination.append(host);
     const legacy=create('div');legacy.hidden=true;legacy.id='voiceSetupLegacy';host.append(legacy);
     function moveRow(id,target){const element=get(id);if(!element)return;const row=element.closest('.settings-row');if(row)target.append(row);}
-    moveRow('settingsTtsVoiceDefault',get('voiceSetup-reading'));moveRow('settingsTtsEnabledToggle',get('voiceSetup-offline'));moveRow('localSpeechInstall',get('voiceSetup-offline'));moveRow('settingsVoiceCallBtnToggle',get('voiceSetup-access'));
+    moveRow('settingsTtsEnabledToggle',get('voiceSetup-reading'));moveRow('settingsVoiceCallBtnToggle',get('voiceSetup-access'));
     moveRow('settingsBrowserVoiceToggle',get('voiceSetup-reading'));
-    const readingRow=get('settingsTtsVoiceDefault').closest('.settings-row');
-    readingRow.querySelector('.settings-row-label').textContent='Voice';
-    readingRow.querySelector('.settings-row-desc').textContent='';
     const callToggle=get('settingsVoiceCallBtnToggle');callToggle.setAttribute('aria-label','Show floating call shortcut');
     callToggle.closest('.settings-row').querySelector('.settings-row-label').textContent='Show floating call shortcut';
     callToggle.closest('.settings-row').querySelector('.settings-row-desc').textContent='Show CALL on phone layouts. Saves automatically.';
@@ -98,8 +92,6 @@
     const simple=get('simpleVoiceMobileRow');if(simple){const go=create('button','Voice setup…','simple-chip');go.type='button';go.addEventListener('click',()=>open('access'));simple.parentElement.append(go);legacy.append(simple);}
     for(const child of [...destination.children])if(child.matches('.settings-section-eyebrow,.settings-section-note'))child.hidden=true;
     get('voiceSetupReload').addEventListener('click',reload);
-    get('voiceSetupReadingRefresh').addEventListener('click',()=>hooks.refreshVoices());
-    get('voiceSetupOfflineRefresh').addEventListener('click',()=>window.cccLocalSpeech?.check?.());
     host.addEventListener('click',event=>{const target=event.target.closest('[data-voice-part]');if(target){event.preventDefault();open(target.dataset.voicePart);}});
     // Search each task as a unit, keeping its native controls visible together.
     host.querySelectorAll('.voice-setup-section').forEach(section=>{section.setAttribute('data-settings-search-group','');section.dataset.keywords+=' '+section.textContent;});
@@ -111,5 +103,5 @@
     if(disclosure)disclosure.addEventListener('toggle',()=>{if(disclosure.open)enter();});
     if('IntersectionObserver'in window)new IntersectionObserver(entries=>{if(entries.some(entry=>entry.isIntersecting))enter();}).observe(host);
   }
-  window.cccVoiceSetup=Object.freeze({mount,mounted,open,enter,leave,refreshAccess,loaded,loadFailed,saved,ttsLoaded,ttsFailed});
+  window.cccVoiceSetup=Object.freeze({mount,mounted,open,enter,leave,refreshAccess,loaded,loadFailed,saved});
 })();

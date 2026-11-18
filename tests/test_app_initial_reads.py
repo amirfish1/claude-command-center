@@ -69,6 +69,17 @@ def test_manifest_and_combined_size_are_bounded(app,monkeypatch):
     assert len(initial.read('demo',base)) == 2
 
 
+def test_declared_medium_json_keeps_exact_payload_within_combined_envelope(app):
+    base,folder=app
+    payload=json.dumps({'items':['x' * (96 * 1024)]})
+    names=['catalog.json','history.json','overflow.json']
+    configure(folder,names)
+    for name in names:(folder/name).write_text(payload)
+    reads=initial.read('demo',base)
+    assert reads == {'/app-static/demo/'+name:payload for name in names[:2]}
+    assert sum(len(value.encode()) for value in reads.values()) <= initial.MAX_TOTAL_BYTES
+
+
 @pytest.mark.parametrize('options',[None, [], 'bad', {'files':'items.json'}, {'data':{},'files':[]}])
 def test_unconfigured_or_malformed_manifest_keeps_original_html(app, options):
     base,folder=app

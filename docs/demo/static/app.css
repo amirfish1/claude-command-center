@@ -16,6 +16,7 @@
     --green: #3fb950;
     --orange: #d29922;
     --purple: #bc8cff;
+    --orch-chip-text: #d8beff;
     --red: #f85149;
     --cyan: #39d2c0;
     --cb-bg: #0b1016;
@@ -24,6 +25,19 @@
     --cb-text: #d6deeb;
     --cb-muted: #9aa7b5;
     --accent-contrast: #ffffff;     /* readable text/icon color on var(--accent) */
+    /* Engine identity colors must contrast with the current theme surfaces. */
+    --engine-claude: #f09a78;
+    --engine-codex: #3dd68c;
+    --engine-gemini: #c084fc;
+    --engine-cursor: #f08a6b;
+    --engine-antigravity: #f2cc60;
+    --engine-hermes: #2dd4bf;
+    --engine-kimi: #7dd3fc;
+    --engine-copilot: #56d364;
+    --engine-grok: #f472b6;
+    --engine-copilotchat: #818cf8;
+    --engine-devin: #8b5cf6;
+    --engine-opencode: #fb923c;
     --status-rail-width: 260px;
     /* Inter primary, system stack fallback. Inter is loaded from Google Fonts
        in index.html with `display=swap`, so the system font paints first and
@@ -44,8 +58,21 @@
     --green: #1a7f37;
     --orange: #9a6700;
     --purple: #8250df;
+    --orch-chip-text: #6639a6;
     --red: #cf222e;
     --cyan: #0e7490;
+    --engine-claude: #a34221;
+    --engine-codex: #096b3b;
+    --engine-gemini: #7541b0;
+    --engine-cursor: #a63c1b;
+    --engine-antigravity: #805b00;
+    --engine-hermes: #0b7165;
+    --engine-kimi: #096789;
+    --engine-copilot: #236e2b;
+    --engine-grok: #a12868;
+    --engine-copilotchat: #454eb0;
+    --engine-devin: #6c3bd1;
+    --engine-opencode: #a34b00;
   }
   :root[data-font="mono"] {
     --font-ui: 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
@@ -117,14 +144,14 @@
   }
   body.resizing { cursor: col-resize; user-select: none; }
   body.resizing * { pointer-events: none; }
-  /* Conversation-list collapse (CCC-132). The « button (left of search) hides
+  /* Conversation-list collapse (CCC-132). The « button beside the divider hides
      the whole list/sidebar so the reader gets full width; a floating »
      restore button brings it back. Desktop only — on mobile the list IS the
      screen (handled by the mobile @media block), so these rules are scoped to
      wide viewports. */
   .conv-list-collapse-btn {
     flex: 0 0 auto;
-    width: 28px; height: 28px; padding: 0;
+    width: 30px; height: 30px; padding: 0;
     display: inline-flex; align-items: center; justify-content: center;
     background: transparent; border: 1px solid var(--border); border-radius: 6px;
     color: var(--text-muted); font-size: 15px; line-height: 1; cursor: pointer;
@@ -300,6 +327,7 @@
      prevents the sidebar resizer from making the conversation pane narrow. */
   .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
   .conv-pane.has-conv-bg {
+    --orch-chip-text: #d8beff;
     --bg: var(--conv-bg);
     --surface: var(--conv-surface);
     --surface-2: var(--conv-surface-2);
@@ -310,6 +338,11 @@
     --accent: var(--conv-accent);
     background: var(--conv-bg);
     color: var(--conv-text);
+  }
+  .conv-pane.has-conv-bg.conv-bg-light {
+    --orch-chip-text: #6639a6;
+    --conv-user-bubble-bg: #dceaff;
+    --conv-peer-bg: #e0f2e5;
   }
   .conv-pane.has-conv-bg .conversations-view {
     background: var(--conv-bg);
@@ -446,6 +479,15 @@
     flex: 1 1 auto;
   }
   body.conversation-popout .toolbar {
+    display: none !important;
+  }
+  /* An app's agent pane (embed=app): one conversation and a composer. The
+     session title, CI progress, process pills and side-panel button belong
+     to the dashboard, not to someone using an app. */
+  body.ccc-app-embed [data-local-ci-host],
+  body.ccc-app-embed #convToolbar,
+  body.ccc-app-embed .conv-pane-header,
+  body.ccc-app-embed .popout-side-panel-btn {
     display: none !important;
   }
   body.conversation-popout .ccc-topbar,
@@ -1521,6 +1563,10 @@
     background: rgba(210, 153, 34, 0.06);
     border-left-color: color-mix(in srgb, var(--orange, #d29922) 70%, transparent);
   }
+  .event.user_text.steering-optimistic > .pending-send-cancel,
+  .event.user_text.steering-optimistic > .user-message-copy {
+    display: none;
+  }
   .event.user_text.steering-optimistic .label::after {
     content: ' · steering…';
     font-style: normal; font-weight: 400;
@@ -1784,6 +1830,10 @@
   .acp-perm-opt.is-submitting { opacity: 0.55; pointer-events: none; }
   .acp-perm-options.is-answered { opacity: 0.45; pointer-events: none; }
   .tool-call .arrow { color: var(--orange); font-weight: bold; }
+  /* CCC-408: an expanded tool row points its arrow down. */
+  .tool-call .arrow { display: inline-block; }
+  .tool-call.cc-open > .arrow,
+  .tool-call:has(> details.tool-command-disclosure[open]) > .arrow { transform: rotate(90deg); }
   .tool-call .tool-source {
     color: var(--text-muted);
     border: 1px solid var(--border);
@@ -2236,6 +2286,50 @@
   .thinking-silent-note { font-size: 11px; opacity: 0.55; }
   .event.assistant.is-silent-thinking-only { display: none !important; }
 
+  .thinking-run-source { display: none !important; }
+  .event.assistant.thinking-run-event > :not(.thinking-run) { display: none !important; }
+  .event.assistant.thinking-run-event:not(:has(> .thinking-run)) { display: none !important; }
+  .thinking-run > .thinking-toggle {
+    display: block; background: none; border: 0; padding: 0;
+    font: inherit; font-size: 11px; font-weight: 600; text-align: start; min-height: 28px;
+  }
+  .thinking-run > .thinking-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .thinking-run-preview {
+    line-height: 1.5; height: 3em; overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow-wrap: anywhere;
+  }
+  .thinking-run > [hidden] { display: none !important; }
+  .thinking-run { cursor: pointer; }
+  .activity-run { display: none; }
+  body:not(.conv-compact):not([data-conv-view="verbose"]) .conversations-view .activity-run {
+    display: block; margin: 6px 0; padding: 0 10px;
+  }
+  body:not(.conv-compact):not([data-conv-view="verbose"]) .conversations-view .activity-run-source:not(.activity-run-open) { display: none !important; }
+  body:not(.conv-compact):not([data-conv-view="verbose"]) .event.assistant:has(> .activity-run-source):not(:has(> .activity-run, > .activity-run-open, > .assistant-text)) { display: none !important; }
+  body:not(.conv-compact):not([data-conv-view="verbose"]) .event.assistant.thinking-run-event:not(:has(> .thinking-run)):has(> .activity-run) { display: block !important; }
+  body:not(.conv-compact):not([data-conv-view="verbose"]) .event.assistant.thinking-run-event > .activity-run { display: block !important; }
+  .activity-run-toggle {
+    display: block; min-height: 28px; padding: 0; border: 0; background: transparent;
+    color: var(--text-muted); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer;
+  }
+  .activity-run-toggle::before { content: '\25B8'; margin-inline-end: 6px; }
+  .activity-run.is-expanded > .activity-run-toggle::before { content: '\25BE'; }
+  .activity-run-toggle:hover { color: var(--text); }
+  .activity-run-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .activity-run.has-error > .activity-run-toggle { color: var(--red); }
+  .activity-run-preview {
+    height: 3em; line-height: 1.5; overflow: hidden; overflow-wrap: anywhere;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    color: var(--text-secondary);
+  }
+  @media (pointer: coarse) { .activity-run-toggle { min-height: 44px; } }
+  /* Expanded shows the whole thought, not a nested 400px scroller. */
+  .thinking-run > .t-body { overflow-wrap: anywhere; max-height: none; }
+  @media (pointer: coarse) {
+    .thinking-run > .thinking-toggle { min-height: 44px; }
+  }
+
   /* ACP plan card (kimi TodoList whole-plan replace) — kimi-web TodoCard look. */
   .plan-card {
     font-size: 12px; margin: 4px 0; padding: 6px 10px;
@@ -2302,6 +2396,26 @@
   .tool-result-image.is-missing img { display: none; }
   .tool-result-image.is-missing .tool-result-image-missing { display: inline; }
 
+  /* Media belongs to the conversation, with an independent vertical flow. */
+  .conversations-view { container-type: inline-size; }
+  .kimi-turn:has(> .conversation-media-rail) { display: flow-root; }
+  .conversation-media-rail { display: flex; flex-direction: column; gap: 0; }
+  .conversation-media-rail > .image-gen-card { margin: 0; max-width: none; min-width: 0; }
+  .conversation-media-rail .tool-result-image { flex: 1 1 100%; max-width: 100%; }
+  .conversation-media-rail .tool-result-image img { width: 100%; object-fit: contain; }
+  @container (min-width: 720px) {
+    .kimi-turn > .conversation-media-rail {
+      float: right; width: 36%; margin: 0 0 0 16px;
+    }
+    .kimi-turn:has(> .conversation-media-rail) > :not(.conversation-media-rail) {
+      max-width: calc(64% - 16px);
+    }
+  }
+  @container (max-width: 719px) {
+    .kimi-turn:has(> .conversation-media-rail) { display: flex; flex-direction: column; }
+    .kimi-turn > .conversation-media-rail { order: 1; margin-top: 8px; }
+  }
+
   /* Inline `codex_request` card: approval/question/permission/elicitation,
      rendered in the transcript instead of only in the live strip. */
   .codex-request-card {
@@ -2354,6 +2468,17 @@
     --kw-success: #3fb950; --kw-success-soft: rgba(63,185,80,0.14);
     --kw-danger: #f85149; --kw-danger-soft: rgba(248,81,73,0.14);
     --kw-warning: #d29922;
+  }
+  /* Light conversation backgrounds: the dark palette above leaves pale text
+     on a pale page. Follow the colours derived from the chosen background. */
+  .conv-pane.is-webui-session.conv-bg-light {
+    --kw-bg: var(--conv-bg); --kw-surface: var(--conv-surface); --kw-raised: var(--conv-surface-2); --kw-sunken: var(--conv-surface);
+    --kw-line: var(--conv-border); --kw-text: var(--conv-text); --kw-muted: var(--conv-text-muted); --kw-faint: var(--conv-text-muted);
+    --kw-accent: var(--conv-accent); --kw-accent-hover: var(--conv-accent);
+    --kw-accent-soft: var(--conv-user-bubble-bg, var(--conv-user-bg)); --kw-accent-bd: rgba(36,90,154,0.28);
+    --kw-success: #1a7f37; --kw-success-soft: rgba(26,127,55,0.12);
+    --kw-danger: #cf222e; --kw-danger-soft: rgba(207,34,46,0.10);
+    --kw-warning: #9a6700;
   }
 
   /* Let rendered turns use the complete reader column. The pane itself
@@ -2958,6 +3083,27 @@
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .conv-pane-ticket {
+    flex: 0 0 auto;
+    max-width: 40%;
+    min-height: 28px;
+    padding: 3px 6px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--surface);
+    color: var(--text);
+    font: 600 12px/1.2 var(--font-mono, monospace);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+  }
+  .conv-pane-ticket[hidden] { display: none; }
+  .conv-pane-ticket:hover { border-color: var(--text-muted); }
+  .conv-pane-ticket:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (pointer: coarse) {
+    .conv-pane-ticket { min-width: 44px; min-height: 44px; }
   }
   /* CCC-213: name + "(short id)". flex-wrap pushes the id onto a second
      line (clipped by the 1-line height) whenever the name alone fills the
@@ -3591,7 +3737,7 @@
     bottom: 24px;
     left: 50%;
     transform: translateX(-50%);
-    background: var(--bg-overlay, rgba(20,20,24,0.95));
+    background: var(--surface, #161b22);
     color: var(--text, #eee);
     padding: 8px 16px;
     border-radius: 6px;
@@ -3603,6 +3749,30 @@
     z-index: 1000;
   }
   .conv-toast.visible { opacity: 1; }
+
+  .error-report-btn {
+    flex: 0 0 auto;
+    margin-inline-start: 8px;
+    padding: 4px 8px;
+    border: 1px solid currentColor;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+    white-space: normal;
+  }
+  .error-report-btn:hover { background: var(--surface-2); }
+  .error-report-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .op-toast { flex-wrap: wrap; width: max-content; box-sizing: border-box; max-width: min(520px, calc(100vw - 24px)) !important; }
+  .op-toast > span { flex-basis: 100% !important; }
+  .op-toast .error-report-btn { margin-inline-start: 0; }
+  .conv-live-tool-inline.is-error { flex-wrap: wrap; }
+  .conv-live-tool-inline.is-error .cl-tool { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+  #bugReportModal { z-index: 10002; }
+  @media (max-width: 600px) {
+    .error-report-btn { min-height: 44px; }
+  }
 
   .conv-pane-drop-overlay {
     position: absolute;
@@ -3753,21 +3923,10 @@
     -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
     mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
   }
-  .conv-scroll-speak-btn[data-tts-cache]::before {
-    display: block;
-    background: conic-gradient(
-      var(--green) calc(var(--tts-ring-f, 0) * 1turn),
-      #d29922 0 calc(var(--tts-ring-sent-f, 0) * 1turn),
-      #a855f7 0 calc(var(--tts-ring-cancelled-f, 0) * 1turn),
-      transparent 0);
-  }
   .conv-scroll-speak-btn.speaking::before {
     display: block;
     background: conic-gradient(
       var(--accent, var(--cyan)) calc(var(--tts-play, 0) * 1turn),
-      var(--green) 0 calc(max(var(--tts-play, 0), var(--tts-ring-f, 0)) * 1turn),
-      #d29922 0 calc(max(var(--tts-play, 0), var(--tts-ring-sent-f, 0)) * 1turn),
-      #a855f7 0 calc(max(var(--tts-play, 0), var(--tts-ring-cancelled-f, 0)) * 1turn),
       color-mix(in srgb, var(--text, #c9d1d9) 14%, transparent) 0);
   }
 
@@ -3820,6 +3979,31 @@
     border-radius: 999px;
     border: 1px solid var(--border);
     background: var(--surface-2);
+  }
+  .event.conv-session-boundary {
+    margin: 32px 12px;
+    padding: 10px 0;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .conv-session-boundary .csb-label {
+    color: var(--text);
+    font-weight: 600;
+    border-color: var(--accent);
+  }
+  .conv-session-boundary .csb-cfg {
+    flex: 0 0 auto;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+  }
+  .conv-session-boundary .csb-cfg.is-changed {
+    color: var(--text);
+    border-color: var(--accent);
+    font-weight: 600;
   }
   .conv-session-boundary .csb-label:hover {
     color: var(--text);
@@ -4154,37 +4338,61 @@
   .peer-sender > * { white-space: nowrap; font-size: inherit; font-style: normal; }
   .peer-sender-mode { font-size: 10px; }
   .peer-sender-name { overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-  .event.user_text.peer-message .user-msg { border-left: 2px solid color-mix(in srgb, var(--accent, #4c8bf5) 45%, transparent); padding-left: 8px; }
   /* Cross-session (UDS peer) delivery gets its own green tint so it reads
      distinctly from a normal chat turn -- e.g. the WatchTower reconciler's
      release instruction, or any other Claude-to-Claude peer message.
-     CCC-1001: liked the green, disliked how loud it read -- dimmed the
-     tint/border/glow and the text itself goes smaller + italic instead of
-     the bright/bold default. */
+     Keep the tint quiet and the report body upright for sustained reading. */
   .conversations-view .event.user_text.peer-message,
   .conv-pane.has-conv-bg .conversations-view .event.user_text.peer-message {
-    background:
-      linear-gradient(135deg, rgba(63, 185, 80, 0.10), rgba(63, 185, 80, 0.05) 70%) padding-box,
-      linear-gradient(135deg, rgba(63, 185, 80, 0.35), rgba(63, 185, 80, 0.15) 70%) border-box;
-    box-shadow: 0 2px 14px rgba(63, 185, 80, 0.05);
+    display: block;
+    width: fit-content;
+    max-width: min(85%, 76ch);
+    margin-left: auto;
+    margin-right: 0;
+    padding: 12px 16px;
+    border: 1px solid color-mix(in srgb, var(--green) 28%, transparent);
+    border-radius: 12px;
+    background: var(--conv-peer-bg, color-mix(in srgb, var(--green) 6%, transparent));
+    box-shadow: none;
   }
-  .conversations-view .event.user_text.peer-message .user-msg {
-    font-size: 13px;
-    font-style: italic;
+  .conversations-view .event.user_text.peer-message .user-msg,
+  .conv-pane.has-conv-bg .conversations-view .event.user_text.peer-message .user-msg {
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    border-radius: 0;
+    color: var(--conv-text, var(--text));
+    font-size: 14px;
+    font-style: normal;
     font-weight: 400;
   }
-  /* Structured child->parent reports (formatPeerMessageHtml): spacing only,
-     same font/colour as the plain peer bubble. */
-  .event.user_text.peer-message .peer-structured { white-space: normal; line-height: 1.55; }
+  .conversations-view .event.user_text.peer-message.has-user-steer .user-msg { padding-right: 0; }
+  .event.user_text.peer-message .peer-sender { margin-bottom: 8px; }
+  .event.user_text.peer-message.has-user-steer .peer-sender { max-width: calc(100% - 44px); }
+  .event.user_text.peer-message .peer-sender-mode { white-space: normal; overflow-wrap: anywhere; }
+  /* Structured reports share one reading layout across conversation engines. */
+  .event.user_text.peer-message .peer-structured { white-space: normal; line-height: 1.65; max-width: 72ch; font-style: normal; font-weight: 400; }
+  .peer-report-preview { cursor: pointer; min-height: 44px; overflow-wrap: anywhere; line-height: 1.6; }
+  .peer-report-preview:focus-visible { outline: 2px solid var(--accent, #4c8bf5); outline-offset: 3px; border-radius: 4px; }
+  .peer-report-summary { display: block; margin: 4px 0; }
+  .peer-report-expand { display: block; font-size: 0.86em; color: var(--conv-accent, var(--accent)); text-decoration: underline; text-underline-offset: 3px; }
+  .peer-report[open] > .peer-report-preview { margin-bottom: 12px; }
+  .peer-report-body { overflow-wrap: anywhere; }
   .peer-structured .peer-para { margin: 0 0 8px; }
   .peer-structured .peer-section { margin: 0 0 14px; }
   .peer-structured .peer-section:last-child,
   .peer-structured .peer-section > .peer-para:last-child { margin-bottom: 0; }
-  .peer-structured .peer-section-label { font-weight: 600; }
-  .peer-structured .peer-section-label + .peer-para { display: inline; }
+  .peer-structured .peer-section-label { display: block; margin-bottom: 4px; font-size: 0.86em; font-weight: 500; }
+  .peer-structured .peer-section-label + .peer-para { display: block; }
   .peer-structured .peer-section-label + .peer-para + .peer-para { margin-top: 8px; }
-  .peer-structured .peer-list { margin: 4px 0 0; padding-left: 20px; list-style: none; }
-  .peer-structured .peer-list li { margin: 2px 0; overflow-wrap: anywhere; }
+  .peer-structured .peer-list { margin: 4px 0 0; padding-left: 20px; list-style: disc; }
+  .peer-structured .peer-list li { margin: 6px 0; overflow-wrap: anywhere; }
+  .peer-structured .peer-files { font-size: 0.88em; }
+  .peer-structured .peer-file-ref { font-size: 0.88em; overflow-wrap: anywhere; }
+  .peer-structured .peer-files .peer-file-ref { font-size: inherit; }
+  .peer-structured strong { font-weight: 500; }
   .peer-image-gallery { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
   .peer-image-gallery figure { flex: 0 1 240px; min-width: 0; max-width: 100%; margin: 0; }
   .peer-image-gallery img.msg-image { width: 100%; max-height: 180px; object-fit: contain; }
@@ -4207,6 +4415,7 @@
     padding: 8px 14px;
     max-width: 85%;
     margin-left: auto;
+    margin-right: 0;
     width: fit-content;
     position: relative;
   }
@@ -4216,6 +4425,7 @@
   .conversations-view .event.user_text .user-msg {
     margin-top: 0;
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
     font-size: 15.5px;
     line-height: 1.6;
     /* Regular weight + normal text color — the tinted bubble carries the
@@ -4289,7 +4499,12 @@
     cursor: default;
   }
   .conv-pane.has-conv-bg .conversations-view .event.user_text {
-    background: var(--conv-user-bg);
+    background: var(--conv-user-bubble-bg, var(--conv-user-bg));
+  }
+  /* WebUI engines paint the inner message; tinting its full-width wrapper
+     would make a right-aligned bubble appear to stretch across the reader. */
+  .conv-pane.has-conv-bg.is-webui-session .conversations-view .event.user_text:not(.peer-message) {
+    background: none;
   }
   .conv-pane.has-conv-bg .conversations-view .event.user_text .user-msg {
     color: var(--conv-user-text);
@@ -4407,6 +4622,11 @@
     visibility: hidden;
     pointer-events: none;
   }
+  .conversations-view .event.user_text.conv-user-jump-target {
+    display: block !important;
+    visibility: visible;
+    pointer-events: auto;
+  }
   /* Pictures belong in the transcript even when the ask is mirrored in a
      summary slot. Keep the full bubble visible so prose cannot clip an
      inline image or an attachment below it. */
@@ -4419,7 +4639,7 @@
   }
   /* Mirroring an ask must preserve the engine's layout. Switching a flex
      image bubble to block changes its height and fights scroll anchoring. */
-  .conv-pane.is-webui-session .event.user_text.is-pinned-in-sticky:has(img) {
+  .conv-pane.is-webui-session .event.user_text.is-pinned-in-sticky:not(.peer-message):has(img) {
     display: flex !important;
   }
   .conversations-view .event.user_text:has(img) .user-msg {
@@ -4446,7 +4666,7 @@
     cursor: pointer; user-select: none;
     padding: 4px 10px;
     font-size: 13px; color: var(--text-muted);
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px;
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
   }
   .conversations-view .tool-call-group-header:hover { background: var(--surface-2); border-radius: 6px; }
@@ -4454,15 +4674,21 @@
     display: inline-block; transition: transform 0.15s; font-size: 10px; color: var(--orange);
   }
   .conversations-view .tool-call-group-header .tcg-label {
-    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 1 1 240px; min-width: 0; white-space: normal; overflow-wrap: anywhere;
   }
   /* CCC-501: a short hint of what the command actually returned, right of the
      label — "Completed git status" alone gave no sense of the outcome. */
   .conversations-view .tool-call-group-header .tcg-result {
-    flex-shrink: 0; max-width: 50%; overflow: hidden; text-overflow: ellipsis;
-    white-space: nowrap; opacity: 0.6; font-size: 12px; font-style: italic;
+    flex: 1 1 240px; min-width: 0;
+    white-space: normal; overflow-wrap: anywhere; opacity: 0.6; font-size: 12px; font-style: italic;
   }
   .conversations-view .tool-call-group-header .tcg-result:empty { display: none; }
+  /* A closed disclosure previews the command and result; expanding it
+     retains the full text. Long ticket bodies must not fill the header. */
+  .conversations-view .tool-call-group.collapsed .tool-call-group-header :is(.tcg-label, .tcg-result):not(:empty) {
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
   /* Real time + line number, right-aligned — a run of collapsed "▶ Completed
      X" rows previously carried neither (only a hidden debug-mode ::before),
      reading as anonymous noise with no way to tell when/where each happened. */
@@ -4615,9 +4841,8 @@
     flex: 0 1 auto;
     min-width: 0;
   }
-  /* The path is the longest item — let it shrink and ellipsis.
-     inline-block is required for text-overflow:ellipsis to apply; the
-     parent's white-space:nowrap and overflow:hidden are inherited. */
+  /* Clip the beginning of long paths so the repo name stays visible.
+     The inner LTR isolate preserves path punctuation and reading order. */
   .conv-input-context .wp-path {
     flex: 0 1 auto;
     min-width: 0;
@@ -4625,6 +4850,8 @@
     vertical-align: middle;
     overflow: hidden;
     text-overflow: ellipsis;
+    direction: rtl;
+    text-align: left;
     cursor: pointer;
   }
   .conv-input-context .wp-path:hover {
@@ -5097,14 +5324,15 @@
     justify-self: stretch;
     overflow: visible;
     width: 100%;
+    min-width: 0;
   }
   .conv-input-context.is-new-session .spawn-cwd-row .spawn-cwd-combo {
     flex: 1 1 auto;
     min-width: 0;
   }
   .conv-input-context.is-new-session .spawn-cwd-row .spawn-cwd-picker {
-    flex: 1 1 auto;
-    width: 100%;
+    flex: 1 1 0;
+    width: 0;
     max-width: none;
     min-width: 0;
     padding: 9px 12px;
@@ -5112,8 +5340,10 @@
   }
   .conv-input-context.is-new-session .spawn-cwd-row .spawn-cwd-menu-btn,
   .conv-input-context.is-new-session .spawn-cwd-row .spawn-cwd-browse-btn {
+    flex: 0 0 auto;
     width: 36px;
-    height: 100%;
+    height: auto;
+    min-height: 38px;
     font-size: 14px;
   }
   .conv-input-context .new-session-object-context {
@@ -5134,7 +5364,8 @@
     grid-template-areas:
       "object object"
       "chips chips"
-      "cwd worktree";
+      "cwd worktree"
+      "account account";
   }
   .nso-label {
     color: var(--text-muted);
@@ -6647,14 +6878,55 @@
     opacity: 1;
     pointer-events: auto;
   }
+  /* Kebab menu: a normal dropdown, not an overlay on the row. JS sets
+     --ca-top / --ca-right from the kebab's rect (flips above near the
+     viewport bottom); each icon button gets its title as a text label. */
   .conv-item.is-actions-open .conv-row-actions:not(:empty) {
     opacity: 1;
     pointer-events: auto;
+    position: fixed;
+    top: var(--ca-top, 0);
+    right: var(--ca-right, 0);
+    transform: none;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 1px;
+    min-width: 190px;
+    max-width: 280px;
+    padding: 4px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.28);
+    z-index: 60;
   }
-  .conv-item.is-actions-open .conv-row-end > .conv-kebab-btn,
-  .conv-item.is-actions-open .conv-row-end .conv-kebab-btn {
-    opacity: 0;
-    pointer-events: none;
+  .conv-item.is-actions-open .conv-row-actions > button {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px;
+    width: 100%;
+    height: 28px;
+    padding: 0 8px;
+    border-radius: 5px;
+    font-size: 13px;
+    opacity: 1;
+    pointer-events: auto;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .conv-item.is-actions-open .conv-row-actions > button::after {
+    content: attr(title);
+    font-size: 12px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .conv-item.is-actions-open .conv-row-actions > button:hover,
+  .conv-item.is-actions-open .conv-row-actions > button:focus-visible {
+    background: var(--surface);
   }
   .conv-item.is-pinned:not(:hover):not(:focus-within):not(.is-actions-open) .conv-row-actions:not(:empty) {
     opacity: 1;
@@ -8072,7 +8344,7 @@
   .compact-rows .conv-item .conv-row-meta .conv-branch-slot { display: none; }
   .compact-rows .conv-item.active .conv-hover-meta-row { display: flex; }
   /* Compact also drops the terminal git-state badges (pushed / committed /
-     read-only / no edits) — they're status-at-rest, not live activity. The
+     read-only) — they're status-at-rest, not live activity. The
      blinking WIP / waiting / live-tool signals stay. */
   .compact-rows .conv-item .conv-signal.pushed,
   .compact-rows .conv-item .conv-signal.uncommitted,
@@ -8080,8 +8352,7 @@
   .compact-rows .conv-item .conv-signal.pr-merged,
   .compact-rows .conv-item .conv-signal.pr-closed,
   .compact-rows .conv-item .conv-signal.committed,
-  .compact-rows .conv-item .conv-signal.read-only,
-  .compact-rows .conv-item .conv-signal.no-edits { display: none; }
+  .compact-rows .conv-item .conv-signal.read-only { display: none; }
   .conv-folder-group .conv-item.is-grouped-row {
     /* Parity with "by time" rows — same vertical padding (6px) and same
        border-radius (6px). The original tightening (4px / 4px) made the
@@ -9029,73 +9300,73 @@
   .conv-session-icon.claude,
   .conv-pane-cat-icon.claude,
   .conv-avatar-model.claude {
-    color: #f09a78;
+    color: var(--engine-claude);
     --icon-shadow-color: rgba(240, 154, 120, 0.45);
   }
   .conv-session-icon.codex,
   .conv-pane-cat-icon.codex,
   .conv-avatar-model.codex {
-    color: #3dd68c;
+    color: var(--engine-codex);
     --icon-shadow-color: rgba(61, 214, 140, 0.45);
   }
   .conv-session-icon.gemini,
   .conv-pane-cat-icon.gemini,
   .conv-avatar-model.gemini {
-    color: #c084fc;
+    color: var(--engine-gemini);
     --icon-shadow-color: rgba(192, 132, 252, 0.45);
   }
   .conv-session-icon.cursor,
   .conv-pane-cat-icon.cursor,
   .conv-avatar-model.cursor {
-    color: #f08a6b;
+    color: var(--engine-cursor);
     --icon-shadow-color: rgba(226, 104, 64, 0.45);
   }
   .conv-session-icon.antigravity,
   .conv-pane-cat-icon.antigravity,
   .conv-avatar-model.antigravity {
-    color: #f2cc60;
+    color: var(--engine-antigravity);
     --icon-shadow-color: rgba(242, 204, 96, 0.42);
   }
   .conv-session-icon.hermes,
   .conv-pane-cat-icon.hermes,
   .conv-avatar-model.hermes {
-    color: #2dd4bf;
+    color: var(--engine-hermes);
     --icon-shadow-color: rgba(45, 212, 191, 0.42);
   }
   .conv-session-icon.kimi,
   .conv-pane-cat-icon.kimi,
   .conv-avatar-model.kimi {
-    color: #7dd3fc;
+    color: var(--engine-kimi);
     --icon-shadow-color: rgba(125, 211, 252, 0.42);
   }
   .conv-session-icon.copilot,
   .conv-pane-cat-icon.copilot,
   .conv-avatar-model.copilot {
-    color: #56d364;
+    color: var(--engine-copilot);
     --icon-shadow-color: rgba(86, 211, 100, 0.42);
   }
   .conv-session-icon.grok,
   .conv-pane-cat-icon.grok,
   .conv-avatar-model.grok {
-    color: #f472b6;
+    color: var(--engine-grok);
     --icon-shadow-color: rgba(244, 114, 182, 0.42);
   }
   .conv-session-icon.copilotchat,
   .conv-pane-cat-icon.copilotchat,
   .conv-avatar-model.copilotchat {
-    color: #818cf8;
+    color: var(--engine-copilotchat);
     --icon-shadow-color: rgba(129, 140, 248, 0.42);
   }
   .conv-session-icon.devin,
   .conv-pane-cat-icon.devin,
   .conv-avatar-model.devin {
-    color: #8b5cf6;
+    color: var(--engine-devin);
     --icon-shadow-color: rgba(139, 92, 246, 0.42);
   }
   .conv-session-icon.opencode,
   .conv-pane-cat-icon.opencode,
   .conv-avatar-model.opencode {
-    color: #fb923c;
+    color: var(--engine-opencode);
     --icon-shadow-color: rgba(251, 146, 60, 0.42);
   }
   /* Unified session cost palette */
@@ -9123,6 +9394,11 @@
   :is(.conv-session-icon, .conv-pane-cat-icon).cost-low .conv-session-svg {
     opacity: 0.48;
     filter: brightness(0.8) saturate(0.72);
+  }
+  /* Light-mode engine identity must not fade or brighten away with cost. */
+  :root[data-theme="light"] :is(.conv-session-icon, .conv-pane-cat-icon)[class*="cost-"] .conv-session-svg {
+    opacity: 1;
+    filter: none;
   }
   /* End unified session cost palette */
   .conv-session-icon.pkood {
@@ -9179,7 +9455,6 @@
   .conv-signal.spawn-failed { background: rgba(248,81,73,0.15); color: var(--red); }
   .conv-signal.pkood-running { background: rgba(63,185,80,0.15); color: var(--green); }
   .conv-signal.pkood-idle { background: rgba(88,166,255,0.1); color: var(--accent); }
-  .conv-signal.no-edits { background: rgba(88,166,255,0.1); color: var(--accent); }
   .conv-signal.read-only { background: rgba(139,148,158,0.12); color: var(--text-muted); }
   .conv-signal.pkood-blocked { background: rgba(248,81,73,0.15); color: var(--red); animation: pulse 2s infinite; }
   .conv-signal.pkood-stuck { background: rgba(248,81,73,0.25); color: var(--red); font-weight: 700; }
@@ -9834,7 +10109,8 @@
         "object"
         "chips"
         "cwd"
-        "worktree";
+        "worktree"
+        "account";
     }
     .conv-input-context.is-new-session .new-session-object-context,
     .conv-input-context.is-new-session .nso-combo,
@@ -9948,6 +10224,19 @@
     .conv-input-bar:has(textarea:focus) .paste-thumb { width: 38px; height: 38px; }
     .conv-input-bar:has(textarea:focus) textarea { max-height: calc(var(--app-vh, 100vh) * 0.12) !important; }
   }
+
+  /* Narrow or app-embedded composer: same + menu as touch. app.js
+     (_initConvActionsMenu) sets .actions-in-menu on the composer when it is
+     under ~600px wide or framed inside an app (body.ccc-app-embed), so Esc,
+     Compact and Steer move into the + menu and the input, mic and Send stay. */
+  .conv-input-bar.actions-in-menu .conv-actions-group { display: inline-flex; }
+  .conv-input-bar.actions-in-menu .attach-btn,
+  .conv-input-bar.actions-in-menu .conv-send-caret,
+  .conv-input-bar.actions-in-menu .compact-btn,
+  .conv-input-bar.actions-in-menu .steer-btn,
+  .conv-input-bar.actions-in-menu #convEscBtn { display: none !important; }
+  .conv-input-bar.actions-in-menu .conv-input-row-bottom { overflow: visible !important; }
+  .conv-input-bar.is-new-session-launch.actions-in-menu .conv-actions-item[data-act="continue"] { display: none; }
 
   /* ── Goal #5: tighten message + status row vertical rhythm ────────────────
      More message fits per screen once the inter-event margins shrink. */
@@ -10932,19 +11221,9 @@
     margin-top: 0;
     font-size: 10px; color: var(--text-muted); opacity: 0.6;
   }
-  .conv-input-hint:empty,
-  .conv-input-hint:has(.tty-label:empty):not(:has(.conv-input-kbd)) { display: none; }
+  .conv-input-hint:not(:has(.codex-appsrv.visible, .tty-label:not(:empty))) { display: none; }
   .conv-input-hint .tty-label {
     font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
-  }
-  .conv-input-hint .conv-input-kbd {
-    margin-left: auto;
-    font-family: inherit;
-  }
-  .conv-input-hint kbd {
-    font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 3px; padding: 0 4px; font-size: 9px;
   }
   /* Legacy in-row tty-label kept for any hidden code paths that still query
      it; the new footer span is what's actually visible. */
@@ -11532,7 +11811,6 @@
   .flow-node-session.is-uncommitted { border-left-color: var(--orange); }
   .flow-node-session.is-failed { border-left-color: var(--red); }
   .flow-node-session.is-read-only,
-  .flow-node-session.is-no-edits,
   .flow-node-session.is-idle { border-left-color: var(--accent); }
   .flow-node-chips {
     display: flex; flex-wrap: wrap; gap: 4px;
@@ -11559,7 +11837,6 @@
   .flow-chip.uncommitted { color: var(--orange); border-color: rgba(255, 165, 0, 0.45); }
   .flow-chip.pushed      { color: var(--cyan);   border-color: rgba(80, 200, 220, 0.4); }
   .flow-chip.committed   { color: var(--cyan);   border-color: rgba(80, 200, 220, 0.4); }
-  .flow-chip.no-edits    { color: var(--text-2); }
   .flow-chip.pr-open     { color: var(--cyan);   border-color: rgba(80, 200, 220, 0.4); }
   .flow-chip.pr-merged   { color: var(--purple); border-color: rgba(168, 102, 232, 0.45); }
   .flow-chip.pr-closed   { color: var(--text-2); }
@@ -11579,8 +11856,11 @@
     box-shadow: 0 2px 10px rgba(0,0,0,0.4);
   }
   .conv-codex-state .ccs-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-  .conv-codex-state.state-working { color: #f2cc60; }
-  .conv-codex-state.state-working .ccs-dot { animation: ccc-flow-chip-pulse 1.6s ease-in-out infinite; }
+  .conv-codex-state.state-working { color: var(--text); }
+  .conv-codex-state.state-working .ccs-dot {
+    background: var(--orange);
+    animation: ccc-flow-chip-pulse 1.6s ease-in-out infinite;
+  }
   .conv-codex-state.state-working.steady .ccs-dot { animation: none; }
   .conv-codex-state.state-stuck   { color: #e0a83c; }
   /* Stuck pill carries the "why" reason on its own wrapped line so the badge
@@ -11600,6 +11880,7 @@
     content: '· ';
     opacity: 0.6;
   }
+  .conv-codex-state.state-working .ccs-age { opacity: 1; }
   /* One-click wake: a stuck/idle pill becomes a button that nudges GPT. */
   .conv-codex-state.is-wakeable { cursor: pointer; }
   .conv-codex-state.is-wakeable:hover { border-color: currentColor; filter: brightness(1.12); }
@@ -11942,10 +12223,6 @@
     will-change: opacity;
     pointer-events: none;
   }
-  /* "no edits" attribute: shown on cards whose Claude has never edited a file
-     (live or dead — liveness doesn't matter). Renders as a small lowercase
-     blue chip next to the stage chip. No card-level dimming so cards stay
-     scannable. */
   /* Pending (optimistic placeholder while /api/sessions/spawn is in flight)
      and recently-born (the real session that replaced it, or any session
      that first appeared during a live poll) share one shimmer style so the
@@ -12098,7 +12375,6 @@
   .kanban-card .kanban-card-stage.stage { background: rgba(188,140,255,0.15); color: var(--purple); }
   .kanban-card .kanban-card-stage.committed { background: rgba(63,185,80,0.15); color: var(--green); }
   .kanban-card .kanban-card-stage.testing { background: rgba(251,202,4,0.15); color: #FBCA04; }
-  .kanban-card .kanban-card-stage.no-edits { background: rgba(88,166,255,0.1); color: var(--accent); margin-left: 4px; }
   .kanban-card .kanban-card-stage.read-only { background: rgba(139,148,158,0.12); color: var(--text-muted); margin-left: 4px; }
   .kanban-issue-badge {
     display: inline-block; font-size: 11px; padding: 1px 6px;
@@ -13246,6 +13522,13 @@
     background: var(--surface); border: 1px solid var(--border);
     border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
   .voice-panel[hidden] { display: none; }
+  /* Collapsed: just the header bar (state, timer, mute, end, expand). */
+  .voice-panel.collapsed { width: auto; max-width: calc(100vw - 24px); }
+  .voice-panel.collapsed > :not(.voice-panel-head):not(audio) { display: none !important; }
+  .voice-panel.collapsed .voice-panel-head { border-bottom: 0; }
+  .voice-panel.collapsed .voice-state-pill { max-width: 46vw; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .voice-panel.collapsed #voicePanelCollapseBtn svg { transform: rotate(180deg); }
   .voice-mobile-btn { display: none; }
   .voice-button-options {
     position: fixed; z-index: 9600; width: min(260px, calc(100vw - 24px));
@@ -13327,7 +13610,10 @@
   .voice-action-btns { display: flex; gap: 8px; margin-top: 8px; }
   .voice-action-btns .upd-btn { font-size: 12px; padding: 3px 12px; }
   .voice-panel-foot { padding: 10px 12px; border-top: 1px solid var(--border);
-    display: flex; justify-content: center; }
+    display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .voice-text-form { display: flex; gap: 6px; width: 100%; }
+  .voice-text-form[hidden] { display: none; }
+  .voice-text-form .bug-input { flex: 1; min-width: 0; }
   .voice-call-btn.upd-btn { display: inline-flex; align-items: center; justify-content: center;
     gap: 10px; min-width: 140px; padding: 10px 24px; border-radius: 999px;
     background: #238636; border-color: #2ea043; color: #fff; font-weight: 700;
@@ -15555,17 +15841,17 @@
     display: block;
   }
   .conv-archived-engine-trigger.is-filtered.claude,
-  .conv-archived-engine-btn.claude { color: #f09a78; }
+  .conv-archived-engine-btn.claude { color: var(--engine-claude); }
   .conv-archived-engine-trigger.is-filtered.codex,
-  .conv-archived-engine-btn.codex { color: #3dd68c; }
+  .conv-archived-engine-btn.codex { color: var(--engine-codex); }
   .conv-archived-engine-trigger.is-filtered.kimi,
-  .conv-archived-engine-btn.kimi { color: #7dd3fc; }
+  .conv-archived-engine-btn.kimi { color: var(--engine-kimi); }
   .conv-archived-engine-trigger.is-filtered.devin,
-  .conv-archived-engine-btn.devin { color: #a78bfa; }
+  .conv-archived-engine-btn.devin { color: var(--engine-devin); }
   .conv-archived-engine-trigger.is-filtered.antigravity,
-  .conv-archived-engine-btn.antigravity { color: #f2cc60; }
+  .conv-archived-engine-btn.antigravity { color: var(--engine-antigravity); }
   .conv-archived-engine-trigger.is-filtered.grok,
-  .conv-archived-engine-btn.grok { color: #f472b6; }
+  .conv-archived-engine-btn.grok { color: var(--engine-grok); }
   .conv-archived-engine-btn.is-active {
     background: color-mix(in srgb, currentColor 18%, transparent);
     box-shadow: inset 0 0 0 1px currentColor;
@@ -15658,6 +15944,24 @@
     color: var(--text-muted);
     font-size: 12px;
   }
+  .sidebar-pagination { line-height: 1.5; }
+  .sidebar-pagination .conv-window-btn {
+    min-height: 36px;
+    margin-bottom: 8px;
+    padding: 6px 16px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-2);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .sidebar-pagination .conv-window-btn:hover { border-color: var(--accent); }
+  .sidebar-pagination .conv-window-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
   /* Explanatory archive placeholder (pre-checklist boot wait). */
   .archive-loading-placeholder .alp-title {
     font-weight: 600; color: var(--text); margin-bottom: 6px;
@@ -15682,6 +15986,8 @@
   }
   .ccc-loading-overlay.fade-out { opacity: 0; pointer-events: none; }
   .ccc-loading-overlay.gone { display: none; }
+  /* The dashboard can finish loading behind an independently ready app. */
+  html.ccc-mobile-app-open #cccLoadingOverlay { display: none; }
   .ccc-loading-spinner {
     width: 36px; height: 36px;
     border: 3px solid rgba(88,166,255,0.18);
@@ -16187,10 +16493,31 @@
   .wa-chip.is-warn b { color: #e3b341; }
   .wa-chip.is-bad { border-color: #5c2626; background: #1f1010; color: #f0776c; }
   .wa-chip.is-bad b { color: #ff9f97; }
-  /* Tall enough that all three detailed cards AND the brief tier below them
-     are on screen at once — the tier split is pointless if the brief rows sit
-     under a scroll fold. */
-  .conv-workers-activity .fq-recent-rows { max-height: 600px; }
+  /* History is secondary to live sessions, even when expanded. */
+  .conv-workers-activity .fq-recent-rows { max-height: 220px; gap: 0; }
+  .conv-workers-activity .fq-recent-work {
+    background: transparent; border: 0; border-bottom: 1px solid var(--border);
+    border-radius: 0; padding: 8px 10px;
+  }
+  .conv-workers-activity .fq-recent-work > summary { color: var(--text); font-size: 12px; }
+  .conv-workers-activity .fq-recent-work > summary > span { color: var(--text-muted); }
+  .conv-workers-activity .fq-recent-work > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .conv-workers-activity .fq-recent-row.is-brief {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px;
+    padding: 9px 0; border: 0; border-bottom: 1px solid var(--border);
+    border-radius: 0; background: transparent;
+  }
+  .conv-workers-activity .fq-recent-row:hover { background: var(--surface-2); }
+  .conv-workers-activity .fq-recent-title { color: var(--text); }
+  .conv-workers-activity .fq-recent-ref,
+  .conv-workers-activity .fq-recent-meta,
+  .conv-workers-activity .fq-recent-resolved { color: var(--text-muted); }
+  .conv-workers-activity .fq-recent-row.is-brief .fq-recent-meta { gap: 8px; }
+  .conv-workers-activity .fq-recent-state { color: var(--text-muted); }
+  .conv-workers-activity .fq-recent-state.is-resolved { color: var(--text-muted); }
+  @media (max-width: 480px) {
+    .conv-workers-activity .fq-recent-row.is-brief { grid-template-columns: minmax(0, 1fr); }
+  }
   /* Three pieces of per-card chrome cost more than they pay for in this
      column, so the detailed tier drops them: the absolute timestamp (still in
      the tooltip, and the relative one is what you scan), the "Full details"
@@ -16241,7 +16568,7 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .fq-recent-row.is-brief .fq-recent-meta {
-    flex: 0 0 auto; gap: 0; font-size: 10px; flex-wrap: nowrap;
+    flex: 0 0 auto; gap: 8px; font-size: 10px; flex-wrap: nowrap;
   }
   .fq-recent-row.is-brief .fq-recent-meta > span:not(.fq-recent-state) { display: none; }
   .fq-recent-row.is-brief .fq-recent-resolved { display: inline; }
@@ -16568,6 +16895,31 @@
      reads brighter, glyph steps back (CCC-1242). */
   .fq-working-row .fq-working-id { color: #c9d1d9; font-weight: 600; }
   .fq-working-row.is-mobile .fq-working-engine { opacity: .7; transform: scale(.85); transform-origin: left center; }
+  /* The Workers lane can open before the Queues panel. Its phone layout
+     must not depend on that panel's measured .fq-mobile state. */
+  @media (max-width: 700px) {
+    .fq-working-head { flex-wrap: wrap; row-gap: 4px; }
+    .fq-working-summary { flex: 1 0 100%; padding-left: 15px; color: #8b949e; }
+    .fq-working-strip .fq-working-row.is-mobile {
+      display: grid; grid-template-columns: minmax(0, 1fr) 6px;
+      gap: 5px 8px; padding: 10px; min-height: 44px;
+    }
+    .fq-working-row.is-mobile .fq-working-lead {
+      grid-column: 1; flex-direction: row; align-items: center; gap: 8px;
+      min-width: 0;
+    }
+    .fq-working-row.is-mobile .fq-working-id {
+      flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis;
+    }
+    .fq-working-row.is-mobile .fq-working-body { grid-column: 1 / -1; gap: 5px; }
+    .fq-working-row.is-mobile .fq-working-title { font-size: 13px; line-height: 1.4; }
+    .fq-working-row.is-mobile .fq-working-meta {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+      color: #8b949e; line-height: 1.5;
+    }
+    .fq-working-row.is-mobile .fq-working-chips { margin-left: 0; flex-wrap: wrap; }
+    .fq-working-row.is-mobile > .fq-working-dot { grid-column: 2; grid-row: 1; }
+  }
   .fq-working-role {
     font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 9.5px; line-height: 1;
     padding: 2px 4px; border-radius: 3px; white-space: nowrap; flex: 0 0 auto;
@@ -17140,16 +17492,21 @@
     body:not(.kanban-split).mobile-show-main .main {
       transform: translateX(0);
     }
+    /* The full-width session list (~16k elements) stays under the opaque
+       reader while a conversation is open. Skip its style and layout work
+       there: every forced recalc in the reader (Load earlier, scroll
+       buttons) re-styled it too. `hidden` keeps its rendering state and
+       scroll position, so Back shows it at once. The hide waits for the
+       0.2s slide-in to finish; showing it again on Back is immediate. */
+    body:not(.kanban-split).mobile-show-main .sidebar {
+      content-visibility: hidden;
+      transition: content-visibility 0s linear 0.25s allow-discrete;
+    }
 
-    /* Between the rail's own 700px cutoff (app-rail.js) and this 1200px
-       breakpoint, the app-rail is still visible and fixed at left:0 above
-       .main's z-index:800 — .main's left:0 above puts its content straight
-       under the rail. Below 700px the rail is gone and left:0 is correct
-       as-is. */
-    @media (min-width: 701px) {
-      body:not(.kanban-split) .main {
-        left: var(--ccc-rail-w, 76px);
-      }
+    /* Mobile bottom navigation sets the rail width to zero. Windows that
+       explicitly keep desktop chrome still leave room for the rail. */
+    body:not(.kanban-split) .main {
+      left: var(--ccc-rail-w, 76px);
     }
 
     .mobile-back-btn {
@@ -17459,19 +17816,6 @@
     /* Controls that don't make sense on phones */
     .sh-btn-deploy { display: none !important; }
 
-    /* Headroom-style session-list header: collapses on scroll-down, returns
-       on scroll-up or at the top (app.js toggles .list-scroll-hidden). */
-    .sidebar-header { max-height: 200px;
-      transition: max-height 0.18s ease, opacity 0.15s ease, padding 0.18s ease; }
-    .sidebar-header.list-scroll-hidden {
-      /* overflow:hidden only while collapsed — the header's dropdown menus
-         (.sh-more-menu, .sh-refresh-menu) are absolutely positioned below it
-         and must not be clipped when the header is expanded. */
-      overflow: hidden;
-      max-height: 0; opacity: 0; padding-top: 0; padding-bottom: 0; border-bottom-width: 0;
-      pointer-events: none;
-    }
-
     /* Floating speaker + rate dial: 56/84px is desktop-sized and eats phone
        width; shrink both proportionally. */
     .conv-scroll-speak-btn { width: 40px; height: 40px; right: 14px; font-size: 17px; }
@@ -17591,44 +17935,6 @@
       touch-action: pan-y;
       transition: transform 0.12s ease, background-color 0.08s ease;
       -webkit-tap-highlight-color: rgba(188, 140, 255, 0.15);
-    }
-    /* A rightward lifecycle swipe must be visible before its action removes
-       the row.  The offset follows the finger, then springs home if the
-       request leaves the row in place. */
-    .conv-item.is-swipe-committed {
-      transform: translateX(var(--conv-row-swipe-offset, 12px));
-      background-color: color-mix(in srgb, var(--red) 16%, var(--surface-2)) !important;
-      box-shadow: -80px 0 0 var(--red);
-    }
-    .conv-item.is-swipe-committed::before {
-      content: attr(data-swipe-action-label);
-      position: absolute;
-      z-index: 1;
-      top: 0;
-      right: calc(100% + 8px);
-      bottom: 0;
-      width: 72px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 4px;
-      border-radius: 6px;
-      background: var(--red);
-      color: #fff;
-      font-size: 10px;
-      font-weight: 700;
-      line-height: 1.1;
-      text-align: center;
-    }
-    /* Left swipe = "Background": the session keeps running, so grey, not red. */
-    .conv-item.is-swipe-committed.is-swipe-left {
-      background-color: color-mix(in srgb, var(--text-muted, #888) 14%, var(--surface-2)) !important;
-      box-shadow: 80px 0 0 var(--text-muted, #888);
-    }
-    .conv-item.is-swipe-committed.is-swipe-left::before {
-      right: auto;
-      left: calc(100% + 8px);
-      background: var(--text-muted, #888);
     }
     .compact-rows .conv-item {
       padding-top: 8px !important;
@@ -17788,6 +18094,45 @@
   .sidebar-footer-btn:hover { background: var(--surface-2); color: var(--text); }
   .sidebar-footer-btn svg { width: 16px; height: 16px; display: block; }
   .sidebar-footer-spacer { flex: 1; }
+  .sidebar-footer-tools {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: 0 0 auto;
+  }
+  .sidebar-footer-tool {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    min-height: 32px;
+    padding: 6px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-muted);
+    font: 500 11px/1.2 var(--font-ui);
+    text-decoration: none;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .sidebar-footer-tool:hover {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+  .sidebar-footer-tool:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    color: var(--text);
+  }
+  .sidebar-footer-tool svg {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
+  }
+  @media (pointer: coarse) {
+    .sidebar-footer-tool { min-height: 44px; }
+  }
   /* Active-coordinations pill — bottom-left of the sidebar footer. Same
      visual rhythm as the rest of the footer but with a brighter accent
      so the "you have N chats waiting" signal is easy to spot. Hidden
@@ -17820,6 +18165,7 @@
   .bg-runs-row { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; }
   .bg-runs-help { opacity: .75; font-size: 11px; line-height: 1.4; padding: 0 0 6px; max-width: 320px; }
   .bg-runs-row.is-alert { color: var(--danger, #e5534b); font-weight: 600; }
+  #bgRunsBtn { max-width: 290px; }
   #bgRunsBtn.is-pressure-busy { color: var(--warning, #d29922); }
   #bgRunsBtn.is-pressure-saturated { color: var(--danger, #e5534b); }
   .bg-runs-meta { opacity: .7; white-space: nowrap; }
@@ -19244,15 +19590,9 @@
     border-right: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   }
 
-  /* Hide the optional Morning plugin's left rail (`.ccc-side-nav`, 52px)
-     in standalone mode. We also guard this in index.html by skipping the
-     script load entirely in standalone, but keep the CSS as belt-and-
-     suspenders. Reset the layout offsets the rail installs so the main
-     pane reclaims the full width. The core repo rail was deleted entirely;
-     no rule is needed for it. */
-  .ccc-side-nav { display: none !important; }
-  body,
-  body.has-side-nav { padding-left: 0 !important; }
+  /* Installed windows use the same responsive navigation as the browser. */
+  body.has-mobile-bottom-nav .ccc-side-nav { display: none !important; }
+  body.has-mobile-bottom-nav { padding-left: 0 !important; }
   body.has-side-nav #termPanel { left: 0 !important; }
 
   /* Resize handle — visually killed entirely. The slight bg step between
@@ -21607,7 +21947,7 @@ body.status-pos-right #convToolbar {
      syncBannerOffset in index.html) rather than sliding in behind it. */
   top: var(--injection-banner-h, 39px); left: 0; right: 0;
   z-index: 9999;
-  max-height: 40vh;
+  max-height: 60vh;
   overflow-y: auto;
   background: var(--surface, #161b22);
   color: var(--text, #e6edf3);
@@ -21931,10 +22271,6 @@ body.status-pos-right #convToolbar {
   cursor: not-allowed;
   pointer-events: none;
 }
-
-/* Cache-state swatches in settings. */
-.tts-cache-debug-sent { background-color: rgba(245, 158, 11, 0.32); }
-.tts-cache-debug-ready { background-color: rgba(34, 197, 94, 0.30); }
 
 /* TTS Word Highlighting */
 ::highlight(tts-highlight) {
@@ -24592,6 +24928,44 @@ body.has-gc-reader .pwa-install-banner {
 }
 .fq-ticket-actions .fq-ticket-attach-btn:hover { background: var(--surface-2); color: var(--text); }
 .fq-ticket-actions .fq-ticket-attach-btn svg { display: block; }
+.fq-ticket-hide-keyboard { display: none; }
+@media (max-width: 700px), (pointer: coarse) {
+  /* iOS keeps the layout viewport full-height when the keyboard opens.
+     Share the chat shell's visual viewport bounds, including Safari panning. */
+  .fq-ticket-composer.upd-overlay {
+    top: var(--app-vv-top, 0px);
+    bottom: auto;
+    height: var(--app-vh, 100dvh);
+    padding: 12px;
+    box-sizing: border-box;
+    justify-content: center;
+  }
+  .fq-ticket-composer .fq-ticket-dialog {
+    box-sizing: border-box;
+    width: min(640px, 100%);
+    max-height: 100%;
+    padding: 12px;
+    gap: 10px;
+    overflow: hidden;
+    /* A desktop drag must not carry outside the viewport after rotation. */
+    transform: none !important;
+  }
+  .fq-ticket-composer .fq-ticket-header,
+  .fq-ticket-composer .fq-ticket-actions { flex-shrink: 0; }
+  .fq-ticket-composer .fq-ticket-header {
+    gap: 6px;
+    cursor: default;
+    touch-action: auto;
+  }
+  .fq-ticket-composer .fq-ticket-header .upd-title { flex: 1; min-width: 0; }
+  .fq-ticket-hide-keyboard { display: block; min-height: 44px; padding: 8px; font-size: 12px; }
+  .fq-ticket-composer .fq-ticket-close { width: 44px; height: 44px; flex-shrink: 0; }
+  .fq-ticket-composer .fq-ticket-body { min-height: 0; overflow-y: auto; padding: 3px; }
+  .fq-ticket-composer .fq-ticket-textarea { min-height: 90px; flex-shrink: 0; font-size: 16px; line-height: 1.4; }
+  .fq-ticket-composer .fq-ticket-queue-select { flex-shrink: 0; font-size: 16px; }
+  .fq-ticket-composer .fq-ticket-actions .upd-btn { min-height: 44px; }
+  .fq-ticket-composer .fq-ticket-attach-btn { width: 44px; height: 44px; }
+}
 .files-queue-configure { font-size: 14px; }
 
 /* Plan-to-fleet import dialog (W51). Flat preview list, never a Kanban. */
@@ -25652,7 +26026,7 @@ body.has-gc-reader .pwa-install-banner {
   text-overflow: ellipsis;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   box-sizing: content-box;
-  
+
   /* Animation states */
   opacity: 0;
   transform: translateX(-20px);
@@ -26383,6 +26757,13 @@ body.has-gc-reader .pwa-install-banner {
   padding: 0 !important;
 }
 
+/* Peer reports remain reading text inside the decorative conversation theme. */
+.conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text.peer-message .user-msg {
+  color: var(--conv-text, var(--text)) !important;
+  font-weight: 400 !important;
+  letter-spacing: normal !important;
+}
+
 /* Cyan >_ prompt at the end of the user message */
 .conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text:not(.is-pinned-in-sticky) .user-msg::after {
   content: ' >_';
@@ -26390,20 +26771,15 @@ body.has-gc-reader .pwa-install-banner {
   font-weight: bold;
 }
 
-/* Cross-session (UDS peer) messages must keep their green tint even under
-   the stitch background theme. The stitch rule above uses !important, so
-   the non-important green rule near .peer-message (and the has-conv-bg
-   variant fixed in 6d949a0e) both lose to it. Beating an !important rule
-   requires our own !important PLUS equal-or-greater specificity -- add
-   .peer-message to match stitch's selector shape exactly, which makes ours
-   the more specific of the two !important declarations regardless of
-   source order. */
+/* Reports keep their quiet surface and complete disclosure under stitch's
+   important decorative bubble rules, including its clipped corner. */
 .conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text.peer-message:not(.is-pinned-in-sticky) {
-  background:
-    linear-gradient(135deg, rgba(63, 185, 80, 0.10), rgba(63, 185, 80, 0.05) 70%) padding-box,
-    linear-gradient(135deg, rgba(63, 185, 80, 0.35), rgba(63, 185, 80, 0.15) 70%) border-box !important;
-  box-shadow: 0 2px 14px rgba(63, 185, 80, 0.05) !important;
+  clip-path: none !important;
+  border-radius: 12px !important;
+  background: color-mix(in srgb, var(--green) 6%, transparent) !important;
+  box-shadow: none !important;
 }
+.conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text.peer-message .user-msg::after { content: none !important; }
 
 /* Remove terminal prompt from subsequent user messages in the session */
 .conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text:not(.is-pinned-in-sticky) ~ .event.user_text:not(.is-pinned-in-sticky) .user-msg::after {
@@ -28534,6 +28910,45 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
   }
 }
 
+/* Narrow or app-embedded pane (composer has .actions-in-menu, set by app.js
+   _initConvActionsMenu): the info bar (path, context meter, model chip) sits
+   BELOW the composer row instead of above it. Same breakpoint and body
+   selectors as the mobile status layout above, so it wins over its areas. */
+/* CCC-404: narrow mode keeps the status row (branch, context, model, TS)
+   directly BELOW the composer, as in wide mode. New-session panes keep it
+   above: that strip holds the folder and model pickers. */
+@media (max-width: 1200px) {
+  body.status-pos-right:not(.popout-rail-forced) .conv-pane.has-status-rail:not(.has-new-session-context),
+  body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane.has-status-rail:not(.has-new-session-context) {
+    grid-template-areas:
+      "header"
+      "present-toolbar"
+      "conv"
+      "goal"
+      "model"
+      "queued"
+      "input"
+      "context"
+      "hint";
+  }
+}
+
+@media (max-width: 1200px) {
+  body.status-pos-right:not(.popout-rail-forced) .conv-pane.has-status-rail:not(.has-new-session-context):has(> .conv-input-bar.actions-in-menu),
+  body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane.has-status-rail:not(.has-new-session-context):has(> .conv-input-bar.actions-in-menu) {
+    grid-template-areas:
+      "header"
+      "present-toolbar"
+      "conv"
+      "goal"
+      "model"
+      "queued"
+      "input"
+      "hint"
+      "context";
+  }
+}
+
 /* =========================================================================
    MOBILE REDESIGN (body.ccc-mobile-redesign)
    Gated by isMobileRedesign() in app.js — matchMedia(max-width:1200px),
@@ -28789,9 +29204,6 @@ body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-goal-icon-only {
   background: var(--bg, #0d1117);
 }
 .ccc-core-app-frame:not([hidden]) { display: block; }
-@media (max-width: 700px) {
-  .ccc-core-app-frame { left: 0; width: 100%; }
-}
 body.has-mobile-bottom-nav .ccc-core-app-frame {
   height: calc(100% - 64px - env(safe-area-inset-bottom, 0px));
 }
@@ -28847,6 +29259,13 @@ body.has-mobile-bottom-nav .mobile-nav-menu {
   border: 1px solid var(--border);
   border-radius: 12px;
   box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+  /* Long menu (Decisions, Other, Jobs, ... Apps): cap to the space between
+     the status-bar inset and the nav so the top items are never clipped
+     under the notch, and scroll the rest. */
+  max-height: calc(100dvh - 96px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 body.has-mobile-bottom-nav .mobile-nav-menu[hidden],
 body.has-mobile-bottom-nav.ccc-simple-mode .mobile-nav-menu { display: none; }
@@ -29321,10 +29740,6 @@ html:not(.ccc-debug-mode) #statsModal {
 }
 .new-session-primary-row .conv-search-input:focus {
   border-color: rgba(224,163,74,0.45);
-}
-.new-session-primary-row .conv-list-collapse-btn {
-  width: 30px;
-  height: 30px;
 }
 
 /* §5 — Footer "needs you N". Amber, mono, and absent at zero so the line
@@ -30918,22 +31333,19 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   align-items: center;
   gap: 2px;
   width: 20px;
-  height: 18px;
+  height: 20px;
   justify-content: center;
   box-sizing: border-box;
-  padding: 1px 3px;
+  padding: 3px;
   border: 0;
   border-radius: 5px;
-  background: transparent;
+  background: var(--surface);
   color: var(--text);
   font: 8px/1.2 system-ui, sans-serif;
   white-space: nowrap;
 }
-.conv-avatar-engine, .conv-avatar-engine svg { display: block; width: 12px; height: 12px; }
-.conv-avatar-model.cost-low .conv-avatar-engine { opacity: 0.45; }
-.conv-avatar-model.cost-medium .conv-avatar-engine { opacity: 0.65; }
-.conv-avatar-model.cost-high .conv-avatar-engine { opacity: 0.82; }
-.conv-avatar-model.cost-premium .conv-avatar-engine { opacity: 1; filter: drop-shadow(0 0 2px currentColor); }
+/* Keep identity readable regardless of repository art or model cost. */
+.conv-avatar-engine, .conv-avatar-engine svg { display: block; width: 14px; height: 14px; }
 @media (max-width: 1200px) {
   #convList .conv-item > .wa-row:has(.conv-idea-avatar) { gap: 10px; }
   .wa-av.conv-idea-avatar { align-self: flex-start; margin-top: 8px; }
@@ -30946,6 +31358,14 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 .conv-family-list { display: grid; gap: 3px; max-height: 180px; overflow: auto; margin: 4px 0; }
 .conv-family-link { text-align: start; white-space: normal; padding: 5px 7px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--text); cursor: pointer; font: inherit; }
 .conv-family-link:hover { border-color: var(--accent); }
+.conv-orch-family-details { max-width: 100%; }
+.conv-orch-family-details > summary.conv-orch-lanes-chip { display: list-item; width: fit-content; margin-left: 14px; }
+.conv-orch-family-details[open] { width: 100%; }
+.conv-orch-family-details .conv-family-link:disabled { cursor: default; color: var(--text-muted); }
+@media (max-width: 1200px) {
+  .conv-orch-family-details > summary.conv-orch-lanes-chip,
+  .conv-orch-family-details .conv-family-link { min-height: 44px; box-sizing: border-box; }
+}
 
 /* Uniform-column hoist. When every worker in view shares an engine and/or a
    cost tier, that per-row glyph is pure repetition: the strip above the list
@@ -30956,7 +31376,7 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 .conv-workers-uniform {
   display: flex;
   align-items: baseline;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 6px;
   flex-wrap: wrap;
   margin: 2px 8px 4px;
@@ -30970,7 +31390,7 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   color: var(--fg, #d8e2ec);
 }
 .conv-workers-uniform-note {
-  opacity: 0.6;
+  color: var(--text-muted);
   font-size: 10px;
 }
 .conv-workers-uniform-sep { opacity: 0.4; }
@@ -30988,6 +31408,107 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 @media (prefers-reduced-motion: reduce) {
   .conv-workers-live-dot { animation: none; }
 }
+
+/* ---- Workers tab: fleet strip, state sections, ticket under the avatar ----
+   The Workers tab answers one question: is anything moving, and is anything
+   waiting on me. The strip above counts the four states once; the list is
+   sectioned by the same four states; each row's ticket sits under its
+   avatar so the title is free to say what the worker is doing. */
+.conv-workers-uniform .conv-workers-needs b { color: var(--orange, #d29922); }
+.conv-workers-uniform .conv-workers-starting b { color: #39d2c0; }
+.conv-workers-uniform .conv-workers-idle,
+.conv-workers-uniform .conv-workers-done { opacity: 0.75; }
+.conv-workers-uniform .conv-workers-uniform-note { flex-basis: 100%; text-align: left; }
+
+/* Section heads: a coloured dot, a small-caps label, the count, and a rule
+   that runs to the edge. Sticky so a long Finished section still says what
+   it is while you scroll through it. */
+#convList .conv-worker-section {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; gap: 7px;
+  margin: 10px 8px 4px; padding: 3px 2px 3px 4px;
+  font-size: 10.5px; line-height: 1.4; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-muted);
+  background: linear-gradient(var(--surface, #0d1117) 70%, transparent);
+}
+#convList .conv-worker-section:first-child { margin-top: 4px; }
+#convList .conv-worker-section .wk-sec-dot {
+  flex: 0 0 7px; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--text-muted); opacity: 0.6;
+}
+#convList .conv-worker-section .wk-sec-label { font-weight: 700; color: var(--text); }
+#convList .conv-worker-section .wk-sec-count {
+  min-width: 16px; padding: 0 5px; border-radius: 8px; text-align: center;
+  font-weight: 700; font-size: 10px; letter-spacing: 0;
+  background: var(--surface-2); color: var(--text);
+}
+#convList .conv-worker-section .wk-sec-line { flex: 1 1 auto; height: 1px; background: var(--border); opacity: 0.8; }
+#convList .conv-worker-section.wk-working .wk-sec-dot { background: #49dc88; opacity: 1; animation: qPulse 2s ease-in-out infinite; }
+#convList .conv-worker-section.wk-working .wk-sec-label { color: #49dc88; }
+#convList .conv-worker-section.wk-starting .wk-sec-dot { background: #39d2c0; opacity: 1; animation: qPulse 2s ease-in-out infinite; }
+#convList .conv-worker-section.wk-needs-you .wk-sec-dot { background: var(--orange, #d29922); opacity: 1; }
+#convList .conv-worker-section.wk-needs-you .wk-sec-label { color: var(--orange, #d29922); }
+#convList .conv-worker-section.wk-needs-you .wk-sec-count { background: color-mix(in srgb, var(--orange, #d29922) 22%, transparent); color: var(--orange, #d29922); }
+#convList .conv-worker-section.wk-done .wk-sec-dot { opacity: 0.35; }
+#convList .conv-worker-section.wk-done .wk-sec-label { color: var(--text-muted); }
+@media (prefers-reduced-motion: reduce) {
+  #convList .conv-worker-section .wk-sec-dot { animation: none; }
+}
+
+/* Row accents by state: a 2px inset bar on the left edge, the same colour
+   as the section dot, so a row still says its state when scrolled away
+   from its heading. Finished rows dim; helper rows (verifier, planner,
+   assessor) are quieter still, since they are stage work, not workers. */
+#convList .conv-item.is-worker-row { position: relative; }
+#convList .conv-item.is-worker-row::before {
+  content: ''; position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px;
+  border-radius: 2px; background: transparent; pointer-events: none;
+}
+#convList .conv-item.is-worker-row.wk-working::before { background: #49dc88; }
+#convList .conv-item.is-worker-row.wk-needs-you::before { background: var(--orange, #d29922); }
+#convList .conv-item.is-worker-row.wk-needs-you { background: color-mix(in srgb, var(--orange, #d29922) 6%, transparent); }
+#convList .conv-item.is-worker-row.wk-idle::before { background: color-mix(in srgb, var(--text-muted) 40%, transparent); }
+#convList .conv-item.is-worker-row.wk-done .conv-title { opacity: 0.72; }
+#convList .conv-item.is-worker-row.wk-done .conv-idea-avatar { filter: saturate(0.55); opacity: 0.8; }
+#convList .conv-item.is-worker-row.is-worker-helper .conv-title { font-style: italic; opacity: 0.85; }
+
+/* Ticket under the avatar. The avatar is absolutely positioned in the
+   desktop row, so the stack is display:contents and the chip takes the
+   same absolute slot the AUTO switch uses, one line below the portrait.
+   Rows with both push the ticket under the switch. Child-mini avatars
+   (nested helpers) have no room for it and their owner shows it anyway. */
+.conv-avatar-stack { display: contents; }
+.conv-item:has(.conv-main-row > .conv-avatar-stack > .conv-idea-avatar) {
+  --conv-content-left: calc(var(--conv-icon-left) + 44px);
+  min-height: 60px;
+}
+#convList .conv-item .conv-main-row > .conv-avatar-stack > .conv-avatar-ticket {
+  position: absolute; left: calc(var(--conv-icon-left) - 11px); top: 41px; z-index: 4;
+  width: 54px;
+}
+#convList .conv-item .conv-main-row:has(> .conv-auto-switch) > .conv-avatar-stack > .conv-avatar-ticket { top: 57px; }
+#convList .conv-item .conv-main-row:has(> .conv-auto-switch) { min-height: 76px; }
+#convList .conv-item .conv-main-row > .conv-avatar-stack:has(> .is-child-mini) > .conv-avatar-ticket { display: none; }
+.conv-avatar-ticket {
+  display: inline-block; box-sizing: border-box;
+  max-width: 100%; padding: 0 3px;
+  border: 1px solid color-mix(in srgb, var(--text-muted) 45%, transparent);
+  border-radius: 4px; background: var(--surface, transparent);
+  color: var(--text-muted);
+  font: 600 8px/11px ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.02em; text-align: center;
+  /* Wrap long refs (BECKY-3363 -> BECKY- / 3363) instead of cutting them with an ellipsis. */
+  white-space: normal; overflow-wrap: anywhere; overflow: visible;
+  cursor: pointer; opacity: 0.85;
+  transition: color 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
+}
+.conv-avatar-ticket:hover, .conv-avatar-ticket:focus-visible {
+  opacity: 1; color: var(--accent); border-color: var(--accent); outline: none;
+}
+#convList .conv-item.is-worker-row.wk-working .conv-avatar-ticket { color: var(--text); border-color: color-mix(in srgb, #49dc88 55%, transparent); }
+#convList .conv-item.is-worker-row.wk-needs-you .conv-avatar-ticket { color: var(--orange, #d29922); border-color: color-mix(in srgb, var(--orange, #d29922) 60%, transparent); }
+#convList .conv-item .wa-av-col > .conv-avatar-ticket { position: static; width: 54px; }
+
 /* The per-row dot answers "which ones". At 4px hollow-vs-filled it was losing
    that argument, so in the table a live row gets the WORKING NOW dot's size
    and pulse -- the two surfaces now say "live" the same way. */
@@ -31023,6 +31544,27 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   border-radius: 4px;
   color: var(--text-muted);
   cursor: default;
+}
+
+/* Cozy Workers keeps titles and work previews compact across row presets.
+   Match the shared desktop inline-step selector before adding lane specificity. */
+#convList#convList.workers-cozy .conv-item,
+#convList#convList.workers-cozy .conv-item:has(.conv-main-row.has-inline-step) {
+  padding-top: 7px !important;
+  padding-bottom: 7px !important;
+  margin-bottom: 2px !important;
+  min-width: 0;
+}
+#convList#convList.workers-cozy .conv-item .conv-title,
+#convList#convList.workers-cozy .conv-item .conv-main-row.has-inline-step .conv-title {
+  font-size: 13px !important;
+  line-height: 1.4 !important;
+}
+#convList#convList.workers-cozy .conv-item .conv-last,
+#convList#convList.workers-cozy .conv-item .conv-outcome,
+#convList#convList.workers-cozy .conv-item .conv-main-row.has-inline-step > .conv-outcome .conv-outcome-step {
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 /* Readable log entries keep severity and summaries visible, diagnostics expandable. */
@@ -31149,6 +31691,11 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 #nsComposerAdvisor .ns-advisor-result > strong { font-size: 13px; }
 #nsComposerAdvisor .ns-advisor-why[open] { flex: 1 0 100%; }
 #nsComposerAdvisor .ns-auto-restore { font-size: 11px; padding: 3px 8px; }
+#nsComposerAdvisor .ns-advisor-suggest {
+  flex: 1 0 100%; font-size: 12px; color: var(--text-muted);
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+#nsComposerAdvisor .ns-advisor-suggest button { font-size: 11px; padding: 3px 8px; }
 .ns-model-overrides { min-width: 0; width: 100%; }
 .ns-model-overrides > summary {
   display: flex; align-items: center; gap: 12px; width: fit-content; max-width: 100%;
@@ -31160,10 +31707,14 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 .ns-selection-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ns-model-change { text-decoration: underline; text-underline-offset: 3px; }
 .ns-model-overrides .conv-model-picker-inner { margin-top: 8px; }
-/* CCC-255: the composer's engine/model/effort selects, lifted above the
-   ranked chips while the override is open. */
+/* Detailed overrides follow ranked shortcuts; account choice belongs to
+   the selected engine inside this disclosure. */
 .ns-model-override-selects { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 .ns-model-override-selects:empty { display: none; }
+.ns-model-account-options { margin-top: 8px; }
+.ns-model-account-options:not(:has(> :not([hidden]))) { display: none; }
+.ns-model-account-options .codex-account-row { flex-wrap: wrap; }
+.ns-model-account-options .codex-account-row label { flex: 0 0 auto; }
 .ns-model-override-selects > select { flex: 0 1 auto; min-width: 0; max-width: 100%; }
 .ns-model-overrides.is-legacy > summary { display: none; }
 .conv-pane:has(.conv-model-picker-strip.has-auto-selection) .ns-model-comparison:not(.is-manual-expanded) { display: none; }
@@ -31258,7 +31809,8 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   box-shadow: none !important;
 }
 .conv-pane.is-codex-session[data-conv-bg="stitch"] .conversations-view .event.user_text:not(.is-pinned-in-sticky):not(.peer-message) .user-msg {
-  max-width: min(88%, 70ch) !important;
+  max-width: 100% !important;
+  margin-left: auto;
   padding: 12px 16px !important;
   border: 1px solid var(--kw-accent-bd) !important;
   border-radius: 16px 16px 4px 16px !important;
@@ -31294,6 +31846,48 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   font-weight: 600;
   overflow-wrap: anywhere;
 }
+
+/* Frozen ask: the user message being answered stays at the top of the
+   transcript while the reader is scrolled up. The host is a zero-height
+   sticky child so it never changes scrollHeight; the bubble hangs below it. */
+.conv-frozen-ask {
+  position: sticky; top: 0; z-index: 6;
+  height: 0; margin: 0; padding: 0;
+}
+.conv-frozen-ask[hidden] { display: none; }
+.conversations-view:has(.conv-live-tool-strip) .conv-frozen-ask {
+  top: var(--live-strip-offset, 24px);
+}
+.conv-frozen-ask__bubble {
+  position: absolute; top: 2px; left: 0; right: 0;
+  box-sizing: border-box;
+  padding: 7px 12px 7px 16px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, rgba(88, 166, 255, 0.16), rgba(163, 113, 247, 0.10) 65%, rgba(57, 210, 192, 0.08)) padding-box,
+    linear-gradient(var(--bg), var(--bg)) padding-box,
+    linear-gradient(135deg, rgba(88, 166, 255, 0.50), rgba(163, 113, 247, 0.30) 70%, rgba(57, 210, 192, 0.25)) border-box,
+    linear-gradient(var(--bg), var(--bg)) border-box;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  cursor: pointer;
+}
+.conv-frozen-ask__bubble:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.conv-frozen-ask__bubble > .original-ask-expand { float: right; margin: 1px 0 0 10px; }
+.conv-frozen-ask__bubble > .user-msg {
+  /* Two lines, always. max-height is the guarantee; the line clamp only
+     adds the ellipsis where the engine honours it (a long ask once filled
+     a whole phone screen when the clamp alone was trusted). */
+  display: -webkit-box !important; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  max-height: 2.9em !important;
+  overflow: hidden !important;
+  white-space: normal !important; overflow-wrap: anywhere;
+  margin: 0;
+  color: var(--text);
+  font-size: 14.5px; line-height: 1.45; font-weight: 410;
+}
+.conv-frozen-ask__bubble > .user-msg :is(img, .msg-image) { display: none; }
+.conv-frozen-ask__bubble { max-height: 64px; overflow: hidden; }
 
 /* CCC-1206: (+) on the Original ask opens it in a large-font reading modal. */
 .original-ask-expand {
@@ -31738,7 +32332,7 @@ body.conv-compact.conv-compact .conversations-view .event.assistant { padding: 1
 body.conv-compact.conv-compact .conversations-view .event.assistant .assistant-text {
   padding: 3px 10px !important; margin: 0 !important;
 }
-body.conv-compact.conv-compact .conversations-view .event.user_text { padding: 3px 10px !important; margin: 2px 0 !important; }
+body.conv-compact.conv-compact .conversations-view .event.user_text { padding: 3px 10px !important; margin: 2px 0 2px auto !important; }
 body.conv-compact.conv-compact .conversations-view .kimi-answer-meta,
 body.conv-compact.conv-compact .conversations-view .event-model-meta,
 body.conv-compact.conv-compact .conversations-view .event-token-chips,
@@ -31746,6 +32340,9 @@ body.conv-compact.conv-compact .conversations-view .msg-ts,
 body.conv-compact.conv-compact .conversations-view .line-num,
 body.conv-compact.conv-compact .conversations-view .assistant-message-actions,
 body.conv-compact.conv-compact .conversations-view details.tool-command-disclosure { display: none !important; }
+/* A schema response is the answer itself, carried in the tool arguments.
+   Keep it reachable when routine input disclosures are hidden. */
+body.conv-compact.conv-compact .conversations-view details.tool-command-disclosure.tool-structured-output { display: block !important; }
 body.conv-compact.conv-compact .conversations-view .event.attachment-event:not(.hook-failed) { display: none !important; }
 /* Every assistant text message keeps its speak/copy actions and timestamp
    (a long single-turn Codex run has many narration messages, none of which
@@ -31788,9 +32385,8 @@ body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assis
    hidden there. */
 body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text):not(:has(~ .event.assistant .assistant-text)) > .event-token-chips,
 body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text):not(:has(~ .event.assistant .assistant-text)) > .event-model-meta { display: block !important; }
-/* Two-line clamp on messages (all but the newest assistant reply). */
-body.conv-compact.conv-compact .conversations-view .event.assistant:has(~ .event.assistant .assistant-text) .assistant-text:not(.cc-open):not(.cc-final):not(:has(.cc-run-chip)),
-body.conv-compact.conv-compact .conversations-view .event.user_text:not(.cc-open):not(:has(img)) .user-msg {
+/* User asks can expand on click; assistant commentary stays fully readable. */
+body.conv-compact.conv-compact .conversations-view .event.user_text:not(.peer-message):not(.cc-open):not(:has(img)) .user-msg {
   display: -webkit-box !important; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
   overflow: hidden; cursor: pointer;
 }
@@ -31803,11 +32399,13 @@ body.conv-compact.conv-compact .conversations-view .thinking-block:not(.cc-open)
 body.conv-compact.conv-compact .conversations-view .thinking-block.cc-open .t-body {
   display: block; -webkit-line-clamp: unset; max-height: none;
 }
-/* One-line tool commands. */
+body.conv-compact.conv-compact .conversations-view .thinking-run.is-expanded > .t-body {
+  display: block; -webkit-line-clamp: unset; max-height: none;
+}
+/* Tool commands wrap so the complete command stays readable. */
 body.conv-compact.conv-compact .conversations-view .tool-call { padding: 0 !important; }
 body.conv-compact.conv-compact .conversations-view .tool-call:not(.cc-open) .tool-detail {
-  display: inline-block; max-width: calc(100% - 90px); vertical-align: bottom;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
+  white-space: pre-wrap; overflow-wrap: anywhere;
 }
 body.conv-compact.conv-compact .conversations-view .tool-call:not(.cc-open) pre.tool-result-output { display: none; }
 body.conv-compact.conv-compact .conversations-view .tool-call-group { margin: 0; }
@@ -31865,26 +32463,59 @@ body.conv-compact.conv-compact .conversations-view .cc-run-head.cc-run-chipped:n
 .te-conversation-chip {
   display: inline-block; padding: 2px 8px; border-radius: 9px;
   font-size: 11px; font-weight: 600; line-height: 16px;
-  color: #d2b4ff; background: rgba(163,113,247,0.16);
+  color: var(--orch-chip-text); background: rgba(163,113,247,0.16);
   border: 1px solid rgba(163,113,247,0.45);
 }
 body.conv-compact .conversations-view .cc-orch-chip {
   display: inline-block; margin-left: 6px; padding: 0 7px; border-radius: 9px;
   font-size: 11px; font-weight: 600; line-height: 16px; white-space: nowrap;
-  vertical-align: baseline; color: #d2b4ff; background: rgba(163,113,247,0.16);
+  vertical-align: baseline; color: var(--orch-chip-text); background: rgba(163,113,247,0.16);
   border: 1px solid rgba(163,113,247,0.45);
 }
 body.conv-compact .conversations-view .cc-orch-chip::before { content: attr(data-cc-orch); }
 /* A run with no preceding text hosts its chips inside the bare head line,
    whose other children are hidden while folded. */
 body.conv-compact.conv-compact .conversations-view .cc-run-head:not(.cc-run-open):not(.tool-call-group) > .cc-orch-chip { display: inline-block !important; }
+/* Compact runs reveal reasoning before commands, with a persistent way back. */
+body.conv-compact .conversations-view .cc-run-head > .tool-call-group-header { flex-wrap: wrap; }
+body.conv-compact.conv-compact .conversations-view .cc-run-head.tool-call.cc-run-thinking > :not(.cc-run-fold, .cc-run-tools, .cc-orch-chip, .cc-run-thumbs) { display: none !important; }
+.cc-run-tools, .cc-run-preview { display: none; }
+body.conv-compact.conv-compact .conversations-view .cc-run-head:not(.cc-run-open) > .tool-call-group-header > .cc-orch-chip {
+  display: inline-block !important;
+}
+body.conv-compact.conv-compact .conversations-view .cc-run-head:not(.cc-run-open) > .cc-run-preview {
+  display: -webkit-box !important; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+  overflow: hidden; white-space: normal; font-style: normal;
+  color: var(--text-secondary); font-size: 13px; line-height: 1.5; margin: 4px 0 8px;
+}
+body.conv-compact.conv-compact .conversations-view .cc-run-head.cc-run-chipped:not(.cc-run-open):has(> .cc-run-preview) {
+  display: block !important;
+}
+body.conv-compact.conv-compact .conversations-view .cc-run-head.cc-run-chipped:not(.cc-run-open)::before { content: none; }
+body.conv-compact.conv-compact .conversations-view .cc-run-head.cc-run-open .cc-run-fold,
+body.conv-compact.conv-compact .conversations-view .cc-run-head.cc-run-open .cc-run-tools {
+  display: inline-flex; border: 0; background: transparent; padding: 2px 6px;
+  color: var(--text-muted); font: inherit; font-size: 12px; cursor: pointer;
+}
+body.conv-compact .conversations-view .cc-run-tools:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+body.conv-compact.conv-compact .conversations-view .cc-run-tail.cc-run-thinking:not(.cc-run-thought),
+body.conv-compact.conv-compact .conversations-view .cc-run-head.cc-run-thinking > :is(.tool-call-group-body, .kimi-tool-body, .kimi-tool-group-body) {
+  display: none !important;
+}
+body.conv-compact.conv-compact .conversations-view .cc-run-thinking.thinking-block .t-body {
+  display: block; -webkit-line-clamp: unset; max-height: none;
+}
+body.conv-compact.conv-compact .conversations-view .cc-run-thinking.kimi-thinking > .kimi-thinking-full { display: block; }
+body.conv-compact.conv-compact .conversations-view .cc-run-thinking.kimi-thinking > .kimi-thinking-teaser { display: none; }
 /* Same purple pills in a Codex/Kimi tool-group header, in every view mode
    (CCC-254): the header is all a collapsed group shows. */
 .kimi-tg-orch { display: inline-flex; gap: 4px; flex: 0 1 auto; min-width: 0; overflow: hidden; }
 .kimi-tg-orch-chip {
   display: inline-block; padding: 0 7px; border-radius: 9px;
   font-size: 11px; font-weight: 600; line-height: 16px; white-space: nowrap;
-  color: #d2b4ff; background: rgba(163,113,247,0.16);
+  color: var(--orch-chip-text); background: rgba(163,113,247,0.16);
   border: 1px solid rgba(163,113,247,0.45);
 }
 .kimi-tg-orch-chip::before { content: attr(data-cc-orch); }
@@ -31918,10 +32549,6 @@ body.conv-compact.conv-compact .conversations-view .kimi-turn {
   margin: 0 !important; padding: 1px 0 !important;
 }
 body.conv-compact.conv-compact .conversations-view .kimi-turn > * + * { margin-top: 0 !important; }
-body.conv-compact.conv-compact .conversations-view .kimi-turn .assistant-text:not(.cc-open):not(.cc-final):not(:has(.cc-run-chip)) {
-  display: -webkit-box !important; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
-  overflow: hidden; cursor: pointer;
-}
 body.conv-compact.conv-compact .conversations-view .kimi-tool-peek { display: none !important; }
 body.conv-compact.conv-compact .conversations-view .kimi-tool-group:has(.acp-needs-approval) > .kimi-tool-group-body { display: block !important; }
 body.conv-compact.conv-compact .conversations-view :is(.kimi-tool, .kimi-tool-group, .kimi-thinking).cc-run-head.cc-run-open:not(.cc-run-chipped)::before {
@@ -31987,28 +32614,10 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
 /* Dark label: white on the bright accent fill was hard to read. */
 .conv-input-bar .tts-btn.speaking[data-tts-voice] { color: #0b1620; }
 
-/* Voiceover cache bar: slim bar along the top of the Speak button, as wide as the
-   share of the last message already generated. Amber while filling, green when done. */
-.tts-btn[data-tts-cache], .tts-btn.speaking { position: relative; }
-.tts-btn[data-tts-cache]::before,
-.assistant-message-action[data-tts-cache]::before {
-  content: ''; position: absolute; top: 2px; left: 9px; height: 3px; border-radius: 2px;
-  width: calc((100% - 18px) * var(--tts-cache-f, 1));
-  background: var(--green); transition: width 0.3s;
-}
-.tts-btn[data-tts-cache="partial"]::before,
-.assistant-message-action[data-tts-cache="partial"]::before { background: #d29922; }
-.assistant-message-action[data-tts-cache] { position: relative; }
-.assistant-message-action[data-tts-cache]::before { left: 2px; top: 0; width: calc((100% - 4px) * var(--tts-cache-f, 1)); }
-.tts-btn.speaking::before {
-  content: ''; position: absolute; top: 2px; left: 9px; height: 4px; border-radius: 2px;
-  width: calc(100% - 18px); transition: none;
-  /* dark = read, white = made ahead, dim dark = not made yet */
+/* Read-aloud progress. */
   background: linear-gradient(to right,
     #0b1620 calc(var(--tts-play, 0) * 100%),
-    #ffffff calc(var(--tts-play, 0) * 100%),
-    #ffffff calc(var(--tts-cache-f, 0) * 100%),
-    rgba(11,22,32,0.35) calc(var(--tts-cache-f, 0) * 100%));
+    rgba(11,22,32,0.35) calc(var(--tts-play, 0) * 100%));
 }
 
 /* Close button for the Continue-new config panel (the chip that opens it can
@@ -32106,13 +32715,34 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   margin: 0; height: 36px; padding: 0; font-size: 13px; color: var(--text-muted);
   background: transparent; border: 0; cursor: pointer;
 }
+/* Never taller than the room above the offer row (--f2c-room, measured when
+   the sheet opens): the fields scroll and the buttons stay pinned in view. */
+.f2c-panel .f2c-config {
+  box-sizing: border-box; flex-wrap: nowrap;
+  max-height: var(--f2c-room, 70vh); overflow-y: auto; overscroll-behavior: contain;
+  padding-bottom: 0;
+}
+.f2c-panel .f2c-config > * { flex-shrink: 0; }
+.f2c-panel .f2c-config .f2c-actions {
+  position: sticky; bottom: 0; z-index: 1; margin-top: 0;
+  padding: 10px 0 14px; background: inherit;
+}
+/* While the sheet is open it sits above the pane's floating buttons, and
+   the install prompt stays out of the way of its buttons. */
+.conv-input-bar:has(.f2c-config) { z-index: 20; }
+/* The toolbar row's narrow-width overflow guard would clip the open sheet. */
+.conv-input-bar .conv-input-row-bottom:has(.f2c-config) { overflow: visible !important; }
+body.has-f2c-config #pwaInstallBanner { display: none !important; }
+.conv-pane:has(.f2c-config) .conv-ready-archive-footer:not([hidden]) { display: none; }
 @media (max-width: 1200px) {
-  /* In flow, not position:fixed: an ancestor's containment boxed a fixed
-     sheet into a narrow clipped strip. The offer row grows to hold it. */
+  /* Opens upward from the offer row, across its full width. Not in flow:
+     the composer sits at the bottom of a pane that does not scroll, so an
+     in-flow sheet pushed Continue below the screen. Not position:fixed
+     either: an ancestor's containment boxed a fixed sheet into a strip. */
   .f2c-panel .route:has(.f2c-config) { display: flex; flex-wrap: wrap; width: 100%; max-width: 100%; }
   .f2c-panel .f2c-config {
-    position: static; order: -1; flex: 1 1 100%; width: 100%; max-width: 100%;
-    box-sizing: border-box; margin-bottom: 8px;
+    position: absolute; left: 0; right: 0; bottom: calc(100% + 8px);
+    width: auto; max-width: 100%;
   }
   .f2c-panel .f2c-config .f2c-select { height: 44px; font-size: 16px; }
 }
@@ -32142,7 +32772,6 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.status-rail .rail-voice-stepper .rail-voice-paid { color: var(--text-muted); margin-left: 3px; }
 
 /* In-page folder viewer (CCC-62): opens when the server host has no desktop */
 .ffv-overlay { position: fixed; inset: 0; z-index: 10000; pointer-events: none; display: flex; align-items: center; justify-content: center; }
@@ -32151,6 +32780,7 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
 .ffv-crumb { flex: 1; min-width: 0; font: 12px var(--font-mono, ui-monospace, monospace); color: var(--text-muted, #8b949e); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ffv-btn { border: 1px solid var(--border, #30363d); background: transparent; color: var(--text, #e6edf3); border-radius: 6px; padding: 4px 10px; font: 12px var(--font-ui); cursor: pointer; text-decoration: none; }
 .ffv-btn:hover { background: rgba(139,148,158,0.15); }
+body.has-img-lightbox-open .ffv-overlay { visibility: hidden; }
 .ffv-body { flex: 1; display: flex; min-height: 0; }
 .ffv-list { width: 300px; flex: none; overflow: auto; border-right: 1px solid var(--border, #30363d); }
 .ffv-row { display: flex; gap: 8px; align-items: center; padding: 7px 14px; cursor: pointer; font-size: 13px; }
@@ -32393,13 +33023,11 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   }
 }
 
-/* Touch composer: Esc lives in the ⋯ menu, Steer is gone (on a phone you
-   send, and steer with the next message), and the attachment preview strip
-   is dropped so the text box keeps its room; the attachment path stays in
-   the message text. */
+/* Touch composer: Esc lives in the ⋯ menu and the attachment preview strip
+   is dropped so the text box keeps its room. Keep explicit Steer available
+   on touch too; ordinary Send may queue behind the running turn. */
 @media (pointer: coarse) {
   .conv-input-bar #convEscBtn,
-  .conv-input-bar .steer-btn,
   .conv-input-bar .paste-thumb-strip { display: none !important; }
 }
 
@@ -32471,7 +33099,8 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
 }
 
 /* ── Phone list header: no row of its own ─────────────────────────────────
-   Share, Discord and the savings ticker are gone on phones; the CCC icon
+   Share and Discord are gone on phones; savings sits with the usage meters.
+   The CCC icon
    moves onto the "Usage left" heading line (headroom bars flatten into the
    header grid via display:contents) so the usage chips keep the full width.
    Alerts (update pill etc.) still get their own full-width line. */
@@ -32506,8 +33135,8 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
    hairline, no accent glow or ">" glyph, sans-serif text, and round buttons
    (+ menu on the left, Send/mic slot on the right). Prefixed with
    html body .conv-split so it outranks conversation themes' !important
-   rules (e.g. Stitch's square corners and monospace) on touch only. */
-@media (pointer: coarse) {
+   rules (e.g. Stitch's square corners and monospace) on touch or narrow screens. */
+@media (pointer: coarse), (max-width: 1200px) {
   html body .conv-split .conv-pane .conv-input-bar.visible {
     background: color-mix(in srgb, var(--text, #e5e2e3) 8%, var(--bg, #0a0a0b)) !important;
     border: 1px solid color-mix(in srgb, var(--text, #e5e2e3) 14%, transparent) !important;
@@ -32602,18 +33231,14 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
 /* Floating speaker while being dragged: no slide transition lag. */
 .conv-scroll-speak-btn.is-dragging { transition: none !important; opacity: 0.85; }
 
-/* ── Phone composer, iMessage layout ───────────────────────────────────────
-   The + sits outside the card on the left; the card is only the text, with
-   expand + Send/mic tucked into its bottom-right corner, so every line of the
-   card is text. The textarea grows with what you type up to ~30% of the
-   visible height (expand mode keeps its own size). Overrides the card block
-   above: same selector weight, later in the file. */
-@media (pointer: coarse) {
+/* Compact composer on touch and narrow screens: text, + and Send share
+   one line initially; the textarea still grows naturally with the draft. */
+@media (pointer: coarse), (max-width: 1200px) {
   html body .conv-split .conv-pane .conv-input-bar.visible {
-    display: grid !important;
-    grid-template-columns: auto minmax(0, 1fr);
-    column-gap: 8px;
-    row-gap: 6px;
+    display: flex !important;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px 8px;
     align-items: end;
     background: transparent !important;
     border: 0 !important;
@@ -32623,12 +33248,12 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   }
   html body .conv-split .conv-pane .conv-input-bar.visible:focus-within { border: 0 !important; }
   html body .conv-split .conv-pane .conv-input-bar > .conv-input-row-top {
-    grid-column: 2;
-    grid-row: 1;
-    display: flex;
-    align-items: center;
+    flex: 1 1 160px;
+    order: 2;
+    width: auto;
+    min-width: min(160px, calc(100% - 144px));
     min-height: 44px;
-    padding: 9px 84px 9px 14px;
+    padding: 9px 14px;
     background: color-mix(in srgb, var(--text, #e5e2e3) 8%, var(--bg, #0a0a0b));
     border: 1px solid color-mix(in srgb, var(--text, #e5e2e3) 14%, transparent);
     border-radius: 22px;
@@ -32640,56 +33265,41 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   html body .conv-split .conv-pane .conv-input-bar:not([data-composer-mode="expand"]) #convInput {
     max-height: calc(var(--app-vh, 100vh) * 0.3) !important;
   }
-  html body .conv-split .conv-pane .conv-input-bar .conv-input-row-bottom { display: contents; }
-  html body .conv-split .conv-pane .conv-input-bar .conv-input-row-bottom > *,
-  html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons > * {
-    grid-column: 1 / -1;
-    grid-row: 2;
+  html body .conv-split .conv-pane .conv-input-bar .conv-input-row-bottom,
+  html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons,
+  html body .conv-split .conv-pane .conv-input-bar .conv-input-selectors { display: contents; }
+  /* Hidden session selectors must not leave a growing flex spacer between
+     the input and controls. New-session picks still share their own row. */
+  html body .conv-split .conv-pane .conv-input-bar.is-new-session-launch .conv-input-selectors {
+    display: flex;
+    flex: 1 1 100%;
+    order: 0;
   }
+  html body .conv-split .conv-pane .conv-input-bar .conv-input-row-bottom > *,
+  html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons > * { order: 4; }
+  html body .conv-split .conv-pane .conv-input-bar .conv-input-row-bottom > .attach-btn,
   html body .conv-split .conv-pane .conv-input-bar .conv-input-row-bottom > .conv-actions-group {
-    grid-column: 1;
-    grid-row: 1;
-    align-self: end;
+    order: 1;
+    flex: 0 0 auto;
     margin: 0;
   }
-  /* Send lives in .conv-send-group (with its hidden caret/menu); place the
-     group, and the bare mic, in the card's bottom-right corner. */
   html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons > .conv-send-group,
   html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons > .mic-btn {
-    grid-column: 2;
-    grid-row: 1;
-    justify-self: end;
-    align-self: end;
-    z-index: 2;
-    margin: 0 4px 4px 0;
+    order: 3;
+    flex: 0 0 auto;
   }
-  html body .conv-split .conv-pane .conv-input-bar:not(.has-text) .conv-input-buttons > .conv-send-group { display: none; }
-  html body .conv-split .conv-pane .conv-input-bar .conv-send-group > .send-btn,
-  html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons > .mic-btn {
-    width: 36px !important;
-    height: 36px !important;
-    min-width: 36px !important;
-    min-height: 36px !important;
-  }
-  html body .conv-split .conv-pane .conv-input-bar .conv-send-group > .send-btn svg,
-  html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons > .mic-btn svg { width: 20px; height: 20px; }
-  /* Cold-session gate ("Large and stale" rail + Continue new pill): the rail
-     needs its own full-width row, or auto-placement drops it into the narrow
-     `auto` column, widens that column to the rail's text and shoves the card
-     off-screen. The card moves to the last row so the absolutely placed
-     expand arrow still lands in its corner. */
-  html body .conv-split .conv-pane .conv-input-bar:has(> .f2c-rail:not([hidden])) > .f2c-rail {
-    grid-column: 1 / -1;
-    grid-row: 1;
+  html body .conv-split .conv-pane .conv-input-bar:not(.has-text) .conv-input-buttons > .conv-send-group,
+  html body .conv-split .conv-pane .conv-input-bar.has-text .mic-btn:not(.recording) { display: none; }
+  /* The cold-session notice and route choice keep their own full-width rows. */
+  html body .conv-split .conv-pane .conv-input-bar > .f2c-rail:not([hidden]) {
+    order: 0;
+    flex: 1 0 100%;
     min-width: 0;
     padding-bottom: 0;
     border-bottom: 0;
   }
-  html body .conv-split .conv-pane .conv-input-bar:has(> .f2c-rail:not([hidden])) > .conv-input-row-top,
-  html body .conv-split .conv-pane .conv-input-bar:has(> .f2c-rail:not([hidden])) .conv-input-row-bottom > .conv-actions-group,
-  html body .conv-split .conv-pane .conv-input-bar:has(> .f2c-rail:not([hidden])) .conv-input-buttons > .conv-send-group,
-  html body .conv-split .conv-pane .conv-input-bar:has(> .f2c-rail:not([hidden])) .conv-input-buttons > .mic-btn {
-    grid-row: 3;
+  html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons > .f2c-panel:not([hidden]) {
+    flex: 1 0 100%;
   }
 }
 
@@ -32977,6 +33587,11 @@ body.ccc-hide-other-machines .fed-peer-section { display: none !important; }
 html.ccc-mobile-list-view .sh-more-filters .is-phone-menu-only { display: inline-flex !important; }
 html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 .sh-more-check input { margin: 0; accent-color: var(--accent); }
+/* A menu row that is an on/off switch: label left, knob right. */
+.sh-more-item.sh-more-switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
+.sh-more-item.sh-more-switch[hidden] { display: none; }
+.sh-more-switch[aria-checked="true"] .settings-toggle-track { background: var(--accent); }
+.sh-more-switch[aria-checked="true"] .settings-toggle-thumb { background: var(--accent-contrast); transform: translateX(14px); }
 @media (max-width: 1200px) {
   #sidebarMoreMenu .sh-more-desktop-only,
   #sidebarMoreMenu .sh-more-divider { display: none !important; }
@@ -33178,37 +33793,47 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 /* The beside-the-title column is too narrow for option chips and they broke
    one letter per line; a decision takes its own full-width line instead. */
 #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-quick-action-slot.is-decision) { flex: 1 1 100%; order: 5; }
-/* The chips share their line with the row speaker instead of filling it
-   and pushing the speaker onto a line of its own (CCC-281). */
+/* The chips share their line with the row pop-out instead of filling it
+   and pushing the pop-out onto a line of its own (CCC-281). */
 .conv-quick-action-slot.is-decision { flex: 1 1 0; min-width: 0; flex-wrap: wrap; gap: 6px; }
-.conv-quick-action-slot.is-decision .conv-quick-action { max-width: 100%; overflow-wrap: break-word; white-space: normal; }
-.conv-row-read {
+/* Long choices wrap in narrow sidebars; a pill radius turns them into tall
+   ovals. Keep the complete label in a compact, left-aligned control. */
+.conv-quick-action-slot.is-decision .conv-quick-action {
+  max-width: 100%;
+  border-radius: 6px;
+  padding: 4px 8px;
+  text-align: left;
+  overflow-wrap: break-word;
+  white-space: normal;
+}
+.conv-row-popout {
   display: inline-flex; align-items: center; justify-content: center;
   flex: 0 0 auto; min-width: 32px; min-height: 32px; margin-left: 4px;
   border: 1px solid var(--border); border-radius: 999px;
   background: var(--surface-2); color: var(--text-muted); cursor: pointer;
 }
-.conv-row-read:hover, .conv-row-read:focus-visible, .conv-row-read.speaking { color: var(--accent); border-color: var(--accent); }
-.conv-row-read:disabled { opacity: .6; cursor: wait; }
-.conv-row-read.paused { opacity: .65; }
-/* With a mouse, a row's speaker appears only on hover/focus (or while it is
-   reading) so a list of rows is not a column of speaker icons (CCC-256).
-   Visibility, not display, so the row does not reflow on hover. Touch keeps
-   it visible: there is no hover to reveal it. */
+.conv-row-popout:hover, .conv-row-popout:focus-visible { color: var(--accent); border-color: var(--accent); }
+/* Mouse hover and keyboard focus reveal the pop-out without reflow.
+   Opacity keeps the button reachable by Tab on desktop. */
 @media not all and (pointer: coarse) {
-  #convList .conv-item:not(:hover):not(:focus-within) .conv-row-read:not(.speaking):not(.paused):not([aria-busy]) {
-    visibility: hidden;
+  #convList .conv-item:not(:hover):not(:focus-within) .conv-row-popout {
+    opacity: 0;
+    pointer-events: none;
   }
 }
-#convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-row-read) {
+/* Session rows open in place on phones; a separate window adds no value. */
+@media (max-width: 1200px) {
+  #convList .conv-row-popout { display: none; }
+}
+#convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-row-popout) {
   display: flex !important; align-items: flex-end; gap: 4px;
 }
-#convList#convList .conv-item .conv-outcome:has(.conv-row-read):not(:has(.conv-quick-action-slot.is-decision)) .conv-outcome-step {
+#convList#convList .conv-item .conv-outcome:has(.conv-row-popout):not(:has(.conv-quick-action-slot.is-decision)) .conv-outcome-step {
   flex: 1 1 auto; min-width: 0; width: auto;
 }
 /* The inline step clamps at two lines; reserve both so a streamed message
    that wraps does not grow the row under the pointer. */
-#convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-row-read) .conv-outcome-step {
+#convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-row-popout) .conv-outcome-step {
   min-height: 2lh;
 }
 .conv-quick-action {
@@ -33541,32 +34166,9 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 .conv-avatar-stack > .conv-avatar-number { font-size:10px; }
 .conv-idea-avatar > .conv-avatar-model { z-index:2; }
 .conv-repo-portrait { cursor:default; }
+.conv-repo-portrait > .conv-avatar-background img { object-fit:contain; background:var(--bg-secondary, #334155); opacity:1; filter:none; }
+.conv-repo-portrait > .conv-avatar-background .repo-avatar-initials { display:flex; font-size:13px; }
 .conv-pane-category .conv-idea-avatar { position:relative; display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:50%; }
-
-/* Optional TTS scheduler inspector; kept outside transcript text and copying. */
-#ttsCacheDebugQueue {
-  position: fixed; top: 74px; left: 12px; z-index: 100100;
-  max-width: min(360px, calc(100vw - 24px)); color: #e6edf3;
-  background: #161b22; border: 1px solid #59636e; border-radius: 8px;
-  font-size: 12px; box-shadow: 0 2px 10px #0008;
-}
-#ttsCacheDebugQueue[hidden] { display: none; }
-#ttsCacheDebugQueue summary { padding: 7px 10px; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
-#ttsCacheDebugQueue.is-dragging summary { cursor: grabbing; }
-#ttsCacheDebugQueue .tts-queue-log { max-height: 32vh; overflow: auto; padding: 0 10px 8px; overflow-anchor: none; }
-#ttsCacheDebugQueue .tts-queue-positions { padding: 0 10px 8px; border-bottom: 1px solid #59636e; overflow-wrap: anywhere; }
-#ttsCacheDebugQueue p { margin: 4px 0 8px; }
-#ttsCacheDebugQueue [data-status] { padding: 5px; margin: 3px 0; overflow-wrap: anywhere; }
-#ttsCacheDebugQueue [data-status="processing"] { background: #f59e0b52; }
-#ttsCacheDebugQueue [data-status="ready"] { background: #22c55e4d; }
-#ttsCacheDebugQueue [data-status="cancelled"] { background: #a855f752; }
-
-/* TTS cache states occupy the gutter, leaving conversation text unpainted. */
-#ttsCacheDebugLines { position: fixed; inset: 0; pointer-events: none; z-index: 100; }
-#ttsCacheDebugLines > i { position: absolute; width: 3px; border-radius: 2px; pointer-events: none; }
-#ttsCacheDebugLines [data-tts-state="sent"] { background: #f59e0b; }
-#ttsCacheDebugLines [data-tts-state="ready"] { background: #22c55e; }
-#ttsCacheDebugLines [data-tts-state="cancelled"] { background: #a855f7; }
 
 /* CCC-243: with smart repo on, the new-session folder picker collapses to
    one "Auto · repo · Change" line, matching the model line below it. */
@@ -33689,7 +34291,7 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
   padding: 0;
 }
 #convList#convList .conv-item .conv-idea-avatar.is-child-mini .conv-avatar-engine,
-#convList#convList .conv-item .conv-idea-avatar.is-child-mini .conv-avatar-engine svg { width: 11px; height: 11px; opacity: 0.8; filter: none; }
+#convList#convList .conv-item .conv-idea-avatar.is-child-mini .conv-avatar-engine svg { width: 11px; height: 11px; opacity: 1; filter: none; }
 /* Doubled id + :has(mini) outranks the CCC-261 desktop child-row indent
    (+36px, sized for the old avatar), so lane titles start beside the mark. */
 #convList#convList .conv-item.is-current-child-row:has(.conv-idea-avatar.is-child-mini) { --conv-content-left: calc(var(--conv-icon-left) + 22px); }
@@ -33719,11 +34321,11 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
 #convList#convList .conv-subagent-cluster-body > .conv-item.conv-item:not(:last-child) {
   border-bottom-color: transparent !important;
 }
-#convList#convList .conv-subagent-cluster > .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-row-read) .conv-outcome-step {
+#convList#convList .conv-subagent-cluster > .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-row-popout) .conv-outcome-step {
   min-height: 0;
 }
 @media not all and (pointer: coarse) {
-  #convList#convList .conv-subagent-cluster .conv-row-read {
+  #convList#convList .conv-subagent-cluster .conv-row-popout {
     min-width: 22px;
     min-height: 22px;
     align-self: center;
@@ -33731,9 +34333,9 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
 }
 
 /* Session workspace: categories remain navigation; lifecycle guides attention. */
-.session-lifecycle-section { margin: 0 0 22px; }
+.session-lifecycle-section { margin: 0 0 12px; }
 .session-lifecycle-heading {
-  display: flex; align-items: center; gap: 8px; margin: 20px 8px 10px;
+  display: flex; align-items: center; gap: 8px; margin: 8px 4px 2px;
   color: var(--text-muted); font-size: 11px; line-height: 18px;
   font-weight: 650; letter-spacing: .08em; text-transform: uppercase;
 }
@@ -33753,11 +34355,11 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
 .session-lifecycle-count { padding: 0 6px; border-radius: 5px; background: var(--surface-2); letter-spacing: 0; font-variant-numeric: tabular-nums; }
 .session-lifecycle-empty { padding: 8px 8px 12px; color: var(--text-muted); font-size: 12px; }
 #convList.session-workspace { padding-inline: 12px; }
-#convList.session-workspace .conv-tab-bar { gap: 2px; margin-bottom: 4px; }
-#convList.session-workspace .conv-tab { padding: 10px 7px; font-size: 12px; }
+#convList.session-workspace .conv-tab-bar { gap: 2px; padding-top: 2px; margin-bottom: 2px; }
+#convList.session-workspace .conv-tab { padding: 6px 7px; font-size: 12px; }
 #convList.session-workspace .conv-tab-count { font-size: 10px; }
 #convList.session-workspace .conv-archived-section { border-top: 0; margin-top: 0; padding-top: 0; }
-#convList.session-workspace .conv-archived-tools { border: 0; padding: 8px 4px; margin: 0; }
+#convList.session-workspace .conv-archived-tools { border: 0; padding: 4px; margin: 0; }
 #convList#convList.session-workspace .conv-item:not(.is-current-child-row) {
   --conv-content-left: calc(var(--conv-icon-left) + 52px);
   padding-top: 13px !important; padding-bottom: 13px !important;
@@ -33791,7 +34393,7 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
 #convList#convList.session-workspace .conv-avatar-initials { font-size: 10px; }
 #convList#convList .conv-item:not(.is-current-child-row) .conv-avatar-stack > .conv-avatar-number { font-size: 11px; opacity: .85; }
 #convList#convList.session-workspace .conv-item:not(.is-current-child-row) .conv-main-row > .conv-auto-switch { top: 59px; left: calc(var(--conv-icon-left) + 2px); }
-#convList.session-workspace .conv-avatar-model { filter: none; transform: scale(.8); }
+#convList.session-workspace .conv-avatar-model { filter: none; transform: none; }
 #convList#convList.session-workspace .conv-main-row.has-inline-step .conv-title { font-size: 15px !important; line-height: 21px !important; font-weight: 550; }
 #convList#convList.session-workspace .conv-main-row.has-inline-step > .conv-outcome .conv-outcome-step { font-size: 13px; line-height: 19px; }
 #convList.session-workspace .conv-working-dot,
@@ -33819,11 +34421,30 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
 .sidebar:has(.session-workspace) .search-wrap { order: 10; flex: 1 1 120px; }
 .sidebar:has(.session-workspace) .conv-search-input { border-radius: 7px; min-height: 36px; font-size: 13px; }
 @media (max-width: 1200px) {
-  #convList#convList.session-workspace .conv-item .wa-body { min-height: 78px; }
+  #convList#convList.session-workspace .conv-item .wa-body { min-height: 0; padding-block: 4px; }
+  #convList#convList.session-workspace .conv-item:not(.is-current-child-row) { padding-block: 6px !important; }
   #convList#convList.session-workspace .conv-item:not(.is-current-child-row) .wa-row > .conv-idea-avatar:not(.is-child-mini) { position: relative; top: auto; flex: 0 0 40px; }
   #convList.session-workspace .wa-title { font-size: 15px; }
   #convList.session-workspace .wa-preview { font-size: 13px; line-height: 19px; }
   .session-usage-drawer { padding: 6px 14px; }
+  #convList .wa-line2:has(.wa-decision-context) .wa-preview {
+    display: block; flex-basis: 100%; -webkit-line-clamp: unset; overflow: visible;
+  }
+  .wa-decision-context { flex: 1 0 100%; min-width: 0; }
+  .wa-decision-context-toggle {
+    min-height: 32px; padding: 4px 0; border: 0; background: transparent;
+    color: var(--accent); font: inherit; font-size: 12px; cursor: pointer;
+    text-align: start; text-decoration: underline; text-underline-offset: 3px;
+  }
+  .wa-decision-context-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .wa-decision-context .conv-session-summary-detail {
+    margin: 0 0 4px; padding: 0; border: 0; background: transparent;
+  }
+  .wa-decision-choice, .wa-decision-reply {
+    color: var(--text-muted); font-size: 12px; line-height: 1.5;
+    white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .wa-decision-choice { margin-bottom: 4px; }
 }
 @media (prefers-reduced-motion: reduce) {
   #convList.session-workspace * { animation: none !important; transition: none !important; }
@@ -33857,6 +34478,11 @@ body.has-mobile-bottom-nav .pwa-install-banner {
     min-width: 0;
   }
   .sidebar .new-session-primary-row.is-search-open .conv-search-input { width: 100%; }
+}
+
+/* Keep the sidebar toggle beside its divider, outside the wrapping actions. */
+@media (min-width: 1201px) {
+  .sidebar > .new-session-panel:has(> .conv-list-collapse-btn) { padding-right: 4px; }
 }
 
 /* Settings: readable hierarchy, grouped navigation and inspectable routing. */
@@ -33913,7 +34539,7 @@ body.has-mobile-bottom-nav .pwa-install-banner {
   .settings-usage-row > .settings-usage-track { grid-column:1 / -1; grid-row:2; }
 }
 /* Keep passive notifications behind the active Settings dialog. */
-body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
+body.has-settings-modal-open #cccNotifyStack { z-index: 9998; }
 /* Defaults need labeled rows: compact engine-list strips clip long models. */
 :is(#settingsSection-defaults, #routingPolicyEditor) .eng-card { display: block; padding: 18px; }
 :is(#settingsSection-defaults, #routingPolicyEditor) .eng-card-head { margin-bottom: 12px; }
@@ -34029,8 +34655,13 @@ body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
   .conv-report-controls button:hover { border-color: var(--text); }
   .conv-report-editor :is(textarea, button):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .conv-report-editor :disabled { opacity: .6; cursor: wait; }
+  .conv-action-confirm p { margin: 0; }
+  .conv-action-confirm [data-confirm-accept] { color: var(--red); }
   .conv-report-error { margin: 8px 0 0; color: var(--red); }
   .wa-line1 > .conv-decision-report-btn { flex-basis: 32px; width: 32px; height: 32px; margin-block: -4px; }
+  @media (max-width: 1200px), (pointer: coarse) {
+    .wa-line1 > .conv-decision-report-btn { flex-basis: 44px; width: 44px; height: 44px; }
+  }
 
   /* Keep the report inside the existing edge cell in flex and grid rows. */
   #convList#convList .conv-item .conv-main-row > .conv-row-end:has(> .conv-decision-report-btn) {
@@ -34066,6 +34697,9 @@ body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
 [data-launch-preview] { min-width: 0; overflow-wrap: anywhere; }
 [data-launch-preview] h3 { margin: 0 0 8px; font-size: 15px; }
 [data-launch-preview] h4 { margin: 18px 0 6px; font-size: 13px; }
+.ao-launch-preview { margin: 12px 0; }
+.ao-launch-preview > summary { cursor: pointer; color: var(--text-muted); font-size: 12px; }
+.ao-launch-preview > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .settings-launch-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
 .settings-launch-toolbar select { flex: 1 1 180px; min-width: 0; max-width: 100%; }
 .settings-launch-output { font-size: 12px; line-height: 1.6; }
@@ -34159,6 +34793,7 @@ body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
   .codex-account-row { grid-area: account; display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
   .codex-account-row[hidden], .codex-session-account[hidden] { display: none; }
   .codex-account-row select { flex: 1; min-width: 0; max-width: 360px; padding: 5px 7px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; }
+  #codexAccountRow select { flex: 0 1 auto; width: auto; max-width: min(16rem, 100%); }
   .codex-account-row a, .codex-session-account { color: var(--text-muted); font-size: 12px; }
   body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session:has(> .codex-account-row:not([hidden])) {
     grid-template-areas: "cwd worktree" "account account";
@@ -34195,20 +34830,22 @@ body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
 .ao-eng-group.is-signin .ao-group-label { color: var(--red); }
 .ao-eng-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 8px; }
 .ao-eng-group.is-missing .ao-eng-grid, .ao-eng-group.is-off .ao-eng-grid { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+.ao-eng-list { display: flex; flex-direction: column; }
 .ao-eng {
-  font: inherit; color: inherit; text-align: left;
-  display: flex; flex-direction: column; gap: 8px; padding: 9px 10px; min-width: 0;
-  border: 1px solid hsl(var(--eng-hue) 40% 30% / 0.7); border-radius: 10px;
-  background: linear-gradient(135deg, hsl(var(--eng-hue) 50% 22% / 0.45), transparent 70%), var(--bg);
+  display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 44px; padding: 6px 2px;
+  border-top: 1px solid var(--border);
 }
-button.ao-eng { cursor: pointer; transition: border-color 0.12s ease-out; }
-button.ao-eng:hover { border-color: hsl(var(--eng-hue) 60% 55%); }
+.ao-eng:first-child { border-top: 0; }
+.ao-eng .eng-mono { flex: none; }
+.ao-eng .ao-eng-name { flex: 0 0 150px; }
+.ao-eng .ao-state { flex: 0 0 120px; }
+.ao-eng .ao-accounts { flex: 1 1 auto; flex-direction: row; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.ao-eng-action { margin-left: auto; flex: none; }
+.ao-eng.is-missing .eng-mono, .ao-eng.is-off .eng-mono { filter: grayscale(1); opacity: 0.55; }
+.ao-eng.is-missing .ao-eng-name, .ao-eng.is-off .ao-eng-name { color: var(--text-muted); }
+.ao-eng.is-signin .ao-state { color: var(--red); }
+@media (max-width: 700px) { .ao-eng { flex-wrap: wrap; } .ao-eng .ao-eng-name { flex: 1 1 110px; } .ao-eng .ao-state { flex: 0 0 auto; } .ao-eng .ao-accounts { flex-basis: 100%; order: 5; } }
 .ao-eng:focus-visible, .ao-q-btn:focus-visible, .ao-default:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.ao-eng.is-signin { border-color: color-mix(in srgb, var(--red) 55%, transparent); background: color-mix(in srgb, var(--red) 9%, var(--bg)); }
-.ao-eng.is-signin .ao-state, .ao-eng.is-signin .ao-cta { color: var(--red); }
-.ao-eng.is-missing, .ao-eng.is-off { padding: 6px 9px; opacity: 0.5; filter: grayscale(1); background: var(--bg); border-color: var(--border); }
-.ao-eng.is-missing:hover, .ao-eng.is-off:hover { opacity: 0.85; filter: none; }
-.ao-eng.is-missing .eng-mono, .ao-eng.is-off .eng-mono { width: 24px; height: 24px; font-size: 10px; border-radius: 7px; }
 .ao-eng-top { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .ao-eng-id { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .ao-eng-name { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -34273,7 +34910,6 @@ button.ao-eng:hover { border-color: hsl(var(--eng-hue) 60% 55%); }
 .ao-setup-body { overflow: auto; padding: 4px 16px 16px; }
 .ao-setup-body #engineConnection > h2, .ao-setup-body #engineConnection > p:first-of-type,
 .ao-setup-body #engineConnection > label, .ao-setup-body #engineConnectionSelect { display: none; }
-[data-theme="light"] .ao-eng { border-color: hsl(var(--eng-hue) 50% 80%); background: linear-gradient(135deg, hsl(var(--eng-hue) 70% 94%), transparent 75%), var(--bg); }
 [data-theme="light"] .ao-default.is-active { color: hsl(var(--eng-hue) 60% 28%); background: hsl(var(--eng-hue) 70% 90%); }
 [data-theme="light"] .ao-badge { color: hsl(var(--eng-hue, 210) 60% 32%); background: hsl(var(--eng-hue, 210) 70% 92%); border-color: hsl(var(--eng-hue, 210) 50% 80%); }
 
@@ -34294,10 +34930,9 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
 
 /* Agents tab = the two diagrams. Text sections stay in the DOM for search,
    first-run and pop-ups, but are folded away otherwise. */
-.settings-modal:not(.is-first-run):not(.is-searching) #settingsSection-defaults.ao-folded > :not(#agentsOverview):not(.ao-setup-overlay),
-.settings-modal:not(.is-first-run):not(.is-searching) :is(#settingsSection-engines, #settingsSection-queues, #settingsSection-routing).ao-folded > :not(.ao-setup-overlay) { display: none !important; }
-.settings-modal:not(.is-first-run):not(.is-searching) :is(#settingsSection-engines, #settingsSection-queues, #settingsSection-routing).ao-folded { border: 0; padding: 0; margin: 0; min-height: 0; }
-.settings-modal.is-first-run #agentsOverview, .settings-modal.is-searching #agentsOverview { display: none; }
+.settings-modal:not(.is-first-run):not(.is-searching) :is(#settingsSection-defaults, #settingsSection-engines, #settingsSection-queues, #settingsSection-routing).ao-folded > :not(.agents-overview):not(.ao-setup-overlay) { display: none !important; }
+.settings-modal:not(.is-first-run):not(.is-searching) #settingsSection-routing.ao-folded { border: 0; padding: 0; margin: 0; min-height: 0; }
+.settings-modal.is-first-run .agents-overview, .settings-modal.is-searching .agents-overview { display: none; }
 .ao-head-main { min-width: 0; }
 .ao-sub:empty { display: none; }
 .ao-defaults-bar { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 14px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
@@ -34313,9 +34948,9 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
 .ao-link:hover { color: var(--accent); text-decoration: underline; }
 .ao-setup-body .settings-section-eyebrow { display: none; }
 @media (max-width: 700px) { .ao-q { grid-template-columns: 1fr; } .ao-def-label { width: auto; } }
-#agentsOverview :is(select, input).ao-select { font-size: 12px !important; line-height: 1.3; height: 26px; min-height: 0; padding: 2px 22px 2px 7px; width: auto; }
-#agentsOverview select.ao-q-select { width: 100%; }
-#agentsOverview input.ao-num { width: 72px; padding-right: 6px; }
+.agents-overview :is(select, input).ao-select { font-size: 12px !important; line-height: 1.3; height: 26px; min-height: 0; padding: 2px 22px 2px 7px; width: auto; }
+.agents-overview select.ao-q-select { width: 100%; }
+.agents-overview input.ao-num { width: 72px; padding-right: 6px; }
 /* The pop-ups show only what the diagram cannot: no repeated defaults. */
 .ao-setup-body #routingPolicyContext option[value="defaults"] { display: none; }
 .ao-setup-body #engineConnectionPanel > section.engine-connection-step:nth-of-type(n+2) { display: none; }
@@ -34339,3 +34974,637 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
   border-radius: 6px;
 }
 .status-rail-title-images { margin-top: 6px; }
+
+/* CCC-378: ⋯ menu for the less-used queue strip controls. */
+.fq-status-more { position: relative; flex-shrink: 0; }
+.fq-status-more-btn {
+  list-style: none; cursor: pointer; user-select: none;
+  font-size: 14px; line-height: 1; padding: 1px 8px; border-radius: 999px;
+  background: rgba(139,148,158,0.10); color: var(--text-muted);
+  border: 1px solid rgba(139,148,158,0.18);
+}
+.fq-status-more-btn::-webkit-details-marker { display: none; }
+.fq-status-more-btn:hover, .fq-status-more[open] > .fq-status-more-btn { background: rgba(139,148,158,0.18); color: var(--text); }
+.fq-status-more-pop {
+  position: absolute; z-index: 30; top: calc(100% + 4px); left: 0;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+  padding: 8px; min-width: 150px;
+  background: var(--bg-elevated, var(--bg, #161b22)); border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+}
+.fq-status-stats { flex-basis: 100%; padding: 4px 0 0; border-bottom: 0; }
+
+/* Narrow (701-1200px) layout keeps the app-rail on screen. The conversation
+   pane (.main, z-index 800) used to cover the bottom nav here, so it vanished
+   whenever a conversation was open, and its left edge slid under the rail.
+   Lift the nav above the pane, start it after the rail, and shorten the pane
+   so the composer sits above it (CCC-385). Phones (<=700px) keep the
+   full-screen pane with the Back button. */
+@media (min-width: 701px) and (max-width: 1200px) {
+  body.has-mobile-bottom-nav:not(.kanban-split) .mobile-bottom-nav {
+    left: var(--ccc-rail-w, 76px);
+    z-index: 850;
+  }
+  body.has-mobile-bottom-nav:not(.kanban-split) .main {
+    height: calc(var(--app-vh, 100vh) - env(safe-area-inset-top, 0px) - 64px - env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* Settings carries no standalone explanation text: only control labels and
+   their own descriptions. Scope help stays in the DOM for aria-describedby. */
+#settingsPane .settings-scope-container, #settingsPane .settings-section-note { display: none !important; }
+.ao-sub:empty { display: none; }
+.agents-overview .ao-def-row select.ao-select { max-width: 190px !important; flex: 0 1 auto; }
+.agents-overview .ao-def-row select.ao-def-engine { font-weight: 650; margin-right: 0; max-width: min(100%, 230px) !important; }
+
+/* Narrow layout (bottom nav present): the hamburger menu already lists every
+   app, so the left app rail is dropped and everything offset by it collapses. */
+@media (max-width: 1200px) {
+  html.has-mobile-bottom-nav { --ccc-rail-w: 0px !important; }
+  body.has-mobile-bottom-nav { padding-left: 0 !important; }
+  body.has-mobile-bottom-nav :is(.ccc-side-nav, .ccc-rail-resizer, .ccc-report-flag, .ccc-account-wrap, .ccc-account-pop) { display: none !important; }
+}
+
+/* Reading on a phone gets the whole screen. Back restores the session list
+   and its mobile navigation. */
+@media (max-width: 700px) {
+  body.mobile-show-main:not(.kanban-split) { padding-left: 0 !important; }
+  body.mobile-show-main:not(.kanban-split) .main { left: 0; }
+  body.mobile-show-main:not(.kanban-split) :is(.ccc-side-nav, .ccc-rail-resizer, .ccc-account-wrap, .ccc-account-pop) { display: none !important; }
+
+  /* Keep the labelled 44px tap targets without covering a column of prose. */
+  :is(.conv-scroll-end-btn, .conv-scroll-last-btn, .conv-scroll-next-btn, .conv-scroll-segment-btn) {
+    width: 44px; height: 44px; padding: 0; gap: 0;
+  }
+  :is(.conv-scroll-end-btn, .conv-scroll-last-btn, .conv-scroll-next-btn, .conv-scroll-segment-btn) span {
+    position: absolute; width: 1px; height: 1px; padding: 0;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+  :is(.conv-scroll-end-btn, .conv-scroll-last-btn, .conv-scroll-next-btn, .conv-scroll-segment-btn) svg { width: 18px; height: 18px; }
+}
+
+/* Queues page: inline add form under the header. */
+.ao-q-add { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto; gap: 8px; align-items: center; margin: 0 0 12px; }
+.ao-q-add[hidden] { display: none; }
+.ao-q-add .settings-text-input, .ao-q-add .settings-select { width: 100%; box-sizing: border-box; }
+.ao-q-add-status { grid-column: 1 / -1; font-size: 12px; color: var(--text-muted); }
+.ao-q-add-status:empty { display: none; }
+@media (max-width: 700px) { .ao-q-add { grid-template-columns: 1fr; } .ao-q-add :is(input, select, button) { min-height: 44px; } }
+
+/* Usage & budgets: limits appear only while sessions wait. */
+#settingsSection-limits.ccc-limits-empty { display: none !important; }
+#cfgConsentModal .settings-scope-container { display: none !important; }
+
+/* Appearance: theme, font, font size, simple mode first; the rest after. */
+#settingsPane #appearancePopover.is-active-section { display: flex !important; flex-direction: column; }
+#appearancePopover > * { order: 10; }
+#appearancePopover > .settings-section-eyebrow { order: 0; }
+#appearancePopover > .settings-reset-row { order: 20; }
+#appearancePopover > [data-context-home="reader"] { order: 3; }
+
+/* One "Reset all settings" lives on Advanced; per-page resets are hidden. */
+#settingsPane :is(.settings-reset-row, [data-reset-list], [aria-label="Reset conversation text size"]) { display: none !important; }
+#settingsSection-layout > .settings-section-eyebrow { display: none; }
+/* Advanced → Preferences is one row: Export and Import. The review tables,
+   history, host profiles and selective resets stay out of sight.
+   Scoped to the consolidated Settings page (data-destination). */
+#settingsPane #settingsSection-preferences[data-destination] > :not(.ccc-prefs-row):not([data-pref-preview]):not([data-pref-status].is-error) { display: none !important; }
+#settingsPane #settingsSection-preferences[data-destination] .ccc-prefs-actions { margin: 0; }
+#settingsPane #settingsSection-preferences[data-destination] .ccc-prefs-actions > :not([data-pref-action="export"]):not([data-pref-action="pick"]) { display: none !important; }
+#settingsPane #settingsSection-preferences[data-destination] [data-pref-preview] > p { display: none; }
+/* Repositories page: the avatar editor sits open with no extra heading. */
+#settingsSection-repositories [data-context-preferences] > summary { display: none; }
+/* Agents: one-click setup chips, with the fine-tuning selects on the line below. */
+.agents-overview .ao-chips { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; flex: 1 1 0; }
+.agents-overview .ao-def-fine { margin: -2px 0 8px; }
+.agents-overview .ao-def-fine [data-ao-apply-all] { margin-left: auto; }
+/* Queues: name, engine, model, effort on one row. */
+.agents-overview .ao-q { grid-template-columns: minmax(110px, 1fr) minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(0, 0.8fr); }
+.agents-overview .ao-q select.ao-q-select { min-width: 0; max-width: 100%; width: 100%; }
+@media (max-width: 700px) { .agents-overview .ao-q { grid-template-columns: 1fr; } }
+/* Agents: the fallback editor sits on the page without its intro prose. */
+.settings-modal:not(.is-first-run) #settingsSection-routing > .settings-section-note,
+.settings-modal:not(.is-first-run) #settingsSection-routing #routingPolicyScope { display: none; }
+
+/* Repositories page: one row per repository, no picker. */
+#settingsSection-repositories [data-context-home="repo"] { display: none; }
+.repo-settings-add { display: flex; gap: 8px; align-items: center; padding: 4px 0 10px; }
+.repo-settings-add .settings-text-input { flex: 1 1 auto; min-width: 0; }
+.repo-settings-row .settings-row-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.repo-settings-row .repo-settings-name { display: flex; flex-direction: column; min-width: 0; }
+.repo-settings-row .repo-settings-name .settings-row-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repo-settings-row .repo-settings-mode { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+#settingsSection-repositories > :not(h2):not(#repoSettingsList) { display: none; }
+/* Settings shows controls, not collapsed explanations. */
+#settingsPane[data-settings-flat] details.choice-eligibility,
+#settingsPane[data-settings-flat] #capabilityRows details { display: none; }
+
+/* Engine setup opens in place on the Engines page, not as a pop-up. */
+.ao-setup-overlay.ao-setup-inline { position: static; inset: auto; display: block; background: none; padding: 12px 0 0; }
+.ao-setup-overlay.ao-setup-inline .ao-setup-card { width: auto; max-height: none; box-shadow: none; }
+.ao-setup-overlay.ao-setup-inline .ao-setup-body { overflow: visible; }
+#settingsPane[data-settings-flat] .settings-row:has(> .settings-row-control > #configConsentBtn), #settingsPane[data-settings-flat] .settings-row:has(#configConsentBtn):not(:has([data-cfgc-group])) { display: none; }
+
+/* Dialogs opened from Settings render in place under their row. */
+.upd-overlay.settings-inline-dialog.open { position: static; inset: auto; z-index: auto; display: block; }
+.upd-overlay.settings-inline-dialog .upd-backdrop { display: none; }
+.upd-overlay.settings-inline-dialog .upd-dialog { width: auto !important; max-height: none !important; overflow: visible !important; box-shadow: none; margin: 8px 0 12px; }
+
+/* Local CI sits beneath the identity and disappears when runners are idle. */
+.local-ci-progress { width: 100%; min-width: 0; margin-top: 7px; }
+.local-ci-progress[hidden] { display: none; }
+.local-ci-job { display: block; color: var(--text); text-decoration: none; padding: 3px 0; }
+.local-ci-job + .local-ci-job { margin-top: 5px; }
+a.local-ci-job:hover { color: var(--accent); }
+.local-ci-label { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; line-height: 1.5; }
+.local-ci-name, .local-ci-step { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.local-ci-percent { flex: none; font-variant-numeric: tabular-nums; }
+.local-ci-job progress { display: block; width: 100%; height: 4px; margin: 3px 0; border: 0; border-radius: 2px; overflow: hidden; background: var(--border); accent-color: var(--accent); }
+.local-ci-job progress::-webkit-progress-bar { background: var(--border); }
+.local-ci-job progress::-webkit-progress-value { background: var(--accent); }
+.local-ci-job progress::-moz-progress-bar { background: var(--accent); }
+.local-ci-detail { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.local-ci-elapsed { flex: none; font-size: 11px; color: var(--text-secondary, var(--text)); font-variant-numeric: tabular-nums; }
+.local-ci-step { display: block; font-size: 11px; color: var(--text-secondary, var(--text)); }
+.local-ci-context { display: block; margin-top: 3px; font-size: 11px; line-height: 1.4; color: var(--text-secondary, var(--text)); overflow-wrap: anywhere; }
+.local-ci-group { display: flex; align-items: flex-start; gap: 4px; min-width: 0; --ci-color: var(--accent); }
+.local-ci-commit { flex: 1; min-width: 0; }
+.local-ci-summary { display: flex; align-items: center; gap: 6px; min-height: 32px; cursor: pointer; font-size: 11px; list-style: none; }
+.local-ci-summary::-webkit-details-marker { display: none; }
+.local-ci-summary::before { content: ''; flex: 0 0 5px; width: 5px; height: 5px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(-45deg); }
+.local-ci-commit[open] > .local-ci-summary::before { transform: rotate(45deg); }
+.local-ci-summary-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.local-ci-runner { display: inline-flex; align-items: center; gap: 2px; flex: none; color: var(--text-secondary, var(--text)); }
+.local-ci-runner svg { display: block; width: 14px; height: 14px; }
+.local-ci-summary-status { flex: none; color: var(--ci-color); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.local-ci-overall-progress { flex: 0 0 32px; width: 32px; height: 4px; margin: 0; appearance: none; border: 0; border-radius: 2px; overflow: hidden; background: var(--border); accent-color: var(--ci-color); }
+.local-ci-overall-progress::-webkit-progress-bar { background: var(--border); }
+.local-ci-overall-progress::-webkit-progress-value { background: var(--ci-color); }
+.local-ci-overall-progress::-moz-progress-bar { background: var(--ci-color); }
+.local-ci-group[data-outcome="failure"] { --ci-color: var(--red); }
+.local-ci-group[data-outcome="success"] { --ci-color: var(--green); }
+.local-ci-group[data-outcome="neutral"] { --ci-color: var(--text-muted); }
+.local-ci-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+.local-ci-checks { padding: 3px 0 6px 10px; }
+@media (max-width: 1200px) { .local-ci-summary { min-height: 44px; font-size: 12px; } }
+
+#ciRunnerSetupStatus ul { padding-inline-start: 20px; line-height: 1.6; }
+
+.settings-rail-item[data-section-target="ci-runners"] { text-transform: none; }
+#ciRunnerLaunchStatus { margin-top: 10px; font-size: 12px; line-height: 1.5; }
+
+.ci-runner-diagnostics { margin-top: 18px; }
+.ci-runner-diagnostics summary { cursor: pointer; color: var(--text); }
+
+.local-ci-progress { max-height: 230px; overflow-y: auto; flex-shrink: 0; }
+.local-ci-entry { display: flex; align-items: center; gap: 6px; --ci-color: var(--accent); }
+.local-ci-entry + .local-ci-entry { margin-top: 5px; }
+.local-ci-entry .local-ci-job { flex: 1 1 0; min-width: 0; }
+.local-ci-job:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.local-ci-entry[data-outcome="success"] { --ci-color: var(--green); }
+.local-ci-entry[data-outcome="failure"] { --ci-color: var(--red); }
+.local-ci-entry[data-outcome="neutral"] { --ci-color: var(--text-muted); }
+.local-ci-entry .local-ci-percent { color: var(--ci-color); }
+.local-ci-entry progress { accent-color: var(--ci-color); }
+.local-ci-entry progress::-webkit-progress-value { background: var(--ci-color); }
+.local-ci-entry progress::-moz-progress-bar { background: var(--ci-color); }
+.local-ci-dismiss { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px; width: 28px; height: 32px; border: 0; border-radius: 5px; background: transparent; color: var(--text-muted); cursor: pointer; }
+.local-ci-dismiss:hover { background: var(--surface-2); color: var(--text); }
+.local-ci-dismiss:disabled { opacity: .5; cursor: wait; }
+.local-ci-mobile { display: none; }
+/* The header status line replaced the stacked desktop list at every width. */
+#localCiProgress { display: none !important; }
+.local-ci-mobile-toggle {
+  display: flex; align-items: center; gap: 6px; width: auto; min-height: 22px;
+  padding: 0; border: 0; background: transparent; color: var(--text);
+  font: inherit; font-size: 11px; text-align: left; cursor: pointer;
+  white-space: nowrap;
+}
+.local-ci-mobile-toggle::before {
+  content: ''; flex: 0 0 5px; width: 5px; height: 5px;
+  border-right: 1px solid currentColor; border-bottom: 1px solid currentColor;
+  transform: rotate(-45deg);
+}
+.local-ci-mobile-toggle[aria-expanded="true"]::before { transform: rotate(45deg); }
+.local-ci-mobile-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.local-ci-mobile:not(.is-expanded) > :not(.local-ci-mobile-toggle) { display: none !important; }
+@media (max-width: 1200px) {
+  body .sidebar > #localCiMobileList:not([hidden]),
+  body .main > #localCiMobileReader:not([hidden]),
+  body.ccc-mobile-redesign.ccc-simple-mode .sidebar > #localCiMobileList:not([hidden]) {
+    display: block !important; flex: 0 0 auto; width: 100%; margin: 0; padding: 6px 12px;
+    max-height: 28vh; overflow-y: auto; border-bottom: 1px solid var(--border); background: var(--surface);
+  }
+  .local-ci-mobile .local-ci-label, .local-ci-mobile .local-ci-step { font-size: 12px; }
+  .local-ci-mobile .local-ci-dismiss { flex-basis: 44px; width: 44px; height: 44px; }
+  .local-ci-mobile-toggle { gap: 8px; width: 100%; min-height: 44px; font-size: 12px; }
+  .local-ci-mobile-toggle > span { min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .local-ci-inline-run, .local-ci-inline-run .local-ci-elapsed { font-size: 12px; }
+  body :is(.sidebar > #localCiMobileList, .main > #localCiMobileReader):not([hidden]):not(.is-expanded) { padding-top: 0; padding-bottom: 0; }
+}
+@media (max-width: 700px) {
+  /* Successful checks remain in the list; the reader only needs running or
+     unsuccessful checks. Do not reserve an empty strip when all passed. */
+  #localCiMobileReader > .local-ci-group[data-outcome="success"] { display: none; }
+  body .main > #localCiMobileReader:not([hidden]):not(:has(> :is(.local-ci-group, .local-ci-entry):not([data-outcome="success"]))) { display: none !important; }
+}
+.session-ref-chip {
+  display: inline-block;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--accent);
+  font: inherit;
+  font-size: .9em;
+  overflow-wrap: anywhere;
+  vertical-align: baseline;
+  text-decoration: none;
+}
+.session-ref-chip:hover { text-decoration: underline; }
+.session-ref-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* A represented ticket owns its session tree; unmatched sessions stay below. */
+.conv-workers-activity .fq-recent-state.is-working { color: var(--green); font-weight: 700; }
+.conv-workers-activity .fq-recent-state.is-needs-you { color: var(--orange); font-weight: 700; }
+.workers-ticket-entry { min-width: 0; border-bottom: 1px solid var(--border); }
+.conv-workers-activity .workers-ticket-entry .fq-recent-row { border-bottom: 0; }
+ .workers-ticket-heading { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.workers-ticket-heading .fq-recent-row { flex: 1 1 auto; min-width: 0; }
+.workers-ticket-toggle {
+  flex: 0 0 auto; padding: 3px 5px; font: inherit; font-size: 10px;
+  color: var(--accent); background: transparent; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 4px; white-space: nowrap;
+}
+.workers-ticket-toggle[aria-expanded="true"], .workers-ticket-toggle:hover { background: var(--surface-2); }
+.workers-ticket-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.workers-ticket-session-body { min-width: 0; }
+.workers-ticket-session-body .conv-subagent-cluster-body { display: block !important; }
+.workers-ticket-session-body [data-role="subagent-cluster-toggle"] { display: none !important; }
+.conv-workers-activity .fq-recent-rows:has(.workers-ticket-session-body:not([hidden])) { max-height: 60vh; }
+
+#convList.workers-view { display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+#convList.workers-view > .conv-tab-bar { flex: 0 0 auto; }
+#convList.workers-view > .conv-archived-section {
+  display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow: hidden;
+}
+#convList.workers-view .conv-workers-activity,
+#convList.workers-view .conv-archived-tools,
+#convList.workers-view .conv-workers-uniform { flex: 0 0 auto; }
+#convList.workers-view .conv-archived-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
+#convList.workers-view .conv-workers-activity .fq-recent-rows { max-height: min(330px, 52.5vh); }
+#convList.workers-view .conv-workers-activity .fq-recent-rows:has(.workers-ticket-session-body:not([hidden])) { max-height: 60vh; }
+
+#convList.workers-view .fq-recent-row.is-brief { grid-template-columns: minmax(0, 1fr) auto; }
+#convList.workers-view .workers-ticket-session-body[hidden] { display: none; }
+@container sidebar (max-width: 420px) {
+  .workers-ticket-entry.has-lanes .workers-ticket-heading { flex-wrap: wrap; }
+  .workers-ticket-entry.has-lanes .workers-ticket-heading .fq-recent-row { flex-basis: 100%; }
+  .workers-ticket-entry.has-lanes .workers-ticket-toggle { margin-bottom: 6px; }
+}
+
+.workers-ticket-update {
+  margin: -3px 0 6px; font-size: 10px; line-height: 1.35; color: var(--text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.conv-workers-activity .fq-recent-row.is-brief .fq-recent-meta > .conv-working-age { display: inline-flex; }
+
+/* Ticket details and session expansion have separate native controls. */
+.workers-ticket-link, .workers-ticket-title {
+  appearance: none; border: 0; border-radius: 0; padding: 0;
+  background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.workers-ticket-link { flex: 0 0 auto; font-family: 'JetBrains Mono', ui-monospace, monospace; }
+.workers-ticket-link:hover { text-decoration: underline; }
+.fq-recent-row.is-brief .fq-recent-title { display: flex; align-items: baseline; gap: 4px; }
+.workers-ticket-title {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+[data-workers-ticket-row] { cursor: pointer; }
+.workers-ticket-link:focus-visible, .workers-ticket-title:focus-visible {
+  outline: 2px solid var(--accent, #58a6ff); outline-offset: 2px;
+}
+@container sidebar (max-width: 420px) {
+  #convList.workers-view .workers-ticket-heading .fq-recent-row.is-brief { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Workers is a ticket list; independent sessions remain available elsewhere. */
+#convList.workers-view .conv-archived-list,
+#convList.workers-view .conv-archived-tools,
+#convList.workers-view .conv-workers-uniform { display: none; }
+#convList.workers-view .conv-workers-activity {
+  display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow: hidden;
+}
+#convList.workers-view .conv-workers-activity .fq-recent-work {
+  display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0;
+}
+#convList.workers-view .conv-workers-activity .fq-recent-rows {
+  flex: 1 1 auto; min-height: 0; max-height: none; overflow-y: auto; overscroll-behavior: contain;
+}
+#convList.workers-view .conv-workers-activity .fq-recent-state.is-open { color: var(--red, #da3633); font-weight: 600; }
+#convList.workers-view .conv-workers-activity .fq-recent-rows:has(.workers-ticket-session-body:not([hidden])) { max-height: none; }
+
+.workers-awaiting { flex: 0 0 auto; min-width: 0; padding: 8px 0 10px; border-bottom: 1px solid var(--border); }
+.workers-awaiting[hidden] { display: none; }
+.workers-awaiting-label { margin-bottom: 6px; font-size: 11px; color: var(--text-secondary, var(--text)); }
+.workers-awaiting-label span { margin-left: 4px; font-variant-numeric: tabular-nums; }
+.workers-awaiting-chips { display: flex; gap: 6px; overflow-x: auto; padding: 2px; overscroll-behavior-x: contain; }
+.workers-awaiting-chip { flex: 0 0 auto; min-height: 32px; padding: 4px 8px; font: inherit; font-size: 11px; color: var(--accent); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+.workers-awaiting-chip:hover { background: var(--surface-2); }
+.workers-awaiting-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.workers-pending-list { margin-top: 12px; }
+.workers-pending-entry { padding: 10px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.workers-pending-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.workers-pending-state, .workers-pending-meta, .workers-pending-entry p { font-size: 11px; line-height: 1.5; }
+.workers-pending-state, .workers-pending-meta { color: var(--text-secondary, var(--text)); }
+.workers-pending-entry p { margin: 4px 0; color: var(--text-secondary, var(--text)); }
+.workers-pending-state.is-active { color: var(--green); }
+.workers-pending-state.is-delayed { color: var(--orange); }
+.workers-pending-session { padding: 4px 8px; min-height: 32px; font: inherit; font-size: 11px; color: var(--accent); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+.workers-pending-session:hover { background: var(--surface-2); }
+.workers-pending-session:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Blocked tickets explain the next action; completed workers stay quiet. */
+.workers-ticket-context { margin: 0 0 8px; min-width: 0; }
+.workers-block-choices { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }
+.workers-block-category { display: inline-block; margin-inline-end: 6px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; color: var(--text-secondary, var(--text)); font-size: 10px; line-height: 1.4; vertical-align: baseline; }
+.workers-ticket-context .workers-ticket-update { margin: 4px 0; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.workers-block-choice { max-width: 100%; padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--accent); font: inherit; font-size: 11px; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.workers-block-choice:hover { background: var(--surface-2); }
+.workers-block-choice:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@container sidebar (max-width: 420px) { .workers-block-choice { min-height: 36px; } }
+
+/* An app's agent pane (embed=app) is narrow, so the phone layout's rules
+   apply to it. Those re-show the CI row and the session title bar with more
+   specific selectors; this keeps the pane to one conversation and a composer. */
+body.ccc-app-embed.conversation-popout .main > #localCiMobileReader,
+body.ccc-app-embed.conversation-popout .main > #convToolbar,
+body.ccc-app-embed.conversation-popout .main > .toolbar {
+  display: none !important;
+}
+
+/* Home keeps the existing identity; operational details share one scrollable
+   line instead of competing with the conversation for vertical space. */
+.sidebar-header:has(> .mobile-home-status) { flex-wrap: wrap !important; }
+.sidebar .mobile-home-status {
+  display: flex; flex: 1 1 100%; align-items: center; gap: 12px;
+  width: 100%; min-width: 0; min-height: 22px; flex-wrap: nowrap;
+  overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none;
+  white-space: nowrap;
+}
+.sidebar .mobile-home-status > #localCiMobileList:not([hidden]) {
+  display: block !important; flex: 0 0 auto; width: max-content; max-width: none;
+  margin: 0; padding: 0; border: 0; max-height: none; overflow: visible;
+}
+.sidebar .mobile-home-status > #headroomBars:not([hidden]) { display: block; flex: 0 0 auto; width: auto; margin: 0; }
+.sidebar #headroomBars .hb-heading,
+.sidebar #headroomBars .hb-bar,
+.sidebar #headroomBars .hb-sub { display: none; }
+.sidebar #headroomBars .hb-grid { display: flex; flex-wrap: nowrap; gap: 12px; }
+.sidebar #headroomBars .hb-chip { display: flex; align-items: center; flex: 0 0 auto; padding: 0; }
+.sidebar #headroomBars .hb-top { flex-wrap: nowrap; justify-content: flex-start; gap: 4px; }
+.sidebar #headroomBars .hb-grid > .ccc-sav-ticker:not([hidden]) { display: inline-flex !important; padding: 0; border: 0; border-radius: 0; background: none; font-size: 11px; }
+.sidebar #headroomBars .ccc-sav-ticker-spark { display: none; }
+@media (max-width: 1200px) {
+  .sidebar .sidebar-header { display: flex; flex-direction: column; align-items: stretch; gap: 0; padding: 8px 12px 0; }
+  .sidebar .sidebar-header > .sidebar-header-brand { display: flex; order: -2; min-height: 44px; margin: 0; flex: 0 0 auto; }
+  .sidebar .sidebar-header-brand .sh-title-row { gap: 8px; }
+  .sidebar .sidebar-header-brand .sh-title-link { display: flex; }
+  .sidebar .sidebar-header-brand .sh-app-icon { display: block; width: 28px; height: 28px; }
+  .sidebar .sidebar-header-brand .sh-title-main {
+    font-size: 17px; font-weight: 750; color: transparent; -webkit-text-fill-color: transparent;
+    background-image: linear-gradient(90deg, #f0f6fc 0%, #58a6ff 42%, #bc8cff 74%, #3fb950 100%);
+    background-clip: text; -webkit-background-clip: text;
+  }
+  .sidebar .mobile-home-status { order: -1; flex: 0 0 auto; min-height: 44px; scrollbar-width: thin; }
+  .mobile-home-status .local-ci-mobile-toggle { width: auto; gap: 6px; }
+  .mobile-home-status .local-ci-mobile-toggle > span { overflow: visible; }
+  .sidebar #headroomBars .hb-chip { min-height: 44px; }
+  .sidebar #headroomBars .hb-grid > .ccc-sav-ticker:not([hidden]) { min-height: 44px; font-size: 12px; }
+  html body .main > #localCiMobileReader:not([hidden]) { display: none !important; }
+  body.mobile-show-main .sidebar .sidebar-header { visibility: hidden; }
+  .conv-input-bar .steer-btn { display: none !important; }
+  html body .conv-split .conv-pane .conv-input-bar.visible { flex-shrink: 0; }
+}
+
+/* Swipes track directly, then settle; vertical scrolling retains ownership. */
+@media (max-width: 1200px), (pointer: coarse) {
+  :is(.conv-item, .simple-task-card[data-session-id]) { touch-action: pan-y; }
+  :is(.conv-item, .simple-task-card).is-swipe-committed {
+    position: relative; overflow: visible; z-index: 2;
+    transform: translateX(var(--conv-row-swipe-offset, 0px));
+    transition: none; box-shadow: none;
+  }
+  :is(.conv-item, .simple-task-card).is-swipe-committed::before {
+    content: attr(data-swipe-action-label);
+    position: absolute; inset-block: 0; right: 100%; width: 112px;
+    display: flex; align-items: center; justify-content: center;
+    padding: 10px; background: #164b48; color: #e2fffa;
+    font-size: 12px; font-weight: 650; text-align: center;
+  }
+  :is(.conv-item, .simple-task-card).is-swipe-committed.is-swipe-left::before { right: auto; left: 100%; }
+  :is(.conv-item, .simple-task-card).is-swipe-armed::before { background: #08786e; }
+  :is(.conv-item, .simple-task-card).is-swipe-settling { transition: transform 180ms cubic-bezier(.2,.8,.2,1); }
+  .simple-card-archive-btn { border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; flex-shrink: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(.conv-item, .simple-task-card).is-swipe-settling { transition: none; }
+}
+
+.mobile-home-status .mobile-ci-details {
+  position: fixed; z-index: 1100; left: 12px; right: 12px;
+  max-height: min(50dvh, 360px); overflow-y: auto; white-space: normal;
+  padding: 8px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface); box-shadow: 0 8px 24px #0005;
+}
+.local-ci-inline-run[data-outcome="failure"] { color: var(--red); }
+.local-ci-inline-run[data-outcome="active"] { color: var(--blue, #79a9dc); }
+.local-ci-inline-run[data-outcome="success"] { color: var(--green); }
+.mobile-home-quick { display: none; }
+@media (max-width: 1200px) {
+  body.mobile-home-collapsed .sidebar .mobile-home-status:not(.mobile-home-folding),
+  body.mobile-home-collapsed .sidebar > .new-session-panel:not(.mobile-home-folding) {
+    display: none !important;
+  }
+  .sidebar .mobile-home-folding {
+    position: fixed; top: var(--mobile-home-fold-top); left: var(--mobile-home-fold-left);
+    width: var(--mobile-home-fold-width); height: var(--mobile-home-fold-height);
+    overflow: hidden !important; pointer-events: none;
+  }
+  .sidebar .mobile-home-list-moving {
+    min-height: var(--mobile-home-fold-height); flex-shrink: 0;
+    position: relative; z-index: 1; background: var(--surface); will-change: transform;
+  }
+  .sidebar:has(> .mobile-home-list-moving) > :not(.mobile-home-list-moving) { flex-shrink: 0; }
+  .sidebar .mobile-home-status { flex-shrink: 0; }
+  body.mobile-home-collapsed .sidebar .sidebar-header { padding-bottom: 4px; }
+  body.mobile-home-collapsed .sidebar .sidebar-header-brand { width: 100%; }
+  body.mobile-home-collapsed .sidebar .sh-title-link { margin-right: auto; }
+  body.mobile-home-collapsed .mobile-home-quick {
+    display: inline-flex; align-items: center; justify-content: center;
+    flex: 0 0 44px; width: 44px; height: 44px; padding: 0; border: 0;
+    border-radius: 50%; background: transparent; color: var(--text); font-size: 26px;
+  }
+  body.mobile-home-collapsed .mobile-home-search { font-size: 28px; }
+  .mobile-home-quick:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+}
+
+.simple-card-archive-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.simple-card-archive-btn:disabled { opacity: .45; cursor: wait; }
+
+.simple-card-archive-btn { border: 0; background: transparent; color: var(--text-muted); padding: 6px; border-radius: 6px; }
+@media (max-width: 1200px) {
+  body.ccc-mobile-redesign.ccc-simple-mode .msh-wordmark {
+    font-size: 15px; font-weight: 750; color: transparent; -webkit-text-fill-color: transparent;
+    background-image: linear-gradient(90deg, #f0f6fc 0%, #58a6ff 42%, #bc8cff 74%, #3fb950 100%);
+    background-clip: text; -webkit-background-clip: text;
+  }
+  .sidebar #mobileSimpleHeader .mobile-home-status { width: calc(100% - 24px); margin-inline: 12px; }
+  body.mobile-show-main .sidebar #mobileSimpleHeader { visibility: hidden; }
+}
+.mobile-home-status:not(:has(> :not([hidden]))) { display: none !important; }
+.sidebar .worker-activity-line {
+  display: flex; align-items: center; gap: 10px; flex: 0 0 100%;
+  width: 100%; min-width: 0; min-height: 26px;
+  overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin;
+  white-space: nowrap; font-size: 11px; font-variant-numeric: tabular-nums;
+  color: var(--text); margin: 0;
+}
+.worker-activity-line > span { flex: 0 0 auto; }
+.worker-activity-label { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; }
+.worker-activity-now { color: var(--green); font-weight: 600; }
+.worker-activity-recent, .worker-activity-muted { color: var(--text-muted); }
+.worker-activity-repo { color: var(--blue, var(--accent)); }
+.worker-activity-line:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+@media (max-width: 1200px) {
+  .sidebar .worker-activity-line { flex: 0 0 auto; min-height: 30px; font-size: 12px; order: -1; }
+  .sidebar #mobileSimpleHeader .worker-activity-line { width: calc(100% - 24px); margin-inline: 12px; }
+  body.mobile-home-collapsed .sidebar .worker-activity-line:not(.mobile-home-folding) { display: none !important; }
+}
+#convList.session-workspace .conv-item.is-swipe-settling { transition: transform 180ms cubic-bezier(.2,.8,.2,1) !important; }
+@media (prefers-reduced-motion: reduce) {
+  #convList.session-workspace .conv-item.is-swipe-settling { transition: none !important; }
+}
+
+/* Replay: a user-role message the owner did not type (injected brief, lane
+   report, worker or peer message) arrives whole, sliding in from above,
+   instead of being typed into the composer. */
+.conv-replay-incoming {
+  animation: conv-replay-incoming-in 0.45s ease-out;
+}
+@keyframes conv-replay-incoming-in {
+  from { opacity: 0; transform: translateY(-10px); box-shadow: 0 0 0 2px var(--accent); }
+  60% { opacity: 1; }
+  to { opacity: 1; transform: none; box-shadow: 0 0 0 0 transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .conv-replay-incoming { animation: none; }
+}
+
+/* ── Workers vertical budget ───────────────────────────────────────────────
+   Each ticket gets one line for identity (ref, title, state, age, session
+   count) and at most one line for context (category, question, answers).
+   tests/workers-row-budget.browser.cjs enforces this; a feature that needs
+   more height asks the owner for budget instead of adding a line here. */
+#convList.workers-view > .conv-archived-section { margin-top: 0; padding-top: 0; border-top: 0; }
+#convList.workers-view .conv-workers-activity { margin: 0; }
+#convList.workers-view .conv-workers-activity .fq-recent-work { padding: 0 10px; }
+#convList.workers-view .conv-workers-activity .fq-recent-rows { margin-top: 0; }
+#convList.workers-view .workers-awaiting {
+  display: flex; align-items: center; gap: 8px; padding: 4px 0; min-width: 0;
+}
+#convList.workers-view .workers-awaiting[hidden] { display: none; }
+#convList.workers-view .workers-awaiting-label { flex: 0 0 auto; margin: 0; white-space: nowrap; }
+#convList.workers-view .workers-awaiting-chips { flex: 1 1 auto; min-width: 0; gap: 4px; padding: 1px; scrollbar-width: none; }
+#convList.workers-view .workers-awaiting-chip { min-height: 0; padding: 1px 6px; font-size: 10.5px; }
+#convList.workers-view .conv-workers-activity .workers-ticket-heading { flex-wrap: nowrap; }
+#convList.workers-view .conv-workers-activity .workers-ticket-heading .fq-recent-row.is-brief {
+  flex-basis: auto; grid-template-columns: minmax(0, 1fr) auto; gap: 0 8px; padding: 5px 0 3px;
+}
+#convList.workers-view .conv-workers-activity .workers-ticket-entry.has-lanes .workers-ticket-toggle { margin: 0; }
+#convList.workers-view .workers-ticket-toggle {
+  min-width: 18px; padding: 0 4px; font-size: 10px; line-height: 16px; text-align: center; font-variant-numeric: tabular-nums;
+}
+#convList.workers-view .workers-ticket-context {
+  display: flex; align-items: center; gap: 6px; margin: 0 0 5px; min-width: 0;
+}
+#convList.workers-view .workers-ticket-context .workers-ticket-update {
+  display: block; flex: 1 1 auto; min-width: 0; margin: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; -webkit-line-clamp: unset;
+}
+#convList.workers-view .workers-block-category { padding: 0 4px; font-size: 9.5px; line-height: 14px; margin-inline-end: 4px; }
+#convList.workers-view .workers-block-choices {
+  flex: 0 1 auto; min-width: 0; flex-wrap: nowrap; gap: 4px; margin: 0; overflow: hidden;
+}
+#convList.workers-view .workers-ticket-context .workers-ticket-update { flex-basis: 30%; }
+#convList.workers-view .workers-block-choice {
+  flex: 0 1 auto; min-width: 4.5em; max-width: 120px; min-height: 0; padding: 0 6px; font-size: 10px; line-height: 16px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Touch keeps a tappable target, still inside the two-line budget. */
+@media (pointer: coarse) {
+  #convList.workers-view .workers-block-choice { min-height: 28px; }
+}
+
+.local-ci-runner { white-space: nowrap; }
+.local-ci-inline-icons { display: inline-flex; gap: 3px; margin-inline-end: 4px; vertical-align: middle; }
+.local-ci-inline-icons svg { width: 13px; height: 13px; }
+
+.local-ci-job-provider + .local-ci-name { flex: 1; min-width: 0; }
+
+/* Turn provenance is distinct from process liveness and spawn ancestry. */
+.conv-driver {display:inline-block;max-width:100%;min-width:0;overflow:hidden;text-overflow:ellipsis;font:12px/1.4 var(--font-ui,system-ui);color:var(--text-secondary,var(--text));white-space:nowrap;vertical-align:middle}
+.conv-driver-label {font-weight:500}
+.conv-driver-owner {display:block;font-weight:400}
+.conv-pane-driver {min-width:0;flex:0 1 260px}
+.conv-pane-driver[hidden] {display:none}
+.conv-meta-col>.conv-driver {margin:2px 6px}
+.wa-row-footer>.conv-driver {flex:0 1 auto}
+.conv-pane-driver>.conv-driver, #cccBreadcrumb>.conv-driver {white-space:normal}
+#mobileConvTitle>.conv-driver, #simpleConvTitle>.conv-driver {display:block;margin-top:3px;font-size:12px;line-height:1.35;white-space:normal}
+.mobile-conv-name {display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:1200px) {.conv-pane-driver {flex-basis:180px}}
+
+/* Recorded session inputs in ticket detail. */
+.uxq-session-activity summary { cursor: pointer; }
+.uxq-session-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 12px 0; }
+.uxq-session-controls label { display: flex; align-items: center; gap: 8px; }
+.uxq-session-record { padding: 12px 0; border-top: 1px solid var(--border); }
+.uxq-session-record > summary { display: list-item; overflow-wrap: anywhere; }
+.uxq-session-record p { margin: 8px 0; }
+.uxq-session-record dl { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; font-variant-numeric: tabular-nums; }
+.uxq-session-record dd { margin: 0; }
+.uxq-session-events { overflow-x: auto; margin-top: 12px; }
+.uxq-session-events table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.uxq-session-events th, .uxq-session-events td { text-align: left; vertical-align: top; padding: 8px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.uxq-session-events caption { text-align: left; padding-bottom: 8px; }
+.uxq-session-record > summary > span + span { display: block; margin-top: 4px; }
+.uxq-session-events table { min-width: 700px; }
+.uxq-session-events th:first-child, .uxq-session-events td:first-child { white-space: nowrap; }
+.uxq-session-events th:nth-child(3), .uxq-session-events td:nth-child(3) { white-space: nowrap; text-align: right; }
+
+  .sidebar-read-pause {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-shrink: 0;
+    padding: 6px 12px;
+    color: var(--text);
+    background: var(--surface-2);
+    font-size: 12px;
+  }
+  .sidebar-read-pause[hidden] { display: none; }
+  .sidebar-read-pause button {
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    cursor: pointer;
+  }
+  .sidebar-read-pause button:hover { background: var(--surface); }

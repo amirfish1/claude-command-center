@@ -78,10 +78,62 @@
         if (s && s.ok) {
           state = s;
           renderPill();
+          renderInline();
         }
         return state;
       })
       .catch(() => state);
+  }
+
+  // Settings > System: one on/off switch per kind of thing CCC adds to the
+  // agent config. Off removes it; on installs it again.
+  const INLINE_GROUPS = [
+    ['claude-hooks', 'Claude Code hooks', (i) => i.id === 'claude-hooks'],
+    ['codex-hooks', 'Codex hooks', (i) => i.id === 'codex-hooks'],
+    ['skills', 'Agent skills', (i) => i.kind === 'skill'],
+    ['instructions', 'Question tags', (i) => i.kind === 'instructions'],
+  ];
+  let inlineBusy = false;
+  function renderInline() {
+    const $btn = document.getElementById('configConsentBtn');
+    const legacy = $btn && $btn.closest('.settings-row');
+    if (!legacy || !state) return;
+    let host = document.getElementById('cfgConsentInline');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'cfgConsentInline';
+      legacy.hidden = true;
+      legacy.after(host);
+      host.addEventListener('click', (event) => {
+        const toggle = event.target.closest('[data-cfgc-group]');
+        if (toggle && !inlineBusy) setGroup(toggle.dataset.cfgcGroup, toggle.getAttribute('aria-checked') !== 'true');
+      });
+    }
+    host.innerHTML = INLINE_GROUPS.map(([id, label, match]) => {
+      const items = (state.items || []).filter((i) => match(i) && i.engine_installed !== false);
+      if (!items.length) return '';
+      const on = items.every((i) => i.status === 'enabled' || i.status === 'changed');
+      return '<div class="settings-row" data-keywords="agent config access hooks skills consent ' + esc(label.toLowerCase()) + '">'
+        + '<div class="settings-row-main"><div class="settings-row-label">' + esc(label) + '</div></div>'
+        + '<div class="settings-row-control"><button type="button" class="settings-toggle' + (on ? ' is-on' : '') + '" role="switch" aria-checked="' + on
+        + '" aria-label="' + esc(label) + '" data-cfgc-group="' + id + '"' + (inlineBusy ? ' disabled' : '') + '>'
+        + '<span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span></button></div></div>';
+    }).join('');
+  }
+  function setGroup(id, on) {
+    const group = INLINE_GROUPS.find((g) => g[0] === id);
+    if (!group || !state) return;
+    const decisions = {};
+    (state.items || []).filter(group[2]).forEach((item) => { decisions[item.id] = on ? 'approve' : 'decline'; });
+    inlineBusy = true; renderInline();
+    const toast = (text, kind) => { if (typeof window.showOpToast === 'function') window.showOpToast(text, kind); };
+    post('/api/config-consent/decide', { decisions }).then((res) => {
+      const failed = Object.entries((res && res.results) || {}).filter(([, r]) => !r.ok).map(([key, r]) => key + ': ' + (r.error || 'failed'));
+      if (res && res.ok === false && !res.results) failed.push(/local-only/.test(res.error || '') ? 'Only allowed from the machine CCC runs on.' : (res.error || 'request failed'));
+      if (failed.length) toast('Could not change ' + group[1] + ': ' + failed.join('; '), 'err');
+      else toast(group[1] + (on ? ' on.' : ' off.'), 'success');
+    }).catch((e) => toast('Could not change ' + group[1] + ': ' + String((e && e.message) || e), 'err'))
+      .then(() => { inlineBusy = false; return load(); }).then(renderInline);
   }
 
   function hooksItem() {
@@ -286,6 +338,7 @@
       + (!review.length && !carried.length && !rest.length ? '<div class="cfgc-muted">Nothing to review.</div>' : '');
     m.querySelector('[data-role="cfgc-approve-all"]').hidden = !review.length || compact;
     m.querySelector('[data-role="cfgc-save"]').hidden = compact;
+    m.querySelector('[data-role="cfgc-later"]').textContent = mode === 'manage' ? 'Close' : 'Not now';
     m.querySelector('[data-role="cfgc-ok"]').hidden = !compact;
     m.querySelector('[data-role="cfgc-details"]').hidden = !compact;
     m.querySelector('[data-role="cfgc-revoke-all"]').hidden = mode !== 'manage' || !items.some((i) => i.installed);
@@ -298,6 +351,7 @@
     }
   }
 
+  let returnFocus = null;
   function open(opts) {
     mode = (opts && opts.mode) || 'manage';
     expanded = true;
@@ -314,6 +368,7 @@
   function close(later) {
     if (!$modal) return;
     $modal.classList.remove('open');
+    if (returnFocus) { const el = returnFocus; returnFocus = null; if (el.isConnected && el.getClientRects().length) el.focus({ preventScroll: true }); }
     if (later && mode === 'auto') snooze();
   }
 
@@ -432,16 +487,15 @@
     const $btn = document.getElementById('configConsentBtn');
     if ($btn && !$btn._cfgcBound) {
       $btn._cfgcBound = true;
-      $btn.addEventListener('click', () => {
-        if (typeof window._cccCloseSettingsModal === 'function') window._cccCloseSettingsModal();
-        open({ mode: 'manage' });
-      });
+      // Opens over Settings and returns to it: closing Settings first left
+      // people on the dashboard with no way back to where they were.
+      $btn.addEventListener('click', () => { returnFocus = $btn; open({ mode: 'manage' }); });
     }
   }
 
   function boot() {
     wire();
-    load().then(() => maybeAutoOpen(0));
+    load().then(() => { renderInline(); maybeAutoOpen(0); });
     setInterval(() => { if (!document.hidden) load(); }, REFRESH_MS);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
   }

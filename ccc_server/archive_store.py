@@ -10,6 +10,7 @@ import hashlib
 import copy
 import json
 import math
+import marshal
 import os
 from pathlib import Path
 import sqlite3
@@ -242,17 +243,18 @@ def load_attention(cache_file, key, *, schema_version, build_id):
         current = con.execute('SELECT cached_at FROM variants WHERE key=?', (key,)).fetchone()
         if not current or current[0] != header[0]:
             return None
-        missing = con.execute('''SELECT 1 FROM rows r LEFT JOIN session_attention a
-            ON a.variant=r.variant AND a.identity=r.identity
-            WHERE r.variant=? AND (a.digest IS NULL OR a.digest!=?||r.digest) LIMIT 1''',
-                              (key, ATTENTION_VERSION)).fetchone()
-        if missing:
-            return None
         stat = database_path(cache_file).stat()
         namespace = (str(database_path(cache_file).resolve()), stat.st_dev, stat.st_ino, key)
-        signatures = con.execute('''SELECT a.identity,a.digest FROM rows r JOIN session_attention a
+        # Validate and collect order in one index traversal, under the same
+        # read transaction. Missing projections must still invalidate warm
+        # decoded rows rather than silently shortening the attention feed.
+        records = con.execute('''SELECT r.identity,a.digest,a.digest=?||r.digest
+            FROM rows r LEFT JOIN session_attention a
             ON a.variant=r.variant AND a.identity=r.identity
-            WHERE r.variant=? ORDER BY r.position''', (key,)).fetchall()
+            WHERE r.variant=? ORDER BY r.position''', (ATTENTION_VERSION, key)).fetchall()
+        if any(not valid for _, _, valid in records):
+            return None
+        signatures = [(rid, digest) for rid, digest, _ in records]
         cached, missing = {}, []
         for rid, digest in signatures:
             row = _ATTENTION_CACHE.get((*namespace, rid, digest))
@@ -268,8 +270,16 @@ def load_attention(cache_file, key, *, schema_version, build_id):
                                  (key, json.dumps(missing)))
             for rid, digest, body in bodies:
                 row = json.loads(body)
-                value = (row, tuple(name for name, item in row.items()
-                                    if isinstance(item, (dict, list))))
+                nested = {name: item for name, item in row.items()
+                          if isinstance(item, (dict, list))}
+                # These bytes come only from our own JSON-decoded containers
+                # and stay in memory; never deserialize marshal from disk or
+                # an external request. Fresh decoding avoids recursive Python
+                # copies on every poll. Placeholders preserve field order.
+                encoded = marshal.dumps(nested, 2) if nested else None
+                for name in nested:
+                    row[name] = None
+                value = (row, encoded)
                 cached[rid] = value
                 # Account for decoded containers and keys as well as strings.
                 # Oversized rows remain readable without being retained.
@@ -280,8 +290,8 @@ def load_attention(cache_file, key, *, schema_version, build_id):
             # Lifecycle overlays and consumer enrichment must never mutate
             # cached inputs, including nested structured state and labels.
             result = row.copy()
-            for name in nested:
-                result[name] = copy.deepcopy(row[name])
+            if nested is not None:
+                result.update(marshal.loads(nested))
             decoded.append((rid, result))
         return {'cached_at': header[0], 'rows': decoded}
     finally:

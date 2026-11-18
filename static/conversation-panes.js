@@ -75,7 +75,7 @@
       if (typeof helpers.updateAnnounceButton === 'function') (0, helpers.updateAnnounceButton)();
       if (typeof helpers.updateJumpButton === 'function') (0, helpers.updateJumpButton)();
       if (typeof helpers.updateSplitToolbar === 'function') (0, helpers.updateSplitToolbar)();
-      (0, helpers.scheduleTtsPrefetch)();
+      ;
       try { if (typeof helpers.pollVercelDeploy === 'function') (0, helpers.pollVercelDeploy)(); } catch (_) {}
       try {
         if (typeof helpers.resetLocalhostPill === 'function') (0, helpers.resetLocalhostPill)();

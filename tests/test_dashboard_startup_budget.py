@@ -316,7 +316,7 @@ def test_reader_only_popouts_skip_dashboard_stream_heartbeat_and_subagent_status
     # archive list fetch.
     assert "if (!READER_ONLY_POPOUT) connectDashboardEvents();" in SOURCE
 
-    heartbeat = _function("// Slow heartbeat:", "// Last rows render done by the stuck-render recovery")
+    heartbeat = _function("// Slow heartbeat:", "let _archiveRecoveryRendered =")
     assert "if (!READER_ONLY_POPOUT) setInterval(() => {" in heartbeat
     assert "'[ARCHIVE-DIAG] alive hidden='" in heartbeat
 
@@ -350,8 +350,6 @@ def test_startup_critical_read_defers_federated_and_live_activity_session_polls(
     assert "req.searchParams.get('peers_only') === '1'" in critical
     assert "req.searchParams.get('federated') === '1'" in critical
 
-    local_speech = (ROOT / "static" / "local-speech.js").read_text(encoding="utf-8")
-    assert "if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', check);" in local_speech
 
 
 def test_threaded_http_server_increases_listen_backlog_for_reload_bursts():

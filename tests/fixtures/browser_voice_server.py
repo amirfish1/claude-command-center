@@ -34,9 +34,9 @@ class Handler(SimpleHTTPRequestHandler):
             self.wfile.write(body)
         elif self.path.startswith("/api/browser-voice/"):
             browser_voice.handle(self, "GET")
-        elif self.path == "/":
+        elif self.path.split("?", 1)[0] == "/":
             body = b'''<!doctype html><meta charset="utf-8"><title>Browser voice test</title>
-              <button id="settingsBrowserVoiceToggle" role="switch" aria-checked="false">Browser voice pilot</button>
+              <button id="settingsBrowserVoiceToggle" role="switch" aria-checked="false">Browser voice</button>
               <p id="settingsBrowserVoiceStatus" role="status"></p>
               <script src="/static/browser-voice.js"></script>'''
             self.send_response(200)

@@ -216,6 +216,7 @@
   /* open({nodeId, nodeName}) — nodeId '' means this node. */
   function open(opts) {
     opts = opts || {};
+    const inline = opts.container;
     const opener = document.activeElement;
     injectStyle();
     const nodeId = opts.nodeId || '';
@@ -226,15 +227,15 @@
     let lastRender = '';
 
     const bd = document.createElement('div');
-    bd.className = 'ccc-phone-backdrop';
+    bd.className = inline ? 'ccc-phone-inline' : 'ccc-phone-backdrop';
     bd.innerHTML = '<div class="ccc-phone-box" role="dialog" aria-modal="true" aria-label="Phone access">'
       + '<h3>Phone access' + (nodeName ? ' on ' + esc(nodeName) : '') + '</h3>'
       + '<p>Open this CCC on your phone over your private Tailscale network. About a minute, no port forwarding, nothing public.</p>'
       + '<div data-role="body"><p>Checking Tailscale…</p></div>'
       + '<div class="ccc-phone-foot ccc-phone-row"><button type="button" data-act="close">Close</button></div></div>';
-    document.body.appendChild(bd);
+    if(inline){bd.innerHTML='<div class="ccc-phone-content"><p>Open this CCC on your phone over your private Tailscale network.</p><div data-role="body"><p>Checking Tailscale…</p></div></div>';inline.append(bd);}else document.body.appendChild(bd);
     const $ = (sel) => bd.querySelector(sel);
-    $('[data-act="close"]').focus();
+    if(!inline)$('[data-act="close"]')?.focus();
 
     function restoreAction(action) {
       const next = action === 'enable' ? 'disable' : action === 'disable' ? 'enable' : action;
@@ -256,7 +257,7 @@
       const role = focused?.getAttribute('data-role');
       if (status.ok === false && !status.tailscale) {
         $('[data-role="body"]').innerHTML = '<p class="ccc-phone-msg err">' + esc(status.detail || status.error || 'Could not load status') + '</p>';
-        if (focused && !focused.isConnected) $('[data-act="close"]').focus();
+        if (focused && !focused.isConnected) $('[data-act="close"]')?.focus();
         return;
       }
       const ts = status.tailscale || {};
@@ -283,7 +284,7 @@
       clearTimeout(timer);
       timer = setTimeout(async () => {
         if (!document.body.contains(bd)) return;
-        if (!busy && !document.hidden) await refresh();
+        if (!busy && !document.hidden && (!inline || bd.getClientRects().length)) await refresh();
         schedule();
       }, POLL_MS);
     }
@@ -310,7 +311,7 @@
         else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
       }
     }
-    document.addEventListener('keydown', onKey, true);
+    if(!inline)document.addEventListener('keydown', onKey, true);
 
     function failureHtml(d) {
       let html = esc(d.detail || d.error || 'Failed');
@@ -319,7 +320,7 @@
     }
 
     bd.addEventListener('click', async (e) => {
-      if (e.target === bd) { close(); return; }
+      if (!inline && e.target === bd) { close(); return; }
       const btn = e.target.closest('[data-act]');
       if (!btn || busy) return;
       const act = btn.getAttribute('data-act');
@@ -423,12 +424,12 @@
   function initSettingsRow() {
     const row = document.getElementById('phoneAccessRow');
     if (!row) return;
-    // Always reachable from Settings; enableFlag() runs when the user opens it.
+    // Viewing setup is read-only; the explicit Turn on action enables the flag.
     row.hidden = false;
   }
 
   // The wizard's server side (enable) is gated on the `phone_access` preview
-  // flag. Opening the wizard is the user's explicit ask, so switch it on.
+  // flag. Only the explicit Turn on action switches it on.
   async function enableFlag() {
     if (await ensureFlags()) return true;
     try {
@@ -446,7 +447,7 @@
     return false;
   }
 
-  window.cccPhoneAccess = { open, renderFleet, ensureFlags, enableFlag };
+  window.cccPhoneAccess = { mount(container){if(container&&!container.childElementCount)open({container});}, open, renderFleet, ensureFlags, enableFlag };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initSettingsRow);
   else initSettingsRow();
 })();

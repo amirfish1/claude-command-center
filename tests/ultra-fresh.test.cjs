@@ -9,7 +9,7 @@ const escaping = app.slice(app.indexOf('  function escapeHtml(s)'), app.indexOf(
 const ticketPaint = app.slice(app.indexOf('  function _workersMeaningfulUpdate('), app.indexOf('  // Compact history rows'));
 const block = app.slice(app.indexOf('  // Ultra-fresh:'), app.indexOf('  // The server derives readiness'))
   + '\nconst _workersTicketSessions = new Map(); const _uxqItemsCache = {items:[{ref:"TASK-1",status:"in_progress"}]}; const _uxqTicketAttention = () => null; const _uxqItemForRef = ref => _uxqItemsCache.items.find(it => it.ref === ref); const _uxqItemRef = item => item.ref;\n' + escaping + ticketPaint;
-const rowActions = app.slice(app.indexOf('  // Row actions are model-authored replies'), app.indexOf('  // CCC-1218:'));
+const rowActions = app.slice(app.indexOf('  // Row actions are model-authored replies'), app.indexOf("  // Handoff chips and the row's Hand off button."));
 
 test('a submitted turn survives delivery acknowledgment over an old finished snapshot', () => {
   let sending = true;

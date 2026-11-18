@@ -7,10 +7,46 @@ import socket
 import sys
 import threading
 import time
+import re
 
 import pytest
 
 import server
+
+
+def test_reused_app_read_accounting_excludes_idle_time(monkeypatch):
+    records = []
+    monkeypatch.setattr(server._cpu_accounting, 'record',
+                        lambda path, cpu, wall: records.append((path, wall)))
+
+    class Handler(server.CommandCenterHandler):
+        def do_GET(self):
+            self.send_json({'ok': True})
+
+        def log_message(self, *args):
+            pass
+
+    httpd = http.server.HTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=httpd.serve_forever, kwargs={'poll_interval': .01})
+    thread.start()
+    connection = http.client.HTTPConnection(*httpd.server_address, timeout=5)
+    try:
+        connection.request('GET', '/view/demo')
+        response = connection.getresponse()
+        response.read()
+        assert response.version == 11 and not response.will_close
+        time.sleep(.25)
+        connection.request('GET', '/view/demo')
+        response = connection.getresponse()
+        response.read()
+        handler_ms = float(re.search(r'app;dur=(\d+)', response.getheader('Server-Timing'))[1])
+    finally:
+        connection.close()
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+    assert len(records) == 2
+    assert abs(records[1][1] * 1000 - handler_ms) < 100
 
 
 @pytest.mark.parametrize("measurement", ["0123456789abcdef", "private-value", ""])

@@ -170,3 +170,33 @@ test('first-run setup uses the same visible editor and can return without saving
  assert.equal(await page.$eval('#settingsSection-engines',node=>node.hidden),false);
  assert.equal(posts.length,0);assert.equal(fs.readFileSync(file,'utf8'),before);
 });
+
+// Replaces the removed autosave fallback helpers: exercise the staged editor
+// and server validation that now own engine/model identity.
+test('profiles retain distinct models on one engine and reject duplicate pairs',async t=>{
+ const {page}=await open(t);await choose(page,'standard');
+ await page.click('#routingPolicyChain > button');
+ const model='#routingPolicyChain fieldset:nth-of-type(2) label:nth-of-type(2) select';
+ await page.select(model,'claude-opus-4-6');await apply(page);
+ assert.deepEqual(read().model_profiles.standard.models.map(row=>[row.engine,row.model]),
+  [['claude','claude-sonnet-4-6'],['claude','claude-opus-4-6']]);
+ const saved=fs.readFileSync(file,'utf8');
+ await page.select(model,'claude-sonnet-4-6');await page.click('#routingPolicyPreview');
+ await page.waitForFunction(()=>!!document.querySelector('#routingPolicyError').textContent);
+ assert.match(await page.$eval('#routingPolicyError',n=>n.textContent),/duplicate|distinct|already|only once/i);
+ assert.equal(fs.readFileSync(file,'utf8'),saved);
+ assert.equal(await page.$eval('#routingPolicyApply',n=>n.disabled),true);
+});
+test('worker fallback prefers an unused engine and rejects duplicate engines',async t=>{
+ const {page}=await open(t);await choose(page,'worker_fallback');
+ await page.click('#routingPolicyChain > button');
+ const engine='#routingPolicyChain fieldset:nth-of-type(3) label:first-of-type select';
+ assert.equal(await page.$eval(engine,n=>n.value),'kimi');
+ await page.select(engine,'claude');
+ await page.select('#routingPolicyChain fieldset:nth-of-type(3) label:nth-of-type(2) select','claude-opus-4-6');
+ await page.click('#routingPolicyPreview');
+ await page.waitForFunction(()=>!!document.querySelector('#routingPolicyError').textContent);
+ assert.match(await page.$eval('#routingPolicyError',n=>n.textContent),/duplicate|once|engine/i);
+ assert.equal(fs.readFileSync(file,'utf8'),original);
+ assert.equal(await page.$eval('#routingPolicyApply',n=>n.disabled),true);
+});

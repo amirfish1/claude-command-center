@@ -11,6 +11,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 def render_session_state(body: str, app_path: Path) -> str:
     source = dashboard_source(app_path)
+    if app_path.parts[-4:] == ("docs", "demo", "static", "app.js"):
+        # The demo now ships the same modular controllers as the dashboard.
+        source += (app_path.parent / "conversation-core.js").read_text()
     assessment_start = source.index("  function sessionCompletionDetails(")
     assessment_end = source.index("\n  }\n", assessment_start) + 5
     function_source = source[assessment_start:assessment_end]

@@ -195,7 +195,7 @@ async function readJSON(url) {
 unused values when the app reports content readiness, so subsequent refreshes
 and unopened sections use the current network APIs. It never changes when the
 app or its conversation reports readiness. Only valid local JSON is included,
-with at most 16 declared reads, 64 KiB per value and 128 KiB total; ineligible
+with at most 16 declared reads, 128 KiB per value and 256 KiB total; ineligible
 reads retain their normal network and error behavior.
 
 ### Load time: one second to fully ready

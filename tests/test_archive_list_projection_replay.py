@@ -1,6 +1,8 @@
 """Complete list replay must preserve live data, ticket work and JSON bytes."""
 import copy
 import json
+import gzip
+import zlib
 
 import pytest
 import server
@@ -28,7 +30,7 @@ def inputs(monkeypatch):
     monkeypatch.setattr(server, '_queue_health_stats', lambda rows, now=None: {'at': now})
     monkeypatch.setattr(server, '_trace_row_flicker', lambda *args, **kwargs: None)
 
-    def topics(rows):
+    def topics(rows, *, diagnostics=None):
         state['calls'] += 1
         by_sid = {row['session_id']: row for row in rows}
         for row in rows:
@@ -48,12 +50,18 @@ def fixture_rows():
     ]
 
 
-def read(rows, *, version=1, context='context', now=10000, window='7d', extra=None):
+def read(rows, *, version=1, context='context', now=10000, window='7d', extra=None,
+         projection_context=None):
     delta = {'ver': version, 'ctx': context, 'extra': extra if extra is not None else rows[1:]}
+    if projection_context is not None:
+        delta['projection_ctx'] = projection_context
     payload = server._archive_list_replay_payload(
         rows, delta, window=window, now=now, cached=True)
     payload['delta_token'] = f'{version}.{context}.{now}'
     assert replay.encode_payload(payload) == json.dumps(dict(payload)).encode()
+    compressed = replay.encode_gzip_payload(payload)
+    if compressed is not None:
+        assert gzip.decompress(compressed) == replay.encode_payload(payload)
     return payload
 
 
@@ -71,6 +79,107 @@ def test_reuses_archive_but_keeps_timestamps_ticket_ticks_and_containers_fresh(i
     assert len(inputs['ticks']) == 2
     assert again['queue_health'] == {'at': 10001}
     assert again['count'] == 2 and again['total_count'] == 2
+
+    # Later replays restore a private clone rather than decoding JSON again.
+    again['conversations'][0]['session_state']['todos'][0]['text'] = 'second caller'
+    rows[1].update(mtime=9950, modified=9950)
+    third = read(rows, now=10002)
+    assert inputs['calls'] == 1
+    assert third['conversations'][1]['mtime'] == 9950
+    assert third['conversations'][0]['session_state']['todos'][0]['text'] == 'nested'
+    assert inputs['ticks'][-1][1]['mtime'] == 9950
+    assert len(inputs['ticks']) == 3
+
+
+@pytest.mark.parametrize('snapshot_ticket', [None, {'ref': 'TEST-1', 'closed': False}])
+def test_ticket_overlay_changes_reuse_projection_and_restore_snapshot_inputs(inputs, snapshot_ticket):
+    rows = fixture_rows()
+    if snapshot_ticket is not None:
+        rows[0].update(idea_ticket=snapshot_ticket, explicitly_archived=False)
+    first = read(rows, projection_context='stable')
+    for index, ideas in enumerate([
+        {'archive': {'ref': 'TEST-2', 'closed': False, 'explicitly_archived': False}},
+        {'archive': {'ref': 'TEST-2', 'closed': True, 'explicitly_archived': True}},
+        {},
+    ]):
+        inputs['ideas'] = ideas
+        actual = read(rows, context=f'changed-ticket-{index}', projection_context='stable')
+        # Ticket routines see the original snapshot, even after a prior overlay
+        # added, removed or archived a ticket. They still run on every replay.
+        assert inputs['ticks'][-1][0].get('idea_ticket') == snapshot_ticket
+        assert inputs['ticks'][-1][0].get('explicitly_archived') == (False if snapshot_ticket else None)
+        expected = server._archive_list_payload(rows, window='7d', now=10000, cached=True)
+        expected['delta_token'] = actual['delta_token']
+        assert dict(actual) == expected
+        assert inputs['calls'] == index + 2, 'only the independent reference reprojects'
+    assert first['conversations'][0].get('idea_ticket') == snapshot_ticket
+    assert rows[0].get('idea_ticket') == snapshot_ticket
+
+
+def test_projection_context_excludes_only_live_ticket_map(inputs, monkeypatch):
+    rows = fixture_rows()
+    monkeypatch.setattr(server, '_archive_serve_cache', {})
+    server._archive_serve_cache_store('scope', rows, server._archive_serve_generation)
+    base = server._archive_serve_cache['scope']['rows']
+    state = lambda: server._archive_list_delta_state('scope', base, '7d', True)
+    original = state()
+    inputs['ideas'] = {'archive': {'ref': 'TEST-1', 'closed': True}}
+    ticket_change = state()
+    assert original['ctx'] != ticket_change['ctx'], 'HTTP/delta freshness remains strict'
+    assert original['projection_ctx'] == ticket_change['projection_ctx']
+    for field, value in [('titles', {'archive': {'display_name': 'Renamed'}}),
+                         ('resume', {'archive': 20000}), ('topics', 2), ('graph', (2, 2))]:
+        previous = state()
+        inputs[field] = value
+        assert state()['projection_ctx'] != previous['projection_ctx'], field
+
+
+def test_ticket_window_membership_changes_still_rebuild_with_stable_projection_context(inputs):
+    rows = fixture_rows()
+    rows[0]['mtime'] = 1
+    rows[1].update(mtime=99999, modified=99999)
+    options = dict(window='8h', now=100000, projection_context='stable')
+    first = read(rows, **options)
+    assert {row['session_id'] for row in first['conversations']} == {'archive', 'live'}
+    inputs['ideas'] = {'archive': {'ref': 'TEST-1', 'explicitly_archived': True}}
+    actual = read(rows, context='removed-parent', **options)
+    assert [row['session_id'] for row in actual['conversations']] == ['live']
+    assert inputs['calls'] == 2, 'the complete selected-id guard remains authoritative'
+
+
+def test_owned_clone_preserves_json_normalization_and_byte_budget():
+    original = [{'session_id': 'live', 'mtime': 1,
+                 'session_state': {'values': (1, 2), 'keys': {1: 'one'}}}]
+    raw, spans = replay.encode_rows(original, {'live'})
+    entry = replay.compressed_entry(raw, spans)
+    normalized = replay.replay_rows(entry, {'live': original[0]})
+    cloned = replay.with_owned_rows(entry, normalized)
+    assert replay.entry_weight(cloned) == replay.entry_weight(entry) + len(cloned[3])
+    restored = replay.replay_rows(cloned, {'live': dict(original[0], mtime=2)})
+    assert restored[0]['session_state'] == {'values': [1, 2], 'keys': {'1': 'one'}}
+    assert restored[0]['mtime'] == 2
+    restored[0]['session_state']['values'].append(3)
+    assert replay.replay_rows(cloned, {'live': original[0]}) == normalized
+    cache = server.ByteBudgetCache(replay.entry_weight(entry), 2)
+    assert cache.put('entry', entry, replay.entry_weight(entry))
+    assert not cache.put('entry', cloned, replay.entry_weight(cloned))
+    assert cache.bytes == 0 and len(cache) == 0
+
+
+@pytest.mark.parametrize('projection_context', [None, 'stable'])
+def test_clone_that_exceeds_budget_keeps_existing_json_replay(inputs, projection_context):
+    rows = fixture_rows()
+    read(rows, projection_context=projection_context)
+    cache = server._ARCHIVE_LIST_PROJECTION_CACHE
+    cache.max_bytes = cache.bytes
+    budget = cache.bytes
+    rows[1]['mtime'] += 1
+    read(rows, now=10001, projection_context=projection_context)
+    rows[1]['mtime'] += 1
+    third = read(rows, now=10002, projection_context=projection_context)
+    assert inputs['calls'] == 1
+    assert third['conversations'][1]['mtime'] == rows[1]['mtime']
+    assert cache.bytes == budget and len(cache) == 1
 
 
 @pytest.mark.parametrize('mutation', ['title', 'parent', 'other-field', 'presence', 'membership',
@@ -157,6 +266,166 @@ def test_offsets_cover_empty_interleaved_and_multibyte_runs():
         assert replay.encode_replay((raw, spans), rows) == raw
 
 
+def test_encoding_chunks_reuse_only_exact_projected_values(monkeypatch):
+    cache = server.ByteBudgetCache(1 << 22, 512)
+    monkeypatch.setattr(replay, '_RUN_CACHE', cache)
+    rows = [{'id': str(i), 'title': 'שלום', 'nested': {'values': [i, None, False]}}
+            for i in range(150)]
+    overlays = {'65', '149'}
+
+    def check(current):
+        raw, spans = replay.encode_rows(current, overlays)
+        assert raw == json.dumps(current).encode()
+        entry = replay.compressed_entry(raw, spans)
+        encoded = replay.compress_replay(entry, current)
+        assert zlib.decompress(encoded + b'\x03\x00', -15) == raw
+        return entry
+
+    first = check(rows)
+    count = len(cache)
+    check(copy.deepcopy(rows))
+    assert len(cache) == count, 'new row objects with the same values reuse chunks'
+    check(json.loads(json.dumps(rows)))
+    assert len(cache) == count, 'JSON replay loses aliases without changing encoded values'
+    rows[70]['nested']['values'][1] = 'changed in place'
+    second = check(rows)
+    assert len(cache) == count + 1, 'only the changed archive chunk is encoded'
+    assert first[2][0] == second[2][0]
+    rows[65]['title'] = 'changed overlay'
+    check(rows)
+    assert len(cache) == count + 1, 'live slots never enter the archive run cache'
+    rows[70]['nested']['added'] = None
+    check(rows)
+    rows[70]['nested'].pop('added')
+    check(rows)
+    check(list(reversed(rows)))
+
+
+@pytest.mark.parametrize('change', ['insert', 'remove', 'reorder', 'overlay'])
+def test_encoding_reuses_unchanged_runs_after_membership_changes(monkeypatch, change):
+    cache = server.ByteBudgetCache(1 << 22, 512)
+    monkeypatch.setattr(replay, '_RUN_CACHE', cache)
+    rows = [{'session_id': f'session-{i}', 'nested': {'text': f'row {i}'}}
+            for i in range(1000)]
+    overlays = {'session-500'}
+
+    def check(current):
+        raw, spans = replay.encode_rows(current, overlays)
+        assert raw == json.dumps(current).encode()
+        entry = replay.compressed_entry(raw, spans)
+        assert zlib.decompress(replay.compress_replay(entry, current) + b'\x03\x00', -15) == raw
+        assert [current[index]['session_id'] for index, _, _ in spans] == [
+            row['session_id'] for row in current if row['session_id'] in overlays]
+
+    check(rows)
+    original_runs = len(cache)
+    assert original_runs > 5, 'fixture exercises multiple reusable runs'
+    changed = copy.deepcopy(rows)
+    if change == 'insert':
+        changed.insert(0, {'session_id': 'new-session', 'nested': {'text': 'new'}})
+    elif change == 'remove':
+        changed.pop(0)
+    elif change == 'reorder':
+        changed.insert(0, changed.pop(1))
+    else:
+        changed.insert(0, changed.pop(500))
+        changed[0]['mtime'] = 123
+    check(changed)
+    assert len(cache) - original_runs <= 3, 'distant archive runs survive a local list change'
+    check(rows)
+    assert len(cache) - original_runs <= 3, 'the original immutable runs remain reusable'
+
+
+def test_encoding_caps_runs_without_identity_boundaries(monkeypatch):
+    lengths = []
+    encode = replay._encoded_run
+    monkeypatch.setattr(replay, '_encoded_run', lambda rows: (lengths.append(len(rows)), encode(rows))[1])
+    rows = [{'title': str(i)} for i in range(1000)]
+    raw, _ = replay.encode_rows(rows, set())
+    assert raw == json.dumps(rows).encode()
+    assert len(lengths) > 1 and max(lengths) <= 256
+
+
+def test_encoding_chunk_budget_and_custom_json_values(monkeypatch):
+    cache = server.ByteBudgetCache(1, 1)
+    monkeypatch.setattr(replay, '_RUN_CACHE', cache)
+    rows = [{'id': 'archive', 'state': {'values': (1, 2), 'keys': {1: 'one'}}}]
+    for _ in range(2):
+        raw, spans = replay.encode_rows(rows, set())
+        assert raw == json.dumps(rows).encode()
+        assert replay.replay_rows(replay.compressed_entry(raw, spans), {}) == json.loads(raw)
+    assert len(cache) == 0 and cache.bytes == 0
+
+    class CustomDict(dict):
+        def __reduce__(self):
+            return dict, ()  # does not describe its JSON-visible contents
+
+    monkeypatch.setattr(replay, '_RUN_CACHE', server.ByteBudgetCache(1 << 20, 10))
+    rows[0]['state'] = CustomDict(value=1)
+    first, _ = replay.encode_rows(rows, set())
+    rows[0]['state']['value'] = 2
+    second, _ = replay.encode_rows(rows, set())
+    assert first != second and second == json.dumps(rows).encode()
+    assert len(replay._RUN_CACHE) == 0
+
+
+def test_compressed_runs_preserve_json_and_fresh_overlay_and_envelope():
+    for rows in ([], [{'id': 'a'}], [{'id': 'live'}],
+                 [{'id': 'a'}, {'id': 'live', 'title': 'שלום'},
+                  {'id': 'b'}, {'id': 'other'}, {'id': 'c'}]):
+        raw, spans = replay.encode_rows(rows, {'live', 'other'})
+        entry = replay.compressed_entry(raw, spans)
+        changed = copy.deepcopy(rows)
+        for row in changed:
+            if row['id'] in {'live', 'other'}:
+                row['mtime'] = 12345
+                row['title'] = 'fresh ☃ "quoted"'
+        current = replay.encode_replay(entry, changed)
+        compressed = replay.compress_replay(entry, changed)
+        assert zlib.decompress(compressed + b'\x03\x00', wbits=-zlib.MAX_WBITS) == current
+        payload = replay.EncodedListPayload(
+            {'ok': True, 'conversations': changed, 'queue_health': {'queued': 3},
+             'delta_token': 'fresh-token'}, current, compressed)
+        encoded = replay.encode_gzip_payload(payload)
+        expected = json.dumps(dict(payload)).encode()
+        assert gzip.decompress(encoded) == expected
+        decoder = zlib.decompressobj(wbits=31)
+        assert decoder.decompress(encoded) == expected
+        assert decoder.eof and decoder.unused_data == b''  # exactly one member
+
+
+def test_changed_ticket_rows_keep_current_content_in_chunked_gzip(inputs, monkeypatch):
+    assert replay.encode_gzip_payload({'conversations': []}) is None
+    cache = server.ByteBudgetCache(1 << 22, 512)
+    monkeypatch.setattr(replay, '_RUN_CACHE', cache)
+    rows = [dict(fixture_rows()[0], session_id=f'archive-{i}') for i in range(1000)]
+    rows.append(fixture_rows()[1])
+    options = {'extra': rows[-1:]}
+    original = read(rows, **options)
+    original_bytes = replay.encode_payload(original)
+    original_runs = len(cache)
+    assert original_runs > 5
+
+    def changed(projected, ideas):
+        projected[501]['goal'] = {'text': 'new ticket data'}
+        return True
+
+    monkeypatch.setattr(server, '_archive_list_ticket_updates', changed)
+    actual = read(rows, now=10001, **options)
+    assert actual['conversations'][501]['goal'] == {'text': 'new ticket data'}
+    assert len(cache) == original_runs + 1, 'only the changed archive run is encoded'
+    encoded = replay.encode_gzip_payload(actual)
+    assert encoded is not None
+    decoder = zlib.decompressobj(wbits=31)
+    assert decoder.decompress(encoded) == json.dumps(dict(actual)).encode()
+    assert decoder.eof and decoder.unused_data == b'', 'one complete gzip member'
+
+    monkeypatch.setattr(server, '_archive_list_ticket_updates', lambda *args: False)
+    restored = read(rows, **options)
+    assert replay.encode_payload(restored) == original_bytes
+    assert len(cache) == original_runs + 1, 'ticket edits did not mutate cached runs'
+
+
 def test_resume_defensive_expiry_invalidates_without_store_change(inputs, monkeypatch):
     from ccc_server import usage_limit
     rows = fixture_rows()
@@ -230,3 +499,78 @@ def test_hidden_duplicate_overlay_cannot_replace_archive_timestamp(inputs):
         assert actual['conversations'][0]['mtime'] == 9000
     assert inputs['calls'] == 2
     assert len(server._ARCHIVE_LIST_PROJECTION_CACHE) == 0
+
+
+def test_overlay_recency_order_reuses_archive_and_preserves_exact_wire_order(inputs):
+    rows = fixture_rows()
+    rows.append({'session_id': 'second', 'source': 'codex', 'display_name': 'Second',
+                 'mtime': 9400, 'modified': 9400, 'session_state': {'todos': ['owned']}})
+    first = read(rows)
+    rows[1].update(mtime=9990, modified=9990)
+    rows[2].update(mtime=9995, modified=9995)
+    reordered = [rows[0], rows[2], rows[1]]
+    actual = read(reordered, now=10001)
+    assert inputs['calls'] == 1
+    expected = server._archive_list_payload(reordered, window='7d', now=10001, cached=True)
+    expected['delta_token'] = actual['delta_token']
+    assert dict(actual) == expected
+    assert [r['session_id'] for r in actual['conversations']] == ['archive', 'second', 'live']
+    # A caller cannot mutate cached nested containers, even after a reorder.
+    actual['conversations'][1]['session_state']['todos'].append('caller')
+    again = read(rows, now=10002)
+    assert again['conversations'][2]['session_state']['todos'] == ['owned']
+    assert first['conversations'][0] == again['conversations'][0]
+
+
+def test_reordered_overlay_content_changes_still_invalidate_topic_dependencies(inputs):
+    rows = fixture_rows() + [{'session_id': 'second', 'source': 'codex', 'display_name': 'Second', 'mtime': 9400}]
+    read(rows)
+    rows[1]['display_name'] = 'Changed title'
+    rows[1]['parent_session_id'] = 'second'
+    reordered = [rows[0], rows[2], rows[1]]
+    actual = read(reordered)
+    assert inputs['calls'] == 2
+    expected = server._archive_list_payload(reordered, window='7d', now=10000, cached=True)
+    expected['delta_token'] = actual['delta_token']
+    assert dict(actual) == expected
+
+
+def test_overlay_cannot_move_across_unchanged_archive_positions(inputs):
+    rows = fixture_rows() + [{'session_id': 'second', 'source': 'codex', 'mtime': 9400}]
+    read(rows)
+    # The mask changes when an archive row moves between overlay slots.
+    reordered = [rows[2], rows[0], rows[1]]
+    read(reordered, extra=[rows[2], rows[1]])
+    assert inputs['calls'] == 2
+
+
+def test_overlay_window_membership_swap_invalidates_even_with_same_slot_count(inputs):
+    rows = [{'session_id': 'archive', 'source': 'codex', 'mtime': 39000},
+            {'session_id': 'left', 'source': 'codex', 'mtime': 39000},
+            {'session_id': 'right', 'source': 'codex', 'mtime': 1000}]
+    first = read(rows, window='8h', now=40000)
+    assert [row['session_id'] for row in first['conversations']] == ['archive', 'left']
+    rows[1]['mtime'] = 1000
+    rows[2]['mtime'] = 39001
+    actual = read(rows, window='8h', now=40000)
+    assert inputs['calls'] == 2
+    assert [row['session_id'] for row in actual['conversations']] == ['archive', 'right']
+
+
+def test_diagnostics_distinguish_replay_and_metadata_invalidation(inputs, monkeypatch):
+    import collections
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_PROJECTION_DIAG_KEYS', collections.OrderedDict())
+    rows = fixture_rows()
+    delta = {'ver': 1, 'ctx': 'context', 'extra': rows[1:]}
+    phases = {}
+    first = server._archive_list_replay_payload(rows, delta, now=10000, phases=phases)
+    assert phases['projection_cache']['reason'] == 'first-observed'
+    rows[1]['mtime'] += 1
+    again = server._archive_list_replay_payload(rows, delta, now=10000, phases=phases)
+    assert phases['projection_cache']['hit'] is True
+    assert again['conversations'][1]['mtime'] != first['conversations'][1]['mtime']
+    rows[1]['display_name'] = 'Renamed'
+    changed = server._archive_list_replay_payload(rows, delta, now=10000, phases=phases)
+    assert phases['projection_cache']['changed'] == ['overlay']
+    assert not phases['projection_cache']['hit']
+    assert changed['conversations'][1]['display_name'] == 'Renamed'

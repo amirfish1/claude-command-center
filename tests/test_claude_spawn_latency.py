@@ -3,6 +3,7 @@
 import importlib
 import time
 from unittest import mock
+from types import SimpleNamespace
 
 
 server = importlib.import_module("server")
@@ -87,7 +88,11 @@ def test_capability_probe_fails_closed_when_help_fails(tmp_path):
 def test_timeline_can_share_the_browser_request_origin(monkeypatch):
     monkeypatch.setattr(server, "_spawn_timeline_sync", lambda: None)
     server._SPAWN_TIMELINE.clear()
-    origin_ms = time.time() * 1000 - 125
+    # This checks the shared clock origin, independently of picker I/O or host load.
+    from ccc_server import codex
+    monkeypatch.setattr(server, "record_model_picker_pick", lambda *args: None)
+    monkeypatch.setattr(codex, "time", SimpleNamespace(time=lambda: 1000.0))
+    origin_ms = 999875.0
 
     server._spawn_timeline_start(
         "claude-timeline",
@@ -98,7 +103,8 @@ def test_timeline_can_share_the_browser_request_origin(monkeypatch):
 
     entry = server._spawn_timeline_get("claude-timeline")
     assert entry["engine"] == "claude"
-    assert 100 <= entry["marks"]["process_started"] <= 500
+    assert entry["t0"] == 999.875
+    assert entry["marks"]["process_started"] == 125.0
 
 
 def test_prewarmed_model_metadata_is_scheduled_after_first_response(monkeypatch):

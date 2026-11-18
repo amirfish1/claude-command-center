@@ -31,6 +31,17 @@ test('a nested lane that also has its own row elsewhere is dropped from the nest
         </div>
       </div>
       <div class="conv-item" data-id="b"></div>
+      <div class="conv-subagent-cluster is-family-nest" id="deferred-nest">
+        <button data-role="subagent-cluster-toggle"><span class="conv-subagent-cluster-summary">↳ 3 lanes</span></button>
+        <button class="wa-lanes" data-role="subagent-cluster-toggle">↳ 3 <span>▸</span></button>
+        <div class="conv-subagent-cluster-body" data-lanes-deferred="true" data-deferred-lane-ids='["a","b","c"]'></div>
+      </div>
+      <div class="conv-subagent-cluster"><div class="conv-subagent-cluster-body" data-lanes-deferred="true" data-deferred-lane-ids='["c"]'></div></div>
+      <div class="conv-subagent-cluster is-family-nest" id="section-nest">
+        <button data-role="subagent-cluster-toggle"><span class="conv-subagent-cluster-summary">↳ 2 lanes</span></button>
+        <div class="conv-subagent-cluster-body" data-lanes-deferred="true" data-deferred-lane-ids='["archived","remaining"]'></div>
+      </div>
+      <div class="session-lifecycle-content" hidden data-deferred-row-ids='["archived"]'></div>
     </div>`);
     const res = await page.evaluate(code => {
       (0, eval)(code);
@@ -40,11 +51,17 @@ test('a nested lane that also has its own row elsewhere is dropped from the nest
         ids: [...list.querySelectorAll('.conv-item[data-id]')].map(e => e.dataset.id),
         summary: list.querySelector('.conv-subagent-cluster-summary').textContent,
         wa: list.querySelector('.wa-lanes').firstChild.nodeValue,
+        deferredSummary: list.querySelector('#deferred-nest .conv-subagent-cluster-summary').textContent,
+        deferredWa: list.querySelector('#deferred-nest .wa-lanes').firstChild.nodeValue,
+        sectionSummary: list.querySelector('#section-nest .conv-subagent-cluster-summary').textContent,
       };
     }, fn('_dedupeFamilyNestRows'));
     assert.deepEqual(res.ids, ['p', 'a', 'b']);
     assert.equal(res.summary, '↳ 1 lane');
     assert.equal(res.wa, '↳ 1 ');
+    assert.equal(res.deferredSummary, '↳ 1 lane');
+    assert.equal(res.deferredWa, '↳ 1 ');
+    assert.equal(res.sectionSummary, '↳ 1 lane', 'deferred sections still own their standalone identities');
   } finally {
     await browser.close();
   }
@@ -56,22 +73,38 @@ test('lanes start collapsed regardless of family size or attention; saved expans
   const end = app.indexOf('\n    };', start) + 7;
   const expanded = new Set();
   const collapsed = new Set();
+  let built = 0;
   const render = require('node:vm').runInNewContext(app.slice(start, end) + '\n_renderSubagentCluster;', {
     _subagentClusterPresentation: cluster => ({ rootItem: cluster.rows[0], ...cluster }),
     _subagentRowId: card => card.id,
+    _ultraFreshCurrent: card => card,
     _subagentExpandedParents: expanded,
     _subagentCollapsedParents: collapsed,
-    _renderRow: () => '<div class="conv-item"></div>',
+    _renderRow: () => { built++; return '<div class="conv-item"></div>'; },
     escapeAttr: String,
   });
   const cluster = (total, attention) => ({ total, attention, active: total,
     rows: Array.from({ length: total + 1 }, (_, i) => ({ card: { id: i ? 'child-' + i : 'parent' }, depth: i ? 1 : 0 })),
   });
   for (const total of [1, 2, 4]) {
-    for (const attention of [0, 1]) assert.doesNotMatch(render(cluster(total, attention)), /is-expanded/);
+    for (const attention of [0, 1]) {
+      built = 0;
+      const html = render(cluster(total, attention));
+      assert.doesNotMatch(html, /is-expanded/);
+      assert.match(html, /data-lanes-deferred="true"/);
+      assert.equal(built, 1, 'only the visible parent needs row HTML');
+    }
   }
   expanded.add('parent');
-  assert.match(render(cluster(1, 0)), /is-expanded/);
+  built = 0;
+  const html = render(cluster(4, 0));
+  assert.match(html, /is-expanded/);
+  assert.doesNotMatch(html, /data-lanes-deferred/);
+  assert.equal(built, 5, 'a saved expansion builds every lane');
   collapsed.add('parent');
   assert.doesNotMatch(render(cluster(1, 1)), /is-expanded/);
+  built = 0;
+  const nested = render({ ...cluster(2, 0), familyNest: true });
+  assert.match(nested, /data-deferred-lane-ids="/);
+  assert.equal(built, 1, 'ad-hoc nests retain identities for cross-list deduplication');
 });

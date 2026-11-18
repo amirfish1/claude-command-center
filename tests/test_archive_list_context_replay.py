@@ -35,7 +35,7 @@ def test_late_cold_parent_keeps_replay_and_delta_tracking(tmp_path, monkeypatch)
     for name in ('_archive_overlay_codex_sessions', '_archive_overlay_acp_sessions',
                  '_archive_overlay_devin_cli_sessions', '_archive_overlay_wt_worker_sessions',
                  '_archive_overlay_claude_registry_sessions'):
-        monkeypatch.setattr(server, name, lambda rows: [])
+        monkeypatch.setattr(server, name, lambda rows, **kw: [])
 
     rows, cached, version = server._archive_list_source_rows_cached({}, window='1d')
     assert [r['session_id'] for r in rows] == ['child', 'parent']

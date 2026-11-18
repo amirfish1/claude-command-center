@@ -19,6 +19,19 @@ _LOCK = threading.Lock()
 _ENTRIES = {}      # key -> {"ts": float, "value": any}
 _INFLIGHT = set()  # keys with a refresh running
 _COLD_LOCKS = {}   # key -> lock serializing inline (cold) computes
+_REFRESH_CATEGORIES = frozenset({
+    "attention-feed", "vercel-deploy", "nextjs-status", "headroom",
+    "throughput-daily", "savings", "repo-worktrees", "issues-all",
+})
+
+
+def _refresh_thread_name(key):
+    # Scope values can contain paths or other user data. Only expose known,
+    # fixed endpoint categories, keeping CPU attribution cardinality bounded.
+    category = key[0] if isinstance(key, tuple) and key else key
+    if isinstance(category, str) and category in _REFRESH_CATEGORIES:
+        return "swr-refresh:" + category
+    return "swr-refresh"
 
 
 def _ok(value):
@@ -60,7 +73,7 @@ def cached(key, compute, *, fresh_s, max_stale_s=600.0, bypass=False):
                         _INFLIGHT.add(key)
                         threading.Thread(
                             target=_refresh, args=(key, compute),
-                            name="swr-refresh", daemon=True,
+                            name=_refresh_thread_name(key), daemon=True,
                         ).start()
                     return entry["value"]
     with _LOCK:

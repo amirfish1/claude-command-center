@@ -7,7 +7,7 @@ const start = source.indexOf('  function sessionStuckAge(');
 const end = source.indexOf('  function setSessionDensity(', start);
 const h = vm.createContext({
   sessionDensityLane: () => 'coding', sessionDensity: () => 'cozy',
-  escapeAttr: s => s,
+  escapeAttr: s => s, window: { CCCNavigation: { getTab: () => 'inprogress' } },
 });
 vm.runInContext(source.slice(start, end), h);
 const now = 10000;
@@ -42,7 +42,7 @@ test('warning covers Cozy and Detailed in Coding, Workers, and Active only', () 
     for (const density of ['compact', 'cozy', 'detailed']) {
       h.sessionDensityLane = () => lane;
       h.sessionDensity = () => density;
-      h.localStorage = { getItem: () => 'inprogress' };
+      h.window.CCCNavigation.getTab = () => 'inprogress';
       h.compactRowsOn = () => density !== 'detailed';
       h.wrapTitlesOn = () => density !== 'compact';
       const html = h.sessionStuckWarningHtml(fixture);
@@ -51,7 +51,7 @@ test('warning covers Cozy and Detailed in Coding, Workers, and Active only', () 
     }
   }
   for (const tab of ['archived', 'queues', 'issues']) {
-    h.localStorage = { getItem: () => tab };
+    h.window.CCCNavigation.getTab = () => tab;
     assert.equal(h.sessionStuckWarningHtml(fixture), '');
   }
 });
