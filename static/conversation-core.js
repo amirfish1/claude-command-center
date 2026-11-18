@@ -20027,7 +20027,13 @@
         // Subtract hidden/suspended time like conv_open/archive_load: a
         // background tab's throttled fetch otherwise reads as a multi-minute
         // "slow list" (CCC-142). Wall time still ships as detail.wall_ms.
-        const _perfEnd = performance.now();
+        const _perfNow = performance.now();
+        const stoppedAt = opts.controller?._cccArchiveSupersededAt;
+        // Aborting a redundant preview ends its read immediately. Its promise
+        // rejection can run only after the complete archive's synchronous
+        // render; retain that later handler delay separately.
+        const _perfEnd = status === 'superseded' && Number.isFinite(stoppedAt)
+          ? Math.min(_perfNow, Math.max(_perfT0, stoppedAt)) : _perfNow;
         const wallMs = Math.round(_perfEnd - _perfT0);
         const ms = Math.round(_perfActiveElapsed(_perfT0, _perfEnd));
         const size = bytes ? (bytes >= 1048576 ? (bytes / 1048576).toFixed(1) + 'MB'
@@ -20049,6 +20055,7 @@
             detail: {
               bytes: bytes || 0, status: status, extra: extra || '',
               wall_ms: wallMs, hidden_ms: wallMs - ms,
+              settle_delay_ms: Math.round(_perfNow - _perfEnd),
               ttfb_ms: _perfHdrAt ? Math.round(_perfHdrAt - _perfT0) : null,
               body_ms: _perfBodyMs ? Math.round(_perfBodyMs) : null,
               paint_wait_ms: Math.round(_perfPaintWaitMs),
@@ -20080,7 +20087,7 @@
         // response never arrives) hangs this promise forever — and every
         // caller dedups onto it (_archiveAllInflight, _archiveRefreshPromise),
         // so the sidebar stays on "Archive loaded" with no path to recovery.
-        const controller = new AbortController();
+        const controller = opts.controller || new AbortController();
         const timeoutId = setTimeout(() => {
           try { controller.abort(); } catch (_) {}
         }, sharedState.ARCHIVE_ALL_FETCH_TIMEOUT_MS);
@@ -20090,7 +20097,14 @@
           if (prevEtag) init.headers = { 'If-None-Match': prevEtag };
           if (!sharedState._archiveBootstrapConsumed && url === sharedState._archiveBootstrapUrl && !prevEtag) {
             sharedState._archiveBootstrapConsumed = true;
+            const snapshot = window.__cccArchiveSnapshot;
+            if (snapshot?.url + '&initial=1' === url && snapshot.cancelRecent) {
+              if (Number.isFinite(snapshot.recentStart)) _perfT0 = Math.min(_perfT0, snapshot.recentStart);
+              if (controller.signal.aborted) snapshot.cancelRecent();
+              else controller.signal.addEventListener('abort', () => snapshot.cancelRecent(), {once:true});
+            }
             r = await sharedState._archiveBootstrapFetchPromise;
+            if (controller.signal.aborted) throw controller.signal.reason;
           }
           if (!r && snapshotBase && window.__cccArchiveSnapshot && !window.__cccArchiveSnapshot.consumed && url === window.__cccArchiveSnapshot.url) {
             window.__cccArchiveSnapshot.consumed = true;
@@ -20101,6 +20115,7 @@
             _perfFetchUrl = deltaToken ? url + '&since=' + encodeURIComponent(deltaToken) : url;
             r = await backgroundApiFetch(_perfFetchUrl, init);
           }
+          if (controller.signal.aborted) throw controller.signal.reason;
         } finally {
           clearTimeout(timeoutId);
         }
@@ -20144,14 +20159,14 @@
         }
         let etag = r.headers.get('ETag');
         let _perfLen = parseInt(r.headers.get('content-length') || '0', 10) || 0;
-        // Fetch history while the initial rows render, but leave its JSON
-        // processing until those rows have had a chance to paint.
-        if (opts.afterPaint) {
+        // Ordinary history parsing waits for recent rows to paint. The early
+        // conditional body is already draining and can validate first.
+        if (opts.afterPaint && !r._cccArchiveParsedBody) {
           const waitStart = performance.now();
           await opts.afterPaint;
           _perfPaintWaitMs = performance.now() - waitStart;
         }
-        let d = await r.json();
+        let d = await (r._cccArchiveParsedBody || r.json());
         _perfBodyMs = performance.now() - _perfHdrAt - _perfPaintWaitMs;
         let _merged = null;
         if (d && d.delta) {
@@ -20215,9 +20230,14 @@
           window.__cccArchiveSnapshot?.save({url, rows:convs,
             etag:sharedState._archiveAllEtag.get(url), delta:sharedState._archiveAllDelta.get(url)});
         }
+        if (typeof opts.onValidated === 'function') opts.onValidated();
         if (typeof opts.onPage === 'function') opts.onPage(d);
         return convs;
       } catch (e) {
+        if (opts.initial && opts.controller?.signal.reason === 'archive-complete') {
+          _perfListLog(0, 'superseded');
+          return null;
+        }
         _perfListLog(0, 'threw');
         _clientLog('[ARCHIVE-DIAG] conversations/list threw: ' + ((e && e.name) || '?') + ' ' + String((e && e.message) || '').slice(0, 120));
         return null;
@@ -20488,15 +20508,22 @@
         const validatedFull = new Promise(resolve => { validatedReady = resolve; });
         let releaseInitialPaint;
         const afterPaint = new Promise(resolve => { releaseInitialPaint = resolve; });
-        const initialRead = loadArchiveAll({ staleOk: true, window: requestedWindow, initial: true });
+        const initialController = new AbortController();
+        const initialRead = loadArchiveAll({ staleOk: true, window: requestedWindow,
+          initial: true, controller: initialController });
         // Start the full download while the recent-row request is pending.
-        // Its JSON processing still waits for the recent rows to paint.
+        // Ordinary response parsing waits for recent rows to paint; the early
+        // conditional response can already be parsed while the app loads.
         fullRead = loadArchiveAll({ staleOk: opts.staleOk !== false && !opts.force,
           window: requestedWindow, afterPaint, onValidated: () => { validatedReady({validated:true}); } });
         try {
-          // An unchanged complete response can be ready before the recent-row
+          // A validated complete response can be ready before the recent-row
           // request. Its rows already include the preview and all ancestors.
           const result = await Promise.race([initialRead.then(first => ({first})), validatedFull]);
+          if (result.validated) {
+            initialController._cccArchiveSupersededAt = performance.now();
+            initialController.abort('archive-complete');
+          }
           const first = result.first;
           if (Array.isArray(first) && isCurrentWindow()) {
             sharedState.archiveData = _applyPendingDashboardConversationPatches(

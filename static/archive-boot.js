@@ -106,24 +106,32 @@
     if (window.__cccArchiveSettled) arm();
     else window.addEventListener('ccc:archive-settled', arm, {once:true});
   };
-  const snapshot = {read, save, url:fullUrl};
+  const snapshot = {read, save, url:fullUrl, recentStart:start,
+    cancelRecent() { snapshot.recentCancelled = true; controller.abort(); }};
   snapshot.fetch = header.then(async metadata => {
     const value = metadata || await read;
     if (!value) return null;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 45000);
     const start = performance.now();
+    let body = null;
     try {
       const target = value.delta ? fullUrl + '&since=' + encodeURIComponent(value.delta) : fullUrl;
       const response = await window.fetch(target, {signal:controller.signal,
         headers:value.etag ? {'If-None-Match':value.etag} : {}});
       response._cccArchiveTiming = {start,headers:performance.now()};
+      if (response.ok && response.status !== 304) {
+        // Drain the early response while the application initializes. Leaving
+        // it unread behind the preview paint can stall a large full reply.
+        body = response._cccArchiveParsedBody = response.json();
+        body.finally(() => clearTimeout(timeout)).catch(() => {});
+      }
       const base = await read;
       // Never apply validation for a different or damaged persisted body.
       if (!base || base.etag !== value.etag || base.delta !== value.delta || base.at !== value.at) return null;
       return response;
     } catch (_) { return null; }
-    finally { clearTimeout(timeout); }
+    finally { if (!body) clearTimeout(timeout); }
   });
   window.__cccArchiveSnapshot = snapshot;
 })();

@@ -19,7 +19,7 @@ function setup({manualFrames = false, initial = [{session_id: 'recent'}]} = {}) 
   const paints = [], calls = [], deferred = [], events = [], releases = [], ready = [], frames = [];
   const state = { archiveData: [], archiveLoaded: false, _archiveFirstLoadedResolve: () => ready.push(true) };
   const context = {
-    sharedState: state, window: {dispatchEvent: event => events.push(event.type)}, Event,
+    sharedState: state, window: {dispatchEvent: event => events.push(event.type)}, Event, AbortController, performance,
     document: { getElementById: id => id === 'archiveCompleteness' ? notice : null },
     _whenDashboardUncovered: async () => {}, _startArchiveProgressPoll() {}, _stopArchiveProgressPoll() {},
     _clientLog() {}, _archiveQuery: () => '', _archiveWindow: () => '7d',
@@ -54,6 +54,7 @@ test('recent rows paint while complete request is still pending, then full rows 
   assert.deepEqual(f.paints, [['recent']]);
   assert.match(f.notice.textContent, /Search and counts are incomplete/);
   assert.equal(f.context.window.__cccArchiveProgress.complete, false);
+  assert.equal(f.calls[0].controller.signal.aborted, false, 'a useful preview stays in flight');
   assert.deepEqual(f.events, [], 'recent rows do not release competing startup work');
   f.context._markArchiveFirstLoaded();
   assert.deepEqual(f.ready, [true], 'first-row readiness does not wait for full history');
@@ -211,4 +212,5 @@ test('current validated full rows do not wait for a slow initial response or let
   await new Promise(setImmediate);
   assert.deepEqual(f.paints,[['recent','older']]);
   assert.equal(f.frames.length,0);
+  assert.equal(f.calls[0].controller.signal.reason,'archive-complete');
 });

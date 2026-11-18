@@ -84,11 +84,69 @@ test('failed early requests retry normally; mismatched windows and initial reads
   }
 });
 
-let browser, server, origin;
+test('parsed full and delta replies validate before a pending preview paint without parsing twice', {timeout:1000}, async () => {
+  const snapshot = {url:fullUrl, rows, delta:'old', etag:'"old"'};
+  for (const body of [
+    {conversations:[{session_id:'replacement'}], delta_token:'new'},
+    {delta:true, conversations:[{session_id:'recent', changed:true}],
+      ids:['older','recent'], delta_token:'new'},
+  ]) {
+    const response=reply(null);
+    response._cccArchiveParsedBody=Promise.resolve(body);
+    response.json=()=>{throw Error('response body was already consumed');};
+    const f=setup({snapshot,early:Promise.resolve(response)});
+    let validated=0;
+    const result=await f.context.loadArchiveAll({afterPaint:new Promise(()=>{}),onValidated:()=>validated++});
+    assert.deepEqual(Array.from(result,r=>r.session_id),body.ids||['replacement']);
+    assert.equal(validated,1);
+    assert.equal(f.state._archiveAllDelta.get(fullUrl),'new');
+  }
+  const bad=reply(null);
+  bad._cccArchiveParsedBody=Promise.resolve({wrong:'shape'});
+  const f=setup({snapshot,early:Promise.resolve(bad)});
+  let validated=false;
+  assert.equal(await f.context.loadArchiveAll({afterPaint:new Promise(()=>{}),onValidated:()=>{validated=true;}}),null);
+  assert.equal(validated,false,'malformed bodies never win the completeness race');
+});
+
+test('superseding an early preview aborts it without a replacement request and retains its timing', async () => {
+  const f=setup({snapshot:{url:fullUrl,rows,delta:'old'}}), controller=new AbortController(), events=[];
+  let release, cancellations=0;
+  const helper=f.context.window.__cccArchiveSnapshot;
+  helper.recentStart=100;
+  helper.cancelRecent=()=>{cancellations++;release(null);};
+  f.state._archiveBootstrapUrl=fullUrl+'&initial=1';
+  f.state._archiveBootstrapFetchPromise=new Promise(resolve=>{release=resolve;});
+  Object.assign(f.context,{
+    performance:{now:()=>1000},
+    _perfActiveElapsed:(a,b)=>b-a,_perfLongTaskMs:()=>0,_convResourceTiming:()=>null,
+    _perfEvent:(kind,ms,extra)=>events.push({kind,ms,...extra}),
+  });
+  f.context.window.__cccPerfRow=()=>{};
+  const loading=f.context.loadArchiveAll({initial:true,controller});
+  await new Promise(setImmediate);
+  controller._cccArchiveSupersededAt=500;
+  controller.abort('archive-complete');
+  assert.equal(await loading,null);
+  assert.equal(cancellations,1);
+  assert.equal(f.reads.length,0,'an aborted bootstrap must not retry as another preview');
+  const metric=events.find(e=>e.kind==='list_read');
+  assert.equal(metric.detail.status,'superseded');
+  assert.equal(metric.detail.start_nav_ms,100,'the original early request remains in the measurement');
+  assert.equal(metric.ms,400,'the cancelled read ends at the actual abort');
+  assert.equal(metric.detail.settle_delay_ms,500,'later handler delay remains visible');
+});
+
+let browser, server, origin, slowPreview=false;
 before(async () => {
   server = http.createServer((req,res) => {
     if (req.url==='/archive-boot.js') {res.setHeader('Content-Type','application/javascript');res.end(boot);return;}
     if (req.url.startsWith('/api/conversations/list')) {
+      if (req.url.includes('since=hang') || slowPreview && req.url.includes('initial=1')) {
+        res.writeHead(200,{'Content-Type':'application/json'});res.flushHeaders();
+        const timer=setTimeout(()=>res.end(JSON.stringify({conversations:rows})),1000);
+        res.on('close',()=>clearTimeout(timer));return;
+      }
       if (req.url.includes('since=valid')) {res.writeHead(304);res.end();return;}
       res.setHeader('Content-Type','application/json');res.end(JSON.stringify({conversations:rows}));return;
     }
@@ -99,6 +157,54 @@ before(async () => {
   browser=await puppeteer.launch({executablePath:findChromePath(),args:['--no-sandbox']});
 });
 after(async () => {await browser?.close();await new Promise(r=>server.close(r));});
+
+async function seed(page,delta) {
+  await page.evaluate(({url,rows,delta})=>{
+    window.__cccArchiveSettled=true;
+    window.__cccArchiveSnapshot.save({url,rows,delta,etag:'"example"'});
+  },{url:fullUrl,rows,delta});
+  await page.waitForFunction(async delta=>{
+    const db=await new Promise(resolve=>{const r=indexedDB.open('ccc-archive-response',1);r.onsuccess=()=>resolve(r.result);});
+    try {return await new Promise(resolve=>{const r=db.transaction('snapshot').objectStore('snapshot').get('last');r.onsuccess=()=>resolve(r.result?.delta===delta);});}
+    finally {db.close();}
+  },{},delta);
+}
+
+test('a real full response is parsed once during prefetch and its body retains the timeout', async () => {
+  const context=await browser.createBrowserContext(),page=await context.newPage();
+  try {
+    await page.goto(origin,{waitUntil:'load'});
+    await seed(page,'refresh');
+    await page.reload({waitUntil:'load'});
+    assert.deepEqual(await page.evaluate(async()=>{
+      const r=await window.__cccArchiveSnapshot.fetch,d=await r._cccArchiveParsedBody;
+      return {status:r.status,used:r.bodyUsed,count:d.conversations.length};
+    }),{status:200,used:true,count:2});
+    await seed(page,'hang');
+    await page.evaluateOnNewDocument(()=>{
+      const original=window.setTimeout;
+      window.setTimeout=(fn,ms,...args)=>original(fn,ms===45000?250:ms,...args);
+    });
+    await page.reload({waitUntil:'load'});
+    assert.equal(await page.evaluate(async()=>{
+      const r=await window.__cccArchiveSnapshot.fetch;
+      try {await r._cccArchiveParsedBody;return 'not aborted';}catch(e){return e.name;}
+    }),'AbortError');
+  } finally {await context.close();}
+});
+
+test('cancelling a superseded preview aborts the actual early response body', async () => {
+  const context=await browser.createBrowserContext(),page=await context.newPage();
+  try {
+    slowPreview=true;
+    await page.goto(origin,{waitUntil:'domcontentloaded'});
+    assert.equal(await page.evaluate(async()=>{
+      const r=await window.__cccArchiveBootstrap.promise,body=r.json();
+      window.__cccArchiveSnapshot.cancelRecent();
+      try {await body;return 'not aborted';}catch(e){return e.name;}
+    }),'AbortError');
+  } finally {slowPreview=false;await context.close();}
+});
 
 test('real IndexedDB retains one scoped snapshot and a reload obtains an actual server 304', async () => {
   const context=await browser.createBrowserContext(), page=await context.newPage();
