@@ -57,7 +57,12 @@ def test_partial_http_never_reads_full_disk_or_creates_delta(monkeypatch):
         raise AssertionError('partial request entered complete-list cache')
     monkeypatch.setattr(server, '_archive_list_disk_candidate', forbidden)
     monkeypatch.setattr(server, '_archive_list_delta_state', forbidden)
-    monkeypatch.setattr(server, 'record_diag', lambda *a: None)
+    diagnostics = []
+    recorded = threading.Event()
+    def record(kind, ms, detail):
+        diagnostics.append((kind, ms, detail))
+        recorded.set()
+    monkeypatch.setattr(server, 'record_diag', record)
     httpd = server.http.server.ThreadingHTTPServer(('127.0.0.1', 0), server.CommandCenterHandler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
@@ -67,6 +72,14 @@ def test_partial_http_never_reads_full_disk_or_creates_delta(monkeypatch):
             p = json.load(response)
         assert p['count'] == 500 and p['selected_count'] == 601
         assert p['complete'] is False and 'delta_token' not in p
+        assert recorded.wait(2)
+        kind, elapsed, detail = diagnostics[-1]
+        assert kind == 'list_server' and elapsed >= 0
+        assert detail['initial'] is True
+        for phase in ('source_ms', 'payload_ms', 'send_ms'):
+            assert 0 <= detail[phase] <= elapsed + 1
+        assert detail['projection']['selection']['cpu_ms'] >= 0
+        assert isinstance(detail['src'], dict)
     finally:
         httpd.shutdown()
         httpd.server_close()

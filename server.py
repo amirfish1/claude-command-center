@@ -19480,8 +19480,9 @@ def _queue_health_stats(rows, *, now=None):
     }
 
 
-def _archive_list_initial_payload(rows, *, window="all", now=None, cached=None):
+def _archive_list_initial_payload(rows, *, window="all", now=None, cached=None, phases=None):
     """Project recent rows first without changing the complete-list protocol."""
+    wall, cpu = time.perf_counter(), time.thread_time()
     now = time.time() if now is None else now
     parents = _session_graph.parent_snapshot()
     try:
@@ -19507,7 +19508,11 @@ def _archive_list_initial_payload(rows, *, window="all", now=None, cached=None):
                 wanted.add(id(parent))
                 initial.append(parent)
     inputs = (_load_usage_limit_resumes(), parents, ideas, initial)
-    payload = _archive_list_payload(rows, window=window, now=now, cached=cached, _inputs=inputs)
+    if phases is not None:
+        phases["selection"] = {"wall_ms": round((time.perf_counter() - wall) * 1000, 1),
+                               "cpu_ms": round((time.thread_time() - cpu) * 1000, 1)}
+    payload = _archive_list_payload(rows, window=window, now=now, cached=cached,
+                                    _inputs=inputs, phases=phases)
     payload.update(complete=len(initial) == len(selected), selected_count=len(selected), initial=True)
     return payload
 
@@ -36162,10 +36167,19 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             if initial:
                 # No delta token or persisted full-body cache entry can ever
                 # describe this intentionally partial response.
-                self.send_json(_archive_list_initial_payload(rows, window=window, cached=from_cache))
+                _initial_source_end = time.perf_counter()
+                _initial_phases = {}
+                _initial_payload = _archive_list_initial_payload(
+                    rows, window=window, cached=from_cache, phases=_initial_phases)
+                _initial_payload_end = time.perf_counter()
+                self.send_json(_initial_payload)
                 record_diag("list_server", (time.perf_counter() - _lt0) * 1000.0, {
                     "window": window, "initial": True, "status": 200,
                     "rows_src": len(rows or []),
+                    "source_ms": round((_initial_source_end - _lt0) * 1000, 1),
+                    "payload_ms": round((_initial_payload_end - _initial_source_end) * 1000, 1),
+                    "send_ms": round((time.perf_counter() - _initial_payload_end) * 1000, 1),
+                    "src": _src_phases, "projection": _initial_phases,
                     "cpu_ms": round((time.thread_time() - _lc0) * 1000.0, 1),
                 })
                 return
