@@ -334,14 +334,14 @@ def test_archive_list_source_avoids_copying_full_snapshot(monkeypatch):
 
     monkeypatch.setattr(server, "_archive_serve_rows_versioned", serve)
     monkeypatch.setattr(server, "_archive_list_body_ver", lambda key, rows, extra: 7)
-    monkeypatch.setattr(server, "_archive_overlay_codex_sessions", lambda rows: [])
+    monkeypatch.setattr(server, "_archive_overlay_codex_sessions", lambda rows, **kw: [])
     # The in-memory overlays (ACP, Devin CLI) legitimately append rows when
     # this machine has live sessions; keep the copy assertion about the
     # snapshot itself, not about the host's session state.
-    monkeypatch.setattr(server, "_archive_overlay_acp_sessions", lambda rows: [])
-    monkeypatch.setattr(server, "_archive_overlay_devin_cli_sessions", lambda rows, now=None: [])
-    monkeypatch.setattr(server, "_archive_overlay_wt_worker_sessions", lambda rows: [])
-    monkeypatch.setattr(server, "_archive_overlay_claude_registry_sessions", lambda rows: [], raising=False)
+    monkeypatch.setattr(server, "_archive_overlay_acp_sessions", lambda rows, **kw: [])
+    monkeypatch.setattr(server, "_archive_overlay_devin_cli_sessions", lambda rows, now=None, **kw: [])
+    monkeypatch.setattr(server, "_archive_overlay_wt_worker_sessions", lambda rows, **kw: [])
+    monkeypatch.setattr(server, "_archive_overlay_claude_registry_sessions", lambda rows, **kw: [], raising=False)
     options = {"include_prs": False}
 
     rows, from_cache, body_ver = server._archive_list_source_rows_cached(options)

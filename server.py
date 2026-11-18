@@ -18803,9 +18803,13 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phas
         defer_cold=True,
     )
     _phase("serve_ms")
-    codex_overlay = _archive_overlay_codex_sessions(rows)
+    # Every gap filler sees the same snapshot plus preceding overlays. Build
+    # membership once per request; still read every engine's current source.
+    existing_ids = _archive_overlay_existing_ids(rows)
+    codex_overlay = _archive_overlay_codex_sessions(rows, existing_ids=existing_ids)
     if codex_overlay:
         rows = list(rows or []) + codex_overlay
+        existing_ids.update(_archive_overlay_existing_ids(codex_overlay))
     _phase("codex_ms")
     # ACP sessions (Kimi/GLM) live in memory before their first transcript
     # lands and before the archive background refresh picks them up. Without
@@ -18814,31 +18818,34 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phas
     # because the cached snapshot has not refreshed yet, then reappears ~30s
     # later when the refresh completes. Merge in-memory attached sessions
     # cheaply so the sidebar never drops them in that window.
-    overlay = _archive_overlay_acp_sessions(rows)
+    overlay = _archive_overlay_acp_sessions(rows, existing_ids=existing_ids)
     if overlay:
         rows = list(rows or []) + overlay
+        existing_ids.update(_archive_overlay_existing_ids(overlay))
     _phase("acp_ms")
     # Same gap for Devin CLI: the session row exists in sessions.db within a
     # second of spawn, but the archive snapshot only picks it up after the
     # next full background rebuild (~20s+ on a large corpus). The Devin CLI
     # list is memoized per session, so asking it here costs a few stat()s on
     # a cached poll and ~0.1s when the DB changed.
-    devin_overlay = _archive_overlay_devin_cli_sessions(rows)
+    devin_overlay = _archive_overlay_devin_cli_sessions(rows, existing_ids=existing_ids)
     if devin_overlay:
         rows = list(rows or []) + devin_overlay
+        existing_ids.update(_archive_overlay_existing_ids(devin_overlay))
     _phase("devin_ms")
     # WatchTower already knows the engine session before the archive scan.
     # Keep that worker in its normal session/queue group during the gap.
-    worker_overlay = _archive_overlay_wt_worker_sessions(rows)
+    worker_overlay = _archive_overlay_wt_worker_sessions(rows, existing_ids=existing_ids)
     if worker_overlay:
         rows = list(rows or []) + worker_overlay
+        existing_ids.update(_archive_overlay_existing_ids(worker_overlay))
     _phase("wt_ms")
     # CCC-153: a session started in a terminal (Claude writes
     # ~/.claude/sessions/<pid>.json at launch) was invisible until the next
     # snapshot refresh: >=5 min at the serve TTL, and never while the load
     # gate holds refreshes off a saturated host. Overlay those live
     # registry-only rows; the work runs only when the registry dir changes.
-    claude_overlay = _archive_overlay_claude_registry_sessions(rows)
+    claude_overlay = _archive_overlay_claude_registry_sessions(rows, existing_ids=existing_ids)
     if claude_overlay:
         rows = list(rows or []) + claude_overlay
     _phase("claude_reg_ms")
@@ -18901,14 +18908,19 @@ def _archive_claude_registry_rows():
         _ARCHIVE_CLAUDE_REG_LOCK.release()
 
 
-def _archive_overlay_codex_sessions(rows, now=None):
+def _archive_overlay_existing_ids(rows):
+    """Share identity scans within one list read, never across snapshots."""
+    return {str(row.get("session_id") or row.get("id") or "")
+            for row in rows or [] if isinstance(row, dict)}
+
+
+def _archive_overlay_codex_sessions(rows, now=None, *, existing_ids=None):
     """Recent indexed threads stay visible while a full rebuild is deferred.
 
     One bounded, signature-cached bulk query across account homes; never read
     transcripts or ask an engine about each row on this polling path.
     """
-    existing = {str(r.get("session_id") or r.get("id") or "")
-                for r in rows or [] if isinstance(r, dict)}
+    existing = _archive_overlay_existing_ids(rows) if existing_ids is None else existing_ids
     columns = ("id", "title", "cwd", "model", "reasoning_effort",
                "created_at", "created_at_ms", "updated_at", "updated_at_ms", "archived")
     try:
@@ -18966,12 +18978,12 @@ def _archive_overlay_codex_sessions(rows, now=None):
     return out
 
 
-def _archive_overlay_claude_registry_sessions(rows):
+def _archive_overlay_claude_registry_sessions(rows, *, existing_ids=None):
     """Live terminal Claude sessions missing from the cached snapshot."""
     reg_rows = _archive_claude_registry_rows()
     if not reg_rows:
         return []
-    existing = {str(r.get("session_id") or r.get("id") or "") for r in rows or [] if isinstance(r, dict)}
+    existing = _archive_overlay_existing_ids(rows) if existing_ids is None else existing_ids
     return [r for r in reg_rows if str(r.get("session_id") or r.get("id") or "") not in existing]
 
 
@@ -19005,12 +19017,12 @@ def _archive_live_wt_workers():
         _ARCHIVE_WT_WORKERS_LOCK.release()
 
 
-def _archive_overlay_wt_worker_sessions(rows):
+def _archive_overlay_wt_worker_sessions(rows, *, existing_ids=None):
     """Missing live worker sessions, until their real archive rows arrive."""
     workers = _archive_live_wt_workers()
     if not workers:
         return []
-    existing = {str(r.get("session_id") or r.get("id") or "") for r in rows or [] if isinstance(r, dict)}
+    existing = _archive_overlay_existing_ids(rows) if existing_ids is None else existing_ids
     normalized = []
     for w in workers:
         # WT records a devin worker's session_id as the raw CLI slug while
@@ -19123,7 +19135,7 @@ def _archive_list_body_ver(key, rows, extra):
 _ARCHIVE_DEVIN_OVERLAY_WINDOW_S = 15 * 60
 
 
-def _archive_overlay_devin_cli_sessions(rows, now=None):
+def _archive_overlay_devin_cli_sessions(rows, now=None, *, existing_ids=None):
     """Archive-shaped Devin CLI rows that are live or recent but missing from
     the cached snapshot. Rows come from the same producer that feeds the
     archive build, so their shape is identical."""
@@ -19132,11 +19144,7 @@ def _archive_overlay_devin_cli_sessions(rows, now=None):
             return []
     except OSError:
         return []
-    existing = set()
-    for r in (rows or []):
-        sid = r.get("session_id") or r.get("id")
-        if sid:
-            existing.add(str(sid))
+    existing = _archive_overlay_existing_ids(rows) if existing_ids is None else existing_ids
     try:
         # Never block /list (and therefore trash POSTs queued behind it) on a
         # multi-second Devin CLI sessions.db rebuild. Serve cache/stale rows;
@@ -19159,14 +19167,14 @@ def _archive_overlay_devin_cli_sessions(rows, now=None):
     return out
 
 
-def _archive_overlay_acp_sessions(rows):
+def _archive_overlay_acp_sessions(rows, *, existing_ids=None):
     """Return archive-shaped rows for ACP sessions live in memory but missing
     from the cached archive snapshot. Called by the lightweight /list path so
     new Kimi/GLM sessions stay visible between creation and the next archive
     refresh."""
     if not _ACP_HARNESSES:
         return []
-    existing = None
+    existing = existing_ids
     # Gate by candidacy (CCC-142): the sidecar loads below cost O(all spawn
     # markers) -- ~4k files, re-stat'd on nearly every poll behind a 2s memo
     # -- yet are only needed to build a row for an attached ACP session that
@@ -19224,11 +19232,7 @@ def _archive_overlay_acp_sessions(rows):
             if not sid:
                 continue
             if existing is None:
-                existing = set()
-                for r in (rows or []):
-                    rsid = r.get("session_id") or r.get("id")
-                    if rsid:
-                        existing.add(str(rsid))
+                existing = _archive_overlay_existing_ids(rows)
             if sid in existing:
                 continue
             if not (state and state.get("attached")):
