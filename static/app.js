@@ -55155,7 +55155,8 @@
     // Wait for diagnostics still being collected, so what is sent matches
     // the finished preview rather than a "(collecting…)" placeholder.
     if ($bugDiagInclude && $bugDiagInclude.checked) {
-      if ($bugSubmitBtn) { $bugSubmitBtn.disabled = true; $bugSubmitBtn.textContent = 'Collecting diagnostics…'; }
+      if ($bugSubmitBtn) { $bugSubmitBtn.disabled = true; $bugSubmitBtn.textContent = 'Sending…'; }
+      if ($bugCancelBtn) $bugCancelBtn.disabled = true;
       await bugLoadDiagnostics();
       bugRenderPreview();
       if ($bugSubmitBtn) $bugSubmitBtn.disabled = false;

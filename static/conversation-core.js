@@ -22942,7 +22942,7 @@
     if (entry) return entry.promise;
     const fresh = { state: 'loading', text: '', error: '' };
     sharedState.bugDiag[dest] = fresh;
-    if (sharedState.$bugDiagInclude && sharedState.$bugDiagInclude.checked) bugDiagSetStatus('Collecting diagnostics…');
+    if (sharedState.$bugDiagInclude && sharedState.$bugDiagInclude.checked) bugDiagSetStatus('Preparing…');
     const url = '/api/telemetry/health-report?hours=' + sharedState.BUG_DIAG_HOURS +
       (dest === 'private' ? '&exact=1' : '');
     fresh.promise = fetch(url, { cache: 'no-store' })
