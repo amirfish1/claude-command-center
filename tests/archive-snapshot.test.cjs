@@ -142,6 +142,8 @@ before(async () => {
   server = http.createServer((req,res) => {
     if (req.url==='/archive-boot.js') {res.setHeader('Content-Type','application/javascript');res.end(boot);return;}
     if (req.url.startsWith('/api/conversations/list')) {
+      if (req.url.includes('since=error')) {res.writeHead(503);res.end();return;}
+      if (req.url.includes('since=bad-json')) {res.end('broken JSON');return;}
       if (req.url.includes('since=hang') || slowPreview && req.url.includes('initial=1')) {
         res.writeHead(200,{'Content-Type':'application/json'});res.flushHeaders();
         const timer=setTimeout(()=>res.end(JSON.stringify({conversations:rows})),1000);
@@ -165,10 +167,100 @@ async function seed(page,delta) {
   },{url:fullUrl,rows,delta});
   await page.waitForFunction(async delta=>{
     const db=await new Promise(resolve=>{const r=indexedDB.open('ccc-archive-response',1);r.onsuccess=()=>resolve(r.result);});
-    try {return await new Promise(resolve=>{const r=db.transaction('snapshot').objectStore('snapshot').get('last');r.onsuccess=()=>resolve(r.result?.delta===delta);});}
+    try {return await new Promise(resolve=>{const r=db.transaction('snapshot').objectStore('snapshot').get('last');r.onsuccess=()=>resolve(r.result?.delta===delta && !!localStorage.getItem('ccc-archive-response-at:7d'));});}
     finally {db.close();}
   },{},delta);
 }
+
+test('an intentionally unsent preview never starts a replacement request', async () => {
+  const f=setup({snapshot:{url:fullUrl,rows},response:reply({conversations:rows})});
+  f.state._archiveBootstrapUrl=fullUrl+'&initial=1';
+  f.state._archiveBootstrapFetchPromise=Promise.resolve(null);
+  f.context.window.__cccArchiveSnapshot.skippedRecent=true;
+  assert.equal(await f.context.loadArchiveAll({initial:true}),null);
+  assert.equal(f.reads.length,0);
+  assert.equal(f.state._archiveAllData.has(fullUrl+'&initial=1'),false);
+  await f.context.loadArchiveAll({initial:true,window:'1d'});
+  assert.equal(f.reads.length,1,'a different scope still uses its own preview');
+});
+
+test('a committed snapshot hint avoids an unsent preview for 304 and parsed 200 responses', async () => {
+  const context=await browser.createBrowserContext(),page=await context.newPage();
+  try {
+    await page.evaluateOnNewDocument(()=>{
+      window.__archiveReads=[];
+      const fetch=window.fetch.bind(window);
+      window.fetch=(url,...args)=>{window.__archiveReads.push(String(url));return fetch(url,...args);};
+    });
+    await page.goto(origin,{waitUntil:'load'});
+    assert.equal(await page.evaluate(()=>window.__archiveReads.filter(u=>u.includes('initial=1')).length),1);
+    for (const delta of ['valid','refresh']) {
+      await seed(page,delta);
+      await page.reload({waitUntil:'load'});
+      assert.deepEqual(await page.evaluate(async()=>{
+        const helper=window.__cccArchiveSnapshot,response=await helper.fetch;
+        if(response.status!==304)await response._cccArchiveParsedBody;
+        return {status:response.status,skipped:helper.skippedRecent,
+          preview:await window.__cccArchiveBootstrap.promise,
+          reads:window.__archiveReads.filter(u=>u.includes('initial=1')).length,
+          ready:!!window.__cccArchiveProgress};
+      }),{status:delta==='valid'?304:200,skipped:true,preview:null,reads:0,ready:false});
+    }
+  } finally {await context.close();}
+});
+
+test('a slow full body starts the bounded preview and cannot later mark it unsent', async () => {
+  const context=await browser.createBrowserContext(),page=await context.newPage();
+  try {
+    await page.goto(origin,{waitUntil:'load'});
+    await seed(page,'hang');
+    await page.evaluateOnNewDocument(()=>{
+      const set=window.setTimeout;
+      window.setTimeout=(fn,ms,...args)=>set(fn,ms===1000?60:ms,...args);
+    });
+    await page.reload({waitUntil:'load'});
+    assert.deepEqual(await page.evaluate(async()=>{
+      const recent=await window.__cccArchiveBootstrap.promise;
+      const rows=(await recent.json()).conversations;
+      await window.__cccArchiveSnapshot.fetch;
+      return {count:rows.length,skipped:!!window.__cccArchiveSnapshot.skippedRecent};
+    }),{count:2,skipped:false});
+  } finally {await context.close();}
+});
+
+test('missing cached bodies and opt-out ignore a remaining scheduling hint', async () => {
+  const context=await browser.createBrowserContext(),page=await context.newPage();
+  try {
+    await page.goto(origin,{waitUntil:'load'});
+    await page.evaluate(()=>window.__cccArchiveSnapshot.read);
+    await page.evaluate(()=>localStorage.setItem('ccc-archive-response-at:7d',String(Date.now())));
+    await page.reload({waitUntil:'load'});
+    assert.equal(await page.evaluate(async()=>{
+      const recent=await window.__cccArchiveBootstrap.promise;
+      return (await recent.json()).conversations.length;
+    }),2);
+    await seed(page,'valid');
+    await page.evaluate(()=>localStorage.setItem('ccc-conv-cache','0'));
+    await page.reload({waitUntil:'load'});
+    assert.deepEqual(await page.evaluate(async()=>({helper:!!window.__cccArchiveSnapshot,
+      count:(await (await window.__cccArchiveBootstrap.promise).json()).conversations.length})),{helper:false,count:2});
+  } finally {await context.close();}
+});
+
+test('failed or malformed complete replies release the ordinary preview', async () => {
+  const context=await browser.createBrowserContext(),page=await context.newPage();
+  try {
+    await page.goto(origin,{waitUntil:'load'});
+    for (const delta of ['error','bad-json']) {
+      await seed(page,delta);
+      await page.reload({waitUntil:'load'});
+      assert.deepEqual(await page.evaluate(async()=>({
+        count:(await (await window.__cccArchiveBootstrap.promise).json()).conversations.length,
+        skipped:!!window.__cccArchiveSnapshot.skippedRecent,
+      })),{count:2,skipped:false});
+    }
+  } finally {await context.close();}
+});
 
 test('a real full response is parsed once during prefetch and its body retains the timeout', async () => {
   const context=await browser.createBrowserContext(),page=await context.newPage();

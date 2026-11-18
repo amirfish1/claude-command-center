@@ -20116,6 +20116,10 @@
             r = await window.__cccArchiveSnapshot.fetch;
             if (r) _perfFetchUrl = r.url || url;
           }
+          // No preview request was sent when the early complete response won.
+          // The normal full loader still validates and applies that response.
+          if (!r && opts.initial && window.__cccArchiveSnapshot?.skippedRecent
+              && url === sharedState._archiveBootstrapUrl) return null;
           if (!r) {
             _perfFetchUrl = deltaToken ? url + '&since=' + encodeURIComponent(deltaToken) : url;
             r = await backgroundApiFetch(_perfFetchUrl, init);

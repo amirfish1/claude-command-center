@@ -12,21 +12,39 @@
     if (['8h', '1d', '7d', 'all'].includes(saved)) windowName = saved;
   } catch (_) {}
   const url = '/api/conversations/list?window=' + windowName + '&stale_ok=1&initial=1';
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 45000);
-  const start = performance.now();
-  const promise = window.fetch(url, {signal: controller.signal})
-    .then(response => {
-      response._cccArchiveTiming = {start, headers: performance.now()};
-      return response;
-    })
-    .catch(() => null).finally(() => clearTimeout(timeout));
+  const hintKey = 'ccc-archive-response-at:' + windowName;
+  let started = false, skipped = false, finishRecent, recentController, recentStart, recentTimer;
+  let snapshot;
+  const promise = new Promise(resolve => { finishRecent = resolve; });
+  const startRecent = () => {
+    if (started || skipped) return;
+    started = true;
+    clearTimeout(recentTimer);
+    const controller = recentController = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45000);
+    const start = recentStart = performance.now();
+    if (snapshot) snapshot.recentStart = start;
+    window.fetch(url, {signal:controller.signal}).then(response => {
+      response._cccArchiveTiming = {start,headers:performance.now()};
+      finishRecent(response);
+    }).catch(() => finishRecent(null)).finally(() => clearTimeout(timeout));
+  };
+  // This tiny hint schedules reads only. Readiness still requires the actual
+  // persisted body and a current server response, never the hint or disk alone.
+  let savedHint = false;
+  try {
+    const at = Number(localStorage.getItem(hintKey));
+    const age = Date.now() - at;
+    savedHint = at > 0 && age >= 0 && age < 86400000;
+  } catch (_) {}
+  if (savedHint) recentTimer = setTimeout(startRecent, 1000);
+  else startRecent();
   window.__cccArchiveBootstrap = {url, promise};
   // Keep one complete response only as a conditional-request base. It never
   // makes the archive ready without a current server response. Start disk I/O
   // alongside the recent-row request, before the application initializes.
-  if (!window.indexedDB) return;
-  try { if (localStorage.getItem('ccc-conv-cache') === '0') return; } catch (_) { return; }
+  if (!window.indexedDB) { startRecent(); return; }
+  try { if (localStorage.getItem('ccc-conv-cache') === '0') { startRecent(); return; } } catch (_) { startRecent(); return; }
   const fullUrl = url.replace('&initial=1', '');
   const maxBytes = 32 * 1024 * 1024;
   let dbPromise;
@@ -89,6 +107,7 @@
       } catch (_) { finish(null); }
     });
   })();
+  read.then(value => { if (!value) startRecent(); });
   let pending = null, scheduled = false;
   const save = value => {
     try { if (localStorage.getItem('ccc-conv-cache') === '0') return; } catch (_) { return; }
@@ -109,6 +128,9 @@
         tx.onerror = () => {};
         const {rows, ...metadata} = value;
         const record = {...metadata, rowsJson, bytes, at: Date.now()};
+        tx.oncomplete = () => {
+          try { localStorage.setItem(hintKey, String(record.at)); } catch (_) {}
+        };
         const store = tx.objectStore('snapshot');
         store.put(record, 'last');
         store.put({url:record.url, bytes, at:record.at, etag:record.etag, delta:record.delta}, 'header');
@@ -118,11 +140,16 @@
     if (window.__cccArchiveSettled) arm();
     else window.addEventListener('ccc:archive-settled', arm, {once:true});
   };
-  const snapshot = {read, save, url:fullUrl, recentStart:start,
-    cancelRecent() { snapshot.recentCancelled = true; controller.abort(); }};
+  header.then(value => { if (!value) startRecent(); });
+  snapshot = {read, save, url:fullUrl, recentStart,
+    cancelRecent() {
+      snapshot.recentCancelled = true;
+      recentController?.abort();
+      if (!started) { skipped = true; clearTimeout(recentTimer); finishRecent(null); }
+    }};
   snapshot.fetch = header.then(async metadata => {
     const value = metadata || await read;
-    if (!value) return null;
+    if (!value) { startRecent(); return null; }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 45000);
     const start = performance.now();
@@ -140,9 +167,24 @@
       }
       const base = await read;
       // Never apply validation for a different or damaged persisted body.
-      if (!base || base.etag !== value.etag || base.delta !== value.delta || base.at !== value.at) return null;
+      if (!base || base.etag !== value.etag || base.delta !== value.delta || base.at !== value.at) {
+        startRecent(); return null;
+      }
+      if (!started && (response.status === 304 || response.ok)) {
+        let ready = response.status === 304;
+        if (!ready) {
+          try { ready = Array.isArray((await body)?.conversations); } catch (_) {}
+        }
+        // The timer may have started the preview while the body was pending.
+        if (ready && !started) {
+          skipped = true;
+          snapshot.skippedRecent = true;
+          clearTimeout(recentTimer);
+          finishRecent(null);
+        } else if (!ready) startRecent();
+      } else if (!response.ok && response.status !== 304) startRecent();
       return response;
-    } catch (_) { return null; }
+    } catch (_) { startRecent(); return null; }
     finally { if (!body) clearTimeout(timeout); }
   });
   window.__cccArchiveSnapshot = snapshot;
