@@ -19308,19 +19308,13 @@ def _archive_overlay_acp_sessions(rows, *, existing_ids=None):
     if not _ACP_HARNESSES:
         return []
     existing = existing_ids
-    # Gate by candidacy (CCC-142): the sidecar loads below cost O(all spawn
-    # markers) -- ~4k files, re-stat'd on nearly every poll behind a 2s memo
-    # -- yet are only needed to build a row for an attached ACP session that
-    # the snapshot is missing. Normally there is none, so load them lazily.
+    # Load shared sidecars only for an attached session missing from the
+    # snapshot. Most polls have no gap to fill.
     ctx = {}
 
     def _overlay_ctx():
         if ctx:
             return ctx
-        try:
-            ctx["spawn_markers"] = _load_spawn_markers()
-        except Exception:
-            ctx["spawn_markers"] = {}
         try:
             ctx["name_overrides"] = _load_session_name_overrides()
         except Exception:
@@ -19377,7 +19371,12 @@ def _archive_overlay_acp_sessions(rows, *, existing_ids=None):
             if not cwd:
                 continue
             c = _overlay_ctx()
-            spawn_markers = c["spawn_markers"]
+            # Only this missing session needs attribution. Loading the whole
+            # marker map re-stats every historical launch after an unrelated
+            # spawn, putting corpus-sized filesystem work in sidebar polls.
+            marker = (_decode_spawn_marker_file(SPAWN_MARKERS_DIR / f"{sid}.json")
+                      if Path(sid).name == sid else None)
+            spawn_markers = {sid: marker} if marker else {}
             name_overrides = c["name_overrides"]
             archived_set, trashed_set = c["archived_set"], c["trashed_set"]
             pinned_rank = c["pinned_rank"]

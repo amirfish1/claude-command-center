@@ -5067,10 +5067,15 @@ def test_archive_list_acp_overlay_skips_sidecars_without_candidates(monkeypatch)
     loaded (and re-stat'd) every spawn marker on disk before checking for a
     single attached ACP session. Live stack dumps caught 3-4s list requests
     sitting there. With no candidate, no sidecar may be read; with one
-    missing attached session, they are read exactly once."""
+    missing attached session, only its marker is read."""
     import server
     loads = []
-    monkeypatch.setattr(server, "_load_spawn_markers", lambda: loads.append("m") or {})
+    def unexpected_scan():
+        raise AssertionError("ACP sidebar must not scan historical spawn markers")
+    monkeypatch.setattr(server, "_load_spawn_markers", unexpected_scan)
+    marker_reads = []
+    monkeypatch.setattr(server, "_decode_spawn_marker_file",
+                        lambda marker: marker_reads.append(marker.name) or None)
     monkeypatch.setattr(server, "_load_session_name_overrides", lambda: loads.append("n") or {})
     monkeypatch.setattr(server, "_load_conversation_lifecycle_sets",
                         lambda: loads.append("l") or (set(), set()))
@@ -5082,11 +5087,13 @@ def test_archive_list_acp_overlay_skips_sidecars_without_candidates(monkeypatch)
     monkeypatch.setattr(server, "_ACP_SESSION_STATE", state)
     assert server._archive_overlay_acp_sessions(rows) == []
     assert loads == []
+    assert marker_reads == []
     state["kimi"]["new-acp"] = {"attached": True, "cwd": "/tmp", "status": "active"}
     state["kimi"]["other-acp"] = {"attached": True, "cwd": "/tmp", "status": "idle"}
     out = server._archive_overlay_acp_sessions(rows)
     assert sorted(r["session_id"] for r in out) == ["new-acp", "other-acp"]
-    assert sorted(loads) == ["l", "m", "n", "p"]
+    assert sorted(loads) == ["l", "n", "p"]
+    assert sorted(marker_reads) == ["new-acp.json", "other-acp.json"]
 
 
 def test_restart_recovery_reads_only_window_tails_once_per_boot(monkeypatch, tmp_path):

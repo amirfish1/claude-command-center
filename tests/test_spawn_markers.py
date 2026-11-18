@@ -118,9 +118,10 @@ def test_archive_overlay_acp_sessions_infers_spawned_via(monkeypatch, tmp_path):
             }
         }
     })
-    monkeypatch.setattr(server, "_load_spawn_markers", lambda: {
-        sid: {"spawned_via": "ui"},
-    })
+    marker_dir = tmp_path / "spawn-markers"
+    marker_dir.mkdir()
+    (marker_dir / f"{sid}.json").write_text(json.dumps({"spawned_via": "ui"}))
+    monkeypatch.setattr(server, "SPAWN_MARKERS_DIR", marker_dir)
     monkeypatch.setattr(server, "_load_session_name_overrides", lambda: {})
     monkeypatch.setattr(server, "_load_conversation_lifecycle_sets", lambda: (set(), set()))
     monkeypatch.setattr(server, "_load_pinned_conversations", lambda: [])
