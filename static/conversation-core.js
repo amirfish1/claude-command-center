@@ -19271,8 +19271,14 @@
 
   function _markArchiveFirstLoaded() {
     hideLoadingOverlay();
+    // Cached/recent rows make the sidebar usable, but optional startup probes
+    // still compete with the complete archive read. Keep readiness separate
+    // from releasing that network backlog; user actions retain their bypass.
+    const progress = window.__cccArchiveProgress;
+    if (!sharedState._archiveFromLocalCache && (!progress || progress.complete || progress.failed)) {
+      _releaseStartupApiReads();
+    }
     if (!sharedState._archiveFirstLoadedResolve) return;
-    _releaseStartupApiReads();
     (0, sharedState._archiveFirstLoadedResolve)();
     sharedState._archiveFirstLoadedResolve = null;
   }
@@ -20489,6 +20495,7 @@
         _stopArchiveProgressPoll();
         _markArchiveFirstLoaded();
         if (archiveSettled) {
+          _releaseStartupApiReads();
           window.__cccArchiveSettled = true;
           window.dispatchEvent?.(new Event('ccc:archive-settled'));
         }

@@ -16,8 +16,8 @@ function setup() {
   let resolveFull;
   const full = new Promise(resolve => { resolveFull = resolve; });
   const notice = { style: {}, setAttribute() {} };
-  const paints = [], calls = [], deferred = [], events = [];
-  const state = { archiveData: [], archiveLoaded: false };
+  const paints = [], calls = [], deferred = [], events = [], releases = [], ready = [];
+  const state = { archiveData: [], archiveLoaded: false, _archiveFirstLoadedResolve: () => ready.push(true) };
   const context = {
     sharedState: state, window: {dispatchEvent: event => events.push(event.type)}, Event,
     document: { getElementById: id => id === 'archiveCompleteness' ? notice : null },
@@ -28,14 +28,16 @@ function setup() {
     _mergeArchivePrSnapshot: rows => rows, _mergeIntoMasterRows() {}, _resetArchiveUnknownPatchIds() {},
     hostServices: { renderArchiveList: () => paints.push(state.archiveData.map(r => r.session_id)) },
     refreshLiveSessionsActivity: async () => {}, _queueDashboardArchiveRender() {},
-    _markArchiveFirstLoaded() {}, _hydrateArchiveSideData() {}, _scheduleArchiveStaleRetry() { context.retryScheduled = true; },
+    hideLoadingOverlay() {}, _releaseStartupApiReads() { releases.push(true); },
+    _hydrateArchiveSideData() {}, _scheduleArchiveStaleRetry() { context.retryScheduled = true; },
     requestAnimationFrame: fn => setImmediate(fn), setTimeout: () => 0,
     queueMicrotask: fn => deferred.push(fn),
   };
   vm.createContext(context);
+  vm.runInContext(extract('_markArchiveFirstLoaded'), context);
   vm.runInContext(extract('_setArchiveCompleteness'), context);
   vm.runInContext('async ' + extract('refreshArchiveData'), context);
-  return { context, state, notice, paints, calls, deferred, events, resolveFull };
+  return { context, state, notice, paints, calls, deferred, events, releases, ready, resolveFull };
 }
 async function initialPaint(f) {
   for (let n = 0; n < 20 && f.calls.length < 2; n++) await new Promise(setImmediate);
@@ -48,6 +50,9 @@ test('recent rows paint while complete request is still pending, then full rows 
   assert.match(f.notice.textContent, /Search and counts are incomplete/);
   assert.equal(f.context.window.__cccArchiveProgress.complete, false);
   assert.deepEqual(f.events, [], 'recent rows do not release competing startup work');
+  f.context._markArchiveFirstLoaded();
+  assert.deepEqual(f.ready, [true], 'first-row readiness does not wait for full history');
+  assert.deepEqual(f.releases, [], 'optional probes wait while the full read is pending');
   f.resolveFull([{session_id:'recent'}, {session_id:'older'}]);
   await task;
   assert.deepEqual(f.paints, [['recent'], ['recent', 'older']]);
@@ -55,6 +60,7 @@ test('recent rows paint while complete request is still pending, then full rows 
   assert.equal(f.context.window.__cccArchiveProgress.complete, true);
   assert.deepEqual(f.events, ['ccc:archive-settled']);
   assert.equal(f.context.window.__cccArchiveSettled, true);
+  assert.ok(f.releases.length, 'full completion releases the startup backlog even after initial readiness');
 });
 test('full failure retains usable rows and explicitly incomplete results', async () => {
   const f = setup(), task = f.context.refreshArchiveData();
@@ -65,6 +71,7 @@ test('full failure retains usable rows and explicitly incomplete results', async
   assert.equal(f.context.retryScheduled, true);
   assert.equal(f.context.window.__cccArchiveProgress.complete, false);
   assert.deepEqual(f.events, ['ccc:archive-settled'], 'failure also releases deferred startup work');
+  assert.ok(f.releases.length);
 });
 test('obsolete full response cannot replace a newly selected window', async () => {
   const f = setup(), task = f.context.refreshArchiveData();
@@ -83,4 +90,17 @@ test('retaining rows after an empty full response still releases deferred startu
   assert.equal(f.state.archiveData[0].session_id, 'recent');
   assert.deepEqual(f.events, ['ccc:archive-settled']);
   assert.equal(f.context.window.__cccArchiveProgress.complete, false, 'settling does not claim complete data');
+  assert.ok(f.releases.length);
+});
+
+test('a persisted preview resolves readiness without starting optional network work', () => {
+  const f = setup();
+  f.state._archiveFromLocalCache = true;
+  f.context._markArchiveFirstLoaded();
+  assert.deepEqual(f.ready, [true]);
+  assert.deepEqual(f.releases, []);
+  f.state._archiveFromLocalCache = false;
+  f.context.window.__cccArchiveProgress = {complete: true};
+  f.context._markArchiveFirstLoaded();
+  assert.ok(f.releases.length);
 });
