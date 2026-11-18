@@ -11568,11 +11568,15 @@
     const tools = btn._speakerTools;
     if (!tools) return;
     tools.hidden = !btn.classList.contains('visible');
-    // Center the dial on the button from measured sizes: phones shrink both
-    // (40px button, 56px dial), so a fixed desktop offset puts the ring off-center.
-    const inset = tools.hidden ? 14 : (tools.offsetWidth - btn.offsetWidth) / 2;
-    tools.style.left = (btn.offsetLeft - inset) + 'px';
-    tools.style.top = (btn.offsetTop - inset) + 'px';
+    // Hidden tools need no position. Reading offsets after transcript writes
+    // would force layout even though the ring cannot be seen. Recompute on
+    // every visible update, including the transition from hidden to shown.
+    if (!tools.hidden) {
+      // Phones shrink both controls, so measure their current sizes.
+      const inset = (tools.offsetWidth - btn.offsetWidth) / 2;
+      tools.style.left = (btn.offsetLeft - inset) + 'px';
+      tools.style.top = (btn.offsetTop - inset) + 'px';
+    }
     const current = btn.classList.contains('speaking') || btn.classList.contains('paused');
     tools.querySelector('.speaker-next-sentence').disabled = !current;
   }
