@@ -129,12 +129,13 @@ test('real renderers replace consecutive thoughts in a steady slot, then preserv
             && Math.abs(height - slot.getBoundingClientRect().height) < 1;
           render([{kind:'tool_use',name:'Bash',id:'activity-first',detail:'Read the worklet',command:'cat worklet.js'}]);
           const firstStable = stable();
+          const commandEllipsis = slot.querySelector('.activity-run-preview').textContent === 'Read the worklet...';
           render([{kind:'tool_use',name:'Bash',id:'activity-second',detail:'Check how rate is used ' + 'and its tests '.repeat(60),command:'rg rate worklet.js'}]);
           const longStable = stable();
           const newestCommand = slot.querySelector('.activity-run-preview').textContent.startsWith('Check how rate is used');
           render([{kind:'thinking',text:'Now implement pitch-preserving speed.'}]);
           const thoughtStable = stable();
-          const latestThought = slot.querySelector('.activity-run-preview').textContent === 'Now implement pitch-preserving speed.';
+          const latestThought = slot.querySelector('.activity-run-preview').textContent === 'Now implement pitch-preserving speed...';
           const collapsedSources = [...view.querySelectorAll('.activity-run-source')].every(el=>!el.checkVisibility());
           heading.click();
           const historyVisible = [...view.querySelectorAll('.activity-run-source')].every(el=>el.checkVisibility());
@@ -161,10 +162,10 @@ test('real renderers replace consecutive thoughts in a steady slot, then preserv
           const verbosePreserved = [...view.querySelectorAll('.activity-run')].every(el=>!el.checkVisibility())
             && [...view.querySelectorAll('.activity-run-source')].every(el=>el.checkVisibility());
           document.body.dataset.convView = 'normal';
-          return {firstStable,longStable,newestCommand,thoughtStable,latestThought,collapsedSources,historyVisible,
+          return {firstStable,commandEllipsis,longStable,newestCommand,thoughtStable,latestThought,collapsedSources,historyVisible,
             commandsRetained,idempotent,replyBoundary,questionVisible,questionBoundary,failurePreserved,verbosePreserved,overflow};
         },{merged});
-        assert.deepEqual(result,{firstStable:true,longStable:true,newestCommand:true,thoughtStable:true,latestThought:true,
+        assert.deepEqual(result,{firstStable:true,commandEllipsis:true,longStable:true,newestCommand:true,thoughtStable:true,latestThought:true,
           collapsedSources:true,historyVisible:true,commandsRetained:true,idempotent:true,replyBoundary:true,
           questionVisible:true,questionBoundary:true,failurePreserved:true,verbosePreserved:true,overflow:false},JSON.stringify({width,merged}));
         await page.focus('.activity-run-toggle');

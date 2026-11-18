@@ -1896,7 +1896,8 @@
       const preview = slot.querySelector('.activity-run-preview');
       const failed = members.some(member => member.matches('.tool-call-fail, .kimi-tool.err')
         || member.querySelector('.tool-call-fail, .kimi-tool-status.error'));
-      const value = (failed ? 'Failed: ' : '') + (detail?.textContent || latest.textContent || '').trim();
+      const text = (detail?.textContent || latest.textContent || '').trim();
+      const value = (failed ? 'Failed: ' : '') + (text ? text.replace(/[.…]+$/u, '') + '...' : '');
       if (preview.textContent !== value) preview.textContent = value;
       slot.classList.toggle('has-error', failed);
       const title = failed ? 'Tool failed — show activity history' : 'Show activity history';
