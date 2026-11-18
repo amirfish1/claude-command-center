@@ -1,4 +1,4 @@
-"""Hints arrive before HTML and do not consume or reframe its response."""
+"""Preloads cannot overtake document headers or leak across requests."""
 
 import http.server
 import io
@@ -74,11 +74,11 @@ def test_hints_match_current_canonical_bundles_and_validate_all_before_writing(a
         return f'/static/{name}?v={version}'
 
     assert send(handler, 'example', apps, current_url)
-    hints = handler.wfile.getvalue().decode()
+    assert handler.wfile.getvalue() == b""
     final = handler._ccc_final_asset_hints
     for name, kind in _ASSETS:
         link = f'<{current_url(name)}>; rel=preload; as={kind}'
-        assert (f'Link: {link}\r\n' in hints) != (link in final)
+        assert link in final
         assert f'/{name}"' in html
     # A bad last URL must not leave a partial informational response behind.
     handler.wfile = io.BytesIO()
@@ -95,10 +95,9 @@ def test_dashboard_route_keeps_canonical_final_html_after_hints(apps, monkeypatc
     monkeypatch.setattr(server._conv_reader, 'forward_page',
                         lambda *_args: {'body': b'<p>canonical page</p>', 'encoding': None})
     status, _headers, body = _get(server, '/?ccc_app=example', HEADERS)
-    assert status == 103
-    assert body.startswith(b'HTTP/1.0 200 OK\r\n')
-    assert body.endswith(b'<p>canonical page</p>')
-    assert b'Content-Length: 21\r\n' in body
+    assert status == 200
+    assert body == b'<p>canonical page</p>'
+    assert _headers["content-length"] == "21"
 
 
 def test_real_connection_sees_hints_before_page_and_reuses_final_framing(apps):
@@ -129,11 +128,6 @@ def test_real_connection_sees_hints_before_page_and_reuses_final_framing(apps):
                        + ''.join(f'{key}: {value}\r\n' for key, value in HEADERS.items()) + '\r\n')
             connection.sendall(request.encode())
             assert ready.wait(3)
-            assert stream.readline() == b'HTTP/1.1 103 Early Hints\r\n'
-            assert stream.readline() == b'Link: </static/conversation-extensions.js?v=current>; rel=preload; as=script\r\n'
-            assert stream.readline() == b'Link: </static/conversation-deferred.js?v=current>; rel=preload; as=script\r\n'
-            assert stream.readline() == b'Link: </static/conversation-extensions.css?v=current>; rel=preload; as=style\r\n'
-            assert stream.readline() == b'\r\n'
             assert not release.is_set()
             release.set()
             assert stream.readline() == b'HTTP/1.1 200 OK\r\n'
@@ -142,6 +136,10 @@ def test_real_connection_sees_hints_before_page_and_reuses_final_framing(apps):
                 final.append(line)
             assert b'Link: </static/conversation-app.js?v=current>; rel=preload; as=script\r\n' in final
             assert b'Link: </static/app.css?v=current>; rel=preload; as=style\r\n' in final
+            from ccc_server.app_asset_hints import _ASSETS
+            assert sum(line.startswith(b'Link:') for line in final) == len(_ASSETS)
+            for name, kind in _ASSETS:
+                assert f'Link: <{asset_url(name)}>; rel=preload; as={kind}\r\n'.encode() in final
             assert stream.read(5) == b'page!'
             connection.sendall(b'GET /static/next.js HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n')
             assert stream.readline() == b'HTTP/1.0 200 OK\r\n'
