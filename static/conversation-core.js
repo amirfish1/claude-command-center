@@ -20076,12 +20076,10 @@
     };
     const p = (async () => {
       try {
-        let snapshotBase = false;
         if (!opts.initial && !opts.includePrs && !sharedState._archiveAllData.has(url)) {
           const snapshot = await window.__cccArchiveSnapshot?.read;
           if (snapshot?.url === url && !sharedState._archiveAllData.has(url)) {
             sharedState._archiveAllData.set(url, snapshot.rows);
-            snapshotBase = true;
             if (snapshot.etag) sharedState._archiveAllEtag.set(url, snapshot.etag);
             if (snapshot.delta) sharedState._archiveAllDelta.set(url, snapshot.delta);
           }
@@ -20111,7 +20109,7 @@
             r = await sharedState._archiveBootstrapFetchPromise;
             if (controller.signal.aborted) throw controller.signal.reason;
           }
-          if (!r && snapshotBase && window.__cccArchiveSnapshot && !window.__cccArchiveSnapshot.consumed && url === window.__cccArchiveSnapshot.url) {
+          if (!r && window.__cccArchiveSnapshot && !window.__cccArchiveSnapshot.consumed && url === window.__cccArchiveSnapshot.url) {
             window.__cccArchiveSnapshot.consumed = true;
             r = await window.__cccArchiveSnapshot.fetch;
             if (r) _perfFetchUrl = r.url || url;

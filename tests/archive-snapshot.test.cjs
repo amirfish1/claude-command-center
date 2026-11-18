@@ -57,6 +57,25 @@ test('a persisted base still waits for validation, then merges the current order
   assert.match(f.reads[0].url,/since=current$/);
 });
 
+test('a fresh early full body needs no saved base and bypasses the preview fence', async () => {
+  const f = setup({response:reply({conversations:[]})});
+  const response = reply(null);
+  response._cccArchiveParsedBody = Promise.resolve({conversations:rows, delta_token:'fresh'});
+  response.json = () => {throw Error('early full body must not parse twice');};
+  f.context.window.__cccArchiveSnapshot = {
+    url:fullUrl, read:Promise.resolve(null), fetch:Promise.resolve(response), save() {},
+  };
+  let validated = 0;
+  const result = await f.context.loadArchiveAll({
+    afterPaint:new Promise(() => {}), onValidated:() => validated++,
+  });
+  assert.deepEqual(Array.from(result), rows);
+  assert.equal(validated,1);
+  assert.equal(f.reads.length,0,'a fresh full boot response is consumed only once');
+  assert.equal(f.state._archiveAllDelta.get(fullUrl),'fresh');
+  assert.equal(f.context.window.__cccArchiveProgress,undefined,'only the renderer marks completeness');
+});
+
 test('304 reuses the exact validated rows; an expired server token replaces the full base', async () => {
   const snapshot = {url:fullUrl, rows, delta:'old', etag:'"old"'};
   const same = setup({snapshot, early:Promise.resolve(reply(null,304))});
@@ -155,11 +174,15 @@ test('superseding an early preview aborts it without a replacement request and r
   assert.equal(metric.detail.settle_delay_ms,500,'later handler delay remains visible');
 });
 
-let browser, server, origin, slowPreview=false;
+let browser, server, origin, slowPreview=false, coldFullFailure='';
 before(async () => {
   server = http.createServer((req,res) => {
     if (req.url==='/archive-boot.js') {res.setHeader('Content-Type','application/javascript');res.end(boot);return;}
     if (req.url.startsWith('/api/conversations/list')) {
+      if (coldFullFailure && !req.url.includes('initial=1') && !req.url.includes('since=')) {
+        res.writeHead(coldFullFailure === 'http' ? 500 : 200);
+        res.end(coldFullFailure === 'http' ? '' : 'invalid JSON');return;
+      }
       if (req.url.includes('since=error')) {res.writeHead(503);res.end();return;}
       if (req.url.includes('since=bad-json')) {res.end('broken JSON');return;}
       if (req.url.includes('since=hang') || slowPreview && req.url.includes('initial=1')) {
@@ -200,6 +223,40 @@ test('an intentionally unsent preview never starts a replacement request', async
   assert.equal(f.state._archiveAllData.has(fullUrl+'&initial=1'),false);
   await f.context.loadArchiveAll({initial:true,window:'1d'});
   assert.equal(f.reads.length,1,'a different scope still uses its own preview');
+});
+
+test('a fresh profile prefetches a parsed full response while retaining its recent read', async () => {
+  const context=await browser.createBrowserContext(),page=await context.newPage();
+  try {
+    await page.goto(origin,{waitUntil:'load'});
+    const state=await page.evaluate(async()=>{
+      const helper=window.__cccArchiveSnapshot;
+      const base=await helper.read;
+      const response=await helper.fetch;
+      return {base,body:await response._cccArchiveParsedBody,
+        recent:(await (await window.__cccArchiveBootstrap.promise).json()).conversations,
+        ready:!!window.__cccArchiveProgress?.complete};
+    });
+    assert.equal(state.base,null);
+    assert.deepEqual(state.body.conversations,rows);
+    assert.deepEqual(state.recent,rows);
+    assert.equal(state.ready,false);
+  } finally {await context.close();}
+});
+
+test('failed fresh full prefetches preserve the ordinary recent response', async () => {
+  for (const failure of ['http','json']) {
+    const context=await browser.createBrowserContext(),page=await context.newPage();
+    coldFullFailure=failure;
+    try {
+      await page.goto(origin,{waitUntil:'load'});
+      assert.deepEqual(await page.evaluate(async()=>{
+        await window.__cccArchiveSnapshot.fetch;
+        return (await (await window.__cccArchiveBootstrap.promise).json()).conversations;
+      }),rows);
+      assert.equal(await page.evaluate(()=>!!window.__cccArchiveProgress?.complete),false);
+    } finally {coldFullFailure='';await context.close();}
+  }
 });
 
 test('a committed snapshot hint avoids an unsent preview for 304 and parsed 200 responses', async () => {
@@ -351,6 +408,11 @@ test('real IndexedDB retains one scoped snapshot and a reload obtains an actual 
 test('expired, future-dated, oversized, malformed and other-window records cannot seed validation', async () => {
   const context=await browser.createBrowserContext(), page=await context.newPage();
   try {
+    await page.evaluateOnNewDocument(()=>{
+      const fetch=window.fetch.bind(window);
+      window.__archiveRequests=[];
+      window.fetch=(url,init)=>{window.__archiveRequests.push({url,headers:init?.headers});return fetch(url,init);};
+    });
     await page.goto(origin,{waitUntil:'load'});
     await page.evaluate(()=>window.__cccArchiveSnapshot.read);
     const base={url:fullUrl, rows, bytes:200, delta:'valid', at:Date.now()};
@@ -363,8 +425,12 @@ test('expired, future-dated, oversized, malformed and other-window records canno
         finally {db.close();}
       },{...base,...patch});
       await page.reload({waitUntil:'load'});
-      assert.deepEqual(await page.evaluate(async()=>({read:await window.__cccArchiveSnapshot.read,
-        response:await window.__cccArchiveSnapshot.fetch})),{read:null,response:null});
+      assert.deepEqual(await page.evaluate(async()=>{
+        const read=await window.__cccArchiveSnapshot.read;
+        const response=await window.__cccArchiveSnapshot.fetch;
+        return {read,status:response.status,rows:(await response._cccArchiveParsedBody).conversations,
+          conditional:window.__archiveRequests.some(r=>r.url.includes('since=') || r.headers?.['If-None-Match'])};
+      }),{read:null,status:200,rows,conditional:false});
     }
   } finally {await context.close();}
 });

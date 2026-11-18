@@ -149,15 +149,18 @@
     }};
   snapshot.fetch = header.then(async metadata => {
     const value = metadata || await read;
-    if (!value) { startRecent(); return null; }
+    // Without a persisted base, start a fresh complete read during boot too.
+    // The recent-row request remains independent; either validated response
+    // can win without waiting for the large application to start its fetch.
+    if (!value) startRecent();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 45000);
     const start = performance.now();
     let body = null;
     try {
-      const target = value.delta ? fullUrl + '&since=' + encodeURIComponent(value.delta) : fullUrl;
+      const target = value?.delta ? fullUrl + '&since=' + encodeURIComponent(value.delta) : fullUrl;
       const response = await window.fetch(target, {signal:controller.signal,
-        headers:value.etag ? {'If-None-Match':value.etag} : {}});
+        headers:value?.etag ? {'If-None-Match':value.etag} : {}});
       response._cccArchiveTiming = {start,headers:performance.now()};
       if (response.ok && response.status !== 304) {
         // Drain the early response while the application initializes. Leaving
@@ -166,8 +169,9 @@
         body.finally(() => clearTimeout(timeout)).catch(() => {});
       }
       const base = await read;
-      // Never apply validation for a different or damaged persisted body.
-      if (!base || base.etag !== value.etag || base.delta !== value.delta || base.at !== value.at) {
+      // Conditional validation still requires the exact persisted body.
+      // An unconditional full response needs no saved base.
+      if (value && (!base || base.etag !== value.etag || base.delta !== value.delta || base.at !== value.at)) {
         startRecent(); return null;
       }
       if (!started && (response.status === 304 || response.ok)) {
