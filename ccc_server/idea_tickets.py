@@ -114,7 +114,10 @@ def _project_state(raw):
         return raw
     graph = _graph()
     graph.sync_from_disk()
-    key = (id(raw), str(graph._path), graph._disk_token, graph.parent_revision())
+    # Activity writes share this file with lineage, but do not change ticket
+    # inheritance. The graph revision covers both local and imported links
+    # and ticket membership; object identity also invalidates a replaced graph.
+    key = (id(raw), graph, graph.parent_revision())
     if _state_cache.get("projection_key") == key:
         return _state_cache["projection"]
     data = json.loads(json.dumps(raw))
