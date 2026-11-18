@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ccc_server.app_asset_hints import send
+from ccc_server.app_asset_hints import AppAssetHintsMixin, send
 from ccc_server.http_read_keepalive import ReadKeepAliveMixin
 
 
@@ -75,9 +75,10 @@ def test_hints_match_current_canonical_bundles_and_validate_all_before_writing(a
 
     assert send(handler, 'example', apps, current_url)
     hints = handler.wfile.getvalue().decode()
-    assert len(_ASSETS) == 5
+    final = handler._ccc_final_asset_hints
     for name, kind in _ASSETS:
-        assert f'Link: <{current_url(name)}>; rel=preload; as={kind}\r\n' in hints
+        link = f'<{current_url(name)}>; rel=preload; as={kind}'
+        assert (f'Link: {link}\r\n' in hints) != (link in final)
         assert f'/{name}"' in html
     # A bad last URL must not leave a partial informational response behind.
     handler.wfile = io.BytesIO()
@@ -103,7 +104,7 @@ def test_dashboard_route_keeps_canonical_final_html_after_hints(apps, monkeypatc
 def test_real_connection_sees_hints_before_page_and_reuses_final_framing(apps):
     ready, release = threading.Event(), threading.Event()
 
-    class Handler(ReadKeepAliveMixin, http.server.BaseHTTPRequestHandler):
+    class Handler(AppAssetHintsMixin, ReadKeepAliveMixin, http.server.BaseHTTPRequestHandler):
         def log_message(self, *_args):
             pass
 
@@ -129,8 +130,6 @@ def test_real_connection_sees_hints_before_page_and_reuses_final_framing(apps):
             connection.sendall(request.encode())
             assert ready.wait(3)
             assert stream.readline() == b'HTTP/1.1 103 Early Hints\r\n'
-            assert stream.readline() == b'Link: </static/conversation-app.js?v=current>; rel=preload; as=script\r\n'
-            assert stream.readline() == b'Link: </static/app.css?v=current>; rel=preload; as=style\r\n'
             assert stream.readline() == b'Link: </static/conversation-extensions.js?v=current>; rel=preload; as=script\r\n'
             assert stream.readline() == b'Link: </static/conversation-deferred.js?v=current>; rel=preload; as=script\r\n'
             assert stream.readline() == b'Link: </static/conversation-extensions.css?v=current>; rel=preload; as=style\r\n'
@@ -138,13 +137,16 @@ def test_real_connection_sees_hints_before_page_and_reuses_final_framing(apps):
             assert not release.is_set()
             release.set()
             assert stream.readline() == b'HTTP/1.1 200 OK\r\n'
-            while stream.readline() != b'\r\n':
-                pass
+            final = []
+            while (line := stream.readline()) != b'\r\n':
+                final.append(line)
+            assert b'Link: </static/conversation-app.js?v=current>; rel=preload; as=script\r\n' in final
+            assert b'Link: </static/app.css?v=current>; rel=preload; as=style\r\n' in final
             assert stream.read(5) == b'page!'
             connection.sendall(b'GET /static/next.js HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n')
             assert stream.readline() == b'HTTP/1.0 200 OK\r\n'
-            while stream.readline() != b'\r\n':
-                pass
+            while (line := stream.readline()) != b'\r\n':
+                assert not line.startswith(b'Link:')
             assert stream.read() == b'page!'
             stream.close()
     finally:

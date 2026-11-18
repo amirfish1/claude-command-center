@@ -14,10 +14,24 @@ _ASSETS = (
     ("conversation-deferred.js", "script"),
     ("conversation-extensions.css", "style"),
 )
+_FINAL_ASSETS = {"conversation-app.js", "app.css"}
+
+
+class AppAssetHintsMixin:
+    def handle_one_request(self):
+        self._ccc_final_asset_hints = ()
+        return super().handle_one_request()
+
+    def end_headers(self):
+        links = self._ccc_final_asset_hints
+        self._ccc_final_asset_hints = ()
+        for link in links:
+            self.send_header("Link", link)
+        return super().end_headers()
 
 
 def send(handler, app_id, apps_dir, asset_url):
-    """Send one informational response; leave the final response untouched.
+    """Preload assets without delaying the final response's header delivery.
 
     Navigation metadata excludes clients that may treat 103 as a final reply.
     HTTPS proxies can relay the hints over HTTP/2; direct HTTP browsers keep
@@ -36,14 +50,20 @@ def send(handler, app_id, apps_dir, asset_url):
     session = agent.get("session_id") if isinstance(agent, dict) else None
     if not isinstance(session, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", session):
         return False
-    links = []
+    early, final = [], []
     for name, kind in _ASSETS:
         url = asset_url(name)
         if not re.fullmatch(r"/static/" + re.escape(name) + r"\?v=[A-Za-z0-9_.-]{1,128}", url):
             return False
-        links.append(f"Link: <{url}>; rel=preload; as={kind}\r\n")
+        link = f"<{url}>; rel=preload; as={kind}"
+        (final if name in _FINAL_ASSETS else early).append(link)
+    # Large preloads can fill the shared HTTP/2 connection ahead of the
+    # document's final headers. Start them with those headers instead; the
+    # smaller extension phases still overlap document preparation.
+    handler._ccc_final_asset_hints = tuple(final)
     # Bypass final-response hooks: this has no body, status accounting, framing
     # or response timing of its own. The eventual HTML keeps all those hooks.
-    handler.wfile.write(("HTTP/1.1 103 Early Hints\r\n" + "".join(links) + "\r\n").encode("ascii"))
+    links = "".join(f"Link: {link}\r\n" for link in early)
+    handler.wfile.write(("HTTP/1.1 103 Early Hints\r\n" + links + "\r\n").encode("ascii"))
     handler.wfile.flush()
     return True
