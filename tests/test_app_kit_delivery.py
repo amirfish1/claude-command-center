@@ -42,3 +42,8 @@ def test_source_edits_invalidate_embedded_bytes_and_failures_keep_http(tmp_path)
     assert script_url("", tmp_path, fallback) != first
     kit.write_bytes(b"x" * (MAX_BYTES + 1))
     assert script_url("", tmp_path, fallback) == fallback
+
+
+def test_empty_http_equiv_attribute_does_not_break_app_loading(tmp_path):
+    (tmp_path / "app-kit.js").write_bytes(b"window.example = true;")
+    assert script_url('<meta http-equiv>', tmp_path, '/static/app-kit.js').startswith('data:')

@@ -17,7 +17,7 @@ class _ScriptPolicy(HTMLParser):
 
     def handle_starttag(self, tag, attributes):
         attrs = dict(attributes)
-        if (tag == "meta" and attrs.get("http-equiv", "").strip().lower()
+        if (tag == "meta" and (attrs.get("http-equiv") or "").strip().lower()
                 == "content-security-policy") or "integrity" in attrs:
             self.external = True
 
