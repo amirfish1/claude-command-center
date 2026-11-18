@@ -20183,6 +20183,9 @@
           if (!_merged) {
             // Ids we never had: resync with one full body.
             _clientLog('[ARCHIVE-DIAG] conversations/list delta unmergeable; full refetch');
+            // A skipped saved preview is useful again while a full resync
+            // runs, including transport retries before a failure is final.
+            if (window.__cccArchiveSnapshot?.url === url) window.__cccArchiveSnapshot.onResync?.();
             sharedState._archiveAllDelta.delete(url);
             sharedState._archiveAllEtag.delete(url);
             const r2 = await backgroundApiFetch(url, { signal: controller.signal });

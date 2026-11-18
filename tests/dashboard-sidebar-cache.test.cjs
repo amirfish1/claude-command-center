@@ -176,6 +176,32 @@ test('skipping a ready preview still starts the authoritative full loader', () =
   assert.equal(c.state().archiveLoaded, false);
 });
 
+test('a failed early resync restores the preview but a successful empty response stays empty', async () => {
+  for (const response of [null, [], [{id:'fresh'}]]) {
+    const {context:c, paints} = harness();
+    c.write([{id:'cached'}], '7d');
+    c.window.__cccArchiveSnapshot = {
+      url:'/api/conversations/list?window=7d&stale_ok=1', skippedRecent:true,
+    };
+    vm.runInContext('this.acceptNetwork = rows => { archiveData = rows; archiveLoaded = true; };', c);
+    Object.assign(c, {
+      document:{getElementById:() => null}, kanbanView:false, isFlowView:() => false,
+      _ARCHIVE_MODE_KEY:'ccc-archive-mode', _renderQueuePanel() {},
+      splitState:{panes:[], activeIndex:0}, conversationRowsContainId:() => false,
+      _archiveRecoveryRenderCovers:() => true,
+      refreshArchiveData:async () => { if (response) c.acceptNetwork(response); },
+    });
+    const start = app.indexOf('  async function setArchiveMode()');
+    const end = app.indexOf('  (function wireArchiveMode()', start);
+    vm.runInContext(app.slice(start, end) + '\nthis.boot = setArchiveMode;', c);
+    await c.boot();
+    assert.equal(paints.length, response ? 0 : 1);
+    assert.equal(c.state().archiveData[0]?.id, response ? response[0]?.id : 'cached');
+    assert.equal(c.state()._archiveFromLocalCache, !response);
+    assert.equal(c.window.__cccArchiveProgress, undefined);
+  }
+});
+
 test('network failure keeps the preview; successful empty history removes it', async () => {
   for (const response of [null, [], [{ id: 'fresh' }]]) {
     const { context: c } = harness();

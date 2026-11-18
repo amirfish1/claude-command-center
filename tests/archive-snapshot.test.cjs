@@ -9,6 +9,8 @@ const boot = fs.readFileSync('static/archive-boot.js', 'utf8');
 const core = fs.readFileSync('static/conversation-core.js', 'utf8');
 const start = core.indexOf('  async function loadArchiveAll(');
 const loader = core.slice(start, core.indexOf('\n  }\n', start) + 4);
+const mergeStart = core.indexOf('  function _mergeArchiveListDelta(');
+const merger = core.slice(mergeStart, core.indexOf('\n  }\n', mergeStart) + 4);
 const fullUrl = '/api/conversations/list?window=7d&stale_ok=1';
 const rows = [{session_id:'recent', nested:{items:[1]}}, {session_id:'older'}];
 
@@ -21,13 +23,8 @@ function setup({snapshot, response, early} = {}) {
   const context = {sharedState:state, window:{__cccArchiveSnapshot:cache},
     performance, URLSearchParams, AbortController, setTimeout:()=>0, clearTimeout(){},
     _archiveWindow:()=> '7d', _clientLog(){}, _scheduleArchiveSidebarCache(){},
-    _mergeArchiveListDelta:(prev, d) => {
-      const byId = new Map(prev.map(r => [r.session_id, r]));
-      for (const row of d.conversations) byId.set(row.session_id, row);
-      return d.ids.map(id => byId.get(id));
-    },
     backgroundApiFetch:async(url, init) => { reads.push({url, init}); return response; }};
-  vm.createContext(context); vm.runInContext(loader, context);
+  vm.createContext(context); vm.runInContext(merger + loader, context);
   return {context, state, reads, saves};
 }
 function reply(body, status=200) {
@@ -67,6 +64,27 @@ test('304 reuses the exact validated rows; an expired server token replaces the 
   const changed = setup({snapshot, early:Promise.resolve(reply({conversations:[{session_id:'replacement'}],delta_token:'new'}))});
   assert.deepEqual(Array.from(await changed.context.loadArchiveAll(), r=>r.session_id),['replacement']);
   assert.equal(changed.state._archiveAllDelta.get(fullUrl),'new');
+});
+
+test('an unmergeable early delta restores the preview before awaiting a full resync', async () => {
+  const snapshot = {url:fullUrl, rows, delta:'old'};
+  const f = setup({snapshot, early:Promise.resolve(reply({
+    delta:true, ids:['missing-base-row'], conversations:[], delta_token:'new',
+  }))});
+  const order = [];
+  let finish;
+  f.context.window.__cccArchiveSnapshot.onResync = () => order.push('restore-preview');
+  f.context.backgroundApiFetch = () => {
+    order.push('full-resync');
+    return new Promise(resolve => {finish=resolve;});
+  };
+  const loading = f.context.loadArchiveAll();
+  await new Promise(setImmediate);
+  assert.deepEqual(order, ['restore-preview', 'full-resync']);
+  assert.equal(f.context.window.__cccArchiveProgress, undefined);
+  finish(reply(null,500));
+  assert.equal(await loading, null);
+  assert.equal(f.state._archiveAllData.get(fullUrl), rows, 'the failed resync does not replace the saved base');
 });
 
 test('failed early requests retry normally; mismatched windows and initial reads never adopt the base', async () => {

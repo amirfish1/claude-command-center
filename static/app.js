@@ -42588,14 +42588,17 @@
   let _archiveSidebarCacheScheduled = conversationInitializers._archiveSidebarCacheScheduled();
   // Shared conversation-core.js: _scheduleArchiveSidebarCache.
 
-  function _paintArchiveSidebarCache() {
+  function _paintArchiveSidebarCache(fallback = false) {
     if (archiveLoaded || archiveData.length) return;
     // The early complete response can already be ready before app startup.
     // Avoid rendering a truncated preview ahead of that response; the full
     // loader still validates/applies it and owns the completeness signal.
     const early = window.__cccArchiveSnapshot;
-    if (early?.skippedRecent && !_archiveQuery().trim()
-        && early.url === '/api/conversations/list?window=' + _archiveWindow() + '&stale_ok=1') return;
+    if (!fallback && early?.skippedRecent && !_archiveQuery().trim()
+        && early.url === '/api/conversations/list?window=' + _archiveWindow() + '&stale_ok=1') {
+      early.onResync = () => _paintArchiveSidebarCache(true);
+      return;
+    }
     const rows = _readArchiveSidebarCache(_archiveWindow());
     if (!rows || !rows.length) return;
     archiveData = rows;
@@ -43527,6 +43530,9 @@
     _renderQueuePanel();
     _paintArchiveSidebarCache();
     await refreshArchiveData();
+    // A parsed early delta can still require a full resync. If that fails,
+    // restore the saved preview without treating it as a complete archive.
+    _paintArchiveSidebarCache(true);
     // Opened straight into an app: the list paint and the saved conversation's
     // transcript below would run under it, unseen, on the app's own thread.
     await _whenDashboardUncovered();
