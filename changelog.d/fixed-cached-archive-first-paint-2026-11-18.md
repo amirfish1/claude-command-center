@@ -1,0 +1,1 @@
+- Let cached sidebar rows paint before a ready full archive replaces them during reload. Automatic full loading and incomplete-search notices remain unchanged.
