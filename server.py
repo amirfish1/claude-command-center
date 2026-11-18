@@ -18526,9 +18526,10 @@ def _archive_list_preview(text, limit=140):
 
 _ARCHIVE_LIST_ROW_TEMPLATES = ByteBudgetCache(
     _cache_budget_bytes("CCC_LIST_ROW_CACHE_MB", 128), 30000)
+_ARCHIVE_LIST_TEMPLATE_UNREAD = object()
 
 
-def _archive_list_row_template(row):
+def _archive_list_row_template(row, cached=_ARCHIVE_LIST_TEMPLATE_UNREAD):
     """Reuse scalar projection work while copying current containers per call.
 
     Snapshot refreshes replace row dictionaries even when their contents did
@@ -18539,7 +18540,8 @@ def _archive_list_row_template(row):
     """
     sid = row.get("session_id") or row.get("id")
     cache_key = (row.get("source"), sid) if sid else id(row)
-    hit = _ARCHIVE_LIST_ROW_TEMPLATES.get(cache_key)
+    hit = (_ARCHIVE_LIST_ROW_TEMPLATES.get(cache_key)
+           if cached is _ARCHIVE_LIST_TEMPLATE_UNREAD else cached)
     if hit is not None and hit[0] == row:
         return hit[1], hit[2]
     scalars, containers = {}, []
@@ -18563,7 +18565,8 @@ def _archive_list_row_template(row):
     return scalars, containers
 
 
-def _archive_list_project_row(row, *, resumes=None, parents=None):
+def _archive_list_project_row(row, *, resumes=None, parents=None,
+                              _template=_ARCHIVE_LIST_TEMPLATE_UNREAD):
     """Project one row for the sidebar list. Bulk callers pass `resumes` /
     `parents` snapshots so the per-row work is dict lookups, not a stat() or
     lock acquisition each (those cost a GIL hand-off apiece)."""
@@ -18575,7 +18578,7 @@ def _archive_list_project_row(row, *, resumes=None, parents=None):
     # CCC-142: a dict comprehension plus a C-level copy of flat containers
     # (cost_breakdown_usd sits on nearly every row) cut this ~1.5x; deepcopy
     # runs only for the rare container that nests another container.
-    scalars, containers = _archive_list_row_template(row)
+    scalars, containers = _archive_list_row_template(row, _template)
     out = dict(scalars)
     for key in containers:
         v = row[key]
@@ -18675,9 +18678,17 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _in
     window_rows = (selected if _inputs is not None else _archive_list_window_rows(
         rows, _archive_list_window_cutoff(window, now=now), idea_tickets_by_sid, parents))
     phase("window")
-    projected = [
-        _archive_list_project_row(row, resumes=resumes, parents=parents)
+    # Concurrent full-list builders otherwise hand the cache lock between
+    # threads once per row. Hold request-local references to immutable
+    # templates, validating each against its current row as usual.
+    templates = _ARCHIVE_LIST_ROW_TEMPLATES.get_many(
+        (row.get("source"), row.get("session_id") or row.get("id"))
+        if row.get("session_id") or row.get("id") else id(row)
         for row in window_rows
+    )
+    projected = [
+        _archive_list_project_row(row, resumes=resumes, parents=parents, _template=template)
+        for row, template in zip(window_rows, templates)
     ]
     phase("rows")
     # Persisted row snapshots may predate the title or this projection field.

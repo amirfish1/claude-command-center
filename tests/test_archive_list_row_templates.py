@@ -75,6 +75,7 @@ def test_new_snapshot_reuses_template_but_copies_current_containers(monkeypatch)
         out = server._archive_list_project_row(replacement, resumes={}, parents={})
     assert cache.get(key) is template
     assert len(cache) == 1
+
     out['session_state']['todos'].append('caller edit')
     assert replacement['session_state']['todos'] == ['original']
     assert first['session_state']['todos'] == ['original']
@@ -85,3 +86,22 @@ def test_new_snapshot_reuses_template_but_copies_current_containers(monkeypatch)
     assert out['question_options'] == ['two']
     assert cache.get(key) is not template
     assert len(cache) == 1
+
+
+def test_bulk_projection_uses_one_cache_read_and_validates_current_rows(monkeypatch):
+    from unittest import mock
+    cache = server.ByteBudgetCache(1 << 20, 20)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_ROW_TEMPLATES', cache)
+    rows = [{'session_id': 'one', 'display_name': 'Before', 'question_options': ['a']},
+            {'session_id': 'two', 'display_name': 'Two'}]
+    for row in rows:
+        server._archive_list_project_row(row, resumes={}, parents={})
+    rows[0]['display_name'] = 'After'
+    inputs = ({}, {}, {}, rows)
+    with mock.patch.object(cache, 'get', side_effect=AssertionError('per-row cache lock')), \
+         mock.patch.object(cache, 'get_many', wraps=cache.get_many) as batch:
+        projected = server._archive_list_project_rows(rows, _inputs=inputs)
+    batch.assert_called_once()
+    assert projected[0]['display_name'] == 'After'
+    projected[0]['question_options'].append('caller edit')
+    assert rows[0]['question_options'] == ['a']

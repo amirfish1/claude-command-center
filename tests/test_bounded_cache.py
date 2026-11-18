@@ -35,3 +35,14 @@ def test_replacing_a_key_does_not_double_count():
     cache.put("b", 1, 5)
     cache.clear()
     assert len(cache) == 0 and cache.bytes == 0
+
+
+def test_batch_reads_preserve_order_misses_and_lru_bounds():
+    cache = ByteBudgetCache(3, 3)
+    for key in ('a', 'b', 'c'):
+        cache.put(key, key.upper(), 1)
+    assert cache.get_many(['b', 'missing', 'a', 'b']) == ['B', None, 'A', 'B']
+    cache.put('d', 'D', 1)
+    assert 'c' not in cache
+    assert cache.bytes == 3 and len(cache) == 3
+    assert cache.get_many([]) == []
