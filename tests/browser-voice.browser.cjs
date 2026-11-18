@@ -15,12 +15,38 @@ test('default-on, audio-thread playback through page stalls, pause, cancellation
     const url = 'http://127.0.0.1:' + String(chunk).trim();
     browser = await puppeteer.launch({executablePath: findChromePath(), args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required']});
     const page = await browser.newPage();
+    await page.evaluateOnNewDocument(() => {
+      const Original = window.AudioContext;
+      window.audioContextStarts = [];
+      window.AudioContext = class extends Original {
+        constructor(...args) { super(...args); window.audioContextStarts.push(performance.now()); }
+      };
+    });
     const requests = [], errors = [];
     page.on('request', r => requests.push(r.url()));
     page.on('pageerror', e => errors.push(e.message));
     await page.goto(url, {waitUntil: 'load'});
     assert.equal(await page.evaluate(() => cccBrowserVoice.enabled), true);
     await page.waitForFunction(() => cccBrowserVoice.ready);
+    // A child conversation can finish loading its scripts before its real
+    // transcript is painted. Do not initialize a second audio stack then.
+    await page.evaluate(async () => {
+      const frame = document.createElement('iframe');
+      frame.id = 'voiceEmbed'; frame.src = '/?conv=test-session&embed=app';
+      const loaded = new Promise(resolve => { frame.onload = resolve; });
+      document.body.appendChild(frame); await loaded;
+    });
+    const frame = await (await page.$('#voiceEmbed')).contentFrame();
+    assert.equal(await frame.evaluate(() => cccBrowserVoice.enabled), true);
+    assert.equal(await frame.evaluate(() => audioContextStarts.length), 0);
+    await frame.evaluate(() => {
+      window.conversationPaintedAt = performance.now();
+      window.dispatchEvent(new Event('ccc:conversation-drawn'));
+    });
+    await frame.waitForFunction(() => cccBrowserVoice.ready);
+    assert.ok(await frame.evaluate(() => audioContextStarts.length === 1
+      && audioContextStarts[0] >= conversationPaintedAt));
+    await page.evaluate(() => document.getElementById('voiceEmbed').remove());
     await page.evaluate(() => {
       window.events = [];
       window.handle = cccBrowserVoice.start('A synthetic six-second transport test.', {rate: 1.25,

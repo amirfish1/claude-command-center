@@ -186,5 +186,16 @@
     get voices() { return voiceList; },
     get status() { return message; } };
   paint();
-  if (enabled) warm();
+  // AudioContext construction and model setup must not hold up the first
+  // conversation paint. Explicit opt-in and speaker warmup remain immediate.
+  if (enabled) {
+    const prepare = () => setTimeout(() => { if (enabled) warm(); }, 0);
+    if (window.parent !== window && new URLSearchParams(location.search).get('embed') === 'app') {
+      window.addEventListener('ccc:conversation-drawn', prepare, { once: true });
+    } else if (document.readyState === 'complete') {
+      prepare();
+    } else {
+      window.addEventListener('load', prepare, { once: true });
+    }
+  }
 })();

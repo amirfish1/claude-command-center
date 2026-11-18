@@ -90,6 +90,9 @@ test('boot never reads a missing/new/invalid target or a top-level page', () => 
 
 test('readiness requires the actual selected composer and sends only one painted preview', () => {
   const h = harness();
+  const drawn = [];
+  h.window.dispatchEvent = event => drawn.push(event.type);
+  h.context.Event = class { constructor(type) { this.type = type; } };
   Object.assign(h.context, {
     APP_EMBED_MODE: true, CONV_POPOUT_TARGET: 'session-1',
     activePaneId: () => 'p1', paneByPaneId: () => ({conversationId: 'session-1'}),
@@ -109,4 +112,5 @@ test('readiness requires the actual selected composer and sends only one painted
   assert.equal(h.messages.length, 1);
   assert.equal(h.messages[0].cached, true);
   assert.equal(h.messages[0].conv, 'session-1');
+  assert.deepEqual(drawn, ['ccc:conversation-drawn']);
 });

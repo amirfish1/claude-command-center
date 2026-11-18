@@ -8302,6 +8302,7 @@
       try {
         window.parent.postMessage({ type: 'ccc:embed-ready', conv: id,
           cached: !!cached, ms: Math.round(performance.now()) }, window.location.origin);
+        window.dispatchEvent(new Event('ccc:conversation-drawn'));
       } catch (_) {}
     };
     requestAnimationFrame(() => setTimeout(notify, 0));
