@@ -28967,13 +28967,23 @@ def _conv_overlay_fingerprint(session_id):
             rq = list(_pending_resume_queue.get(session_id) or ())
         with _pending_terminal_input_lock:
             tq = list(_pending_terminal_input_queue.get(session_id) or ())
+        captures = _codex_capture_fingerprint(session_id)
+        # A real Claude transcript does not depend on the Codex worker's
+        # whole thread-state map. Keep unknown sessions and any discovered
+        # Codex state/capture on the original resolved-owner path.
+        with _CONV_PATH_CACHE_LOCK:
+            source = _CONV_PATH_CACHE.get(session_id)
+        with _CODEX_APP_SERVER_LOCK:
+            local_codex_state = _CODEX_APP_SERVER_THREAD_STATE.get(session_id)
+        known_claude = (source and Path(source).name == session_id + ".jsonl"
+                        and _detect_session_engine(session_id) == "claude")
         try:
-            state = _codex_thread_state_resolved(session_id)
+            state = ({} if known_claude and not local_codex_state and not captures
+                     else _codex_thread_state_resolved(session_id))
         except Exception:
             state = None
         if state is None:
             return None
-        captures = _codex_capture_fingerprint(session_id)
         if not rq and not tq and not state and not captures:
             return ()
         return json.dumps([rq, tq, state, captures], sort_keys=True, default=str)
