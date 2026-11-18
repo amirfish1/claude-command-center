@@ -70,7 +70,17 @@
         const request = store.get('last');
         request.onerror = () => finish(null);
         request.onsuccess = () => {
-          const value = request.result;
+          let value = request.result;
+          if (!validHeader(value)) { finish(null); return; }
+          // Text avoids IndexedDB's recursive structured clone of every row.
+          // Older object snapshots remain readable during a rolling update.
+          if (typeof value.rowsJson === 'string') {
+            try {
+              const {rowsJson, ...metadata} = value;
+              value = rowsJson.length * 2 <= maxBytes
+                ? {...metadata, rows:JSON.parse(rowsJson)} : null;
+            } catch (_) { value = null; }
+          }
           finish(validHeader(value) && Array.isArray(value.rows)
             && value.rows.length <= 30000
             && value.rows.every(row => row && typeof row === 'object' && !Array.isArray(row)
@@ -90,13 +100,15 @@
       scheduled = false;
       const value = pending; pending = null;
       try {
-        const bytes = 2 * JSON.stringify(value.rows).length;
+        const rowsJson = JSON.stringify(value.rows);
+        const bytes = 2 * rowsJson.length;
         if (bytes > maxBytes) return;
         const db = await open();
         if (!db) return;
         const tx = db.transaction('snapshot', 'readwrite');
         tx.onerror = () => {};
-        const record = {...value, bytes, at: Date.now()};
+        const {rows, ...metadata} = value;
+        const record = {...metadata, rowsJson, bytes, at: Date.now()};
         const store = tx.objectStore('snapshot');
         store.put(record, 'last');
         store.put({url:record.url, bytes, at:record.at, etag:record.etag, delta:record.delta}, 'header');

@@ -219,6 +219,14 @@ test('real IndexedDB retains one scoped snapshot and a reload obtains an actual 
       try {return await new Promise(resolve=>{const r=db.transaction('snapshot').objectStore('snapshot').get('last');r.onsuccess=()=>resolve(!!r.result);});}
       finally {db.close();}
     });
+    assert.deepEqual(await page.evaluate(async()=>{
+      const db=await new Promise(resolve=>{const r=indexedDB.open('ccc-archive-response',1);r.onsuccess=()=>resolve(r.result);});
+      try {return await new Promise(resolve=>{
+        const r=db.transaction('snapshot').objectStore('snapshot').get('last');
+        r.onsuccess=()=>resolve({hasRows:Object.hasOwn(r.result,'rows'), decoded:JSON.parse(r.result.rowsJson),
+          bytes:r.result.bytes, textBytes:r.result.rowsJson.length*2});
+      });} finally {db.close();}
+    }),{hasRows:false,decoded:rows,bytes:JSON.stringify(rows).length*2,textBytes:JSON.stringify(rows).length*2});
     await page.reload({waitUntil:'load'});
     assert.deepEqual(await page.evaluate(async()=>{
       const helper=window.__cccArchiveSnapshot, saved=await helper.read, response=await helper.fetch;
@@ -237,7 +245,8 @@ test('expired, future-dated, oversized, malformed and other-window records canno
     await page.evaluate(()=>window.__cccArchiveSnapshot.read);
     const base={url:fullUrl, rows, bytes:200, delta:'valid', at:Date.now()};
     for (const patch of [{at:Date.now()-86400001},{at:Date.now()+86400000},
-      {bytes:32*1024*1024+1},{rows:[null]},{url:fullUrl.replace('7d','1d')}]) {
+      {bytes:32*1024*1024+1},{rows:[null]},{url:fullUrl.replace('7d','1d')},
+      {rowsJson:'broken JSON'},{rowsJson:'null'},{rowsJson:'{}'},{rowsJson:'[null]'}]) {
       await page.evaluate(async value=>{
         const db=await new Promise(resolve=>{const r=indexedDB.open('ccc-archive-response',1);r.onsuccess=()=>resolve(r.result)});
         try {await new Promise((resolve,reject)=>{const tx=db.transaction('snapshot','readwrite');tx.objectStore('snapshot').put(value,'last');tx.oncomplete=resolve;tx.onerror=reject;});}
@@ -247,5 +256,23 @@ test('expired, future-dated, oversized, malformed and other-window records canno
       assert.deepEqual(await page.evaluate(async()=>({read:await window.__cccArchiveSnapshot.read,
         response:await window.__cccArchiveSnapshot.fetch})),{read:null,response:null});
     }
+  } finally {await context.close();}
+});
+
+test('legacy object snapshots still seed the current server validation', async () => {
+  const context=await browser.createBrowserContext(),page=await context.newPage();
+  try {
+    await page.goto(origin,{waitUntil:'load'});
+    await page.evaluate(()=>window.__cccArchiveSnapshot.read);
+    await page.evaluate(async value=>{
+      const db=await new Promise(resolve=>{const r=indexedDB.open('ccc-archive-response',1);r.onsuccess=()=>resolve(r.result);});
+      try {await new Promise((resolve,reject)=>{
+        const tx=db.transaction('snapshot','readwrite');tx.objectStore('snapshot').put(value,'last');
+        tx.oncomplete=resolve;tx.onerror=reject;
+      });} finally {db.close();}
+    },{url:fullUrl,rows,bytes:JSON.stringify(rows).length*2,delta:'valid',at:Date.now()});
+    await page.reload({waitUntil:'load'});
+    assert.deepEqual(await page.evaluate(async()=>({rows:(await window.__cccArchiveSnapshot.read).rows,
+      status:(await window.__cccArchiveSnapshot.fetch).status})),{rows,status:304});
   } finally {await context.close();}
 });
