@@ -18764,7 +18764,10 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _in
     # Resolve topic identity independently of which ancestors are loaded in
     # this response, after applying the current explicit title overrides.
     from ccc_server import continuation_topics
-    continuation_topics.attach_topics(projected)
+    if phases is None:
+        continuation_topics.attach_topics(projected)
+    else:
+        continuation_topics.attach_topics(projected, diagnostics=phases.setdefault('topic_cache', {}))
     phase("topics")
     _archive_list_ticket_updates(projected, idea_tickets_by_sid)
     phase("tickets")

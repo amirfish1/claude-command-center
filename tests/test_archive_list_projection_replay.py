@@ -30,7 +30,7 @@ def inputs(monkeypatch):
     monkeypatch.setattr(server, '_queue_health_stats', lambda rows, now=None: {'at': now})
     monkeypatch.setattr(server, '_trace_row_flicker', lambda *args, **kwargs: None)
 
-    def topics(rows):
+    def topics(rows, *, diagnostics=None):
         state['calls'] += 1
         by_sid = {row['session_id']: row for row in rows}
         for row in rows:

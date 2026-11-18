@@ -511,16 +511,32 @@ def _project_topics(batch, rows):
             row.pop('continuation_topic_session_id', None)
 
 
-def _try_attach_from_cache(rows, conn, names):
+def _try_attach_from_cache(rows, conn, names, diagnostics=None):
+    def miss(reason, changed=()):
+        if diagnostics is not None:
+            diagnostics.update(hit=False, reason=reason)
+            if changed:
+                diagnostics['changed'] = changed
+        return False
+
     token = _db_state_token(conn)
     if token is None:
-        return False
+        return miss('no-state')
     with _CACHE_LOCK:
-        if _TOPIC_CACHE.get('token') != token:
-            return False
+        previous = _TOPIC_CACHE.get('token')
+        if previous != token:
+            if previous is not None and previous[:-1] == token[:-1]:
+                # Only dependency names belong in telemetry, never filenames,
+                # session identities, title text or opaque database tokens.
+                fields = ('metadata-snapshot', 'metadata-count', 'native-titles',
+                          'native-count', 'native-lookup')
+                changed = [name for name, before, after in zip(fields, previous[-1], token[-1])
+                           if before != after]
+                return miss('external-titles', changed)
+            return miss('first-observed' if previous is None else 'database')
         entries = _TOPIC_CACHE.get('entries') or {}
         if not entries:
-            return False
+            return miss('empty')
         resolved_names = None
         staged = []
         for item in rows:
@@ -529,10 +545,10 @@ def _try_attach_from_cache(rows, conn, names):
                 continue
             entry = entries.get(sid)
             if entry is None:
-                return False
+                return miss('new-session')
             cached_origin, has_persisted_title, root, topic_title = entry
             if _origin(item) != cached_origin:
-                return False
+                return miss('origin-changed')
             if not has_persisted_title:
                 if resolved_names is None:
                     resolved_names = _core._load_session_name_overrides() if names is None else names
@@ -543,7 +559,7 @@ def _try_attach_from_cache(rows, conn, names):
                     or item.get('ai_title')
                 )
                 if _topic(candidate):
-                    return False
+                    return miss('title-discovered')
             staged.append((item, root, topic_title))
     for item, root, topic_title in staged:
         if root:
@@ -554,6 +570,8 @@ def _try_attach_from_cache(rows, conn, names):
             item.pop('continuation_topic_title', None)
             item.pop('continuation_topic_root_session_id', None)
             item.pop('continuation_topic_session_id', None)
+    if diagnostics is not None:
+        diagnostics.update(hit=True, reason='hit')
     return True
 
 
@@ -581,7 +599,7 @@ def _store_cache(conn, batch, rows):
                 entries[sid] = (_origin(item), bool(persisted_title), '', '')
 
 
-def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False):
+def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnostics=None):
     """Project topics without waiting behind the ship index's bulk writer.
 
     Archive materialization is opportunistic: a busy writer leaves the computed
@@ -593,7 +611,7 @@ def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False):
     rows = [row for row in rows if isinstance(row, dict)]
     if not rows:
         return
-    if not wait_for_writer and _try_attach_from_cache(rows, conn, names):
+    if not wait_for_writer and _try_attach_from_cache(rows, conn, names, diagnostics):
         return
     conn = _connection(conn)
     names = _core._load_session_name_overrides() if names is None else names
