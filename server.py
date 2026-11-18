@@ -145,6 +145,7 @@ from ccc_server.bounded_cache import ByteBudgetCache
 from ccc_server.static_encoding_cache import StaticEncodingCache
 from ccc_server.response_timing import ResponseTimingMixin
 from ccc_server.http_read_keepalive import ReadKeepAliveMixin
+from ccc_server.http_admission import ConnectionAdmissionMixin
 _cpu_accounting.install_thread_exit_accounting()
 from ccc_server import idea_tickets as _idea_tickets
 from ccc_server import headroom as _headroom
@@ -23980,7 +23981,8 @@ def _quiesce_http_for_restart(timeout=_RESTART_DRAIN_TIMEOUT_S, *, force=False):
     return True
 
 
-class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+class ThreadedHTTPServer(ConnectionAdmissionMixin, socketserver.ThreadingMixIn,
+                         http.server.HTTPServer):
     allow_reuse_address = True
     daemon_threads = True
     request_queue_size = 128
