@@ -47032,6 +47032,10 @@ class CommandCenterHandler(ReadKeepAliveMixin, ResponseTimingMixin, http.server.
             raise
         finally:
             _inflight_end(self)
+            # A reused connection resets its handler clock after the idle
+            # request-line wait; use that same clock for logs and accounting.
+            _t0 = self._ccc_req_t0
+            _c0 = self._ccc_req_cpu0
             # Threshold-gated slow-request log. Fast requests stay silent;
             # only the hot endpoints surface, e.g.:
             #   [SLOW] GET /api/group-chat/active 1840ms

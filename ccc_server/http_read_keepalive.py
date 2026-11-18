@@ -48,10 +48,10 @@ class ReadKeepAliveMixin:
         ok = super().parse_request()
         if (ok and self.command == "GET" and self.request_version == "HTTP/1.1"
                 and "close" not in {part.strip().lower() for part in
-                                    self.headers.get("Connection", "").split(",")}
-                and self.headers.get("Content-Length", "0") == "0"
-                and not self.headers.get("Transfer-Encoding")
-                and not self.headers.get("Expect") and _app_read(self.path)):
+                                    ",".join(self.headers.get_all("Connection", [])).split(",")}
+                and self.headers.get_all("Content-Length", []) in ([], ["0"])
+                and not self.headers.get_all("Transfer-Encoding")
+                and not self.headers.get_all("Expect") and _app_read(self.path)):
             self.protocol_version = "HTTP/1.1"
             self.close_connection = False
             self._ccc_read_keepalive = True

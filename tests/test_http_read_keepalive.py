@@ -1,6 +1,7 @@
 """Real HTTP clients exercise framing, access checks, reuse and idle release."""
 import http.client
 import http.server
+import socket
 from contextlib import closing
 import threading
 
@@ -131,4 +132,19 @@ def test_http10_client_keeps_original_connection_behavior(service):
         conn._http_vsn = 10
         conn._http_vsn_str = 'HTTP/1.0'
         response, _ = request(conn, '/view/demo', headers={'Connection':'keep-alive'})
+        assert response.version == 10 and response.will_close
+
+
+@pytest.mark.parametrize('headers', [
+    b'Content-Length: 0\r\nContent-Length: 1\r\n',
+    b'Content-Length: 0\r\nContent-Length: 0\r\n',
+    b'Transfer-Encoding:\r\nTransfer-Encoding: chunked\r\n',
+    b'Connection: keep-alive\r\nConnection: close\r\n',
+])
+def test_duplicate_framing_and_connection_headers_cannot_enable_reuse(service, headers):
+    with socket.create_connection(service.server_address, timeout=2) as conn:
+        conn.sendall(b'GET /view/demo HTTP/1.1\r\nHost: localhost\r\n' + headers + b'\r\n')
+        response = http.client.HTTPResponse(conn)
+        response.begin()
+        assert response.read() == b'/view/demo'
         assert response.version == 10 and response.will_close
