@@ -7346,10 +7346,10 @@
     return '#convList .conv-item[data-session-id' + (sid ? '="' + CSS.escape(sid) + '"' : '') + ']';
   }
 
-  function syncRowPopouts(sid) {
+  function syncRowPopouts(sid, rowFor = _ultraFreshRow) {
     const selector = rowActionSelector(sid);
     document.querySelectorAll(selector).forEach(row => {
-      const base = _ultraFreshRow(row.dataset.sessionId);
+      const base = rowFor(row.dataset.sessionId);
       const available = !!base && !base.pending_spawn && base.source !== 'backlog' && base.source !== 'github_pr';
       if (!available) {
         row.querySelectorAll('[data-role="popout-row-session"]').forEach(btn => btn.remove());
@@ -7563,11 +7563,26 @@
     // updates must not force layout of a freshly rebuilt sidebar. Keep all
     // necessary reads ahead of the writes, including mixed row batches.
     const rows = Array.from(document.querySelectorAll(selector));
+    // A bulk repaint used to scan the full archive up to three times per
+    // mounted row. Index once for this synchronous update; keeping the first
+    // match preserves the live-list-before-archive lookup rule. Never retain
+    // the map between updates: rows can be replaced or edited in place.
+    let rowFor = _ultraFreshRow;
+    if (rows.length > 1) {
+      const byId = new Map();
+      for (const source of [sharedState.conversationsData, sharedState.archiveData]) {
+        for (const c of source) {
+          const id = String(c.session_id || c.id);
+          if (!byId.has(id)) byId.set(id, c);
+        }
+      }
+      rowFor = id => byId.get(id);
+    }
     const checks = rows.map(row => {
       let candidate = null;
       if (!sharedState._rowQuickActionSending.has(row.dataset.sessionId)
           && sharedState._rowInvestigationChecksInFlight < 4) {
-        const base = _ultraFreshRow(row.dataset.sessionId);
+        const base = rowFor(row.dataset.sessionId);
         candidate = base && rowQuickActionSource(_ultraFreshCurrent(base), true);
       }
       const needsReply = innerWidth <= 1200 && !!row.querySelector('.wa-decision-reply');
@@ -7586,7 +7601,8 @@
           }
         }
       }
-      const source = currentRowQuickActionSource(row.dataset.sessionId);
+      const base = rowFor(row.dataset.sessionId);
+      const source = base ? rowQuickActionSource(_ultraFreshCurrent(base)) : null;
       const feedback = sharedState._rowQuickActionFeedback.get(row.dataset.sessionId);
       if (feedback && (!source || source.key === feedback.key || feedback.state === 'sending')) {
         [row.querySelector('.conv-outcome'), row.querySelector('.wa-line2')].filter(Boolean).forEach(host => {
@@ -7625,7 +7641,7 @@
         paintRowQuickAction(slot, source);
       });
     });
-    syncRowPopouts(sid);
+    syncRowPopouts(sid, rowFor);
   }
 
   function _compactRunActive() {

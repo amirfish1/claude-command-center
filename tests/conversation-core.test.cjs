@@ -48,3 +48,29 @@ test('persisted voice preferences use the shared limits and fallback',()=>{
  h.storage.set('ccc-tts-rate','1.1');assert.equal(preferences._readPersistedTtsRate(),1.1);
  h.storage.set('ccc-tts-rate','99');assert.equal(preferences._readPersistedTtsRate(),1.25);
 });
+
+test('bulk row controls preserve first-match precedence and reread changing rows',()=>{
+ const removed=[];
+ const row=id=>({dataset:{sessionId:id},querySelector:()=>null,
+  querySelectorAll:selector=>selector.includes('popout-row-session') ? [{remove:()=>removed.push(id)}] : []});
+ const mounted=['duplicate','archive-only','missing'].map(row);
+ const h=fixture({document:{querySelectorAll:()=>mounted},innerWidth:1440});
+ const first={session_id:'duplicate',archived:true,pending_spawn:true};
+ const fallback={session_id:'archive-only',archived:true};
+ Object.assign(h.state,{conversationsData:[first,{...first,pending_spawn:false}],
+  archiveData:[{...first,pending_spawn:false},fallback],
+  _rowQuickActionSending:new Set(),_rowQuickActionFeedback:new Map(),
+  _rowInvestigationChecksInFlight:4,_ultraFresh:{entries:new Map()}});
+ h.core.syncRowQuickActions();
+ assert.deepEqual(removed,['duplicate','missing'],'first live duplicate wins over later live and archive rows');
+ removed.length=0;
+ first.pending_spawn=false;
+ fallback.pending_spawn=true;
+ h.core.syncRowQuickActions();
+ assert.deepEqual(removed,['archive-only','missing'],'in-place edits are visible on the next update');
+ removed.length=0;
+ h.state.conversationsData=[{...first,pending_spawn:true}];
+ h.state.archiveData=[];
+ h.core.syncRowQuickActions();
+ assert.deepEqual(removed,['duplicate','archive-only','missing'],'replaced arrays cannot leave retained controls');
+});
