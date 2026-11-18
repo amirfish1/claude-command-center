@@ -43520,13 +43520,6 @@
     // while a cold archive walk is still reading conversation history.
     _renderQueuePanel();
     _paintArchiveSidebarCache();
-    if (_archiveFromLocalCache) {
-      // A ready conditional response can replace the preview in this same
-      // microtask turn. Let usable cached rows reach the screen before the
-      // complete archive is shaped; they remain explicitly incomplete.
-      document.getElementById('cccLoadingOverlay')?.classList.add('gone');
-      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 0))));
-    }
     await refreshArchiveData();
     // Opened straight into an app: the list paint and the saved conversation's
     // transcript below would run under it, unseen, on the app's own thread.

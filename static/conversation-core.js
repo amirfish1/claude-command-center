@@ -20504,6 +20504,12 @@
       const progress = window.__cccArchiveProgress;
       if (!opts.includePrs && (!progress || progress.window !== requestedWindow || !progress.complete)) {
         _setArchiveCompleteness(requestedWindow, false, sharedState.archiveData.length);
+        if (sharedState._archiveFromLocalCache) {
+          // A ready full response can replace the preview in this microtask
+          // turn. Paint cached rows and their incomplete-search notice first.
+          document.getElementById('cccLoadingOverlay')?.classList.add('gone');
+          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 0))));
+        }
         let validatedReady;
         const validatedFull = new Promise(resolve => { validatedReady = resolve; });
         let releaseInitialPaint;

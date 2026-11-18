@@ -214,3 +214,30 @@ test('current validated full rows do not wait for a slow initial response or let
   assert.equal(f.frames.length,0);
   assert.equal(f.calls[0].controller.signal.reason,'archive-complete');
 });
+
+
+test('cached preview paints with an incomplete notice before a ready full response replaces it', async () => {
+  const f = setup({manualFrames:true});
+  f.state._archiveFromLocalCache = true;
+  f.state.archiveData = [{session_id:'cached'}];
+  f.context.setTimeout = (fn, ms) => ms === 0 ? setImmediate(fn) : 0;
+  f.context.loadArchiveAll = async opts => {
+    f.calls.push(opts);
+    if (opts.initial) return [{session_id:'recent'}];
+    opts.onValidated();
+    return [{session_id:'recent'},{session_id:'older'}];
+  };
+  const task = f.context.refreshArchiveData();
+  await new Promise(setImmediate);
+  assert.match(f.notice.textContent, /Search and counts are incomplete/);
+  assert.equal(f.context.window.__cccArchiveProgress.complete, false);
+  assert.equal(f.calls.length, 0, 'a ready response must not overwrite the preview before paint');
+  assert.equal(f.state.archiveData[0].session_id, 'cached');
+  f.frames.shift()();
+  assert.equal(f.calls.length, 0);
+  f.frames.shift()();
+  await task;
+  assert.deepEqual(f.paints, [['recent','older']]);
+  assert.equal(f.context.window.__cccArchiveProgress.complete, true);
+  assert.equal(f.notice.hidden, true);
+});
