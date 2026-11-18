@@ -15,6 +15,20 @@ function setup() {
 }
 const ids = rows => Array.from(rows, c => c.session_id);
 
+test('complete pools preserve row order and copies without traversing parent chains', () => {
+  const context = { continuationParentId: () => { throw new Error('complete pool traversed'); } };
+  vm.createContext(context);
+  vm.runInContext(fn('sidebarRowsWithParentAnchors'), context);
+  const parent = {session_id:'parent'};
+  const child = {session_id:'child', parent_session_id:'parent'};
+  const anonymous = {};
+  const rows = [child, parent, child, anonymous];
+  const result = context.sidebarRowsWithParentAnchors(rows, [anonymous, parent, child]);
+  assert.notEqual(result, rows);
+  assert.equal(result.length, rows.length);
+  rows.forEach((row, index) => assert.equal(result[index], row));
+});
+
 test('a filtered child brings back its loaded topic and intermediate parent', () => {
   const topic = {session_id: 'topic', modified: 1};
   const parent = {session_id: 'parent', parent_session_id: 'topic', modified: 2};

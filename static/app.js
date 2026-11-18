@@ -7222,8 +7222,11 @@
     const idOf = row => String(row && (row.session_id || row.id) || '').trim();
     const byId = new Map((pool || []).map(row => [idOf(row), row]));
     result.forEach(row => byId.set(idOf(row), row));
-    const fold = _continuationFoldMaps([...byId.values()], idOf);
     const included = new Set(result.map(idOf));
+    // Full-list renders already contain every possible parent. Avoid
+    // rebuilding continuation chains just to rediscover those same rows.
+    if (Array.from(byId.keys()).every(id => included.has(id))) return result;
+    const fold = _continuationFoldMaps([...byId.values()], idOf);
     for (let i = 0; i < result.length; i++) {
       const row = result[i];
       if (_isOtherUtilityRow(row)) continue;
