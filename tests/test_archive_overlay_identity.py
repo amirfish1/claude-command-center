@@ -27,7 +27,9 @@ def test_sources_keep_precedence_and_do_not_mutate_the_archive(monkeypatch):
     monkeypatch.setattr(server, '_archive_overlay_devin_cli_sessions', source([]))
     monkeypatch.setattr(server, '_archive_live_wt_workers', lambda: [
         {'session_id': 'new-native', 'alive': True}, {'session_id': base[0]['session_id'], 'alive': True}])
-    monkeypatch.setattr(server, '_archive_claude_registry_rows', lambda: [native, terminal])
+    monkeypatch.setattr(server, '_archive_claude_registry_rows', lambda **kw: [native, terminal])
+    monkeypatch.setattr(server, '_load_session_registry', lambda: {'new-terminal': {}})
+    monkeypatch.setattr(server, '_load_conversation_lifecycle_sets', lambda: (set(), set()))
     rows, cached, version = server._archive_list_source_rows_cached({})
     assert rows == [base[0], native, terminal]
     assert base == [{'session_id': 'stored'}]

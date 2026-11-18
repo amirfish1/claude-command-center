@@ -18870,13 +18870,16 @@ _ARCHIVE_CLAUDE_REG_CACHE = {"sig": None, "rows": [], "changed_at": 0.0, "built_
 _ARCHIVE_CLAUDE_REG_LOCK = threading.Lock()
 
 
-def _archive_claude_registry_rows():
-    """Archive-shaped rows for every live ~/.claude/sessions entry, rebuilt
-    only when that directory's mtime changes (a launch adds a pid file, an
-    exit removes one). Same producer the archive build uses for
-    registry-only sessions, so the row shape matches."""
+def _archive_claude_registry_rows(*, candidate_ids=None, registry=None):
+    """Archive-shaped live registry rows, optionally limited to missing IDs.
+
+    Both registry membership and the requested candidate set guard reuse:
+    another archive snapshot can have different gaps without a launch/exit.
+    The archive build uses the same row producer for registry-only sessions.
+    """
     try:
-        sig = SESSIONS_REGISTRY.stat().st_mtime_ns
+        sig = (SESSIONS_REGISTRY.stat().st_mtime_ns,
+               frozenset(candidate_ids) if candidate_ids is not None else None)
     except OSError:
         return []
     now = time.monotonic()
@@ -18893,7 +18896,10 @@ def _archive_claude_registry_rows():
         out = []
         try:
             archived, trashed = _load_conversation_lifecycle_sets()
-            for sid, meta in _load_session_registry().items():
+            source = registry if registry is not None else _load_session_registry()
+            for sid, meta in source.items():
+                if candidate_ids is not None and sid not in candidate_ids:
+                    continue
                 if sid in archived or sid in trashed:
                     continue
                 try:
@@ -18987,10 +18993,20 @@ def _archive_overlay_codex_sessions(rows, now=None, *, existing_ids=None):
 
 def _archive_overlay_claude_registry_sessions(rows, *, existing_ids=None):
     """Live terminal Claude sessions missing from the cached snapshot."""
-    reg_rows = _archive_claude_registry_rows()
+    existing = _archive_overlay_existing_ids(rows) if existing_ids is None else existing_ids
+    try:
+        archived, trashed = _load_conversation_lifecycle_sets()
+        registry = _load_session_registry()
+        candidates = set(registry) - existing - archived - trashed
+        if not candidates:
+            return []
+    except Exception:
+        return []
+    # Building launch titles, repository metadata and branch information is
+    # only useful when the current registry can actually fill a snapshot gap.
+    reg_rows = _archive_claude_registry_rows(candidate_ids=candidates, registry=registry)
     if not reg_rows:
         return []
-    existing = _archive_overlay_existing_ids(rows) if existing_ids is None else existing_ids
     return [r for r in reg_rows if str(r.get("session_id") or r.get("id") or "") not in existing]
 
 
