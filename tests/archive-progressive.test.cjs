@@ -16,10 +16,10 @@ function setup() {
   let resolveFull;
   const full = new Promise(resolve => { resolveFull = resolve; });
   const notice = { style: {}, setAttribute() {} };
-  const paints = [], calls = [], deferred = [];
+  const paints = [], calls = [], deferred = [], events = [];
   const state = { archiveData: [], archiveLoaded: false };
   const context = {
-    sharedState: state, window: {},
+    sharedState: state, window: {dispatchEvent: event => events.push(event.type)}, Event,
     document: { getElementById: id => id === 'archiveCompleteness' ? notice : null },
     _whenDashboardUncovered: async () => {}, _startArchiveProgressPoll() {}, _stopArchiveProgressPoll() {},
     _clientLog() {}, _archiveQuery: () => '', _archiveWindow: () => '7d',
@@ -35,7 +35,7 @@ function setup() {
   vm.createContext(context);
   vm.runInContext(extract('_setArchiveCompleteness'), context);
   vm.runInContext('async ' + extract('refreshArchiveData'), context);
-  return { context, state, notice, paints, calls, deferred, resolveFull };
+  return { context, state, notice, paints, calls, deferred, events, resolveFull };
 }
 async function initialPaint(f) {
   for (let n = 0; n < 20 && f.calls.length < 2; n++) await new Promise(setImmediate);
@@ -47,11 +47,14 @@ test('recent rows paint while complete request is still pending, then full rows 
   assert.deepEqual(f.paints, [['recent']]);
   assert.match(f.notice.textContent, /Search and counts are incomplete/);
   assert.equal(f.context.window.__cccArchiveProgress.complete, false);
+  assert.deepEqual(f.events, [], 'recent rows do not release competing startup work');
   f.resolveFull([{session_id:'recent'}, {session_id:'older'}]);
   await task;
   assert.deepEqual(f.paints, [['recent'], ['recent', 'older']]);
   assert.equal(f.notice.hidden, true);
   assert.equal(f.context.window.__cccArchiveProgress.complete, true);
+  assert.deepEqual(f.events, ['ccc:archive-settled']);
+  assert.equal(f.context.window.__cccArchiveSettled, true);
 });
 test('full failure retains usable rows and explicitly incomplete results', async () => {
   const f = setup(), task = f.context.refreshArchiveData();
@@ -61,6 +64,7 @@ test('full failure retains usable rows and explicitly incomplete results', async
   assert.match(f.notice.textContent, /could not load.*incomplete/);
   assert.equal(f.context.retryScheduled, true);
   assert.equal(f.context.window.__cccArchiveProgress.complete, false);
+  assert.deepEqual(f.events, ['ccc:archive-settled'], 'failure also releases deferred startup work');
 });
 test('obsolete full response cannot replace a newly selected window', async () => {
   const f = setup(), task = f.context.refreshArchiveData();
@@ -69,4 +73,14 @@ test('obsolete full response cannot replace a newly selected window', async () =
   f.resolveFull([{session_id:'obsolete'}]); await task;
   assert.equal(f.state.archiveData[0].session_id, 'recent');
   assert.equal(f.deferred.length, 1, 'new selected window is queued next');
+  assert.deepEqual(f.events, [], 'an obsolete response is not the selected archive settling');
+});
+
+test('retaining rows after an empty full response still releases deferred startup work', async () => {
+  const f = setup(), task = f.context.refreshArchiveData();
+  await initialPaint(f);
+  f.resolveFull([]); await task;
+  assert.equal(f.state.archiveData[0].session_id, 'recent');
+  assert.deepEqual(f.events, ['ccc:archive-settled']);
+  assert.equal(f.context.window.__cccArchiveProgress.complete, false, 'settling does not claim complete data');
 });

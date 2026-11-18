@@ -192,6 +192,12 @@
     const prepare = () => setTimeout(() => { if (enabled) warm(); }, 0);
     if (window.parent !== window && new URLSearchParams(location.search).get('embed') === 'app') {
       window.addEventListener('ccc:conversation-drawn', prepare, { once: true });
+    } else if (document.getElementById('convList') && !window.__CCC_CONVERSATION_POPOUT__) {
+      // Document load precedes the complete sidebar. Avoid constructing audio
+      // and starting the model download while that archive is still rendering.
+      const afterArchivePaint = () => requestAnimationFrame(() => requestAnimationFrame(prepare));
+      if (window.__cccArchiveSettled) afterArchivePaint();
+      else window.addEventListener('ccc:archive-settled', afterArchivePaint, { once: true });
     } else if (document.readyState === 'complete') {
       prepare();
     } else {

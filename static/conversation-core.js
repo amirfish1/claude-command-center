@@ -20408,6 +20408,7 @@
       await _whenDashboardUncovered();
       _startArchiveProgressPoll();
       _clientLog('[ARCHIVE-DIAG] refreshArchiveData start window=' + (opts.window || _archiveWindow()) + ' staleOk=' + (opts.staleOk !== false && !opts.force));
+      let archiveSettled = false;
       try {
       // While a sidebar search is active the corpus must stay at the 'all'
       // window: renderArchiveList widens to 'all' so every session is
@@ -20440,6 +20441,7 @@
         sharedState._archiveRefreshAfterInflight = true;
         return sharedState.archiveData;
       }
+      archiveSettled = true;
       if (!Array.isArray(convs)) {
         _setArchiveCompleteness(requestedWindow, false, sharedState.archiveData.length, true);
         _scheduleArchiveStaleRetry();
@@ -20486,6 +20488,10 @@
         sharedState._archiveRefreshPromise = null;
         _stopArchiveProgressPoll();
         _markArchiveFirstLoaded();
+        if (archiveSettled) {
+          window.__cccArchiveSettled = true;
+          window.dispatchEvent?.(new Event('ccc:archive-settled'));
+        }
         if (sharedState._archiveRefreshAfterInflight) {
           sharedState._archiveRefreshAfterInflight = false;
           queueMicrotask(() => {
