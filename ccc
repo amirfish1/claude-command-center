@@ -1819,8 +1819,24 @@ def _reserve_restart(base, target=None, force=False, runner=False):
     """
     import time
 
+    # A service-manager start or another machine's CLI can replace this
+    # dashboard without updating our local debounce file. Read outside the
+    # file lock so a slow dashboard does not stall other restart callers.
+    started = 0
+    if not force:
+        try:
+            version = _get_json(base, "/api/version", timeout=5)
+            value = version.get("started_at")
+            if (isinstance(value, (int, float)) and not isinstance(value, bool)
+                    and 0 < value <= time.time()):
+                started = value
+        except (OSError, ValueError, AttributeError):
+            pass  # Older/offline servers retain the local reservation policy.
+
     def apply(state):
         stamp = time.time()
+        if started > float(state.get("last_dashboard_back") or 0):
+            state["last_dashboard_back"] = started
         last = max(float(state.get("last_restart") or 0),
                    float(state.get("last_dashboard_back") or 0))
         pending = state.get("pending")

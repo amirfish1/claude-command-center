@@ -167,9 +167,42 @@ class RestartReservationTests(unittest.TestCase):
         # Exercise the real file lock and state transitions, without starting
         # a long-lived runner. Model its ownership as this exact process.
         self.m._spawn_restart_runner = lambda *_: os.getpid()
+        self.m._get_json = mock.Mock(return_value={})
 
     def state(self):
         return self.m._restart_state_update(lambda s: dict(s))
+
+    def test_external_start_moves_an_already_queued_restart(self):
+        with mock.patch("time.time", return_value=10000) as clock:
+            self.m._reserve_restart("base", "dashboard")
+            self.m._reserve_restart("base", "dashboard")
+            # An external start occurs midway through the queued window.
+            self.m._get_json.return_value = {"started_at": 10900}
+            clock.return_value = 11800
+            slot = self.m._reserve_restart("base", runner=True)
+            self.assertEqual(slot["pending"]["due"], 12700)
+            self.assertEqual(self.state()["last_dashboard_back"], 10900)
+            # Reobserving the same generation must not postpone forever.
+            clock.return_value = 12700
+            self.assertIn("reservation", self.m._reserve_restart("base", runner=True))
+
+    def test_fresh_state_respects_running_dashboard_but_now_can_override(self):
+        with mock.patch("time.time", return_value=10000):
+            self.m._get_json.return_value = {"started_at": 9900}
+            slot = self.m._reserve_restart("base", "dashboard")
+            self.assertEqual(slot["pending"]["due"], 11700)
+            self.assertIn("reservation", self.m._reserve_restart("base", "dashboard", force=True))
+            self.assertEqual(self.m._get_json.call_count, 1)
+
+    def test_missing_invalid_or_offline_generation_keeps_local_policy(self):
+        for value in (None, True, "9000", -1, float("nan"), float("inf"), 10001):
+            with self.subTest(value=value), mock.patch("time.time", return_value=10000):
+                self.m._restart_state_update(lambda s: s.clear())
+                self.m._get_json.return_value = {"started_at": value}
+                self.assertIn("reservation", self.m._reserve_restart("base", "dashboard"))
+        self.m._get_json.side_effect = OSError("offline")
+        with mock.patch("time.time", return_value=11800):
+            self.assertIn("reservation", self.m._reserve_restart("base", "dashboard"))
 
     def test_busy_hour_keeps_a_fixed_half_hour_window(self):
         with mock.patch("time.time", return_value=10000) as clock:
