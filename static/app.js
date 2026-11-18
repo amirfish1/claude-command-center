@@ -5222,7 +5222,9 @@
       stats.pooled += 1;
       return new Promise((resolve, reject) => {
         const signal = (init && init.signal) || (input && input.signal) || null;
-        const task = { input, init, resolve, reject, signal, queuedAt: performance.now(), onAbort: null };
+        const rawUrl = typeof input === 'string' ? input : (input && input.url) || String(input || '');
+        const visibleList = new URL(rawUrl, window.location.href).pathname === '/api/conversations/list';
+        const task = { input, init, resolve, reject, signal, visibleList, queuedAt: performance.now(), onAbort: null };
         if (signal) {
           if (signal.aborted) {
             reject(signal.reason || new DOMException('Aborted', 'AbortError'));
@@ -5237,7 +5239,12 @@
           };
           signal.addEventListener('abort', task.onAbort, { once: true });
         }
-        queue.push(task);
+        // Sidebar rows are the page's primary content. Keep their reads ahead
+        // of optional polls without consuming the slot reserved for clicks.
+        // Preserve FIFO order among list reads and among the remaining polls.
+        const beforePoll = visibleList ? queue.findIndex(queued => !queued.visibleList) : -1;
+        if (beforePoll < 0) queue.push(task);
+        else queue.splice(beforePoll, 0, task);
         stats.queued = queue.length;
         drain();
       });
