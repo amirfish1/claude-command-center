@@ -20064,6 +20064,16 @@
     };
     const p = (async () => {
       try {
+        let snapshotBase = false;
+        if (!opts.initial && !opts.includePrs && !sharedState._archiveAllData.has(url)) {
+          const snapshot = await window.__cccArchiveSnapshot?.read;
+          if (snapshot?.url === url && !sharedState._archiveAllData.has(url)) {
+            sharedState._archiveAllData.set(url, snapshot.rows);
+            snapshotBase = true;
+            if (snapshot.etag) sharedState._archiveAllEtag.set(url, snapshot.etag);
+            if (snapshot.delta) sharedState._archiveAllDelta.set(url, snapshot.delta);
+          }
+        }
         const prevEtag = sharedState._archiveAllEtag.get(url);
         const deltaToken = Array.isArray(sharedState._archiveAllData.get(url)) ? sharedState._archiveAllDelta.get(url) : null;
         // Hard timeout: without one, a wedged request (accepted connection,
@@ -20081,6 +20091,11 @@
           if (!sharedState._archiveBootstrapConsumed && url === sharedState._archiveBootstrapUrl && !prevEtag) {
             sharedState._archiveBootstrapConsumed = true;
             r = await sharedState._archiveBootstrapFetchPromise;
+          }
+          if (!r && snapshotBase && window.__cccArchiveSnapshot && !window.__cccArchiveSnapshot.consumed && url === window.__cccArchiveSnapshot.url) {
+            window.__cccArchiveSnapshot.consumed = true;
+            r = await window.__cccArchiveSnapshot.fetch;
+            if (r) _perfFetchUrl = r.url || url;
           }
           if (!r) {
             _perfFetchUrl = deltaToken ? url + '&since=' + encodeURIComponent(deltaToken) : url;
@@ -20119,6 +20134,7 @@
           if (typeof refreshLiveSessionsActivity === 'function') {
             refreshLiveSessionsActivity();
           }
+          if (typeof opts.onValidated === 'function') opts.onValidated();
           return cached.slice();
         }
         if (!r.ok) {
@@ -20194,7 +20210,11 @@
         else if (etag) sharedState._archiveAllEtag.set(url, etag);
         if (d.delta_token) sharedState._archiveAllDelta.set(url, d.delta_token);
         else sharedState._archiveAllDelta.delete(url);
-        if (!opts.includePrs && !opts.initial) _scheduleArchiveSidebarCache(convs, params.get('window'));
+        if (!opts.includePrs && !opts.initial) {
+          _scheduleArchiveSidebarCache(convs, params.get('window'));
+          window.__cccArchiveSnapshot?.save({url, rows:convs,
+            etag:sharedState._archiveAllEtag.get(url), delta:sharedState._archiveAllDelta.get(url)});
+        }
         if (typeof opts.onPage === 'function') opts.onPage(d);
         return convs;
       } catch (e) {
@@ -20464,15 +20484,20 @@
       const progress = window.__cccArchiveProgress;
       if (!opts.includePrs && (!progress || progress.window !== requestedWindow || !progress.complete)) {
         _setArchiveCompleteness(requestedWindow, false, sharedState.archiveData.length);
+        let validatedReady;
+        const validatedFull = new Promise(resolve => { validatedReady = resolve; });
         let releaseInitialPaint;
         const afterPaint = new Promise(resolve => { releaseInitialPaint = resolve; });
         const initialRead = loadArchiveAll({ staleOk: true, window: requestedWindow, initial: true });
         // Start the full download while the recent-row request is pending.
         // Its JSON processing still waits for the recent rows to paint.
         fullRead = loadArchiveAll({ staleOk: opts.staleOk !== false && !opts.force,
-          window: requestedWindow, afterPaint });
+          window: requestedWindow, afterPaint, onValidated: () => { validatedReady({validated:true}); } });
         try {
-          const first = await initialRead;
+          // An unchanged complete response can be ready before the recent-row
+          // request. Its rows already include the preview and all ancestors.
+          const result = await Promise.race([initialRead.then(first => ({first})), validatedFull]);
+          const first = result.first;
           if (Array.isArray(first) && isCurrentWindow()) {
             sharedState.archiveData = _applyPendingDashboardConversationPatches(
               _mergeArchivePrSnapshot(first, sharedState.archiveData));

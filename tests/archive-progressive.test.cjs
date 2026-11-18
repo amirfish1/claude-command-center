@@ -165,3 +165,50 @@ test('a persisted preview resolves readiness without starting optional network w
   f.context._markArchiveFirstLoaded();
   assert.ok(f.releases.length);
 });
+
+test('an already validated full response paints once without an intermediate recent-row rebuild', async () => {
+  const f = setup({manualFrames:true});
+  f.context.loadArchiveAll = async opts => {
+    f.calls.push(opts);
+    if (opts.initial) return [{session_id:'recent'}];
+    opts.onValidated();
+    return [{session_id:'recent'},{session_id:'older'}];
+  };
+  await f.context.refreshArchiveData();
+  assert.deepEqual(f.paints,[['recent','older']]);
+  assert.equal(f.frames.length,0);
+  assert.equal(f.context.window.__cccArchiveProgress.complete,true);
+  assert.equal(f.notice.hidden,true);
+});
+
+test('a cached receipt from an earlier refresh never bypasses a pending current full response', async () => {
+  const f = setup({manualFrames:true});
+  f.context.window.__cccArchiveSnapshot = {validated:'/api/conversations/list?window=7d&stale_ok=1'};
+  const loading=f.context.refreshArchiveData();
+  await initialPaint(f);
+  assert.deepEqual(f.paints,[['recent']]);
+  assert.equal(f.context.window.__cccArchiveProgress.complete,false);
+  f.frames.shift()(); await new Promise(setImmediate);
+  f.frames.shift()(); f.resolveFull([{session_id:'recent'},{session_id:'older'}]);
+  await loading;
+  assert.equal(f.paints.length,2);
+});
+
+test('current validated full rows do not wait for a slow initial response or let it overwrite them later', async () => {
+  let releaseInitial;
+  const first=new Promise(resolve=>{releaseInitial=resolve;});
+  const f=setup({manualFrames:true});
+  f.context.loadArchiveAll = async opts => {
+    f.calls.push(opts);
+    if (opts.initial) return first;
+    opts.onValidated();
+    return [{session_id:'recent'},{session_id:'older'}];
+  };
+  await f.context.refreshArchiveData();
+  assert.deepEqual(f.paints,[['recent','older']]);
+  assert.equal(f.context.window.__cccArchiveProgress.complete,true);
+  releaseInitial([{session_id:'obsolete-preview'}]);
+  await new Promise(setImmediate);
+  assert.deepEqual(f.paints,[['recent','older']]);
+  assert.equal(f.frames.length,0);
+});
