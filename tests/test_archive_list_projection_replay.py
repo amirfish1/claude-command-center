@@ -317,3 +317,59 @@ def test_hidden_duplicate_overlay_cannot_replace_archive_timestamp(inputs):
         assert actual['conversations'][0]['mtime'] == 9000
     assert inputs['calls'] == 2
     assert len(server._ARCHIVE_LIST_PROJECTION_CACHE) == 0
+
+
+def test_overlay_recency_order_reuses_archive_and_preserves_exact_wire_order(inputs):
+    rows = fixture_rows()
+    rows.append({'session_id': 'second', 'source': 'codex', 'display_name': 'Second',
+                 'mtime': 9400, 'modified': 9400, 'session_state': {'todos': ['owned']}})
+    first = read(rows)
+    rows[1].update(mtime=9990, modified=9990)
+    rows[2].update(mtime=9995, modified=9995)
+    reordered = [rows[0], rows[2], rows[1]]
+    actual = read(reordered, now=10001)
+    assert inputs['calls'] == 1
+    expected = server._archive_list_payload(reordered, window='7d', now=10001, cached=True)
+    expected['delta_token'] = actual['delta_token']
+    assert dict(actual) == expected
+    assert [r['session_id'] for r in actual['conversations']] == ['archive', 'second', 'live']
+    # A caller cannot mutate cached nested containers, even after a reorder.
+    actual['conversations'][1]['session_state']['todos'].append('caller')
+    again = read(rows, now=10002)
+    assert again['conversations'][2]['session_state']['todos'] == ['owned']
+    assert first['conversations'][0] == again['conversations'][0]
+
+
+def test_reordered_overlay_content_changes_still_invalidate_topic_dependencies(inputs):
+    rows = fixture_rows() + [{'session_id': 'second', 'source': 'codex', 'display_name': 'Second', 'mtime': 9400}]
+    read(rows)
+    rows[1]['display_name'] = 'Changed title'
+    rows[1]['parent_session_id'] = 'second'
+    reordered = [rows[0], rows[2], rows[1]]
+    actual = read(reordered)
+    assert inputs['calls'] == 2
+    expected = server._archive_list_payload(reordered, window='7d', now=10000, cached=True)
+    expected['delta_token'] = actual['delta_token']
+    assert dict(actual) == expected
+
+
+def test_overlay_cannot_move_across_unchanged_archive_positions(inputs):
+    rows = fixture_rows() + [{'session_id': 'second', 'source': 'codex', 'mtime': 9400}]
+    read(rows)
+    # The mask changes when an archive row moves between overlay slots.
+    reordered = [rows[2], rows[0], rows[1]]
+    read(reordered, extra=[rows[2], rows[1]])
+    assert inputs['calls'] == 2
+
+
+def test_overlay_window_membership_swap_invalidates_even_with_same_slot_count(inputs):
+    rows = [{'session_id': 'archive', 'source': 'codex', 'mtime': 39000},
+            {'session_id': 'left', 'source': 'codex', 'mtime': 39000},
+            {'session_id': 'right', 'source': 'codex', 'mtime': 1000}]
+    first = read(rows, window='8h', now=40000)
+    assert [row['session_id'] for row in first['conversations']] == ['archive', 'left']
+    rows[1]['mtime'] = 1000
+    rows[2]['mtime'] = 39001
+    actual = read(rows, window='8h', now=40000)
+    assert inputs['calls'] == 2
+    assert [row['session_id'] for row in actual['conversations']] == ['archive', 'right']

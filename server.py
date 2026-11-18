@@ -19546,7 +19546,13 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
     # Keep presence in the guard, and every other overlay field unchanged.
     overlay_guard = [({k: v for k, v in row.items() if k not in ("mtime", "modified")},
                       [k for k in ("mtime", "modified") if k in row]) for row in extra]
-    guard = hashlib.sha1(json.dumps([overlay_guard, ids, ideas, resume_fields],
+    # Recency changes reorder the overlay tail without changing its projected
+    # metadata. Keep archive positions fixed; replay overlay slots by identity.
+    overlay_set = set(overlay_ids)
+    overlay_order = [sid for sid in ids if sid in overlay_set]
+    guard_ids = [None if sid in overlay_set else sid for sid in ids]
+    overlay_guard.sort(key=lambda item: _archive_row_sid(item[0]))
+    guard = hashlib.sha1(json.dumps([overlay_guard, guard_ids, sorted(overlay_order), ideas, resume_fields],
                                    sort_keys=True, default=str).encode()).hexdigest()
     from ccc_server import continuation_topics
     key = (window, bool(cached), delta["ver"], delta["ctx"], guard,
@@ -19561,7 +19567,8 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
         compressed = _list_replay.compress_replay(entry, payload["conversations"])
     else:
         wall, cpu = time.perf_counter(), time.thread_time()
-        projected = _list_replay.replay_rows(entry, dict(zip(overlay_ids, extra)))
+        projected = _list_replay.replay_rows(
+            entry, dict(zip(overlay_ids, extra)), overlay_order=overlay_order)
         if len(entry) == 3:
             # Pay clone preparation only on reuse, never on the cold build.
             # Charge the additional bytes to the same bounded cache.

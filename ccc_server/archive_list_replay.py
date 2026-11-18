@@ -90,13 +90,18 @@ def encode_rows(rows, overlay_ids):
     return b''.join((b'[', b', '.join(chunks), b']')), tuple(spans)
 
 
-def replay_rows(entry, overlays):
+def replay_rows(entry, overlays, *, overlay_order=None):
     raw, spans = entry[:2]
     # Clone bytes are created only from our own JSON-decoded rows below;
     # they are never accepted from disk, HTTP or another process.
     rows = pickle.loads(entry[3]) if len(entry) > 3 and entry[3] is not None else json.loads(raw)
-    for index, _, _ in spans:
-        row = rows[index]
+    by_sid = {str(rows[index].get('session_id') or rows[index].get('id') or ''): rows[index]
+              for index, _, _ in spans} if overlay_order is not None else None
+    if overlay_order is not None and len(overlay_order) != len(spans):
+        raise ValueError('overlay order does not match replacement slots')
+    for slot, (index, _, _) in enumerate(spans):
+        row = by_sid[overlay_order[slot]] if by_sid is not None else rows[index]
+        rows[index] = row
         source = overlays[str(row.get('session_id') or row.get('id') or '')]
         for key in ('mtime', 'modified'):
             if key in source:
