@@ -13,7 +13,7 @@ const exposed = app.replace('const _renderRow = (c, opts = {}) => {',
   window.projectGroupTest = {seed(grouping='project', starred=true, tab='alltickets') {
     // API fixtures are empty; keep their background refresh from replacing
     // the explicit rows under test while exercising the real list renderer.
-    renderArchiveList=()=>{};
+    renderArchiveList=()=>renderConversationList(conversationsData);
     window.__CCC_FLAGS__={idea_tickets:true};
     window.CCCNavigation.setTab(tab);
     localStorage.setItem('ccc-archived-grouping',grouping);
@@ -63,6 +63,22 @@ test('Today stars keep a project together while chronological mode retains its T
     assert.ok(await page.evaluate(()=>window.projectGroupRowsBuilt <= 6),
       'four visible rows and their family routing must not build a discarded duplicate tree');
     const active='[data-session-section="active"]';
+    const lanes=active+' .conv-subagent-cluster-toggle[data-subagent-parent-sid="regular-topic"]';
+    assert.equal(await page.$(active+' [data-session-id="child-lane"]'),null,
+      'collapsed lanes keep their data without constructing hidden rows');
+    if(process.env.CCC_PROJECT_GROUP_SCREENSHOT)await page.screenshot({path:process.env.CCC_PROJECT_GROUP_SCREENSHOT});
+    await page.click(lanes);
+    assert.equal(await page.$eval(lanes,el=>el.getAttribute('aria-expanded')),'true');
+    assert.equal(await page.$eval(active+' [data-session-id="child-lane"]',el=>el.checkVisibility()),true);
+    assert.equal(await page.$eval(lanes,el=>el===document.activeElement),true,
+      'opening a deferred group retains keyboard focus');
+    await page.keyboard.press('Enter');
+    assert.equal(await page.$eval(lanes,el=>el.getAttribute('aria-expanded')),'false');
+    await page.keyboard.press('Enter');
+    assert.equal(await page.$eval(lanes,el=>el.getAttribute('aria-expanded')),'true');
+    await page.evaluate(()=>projectGroupTest.seed());
+    assert.equal(await page.$eval(active+' [data-session-id="child-lane"]',el=>el.checkVisibility()),true,
+      'saved expansion survives ordinary sidebar rendering');
     const groups=await page.$$eval(active+' .conv-folder-group',els=>els.map(el=>({
       name:el.querySelector('.conv-folder-group-chip').textContent.trim(),
       count:el.querySelector('.conv-folder-group-count').textContent.trim(),
@@ -97,5 +113,15 @@ test('Today stars keep a project together while chronological mode retains its T
     assert.deepEqual(await page.$$eval(active+' .conv-item[data-session-id]',els=>els.map(el=>el.dataset.sessionId)),
       ['starred-topic','regular-topic','child-lane','other-topic'],
       'returning to All restores the full visible hierarchy');
+    await page.setViewport({width:390,height:844});
+    await page.evaluate(()=>window.cccMobileNav.back());
+    const phoneLanes=active+' .wa-lanes[data-subagent-parent-sid="regular-topic"]';
+    await page.click(phoneLanes);
+    await page.evaluate(()=>projectGroupTest.seed());
+    assert.equal(await page.$(active+' [data-session-id="child-lane"]'),null);
+    await page.click(phoneLanes);
+    assert.equal(await page.$eval(phoneLanes,el=>el===document.activeElement),true,
+      'phone expansion focuses the visible phone control');
+    assert.equal(await page.$eval(active+' [data-session-id="child-lane"]',el=>el.checkVisibility()),true);
   } finally {await browser.close();}
 });

@@ -24965,7 +24965,12 @@
         clusterCostUsd: clusterCostKnown ? clusterCostUsd : null,
       });
       const descendants = (cluster && Array.isArray(cluster.rows)) ? cluster.rows.slice(1).map(item => ({ item, bridge: false })) : [];
-      const descendantsHtml = descendants.map(entry => _renderRow(entry.item.card, Object.assign({}, opts, {
+      // Keep the complete family in data, but build hidden lane rows only
+      // when opened. Large archives otherwise spend most row work on folds.
+      const renderDescendants = expanded;
+      const deferredIds = expanded ? '' : escapeAttr(JSON.stringify(
+        descendants.map(entry => String(_ultraFreshCurrent(entry.item.card).id))));
+      const descendantsHtml = (renderDescendants ? descendants : []).map(entry => _renderRow(entry.item.card, Object.assign({}, opts, {
         currentChildDepth: entry.item.depth,
         subagentCompact: false,
       }))).join('');
@@ -24975,7 +24980,7 @@
         + _renderRow(rootItem.card, parentOpts)
         // The "↳ N lanes" chip on the parent toggles the lanes both ways, so
         // the body carries no separate Collapse footer.
-        + '<div class="conv-subagent-cluster-body">' + descendantsHtml + '</div>'
+        + '<div class="conv-subagent-cluster-body"' + (renderDescendants ? '' : ' data-lanes-deferred="true" data-deferred-lane-ids="' + deferredIds + '"') + '>' + descendantsHtml + '</div>'
         + '</div>';
     };
     // Active list keeps the date-gap separators so morning/evening
@@ -29524,6 +29529,14 @@
         }
         _subagentClustersSaveExpandedSet(expSet);
         _subagentClustersSaveCollapsedSet(colSet);
+        if (expanded && cluster.querySelector(':scope > .conv-subagent-cluster-body[data-lanes-deferred]')) {
+          // Use the normal renderer so newly revealed rows receive the same
+          // selection, actions and family deduplication as saved expansions.
+          renderSidebar(filterConversations($convSearch.value), { force: true });
+          const replacement = Array.from($convList.querySelectorAll('[data-role="subagent-cluster-toggle"]'))
+            .find(toggle => toggle.getAttribute('data-subagent-parent-sid') === sid && toggle.checkVisibility());
+          if (replacement) replacement.focus({ preventScroll: true });
+        }
       });
     }
     if (!$convList._subagentChipWired) {
@@ -40159,15 +40172,29 @@
     list.querySelectorAll('.conv-item[data-id]').forEach(el => {
       if (!el.closest('.is-family-nest > .conv-subagent-cluster-body')) outside.add(el.getAttribute('data-id'));
     });
+    const deferredIds = body => {
+      try { return JSON.parse(body.getAttribute('data-deferred-lane-ids') || '[]'); }
+      catch (_) { return []; }
+    };
+    list.querySelectorAll('.conv-subagent-cluster:not(.is-family-nest) > .conv-subagent-cluster-body[data-lanes-deferred]').forEach(body => {
+      deferredIds(body).forEach(id => outside.add(id));
+    });
     nests.forEach(nest => {
       const body = nest.querySelector(':scope > .conv-subagent-cluster-body');
       if (!body) return;
       let removed = 0;
-      body.querySelectorAll(':scope > .conv-item[data-id]').forEach(el => {
-        if (outside.has(el.getAttribute('data-id'))) { el.remove(); removed++; }
-      });
+      let left;
+      if (body.hasAttribute('data-lanes-deferred')) {
+        const ids = deferredIds(body);
+        left = ids.filter(id => !outside.has(id)).length;
+        removed = ids.length - left;
+      } else {
+        body.querySelectorAll(':scope > .conv-item[data-id]').forEach(el => {
+          if (outside.has(el.getAttribute('data-id'))) { el.remove(); removed++; }
+        });
+        left = body.querySelectorAll(':scope > .conv-item[data-id]').length;
+      }
       if (!removed) return;
-      const left = body.querySelectorAll(':scope > .conv-item[data-id]').length;
       const noun = left === 1 ? 'lane' : 'lanes';
       nest.querySelectorAll('.conv-subagent-cluster-summary').forEach(n => { n.textContent = '\u21b3 ' + left + ' ' + noun; });
       nest.querySelectorAll('.wa-lanes').forEach(b => {
