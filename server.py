@@ -18554,6 +18554,7 @@ def _archive_list_preview(text, limit=140):
 _ARCHIVE_LIST_ROW_TEMPLATES = ByteBudgetCache(
     _cache_budget_bytes("CCC_LIST_ROW_CACHE_MB", 128), 30000)
 _ARCHIVE_LIST_TEMPLATE_UNREAD = object()
+_ARCHIVE_LIST_TEMPLATE_ENCODER = json.JSONEncoder(default=str)
 
 
 def _archive_list_row_template(row, cached=_ARCHIVE_LIST_TEMPLATE_UNREAD, *,
@@ -18598,7 +18599,10 @@ def _archive_list_row_template(row, cached=_ARCHIVE_LIST_TEMPLATE_UNREAD, *,
     source = dict(row)
     # Estimate retained JSON metadata with room for Python containers. Only
     # misses serialize; warm rows never walk nested parser metadata again.
-    weight = 4 * len(json.dumps(source, default=str).encode()) + 2 * sys.getsizeof(source)
+    # The default ASCII escaping makes character and UTF-8 byte lengths
+    # identical. Reuse the stateless encoder and avoid a temporary byte copy
+    # for every cold row without changing the cache's accounting.
+    weight = 4 * len(_ARCHIVE_LIST_TEMPLATE_ENCODER.encode(source)) + 2 * sys.getsizeof(source)
     _ARCHIVE_LIST_ROW_TEMPLATES.put(cache_key, (source, scalars, containers), weight)
     return scalars, containers
 

@@ -71,7 +71,7 @@ def test_new_snapshot_reuses_template_but_copies_current_containers(monkeypatch)
     def no_serialize(*args, **kwargs):
         raise AssertionError('unchanged snapshot rebuilt the template')
     with monkeypatch.context() as scoped:
-        scoped.setattr(server.json, 'dumps', no_serialize)
+        scoped.setattr(server._ARCHIVE_LIST_TEMPLATE_ENCODER, 'encode', no_serialize)
         out = server._archive_list_project_row(replacement, resumes={}, parents={})
     assert cache.get(key) is template
     assert len(cache) == 1
@@ -86,6 +86,17 @@ def test_new_snapshot_reuses_template_but_copies_current_containers(monkeypatch)
     assert out['question_options'] == ['two']
     assert cache.get(key) is not template
     assert len(cache) == 1
+
+
+def test_template_weight_keeps_exact_json_byte_accounting(monkeypatch):
+    cache = server.ByteBudgetCache(1 << 20, 20)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_ROW_TEMPLATES', cache)
+    row = {'session_id': 'unicode', 'display_name': 'Caf\u00e9 \U0001f600',
+           'session_state': {'nested': ['\u05d0\u05d1', '\ud800', 3]},
+           'parser_only': {'fallback': frozenset(('example',))}}
+    expected = 4 * len(server.json.dumps(row, default=str).encode()) + 2 * server.sys.getsizeof(row)
+    server._archive_list_project_row(row, resumes={}, parents={})
+    assert cache.bytes == expected
 
 
 def test_bulk_projection_uses_one_cache_read_and_validates_current_rows(monkeypatch):
