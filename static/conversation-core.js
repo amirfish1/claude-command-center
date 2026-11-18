@@ -20464,13 +20464,16 @@
       const progress = window.__cccArchiveProgress;
       if (!opts.includePrs && (!progress || progress.window !== requestedWindow || !progress.complete)) {
         _setArchiveCompleteness(requestedWindow, false, sharedState.archiveData.length);
-        const first = await loadArchiveAll({ staleOk: true, window: requestedWindow, initial: true });
-        if (Array.isArray(first) && isCurrentWindow()) {
-          let releaseInitialPaint;
-          const afterPaint = new Promise(resolve => { releaseInitialPaint = resolve; });
-          fullRead = loadArchiveAll({ staleOk: opts.staleOk !== false && !opts.force,
-            window: requestedWindow, afterPaint });
-          try {
+        let releaseInitialPaint;
+        const afterPaint = new Promise(resolve => { releaseInitialPaint = resolve; });
+        const initialRead = loadArchiveAll({ staleOk: true, window: requestedWindow, initial: true });
+        // Start the full download while the recent-row request is pending.
+        // Its JSON processing still waits for the recent rows to paint.
+        fullRead = loadArchiveAll({ staleOk: opts.staleOk !== false && !opts.force,
+          window: requestedWindow, afterPaint });
+        try {
+          const first = await initialRead;
+          if (Array.isArray(first) && isCurrentWindow()) {
             sharedState.archiveData = _applyPendingDashboardConversationPatches(
               _mergeArchivePrSnapshot(first, sharedState.archiveData));
             sharedState.archiveDataWindow = requestedWindow;
@@ -20478,9 +20481,9 @@
             _setArchiveCompleteness(requestedWindow, false, first.length, false, true);
             (0, hostServices.renderArchiveList)(_archiveQuery(), { force: true });
             await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-          } finally {
-            releaseInitialPaint();
           }
+        } finally {
+          releaseInitialPaint();
         }
       }
       if (!isCurrentWindow()) {

@@ -12,7 +12,7 @@ function extract(name) {
   }
   throw Error('missing ' + name);
 }
-function setup({manualFrames = false} = {}) {
+function setup({manualFrames = false, initial = [{session_id: 'recent'}]} = {}) {
   let resolveFull;
   const full = new Promise(resolve => { resolveFull = resolve; });
   const notice = { style: {}, setAttribute() {} };
@@ -25,7 +25,7 @@ function setup({manualFrames = false} = {}) {
     _clientLog() {}, _archiveQuery: () => '', _archiveWindow: () => '7d',
     loadArchiveAll: async opts => {
       calls.push(opts);
-      if (opts.initial) return [{session_id: 'recent'}];
+      if (opts.initial) return initial;
       if (opts.afterPaint) await opts.afterPaint;
       return full;
     },
@@ -90,6 +90,38 @@ test('an initial render error releases the prefetched response barrier', async (
   f.resolveFull([]);
   await f.calls[1].afterPaint;
   assert.equal(f.state._archiveRefreshPromise, null);
+});
+
+test('full download starts before recent rows arrive but cannot replace their first paint', async () => {
+  let resolveInitial;
+  const initial = new Promise(resolve => { resolveInitial = resolve; });
+  const f = setup({manualFrames: true, initial}), task = f.context.refreshArchiveData();
+  await initialPaint(f);
+  assert.equal(f.calls[0].initial, true, 'recent rows request starts first');
+  assert.ok(f.calls[1].afterPaint, 'full download overlaps the pending recent-row request');
+  f.resolveFull([{session_id: 'recent'}, {session_id: 'older'}]);
+  await new Promise(setImmediate);
+  assert.deepEqual(f.paints, [], 'full rows do not bypass the pending initial response');
+  resolveInitial([{session_id: 'recent'}]);
+  await new Promise(setImmediate);
+  assert.deepEqual(f.paints, [['recent']]);
+  f.frames.shift()();
+  await new Promise(setImmediate);
+  assert.deepEqual(f.paints, [['recent']]);
+  f.frames.shift()();
+  await task;
+  assert.deepEqual(f.paints, [['recent'], ['recent', 'older']]);
+  assert.equal(f.calls.length, 2);
+});
+
+test('failed recent-row response releases the full read without claiming partial rows', async () => {
+  const f = setup({initial: null}), task = f.context.refreshArchiveData();
+  await initialPaint(f);
+  assert.deepEqual(f.paints, []);
+  f.resolveFull([{session_id: 'older'}]);
+  await task;
+  assert.deepEqual(f.paints, [['older']]);
+  assert.equal(f.context.window.__cccArchiveProgress.complete, true);
 });
 test('full failure retains usable rows and explicitly incomplete results', async () => {
   const f = setup(), task = f.context.refreshArchiveData();
