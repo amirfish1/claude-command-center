@@ -17984,8 +17984,15 @@ def _archive_list_delta_state(key, rows, window, from_cache):
     titles = _archive_list_title_overlays()
     from ccc_server import continuation_topics
     topic_revision = continuation_topics.revision()
+    graph_revision = _session_graph.projection_revision()
     ctx = hashlib.sha1(json.dumps(
-        [key, window, _session_graph.projection_revision(), resumes, ideas, titles, topic_revision],
+        [key, window, graph_revision, resumes, ideas, titles, topic_revision],
+        sort_keys=True, separators=(",", ":"), default=str,
+    ).encode()).hexdigest()[:12]
+    # Ticket updates run on every projection replay. They still invalidate
+    # HTTP bodies/delta tokens, without reprojecting unchanged archive rows.
+    projection_ctx = hashlib.sha1(json.dumps(
+        [key, window, graph_revision, resumes, titles, topic_revision],
         sort_keys=True, separators=(",", ":"), default=str,
     ).encode()).hexdigest()[:12]
     _archive_delta_ctx_remember(ctx, key, window, resumes, ideas, titles, topic_revision)
@@ -17996,7 +18003,7 @@ def _archive_list_delta_state(key, rows, window, from_cache):
         "token": f"{_ARCHIVE_DELTA_NONCE}.{ver}.{ctx}.{ovl}",
         "nonce": _ARCHIVE_DELTA_NONCE, "ver": ver, "ctx": ctx,
         "track_since": track_since, "row_rev": row_rev,
-        "base": base, "extra": extra,
+        "base": base, "extra": extra, "projection_ctx": projection_ctx,
     }
 
 
@@ -19585,10 +19592,12 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
     overlay_order = [sid for sid in ids if sid in overlay_set]
     guard_ids = [None if sid in overlay_set else sid for sid in ids]
     overlay_guard.sort(key=lambda item: _archive_row_sid(item[0]))
-    guard = hashlib.sha1(json.dumps([overlay_guard, guard_ids, sorted(overlay_order), ideas, resume_fields],
+    projection_ctx = delta.get("projection_ctx")
+    guard_ideas = ideas if projection_ctx is None else None
+    guard = hashlib.sha1(json.dumps([overlay_guard, guard_ids, sorted(overlay_order), guard_ideas, resume_fields],
                                    sort_keys=True, default=str).encode()).hexdigest()
     from ccc_server import continuation_topics
-    key = (window, bool(cached), delta["ver"], delta["ctx"], guard,
+    key = (window, bool(cached), delta["ver"], projection_ctx or delta["ctx"], guard,
            _session_graph.projection_revision(), continuation_topics.revision())
     entry = _ARCHIVE_LIST_PROJECTION_CACHE.get(key)
     if phases is not None:
@@ -19598,6 +19607,8 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
                                        _inputs=(resumes, parents, ideas, selected))
         raw, spans = _list_replay.encode_rows(payload["conversations"], set(overlay_ids))
         entry = _list_replay.compressed_entry(raw, spans)
+        if projection_ctx is not None:
+            entry = _list_replay.TicketContextEntry(entry, delta["ctx"])
         _ARCHIVE_LIST_PROJECTION_CACHE.put(key, entry, _list_replay.entry_weight(entry))
         compressed = _list_replay.compress_replay(entry, payload["conversations"])
     else:
@@ -19611,9 +19622,30 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
             if _list_replay.entry_weight(entry) > _ARCHIVE_LIST_PROJECTION_CACHE.max_bytes:
                 # Keep the usable JSON entry without retrying an oversized
                 # clone on every subsequent read.
-                entry = (*entry[:3], None)
+                entry = (_list_replay.TicketContextEntry((*entry[:3], None), entry.ticket_context)
+                         if isinstance(entry, _list_replay.TicketContextEntry) else (*entry[:3], None))
             _ARCHIVE_LIST_PROJECTION_CACHE.put(key, entry, _list_replay.entry_weight(entry))
-        changed = _archive_list_ticket_updates(projected, ideas)
+        if projection_ctx is not None and getattr(entry, "ticket_context", None) != delta["ctx"]:
+            # Cached rows contain the earlier ticket overlay. All ticket
+            # routines must instead see the same snapshot inputs as a fresh
+            # projection, including when an overlay was removed entirely.
+            absent = object()
+            ticket_fields = ("idea_ticket", "explicitly_archived")
+            before = [tuple(row.get(field, absent) for field in ticket_fields)
+                      for row in projected]
+            source_by_sid = {_archive_row_sid(row): row for row in selected}
+            for row in projected:
+                source = source_by_sid[_archive_row_sid(row)]
+                for field in ticket_fields:
+                    if field not in source:
+                        row.pop(field, None)
+                    elif row.get(field, absent) != source[field]:
+                        row[field] = copy.deepcopy(source[field])
+            _archive_list_ticket_updates(projected, ideas)
+            changed = any(previous != tuple(row.get(field, absent) for field in ticket_fields)
+                          for previous, row in zip(before, projected))
+        else:
+            changed = _archive_list_ticket_updates(projected, ideas)
         if window == "all":
             _trace_row_flicker(projected, now=now)
         raw = (json.dumps(projected).encode() if changed

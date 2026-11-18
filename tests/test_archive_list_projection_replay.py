@@ -50,8 +50,11 @@ def fixture_rows():
     ]
 
 
-def read(rows, *, version=1, context='context', now=10000, window='7d', extra=None):
+def read(rows, *, version=1, context='context', now=10000, window='7d', extra=None,
+         projection_context=None):
     delta = {'ver': version, 'ctx': context, 'extra': extra if extra is not None else rows[1:]}
+    if projection_context is not None:
+        delta['projection_ctx'] = projection_context
     payload = server._archive_list_replay_payload(
         rows, delta, window=window, now=now, cached=True)
     payload['delta_token'] = f'{version}.{context}.{now}'
@@ -88,6 +91,62 @@ def test_reuses_archive_but_keeps_timestamps_ticket_ticks_and_containers_fresh(i
     assert len(inputs['ticks']) == 3
 
 
+@pytest.mark.parametrize('snapshot_ticket', [None, {'ref': 'TEST-1', 'closed': False}])
+def test_ticket_overlay_changes_reuse_projection_and_restore_snapshot_inputs(inputs, snapshot_ticket):
+    rows = fixture_rows()
+    if snapshot_ticket is not None:
+        rows[0].update(idea_ticket=snapshot_ticket, explicitly_archived=False)
+    first = read(rows, projection_context='stable')
+    for index, ideas in enumerate([
+        {'archive': {'ref': 'TEST-2', 'closed': False, 'explicitly_archived': False}},
+        {'archive': {'ref': 'TEST-2', 'closed': True, 'explicitly_archived': True}},
+        {},
+    ]):
+        inputs['ideas'] = ideas
+        actual = read(rows, context=f'changed-ticket-{index}', projection_context='stable')
+        # Ticket routines see the original snapshot, even after a prior overlay
+        # added, removed or archived a ticket. They still run on every replay.
+        assert inputs['ticks'][-1][0].get('idea_ticket') == snapshot_ticket
+        assert inputs['ticks'][-1][0].get('explicitly_archived') == (False if snapshot_ticket else None)
+        expected = server._archive_list_payload(rows, window='7d', now=10000, cached=True)
+        expected['delta_token'] = actual['delta_token']
+        assert dict(actual) == expected
+        assert inputs['calls'] == index + 2, 'only the independent reference reprojects'
+    assert first['conversations'][0].get('idea_ticket') == snapshot_ticket
+    assert rows[0].get('idea_ticket') == snapshot_ticket
+
+
+def test_projection_context_excludes_only_live_ticket_map(inputs, monkeypatch):
+    rows = fixture_rows()
+    monkeypatch.setattr(server, '_archive_serve_cache', {})
+    server._archive_serve_cache_store('scope', rows, server._archive_serve_generation)
+    base = server._archive_serve_cache['scope']['rows']
+    state = lambda: server._archive_list_delta_state('scope', base, '7d', True)
+    original = state()
+    inputs['ideas'] = {'archive': {'ref': 'TEST-1', 'closed': True}}
+    ticket_change = state()
+    assert original['ctx'] != ticket_change['ctx'], 'HTTP/delta freshness remains strict'
+    assert original['projection_ctx'] == ticket_change['projection_ctx']
+    for field, value in [('titles', {'archive': {'display_name': 'Renamed'}}),
+                         ('resume', {'archive': 20000}), ('topics', 2), ('graph', (2, 2))]:
+        previous = state()
+        inputs[field] = value
+        assert state()['projection_ctx'] != previous['projection_ctx'], field
+
+
+def test_ticket_window_membership_changes_still_rebuild_with_stable_projection_context(inputs):
+    rows = fixture_rows()
+    rows[0]['mtime'] = 1
+    rows[1].update(mtime=99999, modified=99999)
+    options = dict(window='8h', now=100000, projection_context='stable')
+    first = read(rows, **options)
+    assert {row['session_id'] for row in first['conversations']} == {'archive', 'live'}
+    inputs['ideas'] = {'archive': {'ref': 'TEST-1', 'explicitly_archived': True}}
+    actual = read(rows, context='removed-parent', **options)
+    assert [row['session_id'] for row in actual['conversations']] == ['live']
+    assert inputs['calls'] == 2, 'the complete selected-id guard remains authoritative'
+
+
 def test_owned_clone_preserves_json_normalization_and_byte_budget():
     original = [{'session_id': 'live', 'mtime': 1,
                  'session_state': {'values': (1, 2), 'keys': {1: 'one'}}}]
@@ -107,16 +166,17 @@ def test_owned_clone_preserves_json_normalization_and_byte_budget():
     assert cache.bytes == 0 and len(cache) == 0
 
 
-def test_clone_that_exceeds_budget_keeps_existing_json_replay(inputs):
+@pytest.mark.parametrize('projection_context', [None, 'stable'])
+def test_clone_that_exceeds_budget_keeps_existing_json_replay(inputs, projection_context):
     rows = fixture_rows()
-    read(rows)
+    read(rows, projection_context=projection_context)
     cache = server._ARCHIVE_LIST_PROJECTION_CACHE
     cache.max_bytes = cache.bytes
     budget = cache.bytes
     rows[1]['mtime'] += 1
-    read(rows, now=10001)
+    read(rows, now=10001, projection_context=projection_context)
     rows[1]['mtime'] += 1
-    third = read(rows, now=10002)
+    third = read(rows, now=10002, projection_context=projection_context)
     assert inputs['calls'] == 1
     assert third['conversations'][1]['mtime'] == rows[1]['mtime']
     assert cache.bytes == budget and len(cache) == 1

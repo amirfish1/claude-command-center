@@ -11,6 +11,14 @@ import struct
 import zlib
 
 
+class TicketContextEntry(tuple):
+    """Keep ticket provenance with the bytes it describes, under one budget."""
+    def __new__(cls, entry, context):
+        result = super().__new__(cls, entry)
+        result.ticket_context = context
+        return result
+
+
 class EncodedListPayload(dict):
     def __init__(self, payload, conversations_json, conversations_deflate=None):
         super().__init__(payload)
@@ -113,13 +121,16 @@ def replay_rows(entry, overlays, *, overlay_order=None):
 
 def with_owned_rows(entry, rows):
     """Retain an immutable clone of normalized rows, before ticket mutation."""
-    return (*entry[:3], pickle.dumps(rows, protocol=pickle.HIGHEST_PROTOCOL))
+    cloned = (*entry[:3], pickle.dumps(rows, protocol=pickle.HIGHEST_PROTOCOL))
+    return (TicketContextEntry(cloned, entry.ticket_context)
+            if isinstance(entry, TicketContextEntry) else cloned)
 
 
 def entry_weight(entry):
     return (len(entry[0]) + sum(map(len, entry[2]))
             + (len(entry[3] or b'') if len(entry) > 3 else 0)
-            + 256 * len(entry[1]) + 1024)
+            + 256 * len(entry[1]) + 1024
+            + (256 + 2 * len(entry.ticket_context) if isinstance(entry, TicketContextEntry) else 0))
 
 
 def encode_replay(entry, rows):
