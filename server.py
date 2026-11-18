@@ -18509,6 +18509,7 @@ def _archive_list_window_allows_row(row, cutoff, idea_tickets_by_sid=None):
 
 _PREVIEW_STATE_RE = re.compile(r"(?:<!--\s*)?<session-state>.*?(</session-state>\s*-->|</session-state>|$)", re.S)
 _PREVIEW_MD_RE = re.compile(r"[`*_#>|]+|\[([^\]]*)\]\([^)]*\)")
+_PREVIEW_MD_TEXT_RE = re.compile(r"[`*_#>|]+")
 
 
 # Most list polls re-derive the same previews from the same cached row
@@ -18531,7 +18532,15 @@ def _archive_list_preview(text, limit=140):
     t = str(text)[:2000]
     if "<session-state>" in t:
         t = _PREVIEW_STATE_RE.sub(" ", t)
-    t = _PREVIEW_MD_RE.sub(lambda m: m.group(1) or " ", t)
+    if "](" not in t:
+        # Without link targets, cleanup only replaces punctuation and folds
+        # whitespace. A prefix already longer than the display limit proves
+        # the same truncated preview without cleaning the rest of the reply.
+        prefix = (" ".join(_PREVIEW_MD_TEXT_RE.sub(" ", t[:2 * limit]).split())
+                  if limit > 0 and len(t) > 2 * limit else "")
+        t = prefix if len(prefix) > limit else _PREVIEW_MD_TEXT_RE.sub(" ", t)
+    else:
+        t = _PREVIEW_MD_RE.sub(lambda m: m.group(1) or " ", t)
     t = " ".join(t.split())
     preview = t if len(t) <= limit else t[: limit - 1].rstrip() + "\u2026"
     if limit == 140:
