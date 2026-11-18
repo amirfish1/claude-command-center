@@ -133,13 +133,57 @@ test('boot paints cache before waiting on the list request and always revalidate
   assert.equal(c.state().archiveData[0].session_id, 'cached');
 });
 
+test('a ready complete response skips only the matching unsearched preview', () => {
+  const fullUrl = '/api/conversations/list?window=7d&stale_ok=1';
+  for (const [snapshot, query, skip] of [
+    [{url:fullUrl, skippedRecent:true}, '', true],
+    [{url:fullUrl, skippedRecent:true}, '   ', true],
+    [{url:fullUrl, skippedRecent:true}, 'older task', false],
+    [{url:fullUrl.replace('7d', 'all'), skippedRecent:true}, '', false],
+    [{url:fullUrl, skippedRecent:false}, '', false],
+    [{url:fullUrl}, '', false],
+    [null, '', false],
+  ]) {
+    const {context:c, paints} = harness();
+    c.write([{id:'cached'}], '7d');
+    c.window.__cccArchiveSnapshot = snapshot;
+    c._archiveQuery = () => query;
+    c.paint();
+    assert.equal(paints.length, skip ? 0 : 1);
+    assert.equal(c.state().archiveLoaded, !skip);
+    assert.equal(c.state().archiveDataWindow, null, 'only the full loader can complete a window');
+    assert.equal(c.window.__cccArchiveProgress, undefined, 'skipping a preview does not claim readiness');
+  }
+});
+
+test('skipping a ready preview still starts the authoritative full loader', () => {
+  const {context:c, paints} = harness();
+  c.write([{id:'cached'}], '7d');
+  c.window.__cccArchiveSnapshot = {
+    url:'/api/conversations/list?window=7d&stale_ok=1', skippedRecent:true,
+  };
+  let refreshes = 0;
+  Object.assign(c, {
+    document:{getElementById:() => null}, kanbanView:false, isFlowView:() => false,
+    _ARCHIVE_MODE_KEY:'ccc-archive-mode', _renderQueuePanel() {},
+    refreshArchiveData:() => { refreshes++; return new Promise(() => {}); },
+  });
+  const start = app.indexOf('  async function setArchiveMode()');
+  const end = app.indexOf('  (function wireArchiveMode()', start);
+  vm.runInContext(app.slice(start, end) + '\nsetArchiveMode();', c);
+  assert.equal(refreshes, 1);
+  assert.equal(paints.length, 0);
+  assert.equal(c.state().archiveLoaded, false);
+});
+
 test('network failure keeps the preview; successful empty history removes it', async () => {
   for (const response of [null, [], [{ id: 'fresh' }]]) {
     const { context: c } = harness();
     c.write([{ id: 'cached' }], '7d');
     c.paint();
     Object.assign(c, {
-      document: { getElementById: () => ({}) },
+      document: { getElementById: () => ({classList:{add() {}}}) },
+      AbortController, performance,
       requestAnimationFrame: callback => callback(),
       _clientLog() {}, _startArchiveProgressPoll() {}, _stopArchiveProgressPoll() {},
       _markArchiveFirstLoaded() {}, _releaseStartupApiReads() {},
@@ -149,7 +193,9 @@ test('network failure keeps the preview; successful empty history removes it', a
       _mergeArchivePrSnapshot: fresh => fresh,
       _applyPendingDashboardConversationPatches: rows => rows,
       refreshLiveSessionsActivity: async () => {},
-      _queueDashboardArchiveRender() {}, setTimeout() {},
+      _queueDashboardArchiveRender() {},
+      _hydrateArchiveSideData() {},
+      setTimeout:callback => callback(),
     });
     vm.runInContext(require('./conversation-source.cjs').functionSource('_setArchiveCompleteness'), c);
     const start = app.indexOf('  let _archiveRefreshPromise = null;');

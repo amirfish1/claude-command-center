@@ -42590,6 +42590,12 @@
 
   function _paintArchiveSidebarCache() {
     if (archiveLoaded || archiveData.length) return;
+    // The early complete response can already be ready before app startup.
+    // Avoid rendering a truncated preview ahead of that response; the full
+    // loader still validates/applies it and owns the completeness signal.
+    const early = window.__cccArchiveSnapshot;
+    if (early?.skippedRecent && !_archiveQuery().trim()
+        && early.url === '/api/conversations/list?window=' + _archiveWindow() + '&stale_ok=1') return;
     const rows = _readArchiveSidebarCache(_archiveWindow());
     if (!rows || !rows.length) return;
     archiveData = rows;
