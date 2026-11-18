@@ -637,8 +637,6 @@ def sweep_rows(rows):
         # sessions of their own; they don't join the ticket's log.
         if sid.startswith("agent-"):
             continue
-        if _plugin_side_call(row=row):
-            continue
         continuing = _ticketed(row.get("continued_from_session_id"))
         child = _ticketed(row.get("parent_session_id"))
         if sid in known:
@@ -653,6 +651,11 @@ def sweep_rows(rows):
         # record that the last event was a turn result.
         if not (continuing or row.get("last_assistant_preview") or row.get("last_assistant_text")
                 or row.get("last_event_type") == "result"):
+            continue
+        # Historical rows that cannot join a ticket need no provenance
+        # parsing. Keep the checker guard before every filing/inheritance
+        # effect, including pending spawns and automatic-skip retries.
+        if _plugin_side_call(row=row):
             continue
         queued = on_turn_end(
             sid,
