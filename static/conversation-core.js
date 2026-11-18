@@ -19976,7 +19976,7 @@
     const url = '/api/conversations/list' + (params.toString() ? '?' + params.toString() : '');
     const pending = sharedState._archiveAllInflight.get(url);
     if (pending) return pending;
-    const _perfT0 = performance.now();
+    let _perfT0 = performance.now();
     // Stage split for the list_read tail (CCC-229): headers arrive after
     // client queueing + server work; body covers download + JSON parse,
     // which stretches when a fresh page's main thread is busy booting.
@@ -20053,7 +20053,14 @@
         } finally {
           clearTimeout(timeoutId);
         }
-        _perfHdrAt = performance.now();
+        // Include the early read's full lifetime instead of reporting only
+        // the time the initialized application spent awaiting its response.
+        const earlyTiming = r._cccArchiveTiming;
+        if (earlyTiming && Number.isFinite(earlyTiming.start)) {
+          _perfT0 = Math.min(_perfT0, earlyTiming.start);
+        }
+        _perfHdrAt = earlyTiming && Number.isFinite(earlyTiming.headers)
+          ? earlyTiming.headers : performance.now();
         try {
           const st = r.headers.get('Server-Timing') || '';
           const m = st.match(/(?:^|,)\s*list;dur=([0-9.]+)/), c = st.match(/listcpu;dur=([0-9.]+)/);

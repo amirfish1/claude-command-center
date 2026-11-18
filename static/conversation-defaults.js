@@ -159,6 +159,9 @@
         const _archiveBootstrapFetchPromise = Promise.resolve().then(async () => {
     if (window.__CCC_CONVERSATION_POPOUT__) return null;
     await (0, sharedState._whenDashboardUncovered)();
+    const early = window.__cccArchiveBootstrap;
+    delete window.__cccArchiveBootstrap;
+    if (early && early.url === sharedState._archiveBootstrapUrl) return early.promise;
     const _archiveBootstrapController = new AbortController();
     const _archiveBootstrapTimeout = setTimeout(() => {
       try { _archiveBootstrapController.abort(); } catch (_) {}
