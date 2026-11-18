@@ -2976,9 +2976,15 @@ def _codex_thread_state_map_resolved():
             states = routed.get("states")
             if isinstance(states, dict):
                 remote = states
-        with _codex_thread_state_remote_lock:
-            _codex_thread_state_remote["ts"] = time.time()
-            _codex_thread_state_remote["map"] = remote
+        # A status-only deadline must not publish an empty failure as a fresh
+        # snapshot for concurrent action/writer checks using normal deadlines.
+        status_only = getattr(
+            _core._CONTROL_PLANE_REQUEST_CONTEXT, "status_deadline", None,
+        ) is not None
+        if not status_only or (isinstance(routed, dict) and routed.get("ok")):
+            with _codex_thread_state_remote_lock:
+                _codex_thread_state_remote["ts"] = time.time()
+                _codex_thread_state_remote["map"] = remote
     # Remote (owner) wins per key: routed call responses like thread/list
     # refresh get recorded into the CALLER's map too, so a dashboard-local
     # entry is usually a stale snapshot while the worker's copy tracks

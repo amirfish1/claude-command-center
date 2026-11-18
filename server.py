@@ -803,6 +803,24 @@ _CONTROL_PLANE_ENGINE_CLIENT = ControlPlaneClient(timeout=45.0)
 _CONTROL_PLANE_REQUEST_CONTEXT = threading.local()
 _CONTROL_PLANE_START_LOCK = threading.Lock()
 
+
+@contextlib.contextmanager
+def _control_plane_status_budget():
+    """Bound worker reads for one best-effort live-status build, across rows.
+
+    Action callers keep their normal deadlines. A busy worker must not turn a
+    status sweep into one full engine timeout per session.
+    """
+    previous = getattr(_CONTROL_PLANE_REQUEST_CONTEXT, "status_deadline", None)
+    deadline = time.monotonic() + 0.25
+    _CONTROL_PLANE_REQUEST_CONTEXT.status_deadline = (
+        min(previous, deadline) if previous is not None else deadline
+    )
+    try:
+        yield
+    finally:
+        _CONTROL_PLANE_REQUEST_CONTEXT.status_deadline = previous
+
 # Per-session /compact dedupe: nothing upstream (client-side `_compactInFlight`
 # in app.js, or the control-plane idempotency_key) protects against two
 # independent HTTP requests for the SAME session_id racing each other — e.g. a
@@ -886,7 +904,19 @@ def _control_plane_engine_call(
     # Engine reads may lazily initialize a native transport too, so they need
     # the same timeout budget as writes. The mutate flag controls durability,
     # not how quickly an engine can answer.
-    if timeout_ms is not None:
+    status_deadline = getattr(_CONTROL_PLANE_REQUEST_CONTEXT, "status_deadline", None)
+    if not mutate and status_deadline is not None:
+        remaining = status_deadline - time.monotonic()
+        if remaining <= 0:
+            return {"ok": False, "available": True,
+                    "error": "Live-status worker read budget exhausted"}
+        client = ControlPlaneClient(
+            path=_CONTROL_PLANE_ENGINE_CLIENT.path,
+            token_file=_CONTROL_PLANE_ENGINE_CLIENT.token_file,
+            timeout=min(_CONTROL_PLANE_ENGINE_CLIENT.timeout, remaining),
+        )
+        response = client.request(method, payload)
+    elif timeout_ms is not None:
         try:
             requested_timeout = max(
                 _CONTROL_PLANE_ENGINE_CLIENT.timeout,
@@ -14193,6 +14223,7 @@ def live_sessions_activity_for_view():
     }
 
 
+@_control_plane_status_budget()
 def _build_live_sessions_activity_uncached(detail=None):
     out = {}
     # Aggregate a fixed number of phases, without recording session ids or
