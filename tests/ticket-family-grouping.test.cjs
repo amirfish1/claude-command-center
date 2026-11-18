@@ -13,6 +13,7 @@ function group(rows) {
     _allTabById: new Map(rows.map(c => [c.session_id, c])),
     _allTabSessionId: c => c.session_id,
     _allTabParentId: c => c.parent_session_id,
+    _isOtherUtilityRow: () => false,
     _allTabLaneFor: () => 'ideas', _ticketlessRowsInAll: true,
     _allTabConvs: rows, _allTabTrashConvs: [],
     _qActive: '', _ipWindowCutoff: null,

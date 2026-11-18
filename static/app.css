@@ -34380,6 +34380,11 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
   box-shadow: none; animation: none;
 }
 #convList#convList .conv-item:not(.is-current-child-row) { --conv-content-left: calc(var(--conv-icon-left) + 52px); }
+/* Engine-only rows can reclaim a fully hoisted column; task avatars still
+   require the shared portrait gutter above. */
+#convList#convList.workers-icon-narrow .conv-item:not(.is-current-child-row):not(:has(.conv-idea-avatar)) {
+  --conv-content-left: calc(var(--conv-icon-left) + var(--conv-dot-col) + 8px);
+}
 #convList#convList .conv-item:not(.is-current-child-row) .conv-idea-avatar > :is(.conv-avatar-background, .session-activity-dot) { display: none; }
 #convList#convList .conv-item:not(.is-current-child-row) .conv-avatar-stack { gap: 2px; text-shadow: none; }
 #convList#convList .conv-item:not(.is-current-child-row) :is(.conv-avatar-initials, .conv-avatar-project) {

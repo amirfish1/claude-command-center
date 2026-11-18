@@ -34,6 +34,7 @@ function harness(holdSlow = false) {
       addEventListener() {},
     },
     localStorage: { getItem() { return null; } },
+    _whenDashboardUncovered: async () => {}, // The tested dashboard is visible.
     Response, AbortController, DOMException, URL, setTimeout, clearTimeout, performance,
     encodeURIComponent, Object, Promise, console,
   };
@@ -55,11 +56,13 @@ test('boot beacons and composer catalogs wait for the archive rows', async () =>
   ctx.fetchViaGate('/api/client-log', { method: 'POST', body: '{}' });
   ctx.fetchViaGate('/api/sessions/spawn', { method: 'POST', body: '{}' });
   await new Promise(r => setTimeout(r, 1));
-  assert.deepEqual(urls(ctx), [
+  // App visibility resolves asynchronously. The gate constrains which
+  // requests start, not the microtask order of these permitted requests.
+  assert.deepEqual(urls(ctx).sort(), [
     'GET /api/conversations/list',
     'GET /api/config',
     'POST /api/sessions/spawn',
-  ]);
+  ].sort());
 });
 
 test('released catalog reads survive the spawn-click pool abort', async () => {
