@@ -19209,7 +19209,7 @@ def _archive_overlay_acp_sessions(rows):
         # CCC-142: never queue a sidebar poll behind _ACP_LOCK (held ~18s
         # while ACP state loads at boot). The overlay is a best-effort gap
         # filler; a lock-free shallow copy (atomic under the GIL) is enough.
-        if _ACP_LOCK.acquire(timeout=0.05):
+        if _ACP_LOCK.acquire(blocking=False):
             try:
                 sessions = dict(_ACP_SESSION_STATE.get(harness) or {})
             finally:
