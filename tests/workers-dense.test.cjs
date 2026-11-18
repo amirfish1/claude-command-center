@@ -67,7 +67,10 @@ test('the dense class is driven off convList, not a re-rendered wrapper', () => 
   // runs on every render (it used to run once at startup, so .workers-dense
   // followed you out of Workers into Coding).
   assert.match(app, /\$convList\.classList\.toggle\('workers-dense', workersDenseTabActive\(\)\)/);
-  assert.match(app, /objects-scroll-split', _objectsSplitActive\);[\s\S]{0,1600}?\n    applyRowDensityToggles\(\);/);
+  const renderStart = app.indexOf("$convList.classList.toggle('objects-scroll-split', _objectsSplitActive);");
+  const renderEnd = app.indexOf('    // Flicker guard.', renderStart);
+  assert.ok(renderStart >= 0 && renderEnd > renderStart);
+  assert.match(app.slice(renderStart, renderEnd), /\n    applyRowDensityToggles\(\);/);
   // The stylesheet has to be scoped to match, or the class binds to nothing.
   assert.match(css, /#convList\.workers-dense \.conv-item \{/);
   assert.ok(!/^\.workers-dense /m.test(css),
@@ -83,6 +86,7 @@ const densityModel = (() => {
     const store = { ...stored };
     const ctx = {
       WORKERS_DENSE_KEY: 'ccc-workers-dense',
+      window: { CCCNavigation: { getTab: () => store['ccc-sidebar-tab'] || 'coding' } },
       localStorage: {
         getItem: (k) => (k in store ? store[k] : null),
         setItem: (k, v) => { store[k] = String(v); },

@@ -50,6 +50,7 @@
       id: 'lhs',
       kind: 'spotlight',
       anchor: ['.sidebar', '[data-tour="lhs"]'],
+      reveal: 'sidebar',
       title: 'The left-hand side (LHS)',
       body: 'The LHS is the session control tower. New session, search, the conversation list, the Workers tab, and Settings all live on this side.'
     },
@@ -124,7 +125,7 @@
     {
       id: 'workers-tab',
       kind: 'spotlight',
-      anchor: ['[data-conv-tab="workers"]', '[data-tour="workers"]'],
+      anchor: ['[data-mobile-nav="workers"]', '[data-conv-tab="workers"]', '[data-tour="workers"]'],
       reveal: 'workers',
       title: 'Workers live on the LHS',
       body: 'The Workers tab is the lane for sessions that drain your queues. We opened that real surface so you can see the live control, not a screenshot.'
@@ -132,7 +133,7 @@
     {
       id: 'workers-lane',
       kind: 'spotlight',
-      anchor: ['[data-tour="workers"]', '[data-conv-tab="workers"]'],
+      anchor: ['[data-mobile-nav="workers"]', '[data-tour="workers"]', '[data-conv-tab="workers"]'],
       reveal: 'workers',
       title: 'What workers do',
       body: 'Workers pick up queue tickets and run them as conversations. One worker, one ticket at a time. You can start with zero workers and add them when you have a queue.'
@@ -511,6 +512,11 @@
   }
 
   const REVEALS = {
+    sidebar: function () {
+      if (document.body.classList.contains('conv-list-collapsed')) {
+        document.getElementById('convListRestoreBtn')?.click();
+      }
+    },
     composer: function () {
       // First-run has no session, so the dashboard keeps .conv-input-bar at
       // display:none until New session / updateInputBar() adds .visible.
@@ -530,7 +536,9 @@
       setVisible(document.getElementById('convSendBtn'));
     },
     workers: function () {
-      let tab = document.querySelector('[data-conv-tab="workers"]');
+      REVEALS.sidebar();
+      const nav = document.querySelector('[data-mobile-nav="workers"]');
+      let tab = nav && nav.getBoundingClientRect().width ? nav : document.querySelector('[data-conv-tab="workers"]');
       const list = document.querySelector('#convList');
       if (!tab && list) {
         let bar = list.querySelector('[data-role="conv-tab-bar"]');

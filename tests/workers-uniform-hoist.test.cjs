@@ -92,7 +92,7 @@ test('the no-tickets marker is only claimed when some row has tickets', () => {
 // The failure this pins is the one that already happened once on this tab: a
 // class that never reached the DOM, leaving a whole stylesheet block dead
 // while the source read as if the feature shipped. Measure the layout.
-test('hoisting drops the majority glyph, keeps the exception, reclaims the column', async () => {
+test('hoisting drops the majority glyph, keeps exceptions and reclaims only engine space', async () => {
   const rowHtml = (i, iconCls) => `<div class="conv-item">
     <span class="conv-session-icon codex cost-high is-working ${iconCls}">
       <svg class="conv-session-svg" width="14" height="14"><rect width="14" height="14"></rect></svg>
@@ -160,6 +160,11 @@ test('hoisting drops the majority glyph, keeps the exception, reclaims the colum
       'an exception row still needs the room, so the column must not move');
     assert.ok(plain.majority.titleLeft - narrow.majority.titleLeft >= 24,
       `expected >=24px reclaimed, got ${plain.majority.titleLeft - narrow.majority.titleLeft}px`);
+    await page.$$eval('.conv-session-icon', icons => icons.forEach(icon => icon.classList.add('conv-idea-avatar')));
+    const avatarPlain = await probe('');
+    const avatarNarrow = await probe('workers-hoist-engine workers-hoist-cost workers-icon-narrow');
+    assert.equal(avatarNarrow.majority.titleLeft, avatarPlain.majority.titleLeft,
+      'task avatars retain their own gutter when engine glyphs are hoisted');
 
     // Working-vs-idle is exactly what differs per row, so the dot never folds.
     assert.equal(both.majority.dot, true);

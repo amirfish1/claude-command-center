@@ -49,6 +49,7 @@ function renderRow(row) {
         + '</span></div>'
       : '<span class="conv-worker-no-tickets" aria-hidden="true">no tickets</span>',
     // Optional badge helpers the template calls; this fixture has none.
+    sessionDriverHtml: () => '', ticketSessionSection: () => 'active', rowDecisionReportButton: () => '',
     sessionStuckWarningHtml: () => '', workerOriginBadgeHtml: () => '',
     ideaTicketChipHtml: () => '', _ideaRowLine: () => '',
     readyToCloseArchiveHtml: () => '', _nyaRowBlockHtml: () => '',

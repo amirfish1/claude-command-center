@@ -12,7 +12,7 @@ const integration=between('  window.cccSettingsHealth?.mount({','  // Trigger ch
 const encoded=JSON.stringify(html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'')).replace(/</g,'\\u003c');
 const fixture=`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/static/app.css"><link rel="stylesheet" href="/static/settings-health.css"><link rel="stylesheet" href="/static/engine-connection.css"><link rel="stylesheet" href="/static/service-connections.css"><style>body{display:block}#sysModal.open{display:flex!important}#settingsModal .settings-modal{width:min(1100px,96vw)}#settingsPane>.settings-section{display:none!important}#settingsPane>.settings-section.is-active-section{display:block!important}#sysDialog [hidden]{display:none!important}#sysDialog{padding:20px}</style><button id="opener" style="min-height:44px">System</button><button id="sidebarMoreBtn">More</button><script src="/static/settings-health.js"></script><script src="/static/engine-connection.js"></script><script src="/static/service-connections.js"></script><script>
 const parsed=new DOMParser().parseFromString(${encoded},'text/html');for(const id of ['sysModal','settingsModal'])document.body.append(parsed.getElementById(id));
-const $sysModal=document.getElementById('sysModal'),$sysDialog=document.getElementById('sysDialog'),$sysChip=document.getElementById('opener'),$sysBackdrop=document.getElementById('sysBackdrop'),$settingsModal=document.getElementById('settingsModal');
+const $sysModal=document.getElementById('sysModal'),$sysDialog=document.getElementById('sysDialog'),$sysChip=null,$sysBackdrop=document.getElementById('sysBackdrop'),$settingsModal=document.getElementById('settingsModal');
 let _sysReturnFocus=null,_sysLastRollupLevel='',_sysRestartInFlight=false,_sysPollTimer=null,_sysSpawnedTickTimer=null,_sysHealthTimer=null,_sysProcessesTimer=null,_sysJobsTimer=null,settingsSearchFocusTimer=null;
 const nativeFetch=fetch;window.fetch=(url,options)=>{if(url==='/api/system-health')window.__resourcePriority=options?.cccPriority;return nativeFetch(url,options);};
 window.__calls=[];const isImeKey=()=>false;function showOpToast(){}function sysRefresh(){window.__calls.push('services');return Promise.resolve({});}function renderSysSpawnedList(){}function _pollSystemProcesses(){}function refreshControlPlaneStatus(){window.__calls.push('worker');}function _wtQueueRefresh(){window.__calls.push('queue');}
@@ -29,7 +29,7 @@ window.cccServiceConnections.mount({navigate:()=>navigate('vault'),newCredential
 // suite; this fixture checks navigation remains staged and receives no preset.
 window.cccRoutingPolicy={open:async(...args)=>{window.__calls.push(['policy',...args]);navigate('routing');document.getElementById('routingPolicyContext').focus();}};
 ${integration}
-document.getElementById('opener').onclick=()=>sysOpenModal(document.getElementById('opener'));
+document.getElementById('opener').onclick=()=>sysOpenModal(document.getElementById('opener'),'health');
 document.getElementById('settingsModalClose').onclick=()=>{closeSettingsModal();document.getElementById('opener').focus();};
 window.__settings=()=>{sysCloseModal();navigate('maintenance');};
 </script>`;
@@ -43,7 +43,7 @@ test.after(async()=>{await browser?.close();if(child){child.kill();await once(ch
 async function open(t,width=1440,{fail=false,stale=false,resourceFail=false}={}){
  for(const [name,on]of [['fail',fail],['stale',stale],['resource-fail',resourceFail]]){const p=path.join(scratch,name);if(on)fs.writeFileSync(p,'1');else fs.rmSync(p,{force:true});}
  const context=await browser.createBrowserContext(),page=await context.newPage();t.after(()=>context.close());await page.setViewport({width,height:900});const errors=[],requests=[];page.on('pageerror',e=>errors.push(e.message));await page.setRequestInterception(true);page.on('request',r=>{if(new URL(r.url()).origin!==url){r.abort();return;}requests.push({method:r.method(),url:new URL(r.url()).pathname});r.continue();});
- await page.goto(url);await page.click('#opener');await page.waitForFunction(()=>document.getElementById('sysHealthBody')?.textContent.includes('Memory')||document.getElementById('sysHealthBody')?.textContent.includes('unavailable'));
+ await page.goto(url);await page.click('#opener');if(errors.length)throw Error(JSON.stringify(errors));await page.waitForFunction(()=>document.getElementById('sysHealthBody')?.textContent.includes('Memory')||document.getElementById('sysHealthBody')?.textContent.includes('unavailable'));
  assert.deepEqual(errors,[]);return{page,requests,errors};
 }
 

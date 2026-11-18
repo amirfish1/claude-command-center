@@ -28,8 +28,8 @@ console.log('inline rename keeps its redraw guard through async save');
 // commit has to patch that pool and pin the rename override (a stale
 // server snapshot must not snap the name back), and the repaint must be
 // forced past the typing/hover pause guard.
-const railStart = app.indexOf('  function startStatusRailTitleRename() {');
-const railEnd = app.indexOf('\n  function updatePaneHeader(', railStart);
+const railStart = app.indexOf('  function startStatusRailTitleRename(');
+const railEnd = app.indexOf('\n  }\n', railStart) + 5;
 assert(railStart >= 0 && railEnd > railStart, 'status-rail rename implementation is present');
 const rail = app.slice(railStart, railEnd);
 assert(rail.includes('archiveData.find('),

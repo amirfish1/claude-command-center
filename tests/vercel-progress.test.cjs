@@ -14,7 +14,7 @@ for (const width of [1280, 390]) test('Vercel phases share CI progress at ' + wi
     const page = await browser.newPage();
     await page.setViewport({width, height:900});
     await page.setContent(`<style>${css}</style><div style="width:${Math.min(width, 330)}px;--text:#eee;--surface:#191919;--border:#555;--accent:#8ab4ff;--green:#89dd99;--red:#ff9999;--text-muted:#aaa;background:#191919;padding:12px;box-sizing:border-box">
-      <div data-local-ci-host id="localCiProgress"></div><div class="sidebar"><div data-local-ci-host class="local-ci-mobile" id="localCiMobileList"></div></div>
+      <div data-local-ci-host id="localCiProgress"></div><div class="sidebar"><div data-local-ci-host class="${width <= 1200 ? 'local-ci-mobile' : ''}" id="localCiMobileList"></div></div>
       <div class="main"><div data-local-ci-host class="local-ci-mobile" id="localCiMobileReader"></div></div></div>`);
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
@@ -37,28 +37,34 @@ for (const width of [1280, 390]) test('Vercel phases share CI progress at ' + wi
       window.checkDeployment = pollVercelDeploy;
       checkDeployment();
     `});
-    const host = width === 390 ? '#localCiMobileList' : '#localCiProgress';
+    const host = '#localCiMobileList';
+    const elapsed = host + ' .local-ci-entry .local-ci-elapsed';
     await page.waitForFunction(selector => document.querySelector(selector).textContent.includes('Building'), {}, host);
-    assert.match(await page.$eval(host, e => e.textContent), /CI · project · Tests/);
+    if(width <= 1200) {
+      await page.focus(host + ' .local-ci-mobile-toggle');
+      await page.keyboard.press('Enter');
+      assert.equal(await page.$eval(host + ' .local-ci-mobile-toggle',el=>el.getAttribute('aria-expanded')),'true');
+    }
+    assert.match(await page.$eval(host, e => e.textContent), /GitHub Actions · project · Tests/);
     assert.equal(await page.$eval(host + ' progress', e => e.hasAttribute('value')), false);
     assert.equal(await page.$eval(host + ' a', e => e.href), 'https://example.vercel.app/');
     assert.doesNotMatch(await page.$eval(host + ' a', e => e.title), /undefined|steps complete/);
     assert.equal(await page.$eval(host, e => e.getBoundingClientRect().right <= innerWidth), true);
-    assert.deepEqual(await page.$$eval(host + ' .local-ci-elapsed', nodes => nodes.map(e => e.textContent)), ['1:05', '2:05']);
+    assert.deepEqual(await page.$$eval(elapsed, nodes => nodes.map(e => e.textContent)), ['1:05', '2:05']);
     await page.evaluate(() => {window.clock += 2000;});
-    await page.waitForFunction(selector => document.querySelector(selector + ' .local-ci-elapsed').textContent === '1:07', {}, host);
-    assert.equal(await page.$eval(host + ' .local-ci-elapsed', e => e.getBoundingClientRect().right <= innerWidth), true);
+    await page.waitForFunction(selector => document.querySelector(selector + ' .local-ci-entry .local-ci-elapsed').textContent === '1:07', {}, host);
+    assert.equal(await page.$eval(elapsed, e => e.getBoundingClientRect().right <= innerWidth), true);
     await page.screenshot({path:'/tmp/ccc-vercel-progress-' + width + '.png'});
     for (const [state, label, outcome] of [['QUEUED','Queued','active'],['INITIALIZING','Initializing','active'],['READY','Ready','success'],['ERROR','Failed','failure'],['CANCELED','Cancelled','neutral']]) {
       await page.evaluate(async state => {deployment.state=state;deployment.ready_at=clock;await checkDeployment();}, state);
       assert.equal(await page.$eval(host + ' .local-ci-percent', e => e.textContent), label);
       assert.equal(await page.$eval(host + ' .local-ci-entry', e => e.dataset.outcome), outcome);
     }
-    assert.equal(await page.$eval(host + ' .local-ci-elapsed', e => e.textContent), '1:07');
+    assert.equal(await page.$eval(elapsed, e => e.textContent), '1:07');
     await page.evaluate(() => {window.clock += 3600000;});
-    await page.waitForFunction(selector => document.querySelectorAll(selector + ' .local-ci-elapsed')[1].textContent === '1:02:07', {}, host);
-    assert.equal(await page.$eval(host + ' .local-ci-elapsed', e => e.textContent), '1:07');
-    await page.click(host + ' .local-ci-dismiss');
+    await page.waitForFunction(selector => document.querySelectorAll(selector + ' .local-ci-entry .local-ci-elapsed')[1].textContent === '1:02:07', {}, host);
+    assert.equal(await page.$eval(elapsed, e => e.textContent), '1:07');
+    await page.click(host + ' .local-ci-entry[data-runner-label="Vercel"] .local-ci-dismiss');
     assert.doesNotMatch(await page.$eval(host, e => e.textContent), /Vercel/);
     assert.deepEqual(await page.evaluate(() => posts), []);
     await page.evaluate(async () => {await checkDeployment();});
@@ -78,7 +84,7 @@ for (const width of [1280, 390]) test('Vercel phases share CI progress at ' + wi
     assert.doesNotMatch(await page.$eval(host, e => e.textContent), /Vercel · old/);
     await page.evaluate(async () => {backgroundApiFetch=async () => ({ok:true,json:async () => ({disabled:true})});await checkDeployment();});
     assert.doesNotMatch(await page.$eval(host, e => e.textContent), /Vercel/);
-    assert.match(await page.$eval(host, e => e.textContent), /CI · project/);
+    assert.match(await page.$eval(host, e => e.textContent), /GitHub Actions · project/);
     assert.deepEqual(errors, []);
   } finally {await browser.close();}
 });

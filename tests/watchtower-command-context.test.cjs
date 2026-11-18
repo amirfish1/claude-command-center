@@ -151,7 +151,7 @@ test('standalone Claude filing groups keep chips and bounded previews until expa
       const view = window.__wtContextTest.getConvViewForPane(window.__wtContextTest.activePaneId());
       const host = view.closest('.conv-pane');
       host.style.cssText = 'position:fixed;inset:0;display:block;overflow:auto;background:var(--bg);z-index:999999';
-      document.body.append(document.getElementById('convSplit'));
+      const split=document.getElementById('convSplit');split.hidden=false;split.style.display='block';document.body.append(split);
       view.style.cssText = 'display:block;width:100%;height:100%;box-sizing:border-box';
     });
     for (const width of [1100, 390]) {
@@ -168,11 +168,14 @@ test('standalone Claude filing groups keep chips and bounded previews until expa
           paneId, { initialLoad: true });
           const pending = view.querySelector('.tcg-orch .kimi-tg-orch-chip')?.dataset.ccOrch;
           h.renderConversationEvents([{ type: 'tool_result', line: 920002, tool_use_id: 'standalone-filing', text: output }], paneId, { initialLoad: true });
+          // The current renderer folds tools into an activity run. Reveal that
+          // native outer disclosure before inspecting the inner command group.
+          const run=view.querySelector('.activity-run');
+          if(run&&!run.classList.contains('is-expanded'))run.querySelector('button').click();
           const group = view.querySelector('.tool-call-group'), header = group.querySelector('.tool-call-group-header');
           const chip = header.querySelector('.tcg-orch .kimi-tg-orch-chip');
           const fields = [...header.querySelectorAll('.tcg-label, .tcg-result')];
-          return { pending, chip: chip?.dataset.ccOrch, visible: chip?.checkVisibility(),
-            closed: group.classList.contains('collapsed'), height: header.getBoundingClientRect().height,
+          return { pending, chip: chip?.dataset.ccOrch, visible: chip?.checkVisibility(), closed: group.classList.contains('collapsed'), height: header.getBoundingClientRect().height,
             bounded: fields.every(el => {
               const style = getComputedStyle(el);
               const lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.5;
@@ -184,7 +187,7 @@ test('standalone Claude filing groups keep chips and bounded previews until expa
         }, mode);
         assert.equal(outcome.pending, 'wt add · APP');
         assert.equal(outcome.chip, 'wt add · APP-42');
-        assert.equal(outcome.visible, true);
+        assert.equal(outcome.visible, true, JSON.stringify(outcome));
         assert.equal(outcome.closed, true);
         assert.equal(outcome.bounded, true, JSON.stringify(outcome));
         assert.ok(outcome.height < 150, JSON.stringify(outcome));
