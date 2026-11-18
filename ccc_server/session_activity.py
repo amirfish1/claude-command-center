@@ -109,7 +109,7 @@ def wake_event(sid, text, timestamp, event, key):
 
 
 def index_transcript(graph, sid, path):
-    """Incremental native Claude/Codex scan; unchanged files incur no reads."""
+    """Incremental native/ACP scan; unchanged files incur no reads."""
     path = __import__('pathlib').Path(path)
     stat = path.stat()
     cache_key = (str(graph._path), sid, str(path))
@@ -140,6 +140,8 @@ def index_transcript(graph, sid, path):
                 native = event
                 if kind == 'user':
                     text = _text((event.get('message') or {}).get('content'))
+                elif kind == 'user_text':
+                    text = event.get('text') or ''
                 elif kind == 'attachment':
                     queued = _core._extract_queued_command_prompt(event)
                     if queued:
@@ -151,7 +153,7 @@ def index_transcript(graph, sid, path):
                 elif kind == 'event_msg' and payload.get('type') == 'user_message':
                     text = payload.get('message') or ''
                 if text:
-                    at = event.get('timestamp')
+                    at = event.get('timestamp') or event.get('ts')
                     digest = hashlib.sha256(text.encode()).hexdigest()
                     prompt = (digest, driver.epoch(at))
                     # Some Codex versions mirror response_item as event_msg.
@@ -213,6 +215,10 @@ def ticket_activity(ref, *, after=0, before=0):
     gaps = []
     for sid in sessions:
         path = idea_tickets._session_transcript_path(sid)
+        if not path and _core._is_devin_cli_session(sid):
+            candidate = _core._acp_transcript_path('devin', _core._devin_cli_raw_id(sid))
+            if candidate.is_file():
+                path = candidate
         if not path:
             gaps.append({'session_id': sid, 'reason': 'Transcript unavailable'})
             continue

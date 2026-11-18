@@ -165,3 +165,36 @@ def test_activity_http_rejects_bad_ranges_before_reading_sessions(monkeypatch):
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=5)
+
+
+def test_devin_activity_resolves_acp_inputs_without_inventing_usage(tmp_path, monkeypatch):
+    from ccc_server import idea_tickets
+    sid = 'devincli-example-session'
+    transcript = tmp_path / 'example-session.jsonl'
+    write(transcript, [
+        {'type': 'user_text', 'text': 'Owner request', 'ts': '2026-01-01T00:00:00Z', 'line': 1},
+        {'type': 'assistant', 'blocks': [{'kind': 'text', 'text': 'Done'}],
+         'ts': '2026-01-01T00:00:01Z', 'line': 2},
+        {'type': 'user_text', 'text': '[WATCHTOWER] Ticket update',
+         'ts': '2026-01-01T01:00:00Z', 'line': 3},
+    ])
+    graph = server._SessionGraph(tmp_path / 'graph.json')
+    monkeypatch.setattr(idea_tickets, 'load_state', lambda: {
+        'schema': 2, 'tickets': {'TASK-1': {'sessions': {sid: {}}}}})
+    monkeypatch.setattr(idea_tickets, '_graph', lambda: graph)
+    monkeypatch.setattr(idea_tickets, '_session_transcript_path', lambda _: None)
+    def acp_path(harness, raw_id):
+        assert (harness, raw_id) == ('devin', 'example-session')
+        return transcript
+    monkeypatch.setattr(server, '_acp_transcript_path', acp_path)
+    monkeypatch.setattr(activity, 'index_messages', lambda *_: None)
+    result = activity.ticket_activity('TASK-1')
+    assert result['gaps'] == []
+    assert [e['sender_kind'] for e in result['events']] == ['human', 'service']
+    assert result['sessions'][0]['tokens'] is None
+    assert result['sessions'][0]['unmeasured_turns'] == 2
+    assert all('text' not in e and e['usage_status'] == 'unobserved' for e in result['events'])
+    assert len(activity.ticket_activity('TASK-1')['events']) == 2
+    transcript.unlink()
+    assert activity.ticket_activity('TASK-1')['gaps'] == [
+        {'session_id': sid, 'reason': 'Transcript unavailable'}]
