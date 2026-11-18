@@ -36,6 +36,7 @@ import errno
 import http.server
 import ipaddress
 import json
+import marshal
 import math
 import os
 import platform
@@ -18598,12 +18599,16 @@ def _archive_list_row_template(row, cached=_ARCHIVE_LIST_TEMPLATE_UNREAD, *,
     if preview:
         scalars["last_assistant_preview"] = preview
     source = dict(row)
-    # Estimate retained JSON metadata with room for Python containers. Only
-    # misses serialize; warm rows never walk nested parser metadata again.
-    # The default ASCII escaping makes character and UTF-8 byte lengths
-    # identical. Reuse the stateless encoder and avoid a temporary byte copy
-    # for every cold row without changing the cache's accounting.
-    weight = 4 * len(_ARCHIVE_LIST_TEMPLATE_ENCODER.encode(source)) + 2 * sys.getsizeof(source)
+    # Estimate retained metadata with room for Python containers. Marshal's
+    # builtin encoder avoids JSON escaping on every cold row. These bytes
+    # are only measured, never stored or deserialized; returned JSON and the
+    # cache's byte/entry limits are unchanged. Unusual parser values retain
+    # the existing JSON/default=str sizing fallback.
+    try:
+        encoded_size = len(marshal.dumps(source, 4))
+    except (TypeError, ValueError):
+        encoded_size = len(_ARCHIVE_LIST_TEMPLATE_ENCODER.encode(source))
+    weight = 4 * encoded_size + 2 * sys.getsizeof(source)
     _ARCHIVE_LIST_ROW_TEMPLATES.put(cache_key, (source, scalars, containers), weight)
     return scalars, containers
 

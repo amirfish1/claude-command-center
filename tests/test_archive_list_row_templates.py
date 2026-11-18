@@ -88,15 +88,42 @@ def test_new_snapshot_reuses_template_but_copies_current_containers(monkeypatch)
     assert len(cache) == 1
 
 
-def test_template_weight_keeps_exact_json_byte_accounting(monkeypatch):
+def test_template_weight_estimates_builtin_metadata_without_json_escaping(monkeypatch):
     cache = server.ByteBudgetCache(1 << 20, 20)
     monkeypatch.setattr(server, '_ARCHIVE_LIST_ROW_TEMPLATES', cache)
     row = {'session_id': 'unicode', 'display_name': 'Caf\u00e9 \U0001f600',
            'session_state': {'nested': ['\u05d0\u05d1', '\ud800', 3]},
            'parser_only': {'fallback': frozenset(('example',))}}
-    expected = 4 * len(server.json.dumps(row, default=str).encode()) + 2 * server.sys.getsizeof(row)
+    expected = 4 * len(server.marshal.dumps(row, 4)) + 2 * server.sys.getsizeof(row)
+    def no_json(*args, **kwargs):
+        raise AssertionError('builtin metadata should not need JSON sizing')
+    monkeypatch.setattr(server._ARCHIVE_LIST_TEMPLATE_ENCODER, 'encode', no_json)
     server._archive_list_project_row(row, resumes={}, parents={})
     assert cache.bytes == expected
+
+
+def test_template_weight_falls_back_for_unsupported_parser_values(monkeypatch):
+    from decimal import Decimal
+
+    cache = server.ByteBudgetCache(1 << 20, 20)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_ROW_TEMPLATES', cache)
+    row = {'session_id': 'fallback', 'display_name': 'Example',
+           'parser_only': Decimal('1.25')}
+    expected = 4 * len(server.json.dumps(row, default=str).encode()) + 2 * server.sys.getsizeof(row)
+    out = server._archive_list_project_row(row, resumes={}, parents={})
+    assert out['display_name'] == 'Example'
+    assert 'parser_only' not in out
+    assert cache.bytes == expected
+
+
+def test_template_weight_remains_conservative_for_large_unicode_values(monkeypatch):
+    cache = server.ByteBudgetCache(1 << 20, 20)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_ROW_TEMPLATES', cache)
+    text = '\U0001f600\u05d0' * 10000
+    row = {'session_id': 'large-unicode', 'last_assistant_text': text}
+    server._archive_list_project_row(row, resumes={}, parents={})
+    assert cache.bytes >= server.sys.getsizeof(text) + 2 * server.sys.getsizeof(row)
+    assert cache.bytes <= cache.max_bytes
 
 
 def test_bulk_projection_uses_one_cache_read_and_validates_current_rows(monkeypatch):
