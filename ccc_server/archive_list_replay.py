@@ -23,6 +23,12 @@ _RUN_BOUNDARY_MASK = 63
 
 
 class _GuardPickler(pickle.Pickler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # JSON replay does not preserve shared object identity. Guard values
+        # independently of aliases so an unchanged decoded run still matches.
+        self.fast = True
+
     def reducer_override(self, value):
         # Only the built-in JSON containers/scalars use pickle's fast paths.
         # Custom reducers must not hide a JSON-visible mutation in the guard.

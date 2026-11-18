@@ -285,6 +285,8 @@ def test_encoding_chunks_reuse_only_exact_projected_values(monkeypatch):
     count = len(cache)
     check(copy.deepcopy(rows))
     assert len(cache) == count, 'new row objects with the same values reuse chunks'
+    check(json.loads(json.dumps(rows)))
+    assert len(cache) == count, 'JSON replay loses aliases without changing encoded values'
     rows[70]['nested']['values'][1] = 'changed in place'
     second = check(rows)
     assert len(cache) == count + 1, 'only the changed archive chunk is encoded'
@@ -392,17 +394,36 @@ def test_compressed_runs_preserve_json_and_fresh_overlay_and_envelope():
         assert decoder.eof and decoder.unused_data == b''  # exactly one member
 
 
-def test_plain_payload_and_changed_ticket_rows_keep_normal_gzip_fallback(inputs, monkeypatch):
+def test_changed_ticket_rows_keep_current_content_in_chunked_gzip(inputs, monkeypatch):
     assert replay.encode_gzip_payload({'conversations': []}) is None
-    rows = fixture_rows()
-    read(rows)
+    cache = server.ByteBudgetCache(1 << 22, 512)
+    monkeypatch.setattr(replay, '_RUN_CACHE', cache)
+    rows = [dict(fixture_rows()[0], session_id=f'archive-{i}') for i in range(1000)]
+    rows.append(fixture_rows()[1])
+    options = {'extra': rows[-1:]}
+    original = read(rows, **options)
+    original_bytes = replay.encode_payload(original)
+    original_runs = len(cache)
+    assert original_runs > 5
+
     def changed(projected, ideas):
-        projected[0]['goal'] = {'text': 'new ticket data'}
+        projected[501]['goal'] = {'text': 'new ticket data'}
         return True
+
     monkeypatch.setattr(server, '_archive_list_ticket_updates', changed)
-    actual = read(rows, now=10001)
-    assert actual['conversations'][0]['goal'] == {'text': 'new ticket data'}
-    assert replay.encode_gzip_payload(actual) is None
+    actual = read(rows, now=10001, **options)
+    assert actual['conversations'][501]['goal'] == {'text': 'new ticket data'}
+    assert len(cache) == original_runs + 1, 'only the changed archive run is encoded'
+    encoded = replay.encode_gzip_payload(actual)
+    assert encoded is not None
+    decoder = zlib.decompressobj(wbits=31)
+    assert decoder.decompress(encoded) == json.dumps(dict(actual)).encode()
+    assert decoder.eof and decoder.unused_data == b'', 'one complete gzip member'
+
+    monkeypatch.setattr(server, '_archive_list_ticket_updates', lambda *args: False)
+    restored = read(rows, **options)
+    assert replay.encode_payload(restored) == original_bytes
+    assert len(cache) == original_runs + 1, 'ticket edits did not mutate cached runs'
 
 
 def test_resume_defensive_expiry_invalidates_without_store_change(inputs, monkeypatch):

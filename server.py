@@ -19653,9 +19653,15 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
             changed = _archive_list_ticket_updates(projected, ideas)
         if window == "all":
             _trace_row_flicker(projected, now=now)
-        raw = (json.dumps(projected).encode() if changed
-               else _list_replay.encode_replay(entry, projected))
-        compressed = None if changed else _list_replay.compress_replay(entry, projected)
+        if changed:
+            # Ticket work may change archive rows outside the live spans.
+            # Validate every current run, reusing only exact encoded content.
+            raw, spans = _list_replay.encode_rows(projected, set(overlay_ids))
+            updated = _list_replay.compressed_entry(raw, spans)
+            compressed = _list_replay.compress_replay(updated, projected)
+        else:
+            raw = _list_replay.encode_replay(entry, projected)
+            compressed = _list_replay.compress_replay(entry, projected)
         payload = {
             "ok": True, "conversations": projected, "count": len(projected),
             "total_count": sum(isinstance(row, dict) for row in (rows or [])),
@@ -19666,6 +19672,7 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
             payload["cached"] = bool(cached)
         if phases is not None:
             phases["projection_replay"] = {
+                "ticket_rows_changed": bool(changed),
                 "wall_ms": round((time.perf_counter() - wall) * 1000, 1),
                 "cpu_ms": round((time.thread_time() - cpu) * 1000, 1)}
     return _list_replay.EncodedListPayload(payload, raw, compressed)
