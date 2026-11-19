@@ -1,0 +1,156 @@
+"""Reuse selection positions without retaining stale projected sidebar state."""
+import copy
+
+import pytest
+
+import server
+from ccc_server.bounded_cache import ByteBudgetCache
+
+
+@pytest.fixture(autouse=True)
+def selection_cache(monkeypatch):
+    cache = ByteBudgetCache(8 * 1024 * 1024, 8)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_INITIAL_SELECTION_CACHE', cache)
+    return cache
+
+
+def select(rows, *, window='all', now=1000000, parents=None, ideas=None, version=1):
+    return server._archive_list_initial_selection(
+        rows, window, now, parents or {}, ideas or {}, version)
+
+
+def ids(result):
+    return [r['session_id'] for r in result[0]]
+
+
+def test_positions_reuse_current_objects_and_keep_pins_ancestors(selection_cache):
+    rows = [{'session_id': str(i), 'mtime': i} for i in range(600)]
+    rows[0]['pinned'] = True
+    rows[-1]['parent_session_id'] = '1'
+    rows[1]['parent_session_id'] = '2'
+    rows[2]['parent_session_id'] = '1'
+    first = select(rows)
+    current = copy.deepcopy(rows)
+    second = select(current)
+    assert first[1:] == (600, False)
+    assert second[1:] == (600, True)
+    assert ids(first) == ids(second)
+    assert set(ids(second)) == {str(i) for i in range(100, 600)} | {'0', '1', '2'}
+    assert all(any(r is source for source in current) for r in second[0])
+    entry = next(iter(selection_cache._items.values()))[0]
+    assert all(type(i) is int for i in entry[0])
+
+
+@pytest.mark.parametrize('window,seconds', [('8h', 28800), ('1d', 86400), ('7d', 604800)])
+def test_window_boundary_clock_rewind_and_ancestor_fallout(window, seconds):
+    now = 1000000
+    rows = [{'session_id': 'parent', 'mtime': 1},
+            {'session_id': 'child', 'mtime': now - seconds + 1,
+             'parent_session_id': 'parent'},
+            {'session_id': 'pinned', 'mtime': 1, 'pinned': True},
+            {'session_id': 'hermes', 'mtime': 1, 'engine': 'hermes'}]
+    assert set(ids(select(rows, window=window))) == {'parent', 'child', 'pinned', 'hermes'}
+    assert select(rows, window=window, now=now + .5)[2] is True
+    # Equality remains included, but reuse stops at the boundary.
+    assert 'child' in ids(select(rows, window=window, now=now + 1))
+    after = select(rows, window=window, now=now + 1.01)
+    assert set(ids(after)) == {'pinned', 'hermes'}
+    rewind = select(rows, window=window, now=now)
+    assert rewind[2] is False
+    assert 'child' in ids(rewind) and 'parent' in ids(rewind)
+
+
+def test_ticket_activity_and_archive_and_parent_changes_invalidate():
+    rows = [{'session_id': 'old', 'mtime': 1},
+            {'session_id': 'new', 'mtime': 1000000}]
+    assert ids(select(rows, window='8h')) == ['new']
+    assert ids(select(rows, window='8h', ideas={'old': {'moved_at': 1000000}})) == ['old', 'new']
+    assert set(ids(select(rows, window='8h', parents={'new': 'old'}))) == {'old', 'new'}
+    removed = select(rows, window='8h', parents={'new': 'old'},
+                     ideas={'old': {'explicitly_archived': True}})
+    assert ids(removed) == ['new'] and removed[2] is False
+    assert select(rows, window='8h', parents={'new': 'old'},
+                  ideas={'old': {'explicitly_archived': True}})[2] is True
+
+
+def test_version_and_scope_and_missing_version_invalidate():
+    rows = [{'session_id': 'a', 'mtime': 1}]
+    assert select(rows)[2] is False
+    assert select(rows)[2] is True
+    changed = [{'session_id': 'b', 'mtime': 1000000}]
+    assert ids(select(changed, version=2)) == ['b']
+    assert select(changed, version=2, window='8h')[2] is False
+    for version in (None, 0):
+        assert select(changed, version=version)[2] is False
+        assert select(changed, version=version)[2] is False
+
+
+def test_mixed_source_and_duplicate_references_preserve_selection():
+    row = {'session_id': 'same', 'mtime': 5}
+    rows = [None, row, 'invalid', row]
+    assert select(rows)[1:] == (2, False)
+    assert select(rows)[1:] == (2, True)
+    assert ids(select(rows)) == ['same', 'same']
+
+
+def test_cache_bounds_and_oversized_guard_bypass(monkeypatch):
+    cache = ByteBudgetCache(2000, 2)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_INITIAL_SELECTION_CACHE', cache)
+    for version in range(1, 10):
+        select([{'session_id': 'a'}], version=version)
+        assert cache.bytes <= 2000 and len(cache) <= 2
+    parents = {str(i): str(i + 1) for i in range(1000)}
+    assert select([], parents=parents)[2] is False
+    assert select([], parents=parents)[2] is False
+    assert cache.bytes <= 2000
+
+
+def test_hit_still_projects_current_state_and_queue_health(monkeypatch):
+    parents, tickets, resumes = {}, {}, {}
+    monkeypatch.setattr(server._session_graph, 'parent_snapshot', lambda: parents)
+    monkeypatch.setattr(server._idea_tickets, 'idea_ticket_rows_map', lambda: tickets)
+    monkeypatch.setattr(server, '_load_usage_limit_resumes', lambda: resumes)
+    projected, health = [], []
+    def project(rows, **kw):
+        projected.append(kw['_inputs'])
+        return [dict(r, title=resumes.get('title')) for r in kw['_inputs'][3]]
+    monkeypatch.setattr(server, '_archive_list_project_rows', project)
+    monkeypatch.setattr(server, '_queue_health_stats', lambda rows, **kw: health.append(kw['now']) or {'now': kw['now']})
+    monkeypatch.setattr(server, '_trace_row_flicker', lambda *a, **kw: None)
+    rows = [{'session_id': 'a'}]
+    one = server._archive_list_initial_payload(rows, selection_version=1, now=1000)
+    resumes['title'] = 'current'
+    phases = {}
+    two = server._archive_list_initial_payload(rows, selection_version=1, now=1001, phases=phases)
+    assert phases['selection']['hit'] is True
+    assert one['conversations'][0]['title'] is None
+    assert two['conversations'][0]['title'] == 'current'
+    assert two['queue_health'] == {'now': 1001}
+    assert len(projected) == len(health) == 2
+
+
+@pytest.mark.parametrize('stale_ok,source_version,expected', [('1', 7, 7), ('0', 7, None), ('1', 0, 0)])
+def test_http_uses_version_only_for_stale_allowed_sources(monkeypatch, stale_ok, source_version, expected):
+    import json
+    import threading
+    import urllib.request
+    seen = []
+    monkeypatch.setattr(server, '_archive_list_source_rows_cached',
+                        lambda *a, **kw: ([], True, source_version))
+    def payload(rows, **kw):
+        seen.append(kw['selection_version'])
+        return {'ok': True, 'complete': True}
+    monkeypatch.setattr(server, '_archive_list_initial_payload', payload)
+    monkeypatch.setattr(server, 'record_diag', lambda *a, **kw: None)
+    httpd = server.http.server.ThreadingHTTPServer(('127.0.0.1', 0), server.CommandCenterHandler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f'http://127.0.0.1:{httpd.server_port}/api/conversations/list?initial=1&stale_ok={stale_ok}'
+        with urllib.request.urlopen(url, timeout=5) as response:
+            assert json.load(response)['complete'] is True
+        assert seen == [expected]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)

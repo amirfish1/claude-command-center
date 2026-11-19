@@ -19687,15 +19687,26 @@ def _queue_health_stats(rows, *, now=None):
     }
 
 
-def _archive_list_initial_payload(rows, *, window="all", now=None, cached=None, phases=None):
-    """Project recent rows first without changing the complete-list protocol."""
-    wall, cpu = time.perf_counter(), time.thread_time()
-    now = time.time() if now is None else now
-    parents = _session_graph.parent_snapshot()
-    try:
-        ideas = _idea_tickets.idea_ticket_rows_map()
-    except Exception:
-        ideas = {}
+_ARCHIVE_LIST_INITIAL_SELECTION_CACHE = ByteBudgetCache(8 * 1024 * 1024, 8)
+
+
+def _archive_list_initial_selection(rows, window, now, parents, ideas, version):
+    """Select the same recent rows until an input or window boundary changes."""
+    # Cache positions, never projected rows: titles, tickets, resume state and
+    # queue health are still read for every response. The source version covers
+    # row contents/order; live graph and ticket selection inputs have their own
+    # guard. Explicit freshness requests and unversioned sources bypass reuse.
+    key = None
+    if version:
+        parent_key = frozenset((sid, parent) for sid, parent in parents.items()
+                              if isinstance(sid, str) and isinstance(parent, str))
+        idea_key = frozenset((sid, _archive_list_row_ts({"idea_ticket": ticket}),
+                              bool(ticket.get("explicitly_archived")))
+                             for sid, ticket in ideas.items() if isinstance(sid, str))
+        key = (version, window, len(rows), parent_key, idea_key)
+        entry = _ARCHIVE_LIST_INITIAL_SELECTION_CACHE.get(key)
+        if entry and entry[2] <= now < entry[3]:
+            return [rows[i] for i in entry[0]], entry[1], True
     selected = _archive_list_window_rows(
         rows, _archive_list_window_cutoff(window, now=now), ideas, parents)
     recent = sorted(selected, key=_archive_list_row_ts, reverse=True)[:500]
@@ -19714,13 +19725,47 @@ def _archive_list_initial_payload(rows, *, window="all", now=None, cached=None, 
                     and not parent.get("explicitly_archived", ticket.get("explicitly_archived"))):
                 wanted.add(id(parent))
                 initial.append(parent)
+
+    if key is not None:
+        seconds = {"8h": 28800, "1d": 86400, "7d": 604800}.get(_archive_list_window(window))
+        # Expire at the first direct member's window boundary. Older ancestors
+        # remain only while a qualifying descendant still includes them. A
+        # rewound clock must recompute membership as well.
+        expires = float("inf")
+        if seconds:
+            for row in selected:
+                engine = (row.get('engine') or row.get('source') or '').lower()
+                if row.get('pinned') or engine == 'hermes':
+                    continue
+                stamp = max(_archive_list_row_ts(row),
+                            _archive_list_row_ts({'idea_ticket': ideas.get(_archive_row_sid(row)) or {}}))
+                if stamp >= now - seconds:
+                    expires = min(expires, stamp + seconds)
+        positions = {id(row): i for i, row in enumerate(rows)}
+        entry = (tuple(positions[id(row)] for row in initial), len(selected), now, expires)
+        weight = 4 * len(marshal.dumps((key, entry), 2)) + 512
+        _ARCHIVE_LIST_INITIAL_SELECTION_CACHE.put(key, entry, weight)
+    return initial, len(selected), False
+
+
+def _archive_list_initial_payload(rows, *, window="all", now=None, cached=None, phases=None, selection_version=None):
+    """Project recent rows first without changing the complete-list protocol."""
+    wall, cpu = time.perf_counter(), time.thread_time()
+    now = time.time() if now is None else now
+    parents = _session_graph.parent_snapshot()
+    try:
+        ideas = _idea_tickets.idea_ticket_rows_map()
+    except Exception:
+        ideas = {}
+    initial, selected_count, selection_hit = _archive_list_initial_selection(
+        rows, window, now, parents, ideas, selection_version)
     inputs = (_load_usage_limit_resumes(), parents, ideas, initial)
     if phases is not None:
-        phases["selection"] = {"wall_ms": round((time.perf_counter() - wall) * 1000, 1),
+        phases["selection"] = {"hit": selection_hit, "wall_ms": round((time.perf_counter() - wall) * 1000, 1),
                                "cpu_ms": round((time.thread_time() - cpu) * 1000, 1)}
     payload = _archive_list_payload(rows, window=window, now=now, cached=cached,
                                     _inputs=inputs, phases=phases)
-    payload.update(complete=len(initial) == len(selected), selected_count=len(selected), initial=True)
+    payload.update(complete=len(initial) == selected_count, selected_count=selected_count, initial=True)
     return payload
 
 
@@ -36401,7 +36446,8 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 _initial_source_end = time.perf_counter()
                 _initial_phases = {}
                 _initial_payload = _archive_list_initial_payload(
-                    rows, window=window, cached=from_cache, phases=_initial_phases)
+                    rows, window=window, cached=from_cache, phases=_initial_phases,
+                    selection_version=body_ver if stale_ok else None)
                 _initial_payload_end = time.perf_counter()
                 self.send_json(_initial_payload)
                 record_diag("list_server", (time.perf_counter() - _lt0) * 1000.0, {
