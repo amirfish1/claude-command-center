@@ -19990,8 +19990,8 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
     if entry is None:
         payload = _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
                                        _inputs=(resumes, parents, ideas, selected))
-        raw, spans = _list_replay.encode_rows(payload["conversations"], set(overlay_ids))
-        entry = _list_replay.compressed_entry(raw, spans)
+        entry = _list_replay.encode_rows(payload["conversations"], overlay_set)
+        raw = entry[0]
         if projection_ctx is not None:
             entry = _list_replay.TicketContextEntry(entry, delta["ctx"])
         _ARCHIVE_LIST_PROJECTION_CACHE.put(key, entry, _list_replay.entry_weight(entry))
@@ -20036,8 +20036,8 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
         if changed:
             # Ticket work may change archive rows outside the live spans.
             # Validate every current run, reusing only exact encoded content.
-            raw, spans = _list_replay.encode_rows(projected, set(overlay_ids))
-            updated = _list_replay.compressed_entry(raw, spans)
+            updated = _list_replay.encode_rows(projected, overlay_set)
+            raw = updated[0]
             compressed = _list_replay.compress_replay(updated, projected)
         else:
             raw = _list_replay.encode_replay(entry, projected)
