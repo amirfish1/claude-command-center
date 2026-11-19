@@ -50,6 +50,9 @@ class ConversationScript:
 
     def metadata(self):
         versions = STATIC_ASSET_VERSIONS.read(self.static_dir, self.sources)
+        return self._metadata(versions)
+
+    def _metadata(self, versions):
         if any(len(info) != 4 for info in versions):
             raise FileNotFoundError("conversation controller source missing")
         size = sum(info[3] for info in versions)
@@ -69,3 +72,18 @@ class ConversationScript:
             from .css_delivery import compact_comments
             return compact_comments(body)
         return body
+
+
+def encoding_cache_keys(static_dir):
+    """Keep only the current pane bundles available across dashboard restarts."""
+    names = {source for sources in BUNDLES.values() for source in sources}
+    versions = {entry[0]: entry for entry in STATIC_ASSET_VERSIONS.read(static_dir, names)}
+    for name, sources in BUNDLES.items():
+        try:
+            _, key, _ = ConversationScript(static_dir, name)._metadata(
+                tuple(versions[source] for source in sorted(set(sources))),
+            )
+        except OSError:
+            continue
+        yield key
+        yield (key, "br")

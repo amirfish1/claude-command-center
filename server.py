@@ -32383,7 +32383,16 @@ def _spawn_stream_idle_sleep_s(consecutive_empty):
 # Keep the shared renderer across a full boot's many smaller assets. An
 # all-at-once entry-cap flush repeatedly recompressed the largest scripts.
 _STATIC_GZIP_CACHE = ByteBudgetCache(max_bytes=16 << 20, max_entries=256)
-_STATIC_ENCODING_DISK_CACHE = StaticEncodingCache(COMMAND_CENTER_STATE_DIR / "static-encoding")
+
+
+def _conversation_encoding_cache_keys():
+    from ccc_server.conversation_assets import encoding_cache_keys
+    return encoding_cache_keys(STATIC_DIR)
+
+
+_STATIC_ENCODING_DISK_CACHE = StaticEncodingCache(
+    COMMAND_CENTER_STATE_DIR / "static-encoding", protected_keys=_conversation_encoding_cache_keys,
+)
 
 
 def _annotate_engine_not_installed(data, path):

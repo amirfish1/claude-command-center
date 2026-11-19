@@ -220,6 +220,8 @@ Compressed static assets also have a disposable disk cache (32 MiB, at most
 128 entries) in the dashboard state directory. Restarts can reuse unchanged
 scripts and styles without recompression. Source metadata changes and corrupt
 entries cause a rebuild; unavailable storage falls back to normal encoding.
+The current agent-pane bundles are retained ahead of other assets within
+the same cache limit.
 
 - **Read it.** `ccc app speed` prints loads, typical, slow (p95) and worst
   times per app for the last 24 hours against the budget (`ccc app speed <id>`

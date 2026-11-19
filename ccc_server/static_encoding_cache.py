@@ -13,10 +13,11 @@ class StaticEncodingCache:
     _VERSION = b"static-br6-gzip5-v1\0"
     _HEADER_SIZE = 32
 
-    def __init__(self, directory, max_bytes=32 << 20, max_entries=128):
+    def __init__(self, directory, max_bytes=32 << 20, max_entries=128, *, protected_keys=None):
         self.directory = Path(directory)
         self.max_bytes = max_bytes
         self.max_entries = max_entries
+        self._protected_keys = protected_keys
         self._lock = threading.Lock()
 
     def _path(self, key):
@@ -60,15 +61,17 @@ class StaticEncodingCache:
                     pass
 
     def _trim(self):
+        protected = ({self._path(key) for key in self._protected_keys()}
+                     if self._protected_keys is not None else set())
         entries = []
         for candidate in self.directory.glob("*.cache"):
             try:
                 stat = candidate.stat()
-                entries.append((stat.st_mtime_ns, candidate, stat.st_size))
+                entries.append((candidate in protected, stat.st_mtime_ns, candidate, stat.st_size))
             except OSError:
                 continue
         size = 0
-        for index, (_, candidate, weight) in enumerate(sorted(entries, reverse=True)):
+        for index, (_, _, candidate, weight) in enumerate(sorted(entries, reverse=True)):
             size += weight
             if index >= self.max_entries or size > self.max_bytes:
                 try:

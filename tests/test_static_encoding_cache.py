@@ -46,6 +46,40 @@ def test_disk_budget_and_entry_limit(tmp_path):
     assert cache.get("oversize") is None
 
 
+def test_agent_bundle_survives_static_churn_and_expires_on_edit(tmp_path):
+    from ccc_server.conversation_assets import ConversationScript, STYLE_NAME, encoding_cache_keys
+
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    style = static_dir / "app.css"
+    style.write_text(".pane { color: black; }")
+    bundle = ConversationScript(static_dir, STYLE_NAME)
+
+    def cache_instance():
+        return StaticEncodingCache(
+            tmp_path / "cache", max_bytes=120, max_entries=2,
+            protected_keys=lambda: encoding_cache_keys(static_dir),
+        )
+    cache = cache_instance()
+    _, key, _ = bundle.metadata()
+    cache.put((key, "br"), b"encoded pane")
+    for index in range(4):
+        cache.put(index, b"ordinary asset")
+    restarted = cache_instance()
+    assert restarted.get((key, "br")) == b"encoded pane"
+    assert restarted.get(3) == b"ordinary asset"
+    assert restarted.get(2) is None
+
+    style.write_text(".pane { color: white; }")
+    _, edited_key, _ = bundle.metadata()
+    assert restarted.get((edited_key, "br")) is None
+    restarted.put((edited_key, "br"), b"edited pane")
+    restarted.put(4, b"ordinary asset")
+    assert restarted.get((key, "br")) is None
+    assert restarted.get((edited_key, "br")) == b"edited pane"
+    assert len(list((tmp_path / "cache").glob("*.cache"))) == 2
+
+
 def test_concurrent_writes_publish_complete_packets(tmp_path):
     cache = StaticEncodingCache(tmp_path)
     bodies = [bytes([index]) * 8192 for index in range(20)]
