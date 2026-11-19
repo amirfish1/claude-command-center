@@ -61,7 +61,11 @@ def test_embed_boot_precedes_renderer_and_keeps_icon_markup_intact():
 
 def test_app_shell_keeps_navigation_and_holds_surrounding_assets():
     html = application_shell_page(SOURCE)
-    assert Assets(html).ids == Assets(SOURCE).ids
+    assert {'settingsModal', 'settingsRail', 'kanbanLayout'}.isdisjoint(Assets(html).ids)
+    assert {'settingsBtn', 'convInput', 'cccLoadingOverlay', 'convList'} <= Assets(html).ids
+    assert '<template data-ccc-dashboard-panel="settingsModal"></template>' in html
+    assert '<template data-ccc-dashboard-panel="kanbanLayout"></template>' in html
+    assert len(html) < len(SOURCE) - 60000
     assert [url for url in Assets(html).scripts if 'app-shell-assets.js' not in url] == Assets(SOURCE).scripts
     assert html.index('/static/app-shell-boot.js') < html.index('rel="stylesheet"')
     assert 'class="ccc-app-starting"' in html
@@ -82,6 +86,7 @@ def test_app_shell_keeps_navigation_and_holds_surrounding_assets():
 def test_changed_panel_structure_falls_back_without_cutting_partial_markup():
     changed = SOURCE.replace('id="kanbanLayout"', 'id="changedLayout"')
     assert Assets(conversation_page(changed)).ids == Assets(changed).ids
+    assert Assets(application_shell_page(changed)).ids == Assets(changed).ids
 
 
 def test_shell_discovery_data_cannot_escape_its_json_element():

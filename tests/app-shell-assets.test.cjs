@@ -19,7 +19,7 @@ function run(mobile = false) {
     addEventListener: (name, handler) => { listeners[name] = handler; },
     getElementById: () => ({}),
     documentElement: {classList: {remove() {}}},
-    querySelectorAll: selector => selector.startsWith('link') ? styles : [
+    querySelectorAll: selector => selector.startsWith('template') ? [] : selector.startsWith('link') ? styles : [
       marker('/static/deferred.js', true), marker('/static/app-rail.js?v=123',true), marker('/static/first.js'), marker('',false,'inline()'), marker('/static/last.js')],
     createElement: () => ({setAttribute(name,value) {this[name] = value;}}),
     head: {appendChild: link => downloads.push(link.href)}};

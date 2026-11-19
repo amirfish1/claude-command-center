@@ -35,8 +35,11 @@ class _DashboardPanels(HTMLParser):
     """Locate complete hidden dashboard trees without copying pane markup."""
     _VOID = frozenset("area base br col embed hr img input link meta param source track wbr".split())
 
-    def __init__(self, html):
+    def __init__(self, html, *, sidebar=True, panel_ids=None):
         super().__init__()
+        self.sidebar = sidebar
+        self.panel_ids = (frozenset(("settingsModal", "kanbanLayout", "cccLoadingOverlay"))
+                          if panel_ids is None else panel_ids)
         self.offsets = [0]
         self.offsets.extend(match.end() for match in re.finditer("\n", html))
         self.stack = []
@@ -51,8 +54,8 @@ class _DashboardPanels(HTMLParser):
         if tag in self._VOID:
             return
         attrs = dict(attributes)
-        panel = (tag == "div" and (attrs.get("class") == "sidebar"
-                 or attrs.get("id") in ("settingsModal", "kanbanLayout", "cccLoadingOverlay")))
+        panel = (tag == "div" and ((self.sidebar and attrs.get("class") == "sidebar")
+                 or attrs.get("id") in self.panel_ids))
         self.stack.append((tag, self._source_offset() if panel else None))
 
     def handle_endtag(self, tag):
@@ -179,6 +182,22 @@ def application_page(html, app_id, agent_id=None, kit_url="/static/app-kit.js"):
 @lru_cache(maxsize=2)
 def _application_shell_template(html):
     """Transform the shared template once, rather than on each app reload."""
+    # Keep the standalone rail's source controls, but fetch unused settings
+    # and board markup only before the dashboard controllers are requested.
+    # An unexpected template retains its full markup rather than a partial
+    # panel. The normal dashboard remains the single source of these trees.
+    panel_ids = frozenset(("settingsModal", "kanbanLayout"))
+    panels = _DashboardPanels(html, sidebar=False, panel_ids=panel_ids).ranges
+    identified = [(start, end, re.search(r'\bid="([^"]+)"', html[start:html.index('>', start)]))
+                  for start, end in panels]
+    if (len(identified) == len(panel_ids) and
+            {match[1] for _, _, match in identified if match} == panel_ids and
+            all(left[1] <= right[0] for left, right in zip(sorted(panels), sorted(panels)[1:]))):
+        for start, end, match in sorted(identified, reverse=True):
+            panel_id = match[1]
+            html = (html[:start] + '<template data-ccc-dashboard-panel="' + panel_id
+                    + '"></template>' + html[end:])
+
     def nonblocking(match):
         return match[0].replace('href=', 'data-ccc-href=', 1).replace(
             'rel="stylesheet"', 'rel="stylesheet" media="print" '

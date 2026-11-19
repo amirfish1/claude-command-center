@@ -6,6 +6,21 @@
   const isNavigation = script => /\/app-rail\.js(?:\?|$)/.test(script.src);
   let dashboard, navigation, dashboardLoaded = false;
   const pendingControls = new WeakSet();
+  async function panels() {
+    const markers = Array.from(document.querySelectorAll('template[data-ccc-dashboard-panel]'));
+    if (!markers.length) return;
+    const response = await fetch('/', {cache:'no-store', signal:AbortSignal.timeout(15000)});
+    if (!response.ok) throw new Error('Dashboard controls unavailable');
+    const source = new DOMParser().parseFromString(await response.text(), 'text/html');
+    const replacements = markers.map(marker => {
+      const panel = source.getElementById(marker.dataset.cccDashboardPanel);
+      if (!panel || panel.tagName !== 'DIV') throw new Error('Dashboard controls unavailable');
+      return [marker, document.importNode(panel, true)];
+    });
+    // Validate every tree before changing the live page or executing any of
+    // its controllers. A failed read leaves the same controls retryable.
+    replacements.forEach(([marker, panel]) => marker.replaceWith(panel));
+  }
   function styles(all) {
     document.querySelectorAll('link[data-ccc-href]').forEach(link => {
       if (!all && !/\/app\.css(?:\?|$)/.test(link.dataset.cccHref)) return;
@@ -36,6 +51,7 @@
     if (dashboard) return dashboard;
     dashboard = (async () => {
       await navigation;
+      await panels();
       styles(true);
       const remaining = scripts().filter(script => !isNavigation(script));
       // Download together; execute at the original blocking/defer boundaries.
@@ -49,7 +65,7 @@
       dashboardLoaded = true;
       document.documentElement.classList.remove('ccc-app-starting');
       window.dispatchEvent(new Event('ccc:dashboard-assets-ready'));
-    })();
+    })().catch(error => { dashboard = undefined; throw error; });
     return dashboard;
   }
   window.__cccEnsureDashboard = ensureDashboard;
@@ -65,9 +81,12 @@
     pendingControls.add(control);
     control.setAttribute('aria-busy', 'true');
     ensureDashboard().then(() => {
+      if (control.isConnected) control.click();
+    }, () => {
+      window.alert("Couldn't open the dashboard controls. Please try again.");
+    }).finally(() => {
       pendingControls.delete(control);
       control.removeAttribute('aria-busy');
-      if (control.isConnected) control.click();
     });
   }, true);
   async function start() {
@@ -82,8 +101,8 @@
     // desktop window resized to mobile also adopts that same controller.
     const mobile = matchMedia('(max-width: 1200px)');
     if (!document.getElementById('cccMobileAppFrame') || mobile.matches
-        || new URLSearchParams(location.search).get('mobile') === '1') ensureDashboard();
-    mobile.addEventListener('change', event => { if (event.matches) ensureDashboard(); });
+        || new URLSearchParams(location.search).get('mobile') === '1') ensureDashboard().catch(console.warn);
+    mobile.addEventListener('change', event => { if (event.matches) ensureDashboard().catch(console.warn); });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, {once:true});
   else start();

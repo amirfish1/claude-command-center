@@ -905,6 +905,8 @@
         if (typeof window.cccOpenApp !== "function" || !window.cccOpenApp(id)) {
           window.location.href = a.href;
         }
+      }, function () {
+        window.alert("Couldn't open the dashboard controls. Please try again.");
       });
       return;
     }
