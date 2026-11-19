@@ -78,6 +78,20 @@ class TestModelPickerContracts(unittest.TestCase):
         self.assertIn("{ id: 'Gemini 4 Carbon (Medium)', label: 'Gemini 4 Carbon (Medium)' }", app_js)
         self.assertIn("{ id: 'Gemini 4 Carbon (Low)', label: 'Gemini 4 Carbon (Low)' }", app_js)
 
+    def test_gemini_4_neon_is_available_across_antigravity_surfaces(self):
+        app_js = dashboard_source(APP_JS)
+        for level in ("High", "XHigh", "Medium", "Low"):
+            label = f"Gemini 4 Neon ({level})"
+            self.assertIn(label, server._ENGINE_KNOWN_MODELS["antigravity"])
+            self.assertEqual(
+                server._antigravity_model_settings_label(f"gemini-4-neon-{level.lower()}"),
+                label,
+            )
+            self.assertEqual(server._antigravity_model_settings_label(label), label)
+            self.assertIn(f"{{ id: '{label}', label: '{label}' }}", app_js)
+        self.assertEqual(server._antigravity_model_settings_label("gemini-4-neon"),
+                         "Gemini 4 Neon (High)")
+
     def test_record_and_get_model_picker_picks(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_history = pathlib.Path(tmpdir) / "model-picker-history.json"
