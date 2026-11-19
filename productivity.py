@@ -8,6 +8,7 @@ portable calculations and Git collection.
 from __future__ import annotations
 
 import hashlib
+import html as _html
 import json
 import math
 import os
@@ -1013,3 +1014,370 @@ def run_presence_sampler(
             # Presence is optional evidence and must never take down CCC.
             _set_presence_health(available=False, reason="sampling_failed")
         stop_event.wait(max(1.0, float(interval)))
+
+
+# ---------------------------------------------------------------------------
+# Shareable day recap — the public-safe aggregate behind `ccc recap` and
+# GET /api/recap. Everything that leaves this builder is already redacted:
+# no filesystem paths, no prompts, no session names, and project names only
+# when the caller explicitly allowlisted them.
+# ---------------------------------------------------------------------------
+
+RECAP_SCHEMA_VERSION = 1
+
+_RECAP_UNKNOWN_MODEL = "unknown"
+
+
+def _recap_local_day(value, tzinfo) -> str | None:
+    parsed = _parse_timestamp(value)
+    if parsed is None:
+        return None
+    return parsed.astimezone(tzinfo).date().isoformat()
+
+
+def _recap_project_label(project_id, project_name, allowed) -> tuple[str, bool]:
+    """Return the shareable project label and whether the real name was used."""
+    pid = str(project_id or "")
+    name = str(project_name or "Unknown project")
+    if pid in allowed or name.lower() in allowed:
+        return name, True
+    suffix = (pid or hashlib.sha256(name.encode("utf-8")).hexdigest()[:12])[-6:]
+    return f"Private project ·{suffix}", False
+
+
+def build_day_recap(
+    *,
+    commits: list[dict],
+    turns: list[dict],
+    tickets: list[dict] | None = None,
+    target_date: date | str | None = None,
+    tzinfo=None,
+    allowed_projects=None,
+) -> dict:
+    """Aggregate one local day's commits and agent turns into a safe payload.
+
+    ``commits`` are ``parse_git_log``/``collect_git_commits`` rows, ``turns``
+    the normalized productivity turn rows, ``tickets`` normalized WatchTower
+    items. ``allowed_projects`` is an iterable of project names or project ids
+    the user opted to show verbatim; every other project renders under a
+    stable anonymized label.
+    """
+    tzinfo = tzinfo or datetime.now().astimezone().tzinfo or timezone.utc
+    if target_date is None:
+        day = datetime.now(tzinfo).date()
+    elif isinstance(target_date, date) and not isinstance(target_date, datetime):
+        day = target_date
+    else:
+        day = date.fromisoformat(str(target_date).strip())
+    day_key = day.isoformat()
+    allowed = {str(item).strip() for item in (allowed_projects or []) if str(item).strip()}
+    allowed |= {item.lower() for item in list(allowed)}
+
+    day_commits = []
+    seen_shas = set()
+    for commit in commits or []:
+        if not isinstance(commit, dict):
+            continue
+        sha = str(commit.get("sha") or "")
+        if not sha or sha in seen_shas:
+            continue
+        if _recap_local_day(commit.get("committed_at"), tzinfo) != day_key:
+            continue
+        seen_shas.add(sha)
+        day_commits.append(commit)
+
+    day_turns = []
+    for turn in turns or []:
+        if not isinstance(turn, dict):
+            continue
+        if _recap_local_day(turn.get("t_start"), tzinfo) != day_key:
+            continue
+        day_turns.append(turn)
+
+    deliveries = [
+        item
+        for item in _delivery_evidence(day_commits, list(tickets or []), tzinfo)
+        if item.get("date") == day_key
+    ]
+
+    sessions = set()
+    engines = {}
+    models = {}
+    agent_seconds = 0.0
+    tokens_total = 0
+    for turn in day_turns:
+        sid = str(turn.get("session_id") or "").strip()
+        if sid:
+            sessions.add(sid)
+        engine = str(turn.get("engine") or "unknown").lower() or "unknown"
+        tokens = int(turn.get("tokens") or 0)
+        start = _parse_timestamp(turn.get("t_start"))
+        end = _parse_timestamp(turn.get("t_end"))
+        dur = float(turn.get("dur_sec") or 0)
+        if not dur and start and end and end > start:
+            dur = (end - start).total_seconds()
+        agent_seconds += max(dur, 0.0)
+        tokens_total += tokens
+        bucket = engines.setdefault(engine, {"engine": engine, "sessions": set(), "turns": 0, "tokens": 0})
+        if sid:
+            bucket["sessions"].add(sid)
+        bucket["turns"] += 1
+        bucket["tokens"] += tokens
+        model = str(turn.get("model") or "").strip() or _RECAP_UNKNOWN_MODEL
+        mbucket = models.setdefault(model, {"model": model, "turns": 0, "tokens": 0, "sessions": set()})
+        mbucket["turns"] += 1
+        mbucket["tokens"] += tokens
+        if sid:
+            mbucket["sessions"].add(sid)
+
+    projects = {}
+    for commit in day_commits:
+        row = _project_bucket(projects, commit.get("project_id"), commit.get("project_name"))
+        row["commits"] += 1
+        row["lines_added"] += int(commit.get("lines_added") or 0)
+        row["lines_deleted"] += int(commit.get("lines_deleted") or 0)
+    for turn in day_turns:
+        row = _project_bucket(projects, turn.get("project_id"), turn.get("project_name"))
+        row["turns"] += 1
+        row["tokens"] += int(turn.get("tokens") or 0)
+    for item in deliveries:
+        row = _project_bucket(projects, item.get("project_id"), item.get("project_name"))
+        row["deliveries"] += 1
+        if item.get("kind") == "feature":
+            row["features"] += 1
+        elif item.get("kind") == "fix":
+            row["fixes"] += 1
+        row["work_items"].append(
+            {
+                "kind": item.get("kind"),
+                "title": sanitize_evidence_title(item.get("title")),
+                "sha": str(item.get("sha") or "")[:12],
+                "ref": str(item.get("ref") or ""),
+            }
+        )
+
+    project_rows = []
+    for pid, row in projects.items():
+        if not (row["commits"] or row["turns"] or row["deliveries"]):
+            continue
+        label, named = _recap_project_label(pid, row["name"], allowed)
+        items = sorted(
+            row["work_items"],
+            key=lambda entry: (entry.get("kind") == "feature", entry.get("title") or ""),
+            reverse=True,
+        )[:8]
+        project_rows.append(
+            {
+                "name": label,
+                "named": named,
+                "commits": row["commits"],
+                "lines_added": row["lines_added"],
+                "lines_deleted": row["lines_deleted"],
+                "turns": row["turns"],
+                "tokens": row["tokens"],
+                "features": row["features"],
+                "fixes": row["fixes"],
+                "deliveries": row["deliveries"],
+                "items": items,
+            }
+        )
+    project_rows.sort(
+        key=lambda row: (row["deliveries"], row["commits"], row["tokens"], row["name"]),
+        reverse=True,
+    )
+
+    engine_rows = sorted(
+        (
+            {
+                "engine": entry["engine"],
+                "sessions": len(entry["sessions"]),
+                "turns": entry["turns"],
+                "tokens": entry["tokens"],
+            }
+            for entry in engines.values()
+        ),
+        key=lambda row: (row["turns"], row["tokens"]),
+        reverse=True,
+    )
+    model_rows = sorted(
+        (
+            {
+                "model": entry["model"],
+                "sessions": len(entry["sessions"]),
+                "turns": entry["turns"],
+                "tokens": entry["tokens"],
+            }
+            for entry in models.values()
+        ),
+        key=lambda row: (row["turns"], row["tokens"]),
+        reverse=True,
+    )
+
+    totals = {
+        "commits": len(day_commits),
+        "lines_added": sum(int(c.get("lines_added") or 0) for c in day_commits),
+        "lines_deleted": sum(int(c.get("lines_deleted") or 0) for c in day_commits),
+        "sessions": len(sessions),
+        "turns": len(day_turns),
+        "tokens": tokens_total,
+        "agent_seconds": round(agent_seconds, 1),
+        "features": sum(r["features"] for r in project_rows),
+        "fixes": sum(r["fixes"] for r in project_rows),
+        "deliveries": sum(r["deliveries"] for r in project_rows),
+    }
+    return {
+        "schema": RECAP_SCHEMA_VERSION,
+        "date": day_key,
+        "timezone": str(tzinfo),
+        "empty": not (totals["commits"] or totals["turns"] or totals["deliveries"]),
+        "totals": totals,
+        "engines": engine_rows,
+        "models": model_rows,
+        "projects": project_rows,
+        "redaction": {
+            "named_projects": sorted(r["name"] for r in project_rows if r["named"]),
+            "note": (
+                "Filesystem paths, prompts, and session names are never included. "
+                "Project names appear only when passed to `ccc recap --repo`."
+            ),
+        },
+    }
+
+
+def _recap_fmt_int(value) -> str:
+    try:
+        return f"{int(value):,}"
+    except (TypeError, ValueError):
+        return "0"
+
+
+def _recap_fmt_hours(seconds) -> str:
+    try:
+        hours = float(seconds or 0) / 3600.0
+    except (TypeError, ValueError):
+        hours = 0.0
+    return f"{hours:.1f}h" if hours >= 0.05 else "0h"
+
+
+def render_recap_html(payload: dict) -> str:
+    """Render a day-recap payload as a standalone, share-safe HTML page."""
+    esc = _html.escape
+    day = esc(str(payload.get("date") or ""))
+    tz = esc(str(payload.get("timezone") or ""))
+    totals = payload.get("totals") or {}
+    engines = payload.get("engines") or []
+    models = payload.get("models") or []
+    projects = payload.get("projects") or []
+
+    stat_cards = []
+    for label, value in (
+        ("Agent sessions", totals.get("sessions")),
+        ("Agent turns", totals.get("turns")),
+        ("Commits", totals.get("commits")),
+        ("Shipped items", totals.get("deliveries")),
+        ("Lines added", totals.get("lines_added")),
+        ("Tokens", totals.get("tokens")),
+        ("Agent time", None),
+    ):
+        shown = _recap_fmt_hours(totals.get("agent_seconds")) if label == "Agent time" else _recap_fmt_int(value)
+        stat_cards.append(
+            f'<div class="stat"><div class="stat-value">{esc(shown)}</div>'
+            f'<div class="stat-label">{esc(label)}</div></div>'
+        )
+
+    engine_chips = "".join(
+        f'<span class="chip">{esc(e.get("engine") or "unknown")} · '
+        f'{_recap_fmt_int(e.get("sessions"))} sessions · '
+        f'{_recap_fmt_int(e.get("tokens"))} tok</span>'
+        for e in engines
+    ) or '<span class="chip">no agent turns</span>'
+    model_chips = "".join(
+        f'<span class="chip">{esc(m.get("model") or _RECAP_UNKNOWN_MODEL)} · '
+        f'{_recap_fmt_int(m.get("turns"))} turns</span>'
+        for m in models
+    )
+
+    project_blocks = []
+    for project in projects:
+        items = "".join(
+            f'<li><span class="kind kind-{esc(str(item.get("kind") or "other"))}">'
+            f'{esc(str(item.get("kind") or "other"))}</span> '
+            f'{esc(str(item.get("title") or "Untitled"))}'
+            + (
+                f' <code>{esc(str(item.get("sha")))}</code>' if item.get("sha") else ""
+            )
+            + "</li>"
+            for item in (project.get("items") or [])
+        )
+        if items:
+            items = f"<ul>{items}</ul>"
+        meta_bits = [
+            f'{_recap_fmt_int(project.get("commits"))} commits',
+            f'+{_recap_fmt_int(project.get("lines_added"))}/'
+            f'-{_recap_fmt_int(project.get("lines_deleted"))} lines',
+        ]
+        if project.get("deliveries"):
+            meta_bits.append(f'{_recap_fmt_int(project.get("deliveries"))} shipped')
+        if project.get("turns"):
+            meta_bits.append(f'{_recap_fmt_int(project.get("turns"))} turns')
+        private_tag = "" if project.get("named") else ' <span class="private-tag">name withheld</span>'
+        project_blocks.append(
+            f'<section class="project"><h3>{esc(str(project.get("name") or "Project"))}'
+            f"{private_tag}</h3>"
+            f'<div class="project-meta">{esc(" · ".join(meta_bits))}</div>{items}</section>'
+        )
+    if not project_blocks:
+        project_blocks.append('<p class="empty">No activity recorded for this day.</p>')
+
+    redaction_note = esc(str((payload.get("redaction") or {}).get("note") or ""))
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent recap — {day}</title>
+<style>
+:root {{ color-scheme: dark; }}
+body {{ margin: 0; font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+       background: #0d1117; color: #e6edf3; }}
+.wrap {{ max-width: 720px; margin: 0 auto; padding: 40px 20px 60px; }}
+h1 {{ font-size: 1.6rem; margin: 0 0 4px; }}
+.sub {{ color: #8b949e; font-size: 0.9rem; margin-bottom: 24px; }}
+.stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 24px; }}
+.stat {{ background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 14px; }}
+.stat-value {{ font-size: 1.35rem; font-weight: 650; }}
+.stat-label {{ color: #8b949e; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 4px; }}
+.chips {{ display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 24px; }}
+.chip {{ background: #161b22; border: 1px solid #30363d; border-radius: 999px;
+        padding: 4px 12px; font-size: 0.8rem; color: #c9d1d9; }}
+.project {{ background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 16px 18px; margin-bottom: 12px; }}
+.project h3 {{ margin: 0 0 4px; font-size: 1.05rem; }}
+.project-meta {{ color: #8b949e; font-size: 0.8rem; margin-bottom: 8px; }}
+.project ul {{ margin: 8px 0 0; padding-left: 18px; }}
+.project li {{ margin: 4px 0; font-size: 0.92rem; }}
+.kind {{ font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em;
+        border-radius: 4px; padding: 1px 6px; background: #30363d; color: #c9d1d9; }}
+.kind-feature {{ background: #1f6feb33; color: #58a6ff; }}
+.kind-fix {{ background: #3fb95033; color: #3fb950; }}
+code {{ font-size: 0.8rem; color: #8b949e; }}
+.private-tag {{ font-size: 0.7rem; color: #8b949e; font-weight: 400; }}
+.empty {{ color: #8b949e; }}
+footer {{ margin-top: 32px; color: #8b949e; font-size: 0.8rem; line-height: 1.5; }}
+footer a {{ color: #58a6ff; }}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>What my agents shipped — {day}</h1>
+  <div class="sub">Local timezone: {tz} · generated by Claude Command Center</div>
+  <div class="stats">{''.join(stat_cards)}</div>
+  <div class="chips">{engine_chips}{model_chips}</div>
+  {''.join(project_blocks)}
+  <footer>
+    <div>{redaction_note}</div>
+    <div>Made with <a href="https://github.com/amirfish1/claude-command-center">Claude Command Center</a>.</div>
+  </footer>
+</div>
+</body>
+</html>
+"""
