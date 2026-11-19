@@ -100,7 +100,11 @@ class FreshSession:
             result = core.parse_conversation(self.sid, tail=80, messages_only=True)
             previous_line = 0 if initial or result.get("last_line", 0) < self.last_line else self.last_line
             self.last_line = result.get("last_line", self.last_line)
-            for ev in result.get("events") or []:
+            events = result.get("events") or []
+            latest = next((ev for ev in reversed(events) if ev.get("type") in
+                           ("assistant", "assistant_block", "user", "user_text", "tool_result")
+                           and not ev.get("pending") and not ev.get("parent_tool_use_id")), None)
+            for ev in events:
                 # Synthetic coordination events use text IDs, not transcript
                 # cursors. They must not abort the rest of an incremental read.
                 try:
@@ -122,6 +126,11 @@ class FreshSession:
                 if text:
                     update = self._message(text, ts, line=line)
                     if update:
+                        if ev is latest and ev.get("turn_complete"):
+                            from ccc_server.engines import _antigravity_response_state
+                            update["turn_complete"] = True
+                            if not update["session_state"]:
+                                update["session_state"] = _antigravity_response_state(text, True)
                         # JSON-only verdicts cannot include a footer. Enrich
                         # only an exact, persisted response, never live chunks.
                         if not update["session_state"] and text.lstrip().startswith("{"):

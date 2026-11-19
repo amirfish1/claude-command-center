@@ -172,11 +172,13 @@ _adopt_ccc_module("repo_paths")
 from productivity import (
     ProductivityStore,
     aggregate_productivity,
+    build_day_recap,
     collect_git_commits,
     describe_git_repo,
     discover_git_identities,
     presence_health,
     presence_summary,
+    render_recap_html,
     run_presence_sampler,
     system_local_timezone,
 )
@@ -18574,7 +18576,7 @@ _ARCHIVE_LIST_FIELDS = (
     "subagent_in_flight_count", "subagent_recent", "workflows", "session_state", "goal",
     "goal_status", "parent_session_id", "continued_from_session_id", "idea_ticket",
     "continuation_topic_title", "continuation_topic_session_id", "continuation_topic_root_session_id",
-    "hermes_parent_session_id", "spawned_via", "spawn_caller", "runtime",
+    "hermes_parent_session_id", "spawned_via", "spawn_caller", "spawned_kind", "runtime",
     "hermes_continued_from", "hermes_child_session_ids",
     "hermes_lineage_session_ids", "hermes_lineage_count", "hermes_is_parent",
     "model", "reasoning_effort", "latest_input_tokens", "lifetime_tokens", "cost_usd", "cost_breakdown_usd",
@@ -34178,6 +34180,18 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             )
             self.send_json(payload, status)
             return
+        elif path == "/api/recap":
+            qs = urllib.parse.parse_qs(parsed.query)
+            date_text = (qs.get("date", [""])[0] or "").strip()
+            repos_param = qs.get("repos", [""])[0] or ""
+            allowed = [part.strip() for part in repos_param.split(",") if part.strip()]
+            payload, status = _recap_day_payload(date_text or None, allowed)
+            fmt = (qs.get("format", ["json"])[0] or "json").lower()
+            if status == 200 and fmt == "html":
+                self.send_html(render_recap_html(payload))
+                return
+            self.send_json(payload, status)
+            return
         elif path == "/api/throughput/refresh/start":
             qs = urllib.parse.parse_qs(parsed.query)
             session_id = (qs.get("session_id", [""])[0] or "").strip()
@@ -35073,6 +35087,15 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             from ccc_server.tokeneconomizer import session_annotation
             conv_id = urllib.parse.unquote(path.split("/")[-2])
             self.send_json(session_annotation(conv_id))
+        elif re.match(r"^/api/conversations/[^/]+/origin$", path):
+            from ccc_server.session_origin import launch_metadata
+            conv_id = urllib.parse.unquote(path.split("/")[-2])
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}", conv_id):
+                self.send_json({"error": "invalid session id"}, 400)
+                return
+            transcript = conversation_transcript_path(conv_id)
+            self.send_json(launch_metadata(conv_id, _load_spawn_markers(), transcript,
+                                           _spawn_registry_entry_for_session(conv_id)))
         elif re.match(r"^/api/conversations/[^/]+/transcript-path$", path):
             conv_id = urllib.parse.unquote(path.split("/")[-2])
             qs = urllib.parse.parse_qs(parsed.query)

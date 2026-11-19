@@ -829,7 +829,7 @@ _ANTIGRAVITY_APP_LS_TOKEN_RE = re.compile(
     r"--csrf_token\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
     re.IGNORECASE,
 )
-_ANTIGRAVITY_META_VERSION = 5
+_ANTIGRAVITY_META_VERSION = 6
 # An Antigravity transcript writes every assistant tool call / message, so if
 # the file moved within this window we treat the session as live. Antigravity
 # has no hook system that CCC could listen to (the way Claude Code does via
@@ -1693,6 +1693,44 @@ def _antigravity_event_path_candidates(ev):
 _antigravity_tail_resume = {}  # path -> {offset, pos, pending_tool, cwd_candidates, meta, meta_version}
 
 
+def _antigravity_final_response(event):
+    return (event.get("type") == "PLANNER_RESPONSE"
+            and event.get("source") == "MODEL"
+            and event.get("status") == "DONE"
+            and not event.get("tool_calls"))
+
+
+def _antigravity_response_state(text, turn_complete):
+    state = _core._parse_session_state(text)
+    if state or not turn_complete or not text or len(text) > 40000 or "<session-state>" in text:
+        return state
+    # Only accept an explicit final numbered question with two distinct,
+    # adjacent reply tokens and short labels. Never infer a reply from prose.
+    last = text.strip().rsplit("\n", 1)[-1].strip()
+    if len(last) > 480:
+        return None
+    match = re.fullmatch(
+        r"Ready for your call on (.{1,260}):\s+\*\*([12])\*\* \(([^()]{1,64})\)"
+        r"\s+or\s+\*\*([12])\*\* \(([^()]{1,64})\)\?",
+        last, re.I,
+    )
+    if not match or match[2] == match[4]:
+        return None
+    actions = []
+    for reply, label in ((match[2], match[3]), (match[4], match[5])):
+        label = " ".join(label.replace("&", " and ").split())
+        if len(label) > 48 or not re.fullmatch(r"[^\W\d_]+(?: [^\W\d_]+){0,6}", label):
+            return None
+        actions.append({"label": label[0].upper() + label[1:], "reply": reply})
+    if actions[0]["label"].casefold() == actions[1]["label"].casefold():
+        return None
+    topic = re.sub(r"[*`]", "", match[1]).strip()
+    if not topic:
+        return None
+    return {"next_step_user": "Decide on " + topic, "numbered_choice": True,
+            "next_actions": actions}
+
+
 def _extract_antigravity_tail_meta(path_or_session_id):
     path = Path(path_or_session_id) if isinstance(path_or_session_id, (str, Path)) else None
     if path and not path.is_file():
@@ -1739,6 +1777,7 @@ def _extract_antigravity_tail_meta(path_or_session_id):
             "last_assistant_text": None,
             "last_thinking_text": None,
             "last_event_type": None,
+            "turn_complete": False,
             "last_meaningful_ts": 0,
             "pending_tool": None,
             "pending_file": None,
@@ -1796,6 +1835,7 @@ def _extract_antigravity_tail_meta(path_or_session_id):
                 if selected_model:
                     meta["model"] = selected_model
                 if ev_type == "USER_INPUT" and source == "USER_EXPLICIT":
+                    meta["turn_complete"] = False
                     meta["last_thinking_text"] = None
                     text = _antigravity_user_text(ev.get("content") or "")
                     if text:
@@ -1809,6 +1849,11 @@ def _extract_antigravity_tail_meta(path_or_session_id):
                     continue
                 if ev_type == "PLANNER_RESPONSE":
                     content = (ev.get("content") or "").strip()
+                    meta["turn_complete"] = bool(content and _antigravity_final_response(ev))
+                    if meta["turn_complete"]:
+                        meta["pending_tool"] = None
+                        meta["pending_file"] = None
+                        pending_tool = False
                     # Keep thought-only progress separate from the real reply:
                     # it explains a busy row, but must never become its outcome.
                     thinking = ev.get("thinking")
@@ -1855,6 +1900,7 @@ def _extract_antigravity_tail_meta(path_or_session_id):
                     continue
                 if ev_type in ("CONVERSATION_HISTORY", "SYSTEM_MESSAGE", "EPHEMERAL_MESSAGE", "CHECKPOINT"):
                     continue
+                meta["turn_complete"] = False
                 if pending_tool:
                     meta["pending_tool"] = None
                     meta["pending_file"] = None
@@ -1926,6 +1972,9 @@ def _antigravity_activity_fields_from_tail(tail, live):
             "sidecar_ts": ts,
             "sidecar_in_flight": True,
         })
+        return fields
+    if tail.get("turn_complete"):
+        fields.update(sidecar_status="idle", sidecar_ts=ts)
         return fields
     if not tail or tail.get("last_event_type") in (None, "user", "assistant"):
         fields.update({
@@ -2137,7 +2186,9 @@ def find_antigravity_conversations(
             "tail_pr_number": tail.get("tail_pr_number"),
             "tail_pr_url": tail.get("tail_pr_url"),
             "pr_state": None,
-            "session_state": _core._parse_session_state(tail.get("last_assistant_text")),
+            "session_state": _antigravity_response_state(
+                tail.get("last_assistant_text"), tail.get("turn_complete")
+            ),
             "archived": sid in archived_set,
             "trashed": sid in trashed_set,
             "verified": sid in verified_set,
@@ -2368,6 +2419,8 @@ def _parse_antigravity_event(ev, line_num, usage_map=None):
                 "message_id": f"antigravity-{line_num}",
                 "blocks": blocks,
             }
+            if content and _antigravity_final_response(ev):
+                out["turn_complete"] = True
             # Look up per-step token usage by the transcript's step_index, so
             # each assistant turn can render its own "in | out | thinking"
             # chip mirroring Antigravity's own UI.
@@ -4445,13 +4498,7 @@ def _antigravity_turn_finished(session_id, pid=None, idle_s=None):
         row = json.loads(lines[-1])
     except (OSError, ValueError, IndexError):
         return False
-    return (
-        isinstance(row, dict)
-        and row.get("source") == "MODEL"
-        and row.get("type") == "PLANNER_RESPONSE"
-        and row.get("status") == "DONE"
-        and not row.get("tool_calls")
-    )
+    return isinstance(row, dict) and _antigravity_final_response(row)
 
 
 def _antigravity_reap_finished_process(session_id, pid):

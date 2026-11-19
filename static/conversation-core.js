@@ -1,6 +1,35 @@
 /* Shared conversation core with explicit live-state and host adapters. */
 (function (root) {
-  function createController({ state: sharedState, helpers: hostServices }) {
+  function createController({ state: sharedState, helpers: hostServices, loadDetailsScript }) {
+  function composeArchiveController() {
+    return root.CCCConversationDetails.createArchiveController({
+      state: sharedState, helpers: hostServices,
+      dependencies: {
+        _archiveWindow, _archiveRowStableKey, _archiveQuery, _queueDashboardArchiveRender,
+        _renderArchiveIfLoaded, _clientLog, _releaseStartupApiReads, _whenDashboardUncovered,
+        refreshLiveSessionsActivity, _mergeIntoMasterRows, _gated, backgroundApiFetch,
+        refreshUxFixesQueueMeta, loadCrossRepoIssues, refreshArchivedGroupChats, loadRepoList,
+        _dashboardCoveredByApp, shouldPauseSidebarRender, _perfEvent, _perfActiveElapsed,
+        _perfLongTaskMs, _convResourceTiming, hideLoadingOverlay,
+      },
+    });
+  }
+  // The dashboard already has the details script. Embedded apps use the same
+  // archive controller on demand, without carrying it in the startup bundle.
+  let archiveController = root.CCCConversationDetails?.createArchiveController
+    ? composeArchiveController() : null;
+  async function loadArchiveController() {
+    if (!archiveController) {
+      await loadDetailsScript();
+      archiveController ||= composeArchiveController();
+    }
+    return archiveController;
+  }
+  const refreshArchiveData = archiveController?.refreshArchiveData
+    || (opts => loadArchiveController().then(archive => archive.refreshArchiveData(opts)));
+  const loadArchiveAll = archiveController?.loadArchiveAll
+    || (opts => loadArchiveController().then(archive => archive.loadArchiveAll(opts)));
+
   function _pollerOff(name) { return !!(window.__pollersOff && window.__pollersOff[name]); }
 
   function isImeKey(ev) { return !!(ev && (ev.isComposing || ev.keyCode === 229)); }
@@ -778,7 +807,7 @@
     const preSend = preSendPreviewFor(sid);
     if (sending && (!entry.sending || preSend !== entry.preSend)) {
       entry.sendAt = Date.now(); entry.at = entry.sendAt; entry.userAt = entry.sendAt;
-      entry.text = ''; entry.sessionState = null;
+      entry.text = ''; entry.sessionState = null; entry.turnCompleteAt = 0;
     }
     entry.preSend = preSend; entry.sending = sending;
     return sending;
@@ -802,7 +831,13 @@
     if (c.last_event_type === 'user'
         && _ultraFreshTime(c.modified || c.mtime) > Math.max(entry.at, entry.sourceAt || 0)) return c;
     const reopened = !!entry.sendAt || entry.userAt > _ultraFreshTime(c.modified || c.mtime);
-    return Object.assign({}, c, waiting, { last_assistant_text: entry.text, last_assistant_preview: entry.text,
+    const completeAt = entry.turnCompleteAt;
+    const settled = completeAt && completeAt >= _ultraFreshWaitingAt(c)
+      && !c.needs_approval && !c.question_waiting
+      ? { _turnCompleteAt: completeAt, state: c.is_live ? 'idle' : 'ended', sidecar_status: 'idle',
+          sidecar_in_flight: false, sidecar_tool: null, pending_tool: null, sidecar_ts: completeAt / 1000 }
+      : {};
+    return Object.assign({}, c, waiting, settled, { last_assistant_text: entry.text, last_assistant_preview: entry.text,
       _ownerInputAt: ownerInputAt,
       archived: reopened && !(c.explicitly_archived ?? c.idea_ticket?.explicitly_archived) ? false : c.archived,
       session_state: entry.sessionState || (entry.text === c.last_assistant_text ? c.session_state : null), last_event_type: 'assistant',
@@ -1024,8 +1059,15 @@
     const entry = sharedState._ultraFresh.entries.get(sid);
     if (!entry || generation !== sharedState._ultraFresh.generation) return;
     const userAt = _ultraFreshTime(update.user_ts);
-    if (userAt > entry.userAt) { entry.userAt = userAt; entry.text = ''; }
-    if (update.clear) { _ultraFreshPaint(sid); return; }
+    const hadDecision = entry.sessionState?.next_actions?.length > 1;
+    if (userAt > entry.userAt) {
+      entry.userAt = userAt; entry.text = ''; entry.sessionState = null; entry.turnCompleteAt = 0;
+    }
+    if (update.clear) {
+      _ultraFreshPaint(sid);
+      if (hadDecision) _scheduleSidebarRender({ lifecycle: true });
+      return;
+    }
     const text = String(update.text || '');
     if (!text.trim()) return;
     const at = _ultraFreshTime(update.ts) || (update.live ? Date.now() : 0);
@@ -1034,7 +1076,7 @@
     if (line && line < (entry.line || 0) && at <= entry.at) return;
     const sameText = text === entry.text;
     const incomingState = update.session_state || _ultraFreshParseState(text);
-    const enrich = sameText && !!incomingState;
+    const enrich = sameText && (!!incomingState || (update.turn_complete && !entry.turnCompleteAt));
     if (at < entry.at && !enrich) return;
     const base = _ultraFreshRow(sid);
     if (!base) return;
@@ -1046,10 +1088,15 @@
         && Math.max(at, sourceAt) < _ultraFreshTime(base.modified || base.mtime)) return;
     if (text === entry.text && at === entry.at && !enrich) return;
     if (line) entry.line = line;
+    if (update.turn_complete) entry.turnCompleteAt = at;
+    else if (!sameText) entry.turnCompleteAt = 0;
     entry.text = text; entry.at = Math.max(entry.at, at); entry.sourceAt = sourceAt;
     // A duplicate raw pane frame must not erase richer server metadata.
     entry.sessionState = sameText && !update.session_state && entry.sessionState
       ? entry.sessionState : incomingState;
+    if (hadDecision !== (entry.sessionState?.next_actions?.length > 1)) {
+      _scheduleSidebarRender({ lifecycle: true });
+    }
     if (!entry.paintQueued) {
       entry.paintQueued = true;
       requestAnimationFrame(() => {
@@ -2256,6 +2303,9 @@
     // An owner event supersedes the entire older activity snapshot, not
     // just its waiting flags: its idle state would erase Working as well.
     if (c._ownerInputAt && _ultraFreshWaitingAt(ov) <= c._ownerInputAt) return c;
+    if (c._turnCompleteAt && _ultraFreshWaitingAt(ov) <= c._turnCompleteAt
+        && ov.last_event_type === 'assistant' && !ov.pending_tool
+        && !ov.needs_approval && !ov.question_waiting) return c;
     const merged = Object.assign({}, c);
     const ovTs = ov.sidecar_ts || 0;
     const rowTs = merged.sidecar_ts || 0;
@@ -5232,6 +5282,12 @@
     if (window.CCCFreeRuntime && typeof CCCFreeRuntime.renderRailRuntime === 'function') {
       CCCFreeRuntime.renderRailRuntime(row);
     }
+    if (window.CCCSessionOrigin && CCCSessionOrigin.render(row, {
+      document,
+      findSession: sid => (sharedState.conversationsData || []).find(c => c && (c.session_id === sid || c.id === sid))
+        || (Array.isArray(sharedState.archiveData) ? sharedState.archiveData : []).find(c => c && (c.session_id === sid || c.id === sid)),
+      openSession: sid => (0, sharedState.selectConversation)(sid),
+    })) return;
     if (!el) return;
     if (!row) { el.hidden = true; el.textContent = ''; el.removeAttribute('title'); return; }
     let via = String(row.spawned_via || '').trim().toLowerCase();
@@ -7476,7 +7532,12 @@
       } else return null;
     } else if (!actions.length || !next || info.kind !== 'next' || (info.next || info.text) !== next) return null;
     const source = { sid, actions, action: actions[0], key: JSON.stringify([sid, next, actions]) };
-    if (info.kind === 'plan' || build) {
+    if (c.session_state?.numbered_choice === true) {
+      if (!c.last_assistant_text) return null;
+      source.transcriptText = c.last_assistant_text;
+      source.key = JSON.stringify([source.key, source.transcriptText]);
+    }
+    if (info.kind === 'plan' || build || c.session_state?.numbered_choice === true) {
       source.investigation = next;
       const check = sharedState._rowInvestigationChecks.get(sid);
       if (!candidateOnly && (!check || check.key !== source.key || !check.idle
@@ -7493,6 +7554,7 @@
     const blocks = last.blocks || [];
     if (blocks.some(b => ['tool_use', 'tool_call'].includes(b.kind || b.type))) return false;
     const text = blocks.filter(b => (b.kind || b.type) === 'text').map(b => b.text || '').join('\n');
+    if (source.transcriptText !== undefined) return last.turn_complete === true && text === source.transcriptText;
     const state = _ultraFreshParseState(text);
     const current = state && rowQuickActionSource({ session_id: source.sid, state: 'idle',
       last_event_type: 'assistant', last_assistant_text: text, session_state: state }, true);
@@ -19373,42 +19435,12 @@
     }
   }
 
-  function _markArchiveFirstLoaded() {
-    hideLoadingOverlay();
-    // Cached/recent rows make the sidebar usable, but optional startup probes
-    // still compete with the complete archive read. Keep readiness separate
-    // from releasing that network backlog; user actions retain their bypass.
-    const progress = window.__cccArchiveProgress;
-    if (!sharedState._archiveFromLocalCache && (!progress || progress.complete || progress.failed)) {
-      _releaseStartupApiReads();
-    }
-    if (!sharedState._archiveFirstLoadedResolve) return;
-    (0, sharedState._archiveFirstLoadedResolve)();
-    sharedState._archiveFirstLoadedResolve = null;
-  }
-
   function _queueDashboardArchiveRender(opts = {}) {
     // Passive event/refresh redraws share the pollers' read-aloud throttle.
     // Promise continuations can pass archive rows here, so only an explicit
     // lifecycle flag may bypass the pause for an authoritative state change.
     _scheduleSidebarRender({ lifecycle: opts?.lifecycle === true });
   }
-
-  function _applyPendingDashboardConversationPatches(rows) {
-    if (!Array.isArray(rows) || !sharedState._dashboardEventState.pendingConversationPatches.size) return rows;
-    return rows.map(row => {
-      const id = String(row && (row.session_id || row.id) || '');
-      const entry = id && sharedState._dashboardEventState.pendingConversationPatches.get(id);
-      if (entry && entry.expiresAt <= Date.now()) {
-        sharedState._dashboardEventState.pendingConversationPatches.delete(id);
-        return row;
-      }
-      const patch = entry && entry.patch;
-      return patch ? Object.assign({}, row, patch) : row;
-    });
-  }
-
-  function _resetArchiveUnknownPatchIds() { sharedState._archiveUnknownPatchIds = new Set(); }
 
   function _scheduleDashboardArchiveRefresh() {
     if (sharedState._dashboardArchiveRefreshTimer) return;
@@ -19887,468 +19919,6 @@
     return c.session_id || c.id || (c.tail_pr_url ? 'pr-url:' + c.tail_pr_url : '');
   }
 
-  function _mergeArchivePrSnapshot(freshRows, previousRows) {
-    const fresh = Array.isArray(freshRows) ? freshRows : [];
-    const previous = Array.isArray(previousRows) ? previousRows : [];
-    const prevByKey = new Map();
-    for (const row of previous) {
-      const key = _archiveRowStableKey(row);
-      if (key) prevByKey.set(key, row);
-    }
-
-    const seen = new Set();
-    const out = fresh.map(row => {
-      const key = _archiveRowStableKey(row);
-      if (key) seen.add(key);
-      const prev = key ? prevByKey.get(key) : null;
-      // Keep the network snapshot independent without growing a wide row
-      // property by property into V8's slower dictionary representation.
-      const merged = { ...row };
-      if (key) {
-        const override = sharedState._recentRenameOverrides.get(key);
-        if (override) {
-          if (merged.display_name === override.display_name) {
-            sharedState._recentRenameOverrides.delete(key);
-          } else if (Date.now() - override.at < sharedState.RENAME_OVERRIDE_MAX_AGE_MS) {
-            merged.display_name = override.display_name;
-            merged.name_overridden = override.name_overridden;
-          } else {
-            sharedState._recentRenameOverrides.delete(key);
-          }
-        }
-      }
-      if (!prev) return merged;
-      const copyIfMissing = (field) => {
-        const val = merged[field];
-        const emptyArray = Array.isArray(val) && val.length === 0;
-        if (val === undefined || val === null || val === '' || emptyArray) {
-          if (prev[field] !== undefined && prev[field] !== null) merged[field] = prev[field];
-        }
-      };
-      [
-        'tail_pr_number', 'tail_pr_url', 'pr_state', 'pr_notes',
-        'pr_is_draft', 'pr_mergeable', 'pr_review_decision',
-      ].forEach(copyIfMissing);
-      return merged;
-    });
-
-    for (const row of previous) {
-      const key = _archiveRowStableKey(row);
-      if (!key || seen.has(key)) continue;
-      if (row.source === 'github_pr') out.push(row);
-    }
-    return out;
-  }
-
-  function _archiveSidebarCacheKey(windowName) {
-    return sharedState.ARCHIVE_SIDEBAR_CACHE_KEY + ':' + windowName;
-  }
-
-  function _archiveSidebarCacheRow(row) {
-    if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
-    if (typeof (row.session_id || row.id) !== 'string') return null;
-    const out = {};
-    for (const key of sharedState.ARCHIVE_SIDEBAR_CACHE_FIELDS) {
-      const value = row[key];
-      if (typeof value === 'string') {
-        out[key] = (key === 'first_message' || key === 'ai_title' || key === 'display_name')
-          ? value.slice(0, 400) : value;
-      } else if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) {
-        out[key] = value;
-      }
-    }
-    // Ticket identity determines which session tab owns this row. Without
-    // it, cached sessions all fall into Other until the network list lands.
-    // Keep only routing/lifecycle fields, never handoff questions or actions.
-    const ticket = row.idea_ticket;
-    if (ticket && typeof ticket === 'object' && !Array.isArray(ticket)) {
-      out.idea_ticket = {};
-      for (const key of ['ref', 'queue']) {
-        if (typeof ticket[key] === 'string') out.idea_ticket[key] = ticket[key].slice(0, 120);
-      }
-      for (const key of ['closed', 'pending', 'explicitly_archived']) {
-        if (typeof ticket[key] === 'boolean') out.idea_ticket[key] = ticket[key];
-      }
-      if (Number.isFinite(ticket.moved_at)) out.idea_ticket.moved_at = ticket.moved_at;
-    }
-    return out;
-  }
-
-  function _writeArchiveSidebarCache(rows, windowName) {
-    try {
-      const entries = [];
-      // Leave room for the small envelope; count serialized characters so
-      // UTF-16 localStorage usage stays below 512 KiB even with long titles.
-      let chars = 256;
-      // Reserve the bounded preview for ticket rows first: a busy worker
-      // fleet must not crowd every Features/Small bugs session out of cache.
-      const ordered = rows.filter(row => row && row.idea_ticket)
-        .concat(rows.filter(row => !row || !row.idea_ticket));
-      const idOf = row => String(row && (row.session_id || row.id) || '');
-      const byId = new Map(rows.filter(Boolean).map(row => [idOf(row), row]));
-      const saved = new Set();
-      const stringFields = ['id', 'session_id', 'folder_path', 'session_cwd',
-        'first_message', 'display_name', 'ai_title'];
-      const clipped = new Set(['first_message', 'display_name', 'ai_title']);
-      for (const row of ordered) {
-        if (entries.length >= sharedState.ARCHIVE_SIDEBAR_CACHE_MAX_ROWS) break;
-        const firstId = idOf(row);
-        if (!firstId || saved.has(firstId)) continue;
-        // Once the preview is nearly full, most remaining rows cannot fit.
-        // These required strings alone bound their JSON size from below;
-        // escaping, other fields and ancestors can only increase it. Skip
-        // impossible rows before projecting/serializing their whole family,
-        // while still considering later smaller rows for the remaining space.
-        let minimum = 2; // braces; omitted commas keep this conservative
-        const remaining = sharedState.ARCHIVE_SIDEBAR_CACHE_MAX_CHARS - chars;
-        for (const key of stringFields) {
-          const value = row[key];
-          if (typeof value === 'string') {
-            minimum += key.length + 5 + (clipped.has(key)
-              ? Math.min(400, value.length) : value.length);
-          }
-        }
-        if (minimum + 1 > remaining) continue;
-        // Admit a child with its loaded ancestors as one bounded batch. A
-        // busy fleet must not evict the parent and leave an unexplained lane.
-        const batch = [], batchSeen = new Set();
-        let candidate = row;
-        while (candidate) {
-          const cid = idOf(candidate);
-          if (!cid || saved.has(cid) || batchSeen.has(cid)) break;
-          batchSeen.add(cid);
-          const projected = _archiveSidebarCacheRow(candidate);
-          if (!projected) break;
-          batch.push({ id: cid, text: JSON.stringify(projected) });
-          candidate = byId.get(candidate.parent_session_id || candidate.hermes_parent_session_id
-            || candidate.continued_from_session_id);
-        }
-        const cost = batch.reduce((n, item) => n + item.text.length + 1, 0);
-        if (entries.length + batch.length > sharedState.ARCHIVE_SIDEBAR_CACHE_MAX_ROWS
-            || chars + cost > sharedState.ARCHIVE_SIDEBAR_CACHE_MAX_CHARS) continue;
-        for (const item of batch) { entries.push(item.text); saved.add(item.id); }
-        chars += cost;
-      }
-      const envelope = JSON.stringify({ version: 1, window: windowName, savedAt: Date.now() });
-      localStorage.removeItem(sharedState.ARCHIVE_SIDEBAR_CACHE_KEY);  // pre-per-window snapshot
-      localStorage.setItem(_archiveSidebarCacheKey(windowName),
-        envelope.slice(0, -1) + ',"rows":[' + entries.join(',') + ']}');
-    } catch (_) { /* Storage disabled/full: the network list still works. */ }
-  }
-
-  function _scheduleArchiveSidebarCache(rows, windowName) {
-    sharedState._archiveSidebarCachePending = { rows, windowName };
-    if (sharedState._archiveSidebarCacheScheduled) return;
-    sharedState._archiveSidebarCacheScheduled = true;
-    const arm = () => {
-      if (window.requestIdleCallback) window.requestIdleCallback(save, { timeout: 2000 });
-      else setTimeout(save, 0);
-    };
-    const save = () => {
-      const ae = typeof document !== 'undefined' && document && document.activeElement;
-      const typingInComposer = !!ae && (ae.tagName === 'TEXTAREA'
-        || (ae.tagName === 'INPUT' && ae.id !== 'convSearch' && /^(text|search|email|url|tel|password)$/i.test(ae.type || 'text')))
-        && typeof sharedState._lastTextKeyTs === 'number'
-        && Date.now() - sharedState._lastTextKeyTs < 1500;
-      if (typingInComposer) {
-        if (typeof setTimeout === 'function') {
-          setTimeout(arm, Math.max(120, 1520 - (Date.now() - sharedState._lastTextKeyTs)));
-        } else {
-          arm();
-        }
-        return;
-      }
-      sharedState._archiveSidebarCacheScheduled = false;
-      const pending = sharedState._archiveSidebarCachePending;
-      sharedState._archiveSidebarCachePending = null;
-      if (pending && pending.windowName === _archiveWindow()) {
-        _writeArchiveSidebarCache(pending.rows, pending.windowName);
-      }
-    };
-    arm();
-  }
-
-  function _mergeArchiveListDelta(prev, d) {
-    if (!Array.isArray(prev) || !Array.isArray(d.ids) || !Array.isArray(d.conversations)) return null;
-    const byId = new Map();
-    for (const row of prev) {
-      const id = row && (row.session_id || row.id);
-      if (id) byId.set(String(id), row);
-    }
-    for (const row of d.conversations) {
-      const id = row && (row.session_id || row.id);
-      if (!id) return null;
-      byId.set(String(id), row);
-    }
-    const out = new Array(d.ids.length);
-    for (let i = 0; i < d.ids.length; i++) {
-      const row = byId.get(String(d.ids[i]));
-      if (!row) return null;
-      out[i] = row;
-    }
-    return out;
-  }
-
-  async function loadArchiveAll(opts = {}) {
-    const params = new URLSearchParams();
-    params.set('window', opts.window || _archiveWindow());
-    if (opts.staleOk !== false) {
-      params.set('stale_ok', '1');
-    }
-    if (opts.includePrs) {
-      params.set('include_prs', '1');
-      params.set('resolve_prs', '1');
-      params.set('resolve_effective', '1');
-      params.set('resolve_worktrees', '1');
-      params.set('background', '1');
-    }
-    if (opts.initial) params.set('initial', '1');
-    const url = '/api/conversations/list' + (params.toString() ? '?' + params.toString() : '');
-    const pending = sharedState._archiveAllInflight.get(url);
-    if (pending) return pending;
-    let _perfT0 = performance.now();
-    // Stage split for the list_read tail (CCC-229): headers arrive after
-    // client queueing + server work; body covers download + JSON parse,
-    // which stretches when a fresh page's main thread is busy booting.
-    let _perfHdrAt = 0;
-    let _perfBodyMs = 0;
-    let _perfPaintWaitMs = 0;
-    // Server list handler time (Server-Timing list;dur) and the fetched URL
-    // (its ?since= varies) for the Resource Timing split (CCC-229).
-    let _perfServer = null;
-    let _perfFetchUrl = url;
-    const _perfListLog = function (bytes, status, extra) {
-      try {
-        if (typeof window.__cccPerfRow !== 'function') return;
-        // Subtract hidden/suspended time like conv_open/archive_load: a
-        // background tab's throttled fetch otherwise reads as a multi-minute
-        // "slow list" (CCC-142). Wall time still ships as detail.wall_ms.
-        const _perfNow = performance.now();
-        const stoppedAt = opts.controller?._cccArchiveSupersededAt;
-        // Aborting a redundant preview ends its read immediately. Its promise
-        // rejection can run only after the complete archive's synchronous
-        // render; retain that later handler delay separately.
-        const _perfEnd = status === 'superseded' && Number.isFinite(stoppedAt)
-          ? Math.min(_perfNow, Math.max(_perfT0, stoppedAt)) : _perfNow;
-        const wallMs = Math.round(_perfEnd - _perfT0);
-        const ms = Math.round(_perfActiveElapsed(_perfT0, _perfEnd));
-        const size = bytes ? (bytes >= 1048576 ? (bytes / 1048576).toFixed(1) + 'MB'
-          : Math.round(bytes / 1024) + 'KB')
-          : (status === 304 ? '304'
-            : (typeof status === 'number' ? 'HTTP' + status : String(status)));
-        window.__cccPerfRow('list', {
-          at: Date.now(),
-          text: ms + 'ms ' + size + (extra ? ' ' + extra : ''),
-          title: url + ' → ' + status,
-          ms: ms,
-          status: status,
-        });
-        // Structured beacon too — the perf watchdog only sees /api/perf-event
-        // samples, so list-read latency feeds the same breach evaluation and
-        // (maintainer-box) self-filing as conv_open/archive_load.
-        if (typeof _perfEvent === 'function') {
-          _perfEvent('list_read', ms, {
-            detail: {
-              bytes: bytes || 0, status: status, extra: extra || '',
-              wall_ms: wallMs, hidden_ms: wallMs - ms,
-              settle_delay_ms: Math.round(_perfNow - _perfEnd),
-              ttfb_ms: _perfHdrAt ? Math.round(_perfHdrAt - _perfT0) : null,
-              body_ms: _perfBodyMs ? Math.round(_perfBodyMs) : null,
-              paint_wait_ms: Math.round(_perfPaintWaitMs),
-              start_nav_ms: Math.round(_perfT0),
-              server_ms: _perfServer ? _perfServer.ms : null,
-              server_cpu_ms: _perfServer ? _perfServer.cpu : null,
-              longtask_ms: _perfLongTaskMs(_perfT0, _perfEnd),
-              rt: _perfHdrAt ? _convResourceTiming(_perfFetchUrl, _perfT0) : null,
-            },
-          });
-        }
-      } catch (_) {}
-    };
-    const p = (async () => {
-      try {
-        if (!opts.initial && !opts.includePrs && !sharedState._archiveAllData.has(url)) {
-          const snapshot = await window.__cccArchiveSnapshot?.read;
-          if (snapshot?.url === url && !sharedState._archiveAllData.has(url)) {
-            sharedState._archiveAllData.set(url, snapshot.rows);
-            if (snapshot.etag) sharedState._archiveAllEtag.set(url, snapshot.etag);
-            if (snapshot.delta) sharedState._archiveAllDelta.set(url, snapshot.delta);
-          }
-        }
-        const prevEtag = sharedState._archiveAllEtag.get(url);
-        const deltaToken = Array.isArray(sharedState._archiveAllData.get(url)) ? sharedState._archiveAllDelta.get(url) : null;
-        // Hard timeout: without one, a wedged request (accepted connection,
-        // response never arrives) hangs this promise forever — and every
-        // caller dedups onto it (_archiveAllInflight, _archiveRefreshPromise),
-        // so the sidebar stays on "Archive loaded" with no path to recovery.
-        const controller = opts.controller || new AbortController();
-        const timeoutId = setTimeout(() => {
-          try { controller.abort(); } catch (_) {}
-        }, sharedState.ARCHIVE_ALL_FETCH_TIMEOUT_MS);
-        let r;
-        try {
-          const init = { signal: controller.signal };
-          if (prevEtag) init.headers = { 'If-None-Match': prevEtag };
-          if (!sharedState._archiveBootstrapConsumed && url === sharedState._archiveBootstrapUrl && !prevEtag) {
-            sharedState._archiveBootstrapConsumed = true;
-            const snapshot = window.__cccArchiveSnapshot;
-            if (snapshot?.url + '&initial=1' === url && snapshot.cancelRecent) {
-              if (Number.isFinite(snapshot.recentStart)) _perfT0 = Math.min(_perfT0, snapshot.recentStart);
-              if (controller.signal.aborted) snapshot.cancelRecent();
-              else controller.signal.addEventListener('abort', () => snapshot.cancelRecent(), {once:true});
-            }
-            r = await sharedState._archiveBootstrapFetchPromise;
-            if (controller.signal.aborted) throw controller.signal.reason;
-          }
-          if (!r && window.__cccArchiveSnapshot && !window.__cccArchiveSnapshot.consumed && url === window.__cccArchiveSnapshot.url) {
-            window.__cccArchiveSnapshot.consumed = true;
-            r = await window.__cccArchiveSnapshot.fetch;
-            if (r) _perfFetchUrl = r.url || url;
-          }
-          // No preview request was sent when the early complete response won.
-          // The normal full loader still validates and applies that response.
-          if (!r && opts.initial && window.__cccArchiveSnapshot?.skippedRecent
-              && url === sharedState._archiveBootstrapUrl) return null;
-          if (!r) {
-            _perfFetchUrl = deltaToken ? url + '&since=' + encodeURIComponent(deltaToken) : url;
-            r = await backgroundApiFetch(_perfFetchUrl, init);
-          }
-          if (controller.signal.aborted) throw controller.signal.reason;
-        } finally {
-          clearTimeout(timeoutId);
-        }
-        // Include the early read's full lifetime instead of reporting only
-        // the time the initialized application spent awaiting its response.
-        const earlyTiming = r._cccArchiveTiming;
-        if (earlyTiming && Number.isFinite(earlyTiming.start)) {
-          _perfT0 = Math.min(_perfT0, earlyTiming.start);
-        }
-        _perfHdrAt = earlyTiming && Number.isFinite(earlyTiming.headers)
-          ? earlyTiming.headers : performance.now();
-        try {
-          const st = r.headers.get('Server-Timing') || '';
-          const m = st.match(/(?:^|,)\s*list;dur=([0-9.]+)/), c = st.match(/listcpu;dur=([0-9.]+)/);
-          if (m) _perfServer = { ms: Math.round(+m[1]), cpu: c ? Math.round(+c[1]) : null };
-        } catch (_) {}
-        sharedState._lastArchiveListHttpStatus = r.status;
-        // 304 → the server confirms our cached payload is still current, so we
-        // skip re-parsing ~500KB and reuse the last conversations as-is. The
-        // caller re-renders, but the flicker guard skips the rebuild since the
-        // structural signature is unchanged.
-        if (r.status === 304) {
-          _perfListLog(0, 304);
-          const cached = sharedState._archiveAllData.get(url);
-          if (!Array.isArray(cached)) {
-            _clientLog('[ARCHIVE-DIAG] conversations/list 304 with no cached body');
-            return null;
-          }
-          // Archive body unchanged, but live tool/WIP chips still move —
-          // refresh the cheap overlay and let the next render merge it in.
-          if (typeof refreshLiveSessionsActivity === 'function') {
-            refreshLiveSessionsActivity();
-          }
-          if (typeof opts.onValidated === 'function') opts.onValidated();
-          return cached.slice();
-        }
-        if (!r.ok) {
-          _perfListLog(0, r.status, 'err');
-          _clientLog('[ARCHIVE-DIAG] conversations/list not-ok: HTTP ' + r.status + ' ' + url.split('?')[1]);
-          return null;
-        }
-        let etag = r.headers.get('ETag');
-        let _perfLen = parseInt(r.headers.get('content-length') || '0', 10) || 0;
-        // Ordinary history parsing waits for recent rows to paint. The early
-        // conditional body is already draining and can validate first.
-        if (opts.afterPaint && !r._cccArchiveParsedBody) {
-          const waitStart = performance.now();
-          await opts.afterPaint;
-          _perfPaintWaitMs = performance.now() - waitStart;
-        }
-        let d = await (r._cccArchiveParsedBody || r.json());
-        _perfBodyMs = performance.now() - _perfHdrAt - _perfPaintWaitMs;
-        let _merged = null;
-        if (d && d.delta) {
-          _merged = _mergeArchiveListDelta(sharedState._archiveAllData.get(url), d);
-          if (!_merged) {
-            // Ids we never had: resync with one full body.
-            _clientLog('[ARCHIVE-DIAG] conversations/list delta unmergeable; full refetch');
-            // A skipped saved preview is useful again while a full resync
-            // runs, including transport retries before a failure is final.
-            if (window.__cccArchiveSnapshot?.url === url) window.__cccArchiveSnapshot.onResync?.();
-            sharedState._archiveAllDelta.delete(url);
-            sharedState._archiveAllEtag.delete(url);
-            const r2 = await backgroundApiFetch(url, { signal: controller.signal });
-            if (!r2.ok) {
-              _perfListLog(0, r2.status, 'err');
-              return null;
-            }
-            etag = r2.headers.get('ETag');
-            _perfLen = parseInt(r2.headers.get('content-length') || '0', 10) || 0;
-            d = await r2.json();
-          }
-        }
-        try {
-          if (d && d.queue_health && typeof window.__cccPerfQueueHealth === 'function') {
-            window.__cccPerfQueueHealth(d.queue_health);
-          }
-        } catch (_) {}
-        if (!window.__cccPerfFirstListAt && d && Array.isArray(d.conversations)) {
-          window.__cccPerfFirstListAt = true;
-          window.__cccPerfRow && window.__cccPerfRow('list', {
-            at: Date.now(),
-            text: 'first-list ' + Math.round(performance.now()) + 'ms',
-            ms: Math.round(performance.now()),
-            firstList: true,
-            title: 'page load → first conversation list response parsed',
-          });
-        }
-        _perfListLog(_perfLen, r.status, d && Array.isArray(d.conversations)
-          ? (_merged ? 'delta ' + d.conversations.length + '/' + _merged.length : d.conversations.length) + 'rows'
-            + ((d.queue_health && d.queue_health.stale_queued_items)
-              ? ' stale-steer:' + d.queue_health.stale_queued_items : '')
-          : '');
-        if (d && d.cached && d.stale && d.refreshing) {
-          _scheduleArchiveStaleRetry();
-        }
-        if (!d || !Array.isArray(d.conversations)) {
-          _clientLog('[ARCHIVE-DIAG] conversations/list missing conversations array');
-          return null;
-        }
-        const convs = _merged || d.conversations;
-        _clientLog('[ARCHIVE-DIAG] conversations/list ok: ' + convs.length + ' rows' + (_merged ? ' (delta)' : ''));
-        // Cache the ETag only after the body parsed and landed — otherwise a
-        // truncated/aborted download leaves an ETag whose next 304 replays
-        // an empty list.
-        sharedState._archiveAllData.set(url, convs);
-        // A merged list matches no full body's ETag; the delta token alone
-        // validates it from here on.
-        if (_merged) sharedState._archiveAllEtag.delete(url);
-        else if (etag) sharedState._archiveAllEtag.set(url, etag);
-        if (d.delta_token) sharedState._archiveAllDelta.set(url, d.delta_token);
-        else sharedState._archiveAllDelta.delete(url);
-        if (!opts.includePrs && !opts.initial) {
-          _scheduleArchiveSidebarCache(convs, params.get('window'));
-          window.__cccArchiveSnapshot?.save({url, rows:convs,
-            etag:sharedState._archiveAllEtag.get(url), delta:sharedState._archiveAllDelta.get(url)});
-        }
-        if (typeof opts.onValidated === 'function') opts.onValidated();
-        if (typeof opts.onPage === 'function') opts.onPage(d);
-        return convs;
-      } catch (e) {
-        if (opts.initial && opts.controller?.signal.reason === 'archive-complete') {
-          _perfListLog(0, 'superseded');
-          return null;
-        }
-        _perfListLog(0, 'threw');
-        _clientLog('[ARCHIVE-DIAG] conversations/list threw: ' + ((e && e.name) || '?') + ' ' + String((e && e.message) || '').slice(0, 120));
-        return null;
-      }
-    })();
-    sharedState._archiveAllInflight.set(url, p);
-    p.finally(() => sharedState._archiveAllInflight.delete(url));
-    return p;
-  }
-
   async function loadCrossRepoIssues() {
     try {
       const r = await backgroundApiFetch('/api/issues/all');
@@ -20359,42 +19929,6 @@
       // both so the future "view recently completed" toggle has data.
       return all.filter(i => (i.state || '').toUpperCase() === 'OPEN');
     } catch (_) { return []; }
-  }
-
-  function _renderArchiveLoadingStages(snapshot) {
-    const $list = document.getElementById('convList');
-    if (!$list) return;
-    // Don't overwrite a populated list — only swap when we're still in
-    // the placeholder state. Once renderArchiveList() runs with real
-    // data, this poll's job is done.
-    const isPlaceholder = $list.querySelector('.archive-loading-placeholder, .archive-loading-stages');
-    if (!isPlaceholder) return;
-    const steps = (snapshot && snapshot.steps) || [];
-    if (!steps.length) return;
-    const glyphFor = (state) => {
-      if (state === 'done')    return '<span class="als-glyph als-done">✓</span>';
-      if (state === 'running') return '<span class="als-glyph als-running">●</span>';
-      if (state === 'error')   return '<span class="als-glyph als-error">!</span>';
-      if (state === 'skipped') return '<span class="als-glyph als-skipped">-</span>';
-      return '<span class="als-glyph als-pending">○</span>';
-    };
-    const escAls = (s) => String(s || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-    let html = '<div class="archive-loading-stages">';
-    html += '<div class="als-title">' + escAls(snapshot.title || 'Loading archive…') + '</div>';
-    for (const s of steps) {
-      const det = s.detail || '';
-      const count = (typeof s.count === 'number' && typeof s.total === 'number')
-        ? ' <span class="als-count">' + s.count + ' / ' + s.total + '</span>'
-        : '';
-      html += '<div class="als-row als-state-' + escAls(s.state || 'pending') + '">'
-        +    glyphFor(s.state)
-        +    '<span class="als-label">' + escAls(s.label) + '</span>'
-        +    count
-        +    (det ? '<div class="als-detail">' + escAls(det) + '</div>' : '')
-        +    '</div>';
-    }
-    html += '</div>';
-    $list.innerHTML = html;
   }
 
   function _mergeIntoMasterRows(freshRows) {
@@ -20418,305 +19952,6 @@
   function _renderArchiveIfLoaded() {
     if (!sharedState.archiveLoaded) return;
     (0, hostServices.renderArchiveList)(_archiveQuery());
-  }
-
-  function _archiveListStillShowsLoader() {
-    const $list = document.getElementById('convList');
-    return !!($list && $list.querySelector('.archive-loading-placeholder, .archive-loading-stages'));
-  }
-
-  function _scheduleArchiveStuckRetry() {
-    if (sharedState._archiveStuckRetryId) return;
-    if (sharedState._archiveStuckRetryCount >= sharedState.ARCHIVE_STUCK_RETRY_MAX) return;
-    sharedState._archiveStuckRetryCount++;
-    sharedState._archiveStuckRetryId = setTimeout(() => {
-      sharedState._archiveStuckRetryId = null;
-      _recoverArchiveRenderIfStuck();
-    }, sharedState.ARCHIVE_STUCK_RETRY_MS);
-  }
-
-  function _archiveListFetchInflight(win) {
-    if (!sharedState._archiveBootstrapConsumed && sharedState._archiveBootstrapWindow === win) return sharedState._archiveBootstrapFetchPromise;
-    for (const [url, p] of sharedState._archiveAllInflight) {
-      if (new URLSearchParams(url.split('?')[1] || '').get('window') === win) return p;
-    }
-    return null;
-  }
-
-  function _recoverArchiveRenderIfStuck() {
-    // The loader is expected under an open app; closing the app paints it.
-    if (_dashboardCoveredByApp()) return Promise.resolve();
-    if (!_archiveListStillShowsLoader()) {
-      sharedState._archiveStuckRetryCount = 0;
-      return Promise.resolve();
-    }
-    if (sharedState.archiveLoaded && Array.isArray(sharedState.archiveData) && sharedState.archiveData.length) {
-      sharedState._archiveStuckRetryCount = 0;
-      // force: the pause-sidebar guard (typing recency, find bar, a restored
-      // '__new__'/spawning conversation state) defers renders indefinitely,
-      // which is precisely how a fully-loaded archive stays on the placeholder
-      // forever. Recovery is not a periodic re-render; it must paint.
-      (0, hostServices.renderArchiveList)(_archiveQuery(), { force: true });
-      sharedState._archiveRecoveryRendered = { data: sharedState.archiveData, query: _archiveQuery().trim().toLowerCase() };
-      return Promise.resolve();
-    }
-    _clientLog('[ARCHIVE-DIAG] recoverIfStuck: loader showing, archiveLoaded=' + sharedState.archiveLoaded
-      + ' rows=' + (Array.isArray(sharedState.archiveData) ? sharedState.archiveData.length : -1)
-      + ' retry=' + sharedState._archiveStuckRetryCount
-      + ' pause=' + (typeof shouldPauseSidebarRender === 'function' ? shouldPauseSidebarRender() : '?')
-      + ' conv=' + String(window.currentConversation || '')
-      + ' hidden=' + document.hidden);
-    if (sharedState._archiveStuckRenderRecoveryPromise) return sharedState._archiveStuckRenderRecoveryPromise;
-    const currentWin = _archiveWindow();
-    // The loader is still up because the first fetch for this window has not
-    // landed yet (a 4k-row 'all' payload takes seconds to parse under load),
-    // not because it is wedged. Wait on that fetch: demoting to 7d here fired
-    // a second list request + full re-render on every 'all' boot (CCC-118).
-    const inflightWin = _archiveListFetchInflight(currentWin);
-    if (inflightWin) {
-      sharedState._archiveStuckRenderRecoveryPromise = inflightWin.catch(() => null).finally(() => {
-        sharedState._archiveStuckRenderRecoveryPromise = null;
-        if (_archiveListStillShowsLoader()) _scheduleArchiveStuckRetry();
-      });
-      return sharedState._archiveStuckRenderRecoveryPromise;
-    }
-    const targetWin = (currentWin === 'all') ? '7d' : currentWin;
-    if (currentWin === 'all') {
-      try { localStorage.setItem(sharedState.ARCHIVE_WINDOW_KEY, '7d'); } catch (_) {}
-    }
-    sharedState._archiveStuckRenderRecoveryPromise = loadArchiveAll({ staleOk: true, window: targetWin }).then(convs => {
-      if (!Array.isArray(convs) || !convs.length || !_archiveListStillShowsLoader()) return;
-      sharedState.archiveData = _mergeArchivePrSnapshot(convs, sharedState.archiveData);
-      sharedState.archiveDataWindow = targetWin;
-      sharedState.archiveLoaded = true;
-      sharedState._archiveStuckRetryCount = 0;
-      (0, hostServices.renderArchiveList)(_archiveQuery(), { force: true });
-      sharedState._archiveRecoveryRendered = { data: sharedState.archiveData, query: _archiveQuery().trim().toLowerCase() };
-    }).finally(() => {
-      sharedState._archiveStuckRenderRecoveryPromise = null;
-      // One-shot recovery used to give up here: if the fetch failed (or, before
-      // the loadArchiveAll timeout, hung forever) the sidebar stayed on the
-      // "Archive loaded" checklist permanently. Retry on a slow cadence while
-      // the loader is still on screen.
-      if (_archiveListStillShowsLoader()
-          && !(sharedState.archiveLoaded && Array.isArray(sharedState.archiveData) && sharedState.archiveData.length)) {
-        _scheduleArchiveStuckRetry();
-      }
-    });
-    return sharedState._archiveStuckRenderRecoveryPromise;
-  }
-
-  function _scheduleArchiveStaleRetry() {
-    if (sharedState._archiveStaleRetryId) return;
-    sharedState._archiveStaleRetryId = setTimeout(() => {
-      sharedState._archiveStaleRetryId = null;
-      if (document.hidden || sharedState.activeTab !== 'sessions' || sharedState.conversationPaneLoading) return;
-      refreshArchiveData({ staleOk: true })
-        .then(() => (0, hostServices.renderArchiveList)(_archiveQuery()))
-        .catch(() => {});
-    }, sharedState.ARCHIVE_STALE_RETRY_MS);
-  }
-
-  function _hydrateArchiveSideData(force = false) {
-    if (sharedState._archiveSideDataPromise) return sharedState._archiveSideDataPromise;
-    if (!force && sharedState._archiveSideDataHydratedAt && (Date.now() - sharedState._archiveSideDataHydratedAt) < sharedState.ARCHIVE_HYDRATE_TTL_MS) {
-      return Promise.resolve();
-    }
-    sharedState._archiveSideDataPromise = Promise.all([
-      loadCrossRepoIssues(),
-      refreshArchivedGroupChats().catch(() => {}),
-      sharedState.repoListState.repos.length ? Promise.resolve(null) : loadRepoList().catch(() => null),
-      refreshUxFixesQueueMeta({ force }).catch(() => null),
-    ]).then(([issues]) => {
-      sharedState.crossRepoIssuesData = issues || [];
-      sharedState._archiveSideDataHydratedAt = Date.now();
-      _renderArchiveIfLoaded();
-    }).finally(() => {
-      sharedState._archiveSideDataPromise = null;
-    });
-    return sharedState._archiveSideDataPromise;
-  }
-
-  function _startArchiveProgressPoll() {
-    if (sharedState._archiveProgressPollId) return;
-    const tick = async () => {
-      try {
-        const r = await backgroundApiFetch('/api/archive/loading-status');
-        if (!r.ok) {
-          _clientLog('[ARCHIVE-DIAG] loading-status not-ok: HTTP ' + r.status);
-          return;
-        }
-        const snap = await r.json();
-        _renderArchiveLoadingStages(snap);
-        if (!snap.active) {
-          _stopArchiveProgressPoll();
-          _recoverArchiveRenderIfStuck();
-        }
-      } catch (e) {
-        _clientLog('[ARCHIVE-DIAG] loading-status fetch threw: ' + ((e && e.name) || '?') + ' ' + ((e && e.message) || ''));
-      }
-    };
-    tick();  // immediate first paint
-    sharedState._archiveProgressPollId = setInterval(_gated('archiveProgress', tick), 250);
-  }
-
-  function _stopArchiveProgressPoll() {
-    if (sharedState._archiveProgressPollId) {
-      clearInterval(sharedState._archiveProgressPollId);
-      sharedState._archiveProgressPollId = null;
-    }
-  }
-
-  function _setArchiveCompleteness(win, complete, count, failed = false, ready = false) {
-    window.__cccArchiveProgress = { window: win, complete, count, failed, ready: ready || complete };
-    let notice = document.getElementById('archiveCompleteness');
-    if (!notice) {
-      notice = document.createElement('div');
-      notice.id = 'archiveCompleteness';
-      notice.setAttribute('role', 'status');
-      notice.style.cssText = 'padding:8px 12px;font-size:12px;color:var(--text-secondary);background:var(--surface-2);flex-shrink:0';
-      document.getElementById('convList')?.before(notice);
-    }
-    notice.hidden = complete;
-    notice.textContent = complete ? '' : (failed
-      ? 'Full archive could not load. Search and counts are incomplete; retrying on refresh.'
-      : 'Loading full archive… Search and counts are incomplete (' + count + ' sessions loaded).');
-  }
-
-  async function refreshArchiveData(opts = {}) {
-    if (sharedState._archiveRefreshPromise) {
-      _clientLog('[ARCHIVE-DIAG] refreshArchiveData deduped onto in-flight promise');
-      return sharedState._archiveRefreshPromise;
-    }
-    sharedState._archiveRefreshPromise = (async () => {
-      await _whenDashboardUncovered();
-      _startArchiveProgressPoll();
-      _clientLog('[ARCHIVE-DIAG] refreshArchiveData start window=' + (opts.window || _archiveWindow()) + ' staleOk=' + (opts.staleOk !== false && !opts.force));
-      let archiveSettled = false;
-      let fullRead = null;
-      try {
-      // While a sidebar search is active the corpus must stay at the 'all'
-      // window: renderArchiveList widens to 'all' so every session is
-      // searchable, and a background refresh that re-fetches with the stored
-      // ('1d'/'7d') window would swap the data back under the user's feet —
-      // the visible "result count flips between small and full" flicker.
-      const requestedWindow = opts.window || (_archiveQuery().trim() ? 'all' : _archiveWindow());
-      const isCurrentWindow = () => requestedWindow === (_archiveQuery().trim() ? 'all' : _archiveWindow());
-      const progress = window.__cccArchiveProgress;
-      if (!opts.includePrs && (!progress || progress.window !== requestedWindow || !progress.complete)) {
-        _setArchiveCompleteness(requestedWindow, false, sharedState.archiveData.length);
-        if (sharedState._archiveFromLocalCache) {
-          // A ready full response can replace the preview in this microtask
-          // turn. Paint cached rows and their incomplete-search notice first.
-          document.getElementById('cccLoadingOverlay')?.classList.add('gone');
-          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 0))));
-        }
-        let validatedReady;
-        const validatedFull = new Promise(resolve => { validatedReady = resolve; });
-        let releaseInitialPaint;
-        const afterPaint = new Promise(resolve => { releaseInitialPaint = resolve; });
-        const initialController = new AbortController();
-        const initialRead = loadArchiveAll({ staleOk: true, window: requestedWindow,
-          initial: true, controller: initialController });
-        // Start the full download while the recent-row request is pending.
-        // Ordinary response parsing waits for recent rows to paint; the early
-        // conditional response can already be parsed while the app loads.
-        fullRead = loadArchiveAll({ staleOk: opts.staleOk !== false && !opts.force,
-          window: requestedWindow, afterPaint, onValidated: () => { validatedReady({validated:true}); } });
-        try {
-          // A validated complete response can be ready before the recent-row
-          // request. Its rows already include the preview and all ancestors.
-          const result = await Promise.race([initialRead.then(first => ({first})), validatedFull]);
-          if (result.validated) {
-            initialController._cccArchiveSupersededAt = performance.now();
-            initialController.abort('archive-complete');
-          }
-          const first = result.first;
-          if (Array.isArray(first) && isCurrentWindow()) {
-            sharedState.archiveData = _applyPendingDashboardConversationPatches(
-              _mergeArchivePrSnapshot(first, sharedState.archiveData));
-            sharedState.archiveDataWindow = requestedWindow;
-            sharedState.archiveLoaded = true;
-            _setArchiveCompleteness(requestedWindow, false, first.length, false, true);
-            (0, hostServices.renderArchiveList)(_archiveQuery(), { force: true });
-            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-          }
-        } finally {
-          releaseInitialPaint();
-        }
-      }
-      if (!isCurrentWindow()) {
-        sharedState._archiveRefreshAfterInflight = true;
-        return sharedState.archiveData;
-      }
-      const convs = await (fullRead || loadArchiveAll({ staleOk: opts.staleOk !== false && !opts.force, window: requestedWindow }));
-      if (!isCurrentWindow()) {
-        sharedState._archiveRefreshAfterInflight = true;
-        return sharedState.archiveData;
-      }
-      archiveSettled = true;
-      if (!Array.isArray(convs)) {
-        _setArchiveCompleteness(requestedWindow, false, sharedState.archiveData.length, true);
-        _scheduleArchiveStaleRetry();
-        _clientLog('[ARCHIVE-DIAG] refreshArchiveData keeping previous rows='
-          + (Array.isArray(sharedState.archiveData) ? sharedState.archiveData.length : -1)
-          + ' (fetch failed)');
-        return sharedState.archiveData;
-      }
-      if (!convs.length && Array.isArray(sharedState.archiveData) && sharedState.archiveData.length) {
-        if (!sharedState._archiveFromLocalCache) {
-          _clientLog('[ARCHIVE-DIAG] refreshArchiveData keeping previous rows='
-            + sharedState.archiveData.length + ' (empty payload)');
-          return sharedState.archiveData;
-        }
-      }
-      sharedState._archiveFromLocalCache = false;
-      _setArchiveCompleteness(requestedWindow, true, convs.length);
-      sharedState.archiveData = _applyPendingDashboardConversationPatches(
-        _mergeArchivePrSnapshot(convs, sharedState.archiveData)
-      );
-      _mergeIntoMasterRows(sharedState.archiveData);
-      if (opts.force || requestedWindow !== sharedState.archiveDataWindow) _resetArchiveUnknownPatchIds();
-      sharedState.archiveDataWindow = requestedWindow;
-        sharedState.archiveLoaded = true;
-        _clientLog('[ARCHIVE-DIAG] refreshArchiveData merged ' + (Array.isArray(sharedState.archiveData) ? sharedState.archiveData.length : -1) + ' rows, archiveLoaded=true');
-        (0, hostServices.renderArchiveList)(_archiveQuery(), { force: true });
-        // Base rows are useful immediately. Let the live/approval overlay land
-        // afterward instead of holding first paint behind a contended status
-        // read; the unified session watcher also pushes those state changes.
-        refreshLiveSessionsActivity().then(() => {
-          _queueDashboardArchiveRender();
-          if (typeof window.__cccRenderThroughputActivity === 'function') {
-            window.__cccRenderThroughputActivity();
-          }
-        }).catch(() => {});
-        if (typeof window.__cccRenderThroughputActivity === 'function') {
-          window.__cccRenderThroughputActivity();
-        }
-        setTimeout(() => {
-          _hydrateArchiveSideData();
-        }, 0);
-        return sharedState.archiveData;
-      } finally {
-        sharedState._archiveRefreshPromise = null;
-        _stopArchiveProgressPoll();
-        _markArchiveFirstLoaded();
-        if (archiveSettled) {
-          _releaseStartupApiReads();
-          window.__cccArchiveSettled = true;
-          window.dispatchEvent?.(new Event('ccc:archive-settled'));
-        }
-        if (sharedState._archiveRefreshAfterInflight) {
-          sharedState._archiveRefreshAfterInflight = false;
-          queueMicrotask(() => {
-            refreshArchiveData({ staleOk: true })
-              .then(_queueDashboardArchiveRender)
-              .catch(() => {});
-          });
-        }
-      }
-    })();
-    return sharedState._archiveRefreshPromise;
   }
 
   function _hashHue(s) {
@@ -23500,7 +22735,7 @@
   function ff(name) {
     try { return !!(window.__CCC_FLAGS__ || {})[name]; } catch (_) { return false; }
   }
-    return { stopSpeechRecognition, mountStatusRailForActivePane, saveSplitState, updatePaneHeader, setCopyableSessionId, fetchCodexDiagnostics, _codexDiagHidePanel, updateResumeButton, updateAnnounceButton, updateJumpButton, updateSplitToolbar, resetLocalhostPill, _applyStatusRailLayout, sendEscToTerminal, compactCurrentSession, syncAllPaneHasFlags, convScopeSignal, updateConvOverflowButton, startLiveStatusPolling, rowRepoPath, popoutRepoPath, isImeKey, syncConversationArchiveButton, liveStatusMatchesOpenConv, antigravityCanSend, renderConversationGoalStrip, f2RenderComposer, getSpawnCwd, activeConvRepoPath, spawnCwdLabel, _pathLeaf, getSpawnEngine, antigravityInputPlaceholder, _relayedQuestionInlineEl, devinSteerCapableNow, isCompactionCapableSource, hasPendingSendEchoBeforeCompact, _compactRunBlocksResend, modelOptionsForSpawnEngine, engineSupportsEffort, effortLevelsForEngine, renderEffortOptions, newSessionPaneId, positionConversationEndAffordance, getInputContextSlot, renderSessionWorkspaceIntoSticky, renderSessionUsageIntoStrip, syncInputContextVisibility, composerUploadIsPending, showOpToast, sidebarRowDisplayTitle, shortSessionId, sessionCompletionDetails, fetchSessionUsage, resolvedSpawnConversationId, isSpawnLogPlaceholderSource, loadCodexLog, stopCodexLogPoller, _pollerOff, _pollerTick, renderPendingSpawnConversation, _contEnsureSegments, _contNextParentForPane, convTailLines, convFirstOpenLines, _takePrefetchedConversationTail, _convCacheEligible, _convCacheGet, _fetchConvJsonTimed, _markConvCachePreview, noteAppEmbedDrawn, _perfEvent, _perfActiveElapsed, _flushAfterConvTailAfterPaint, _contSegmentTitle, _contSegmentConfig, _prependConversationEvents, _convCachePutSoon, _renderFirstPromptPin, _convOpenPhases, _convOpenAfterPaint, _insertLoadEarlierBanner, _scheduleConvOpenBackfill, restorePendingSendEchoes, optimisticPromptForSession, spawnStatsMark, markSpawnAssistantPaint, markClaudeFirstVisibleOutput, _closeWtLogPanel, refreshConversationBackgroundForPane, syncPaneLastUserMessage, abortConvScopedRequests, _prefetchConversationTail, stopSpawnStream, startSpawnStream, syncPendingSendsMapForConv, rememberRecentConv, getLastConvKey, _compactRunActive, discardCompactRun, rememberConvScroll, closeStatusRailFileViewer, _updateLastWrittenLine, updateTtsFloatingControl, syncMobileOriginalAsk, _afterConvTail, scheduleSessionMetadataFetches, exitConvReplayMode, stopPkoodTailPoller, loadPkoodTail, _gated, _ultraFreshFeed, resetTtsOnNewTurn, _kimiRegroupTools, _removeStaleProvisionalsForTurn, _isOriginalAskText, convRowForPane, originalAskTextForEvent, renderImageDescriptors, breadcrumbSpawnedByChipHtml, _dynAskSchedule, _updateStickyAskSlots, renderSessionTimelineIntoSticky, repoPathForIssueNumber, clearSessionSending, completeCompactRun, _compactRunAnchorTo, userMessageSteerHtml, formatPeerMessageHtml, _convPaneSeedTaskInfo, _kimiToolRowHtml, _imageGenerationBlockHtml, _kimiAppendAssistantEvent, attachPresentationArtifactToAssistant, _compactRunAdoptDevinSummary, _recordCacheMissLog, _convPaneMarkTaskCompleted, stampCurrentToolGroup, _convLiveRevealNewText, _kimiFlushRegroups, _convPaneSyncJsonlTaskTabs, updateLiveToolStrip, updateCodexStateBadge, clearOptimisticAgentIndicator, _compactRunClaimSummary, _compactRunMount, _compactRunAdoptBoundary, syncQueuedSteerTray, takeQueuedSendAcknowledgement, updateSessionOutcomeBanner, updateConversationEndAffordance, scrollConversationToEnd, _firePhoneModeReadIfDone, _ensureFirstUserPinned, _syncLiveQuestionDuplicateHide, syncUserMessageSteerButtons, _convReplaySweepNewItems, hideSlashCommandMenu, stopTextToSpeech, applyOptimisticConversationGoalAction, beginCompactRun, appendPendingSendEcho, markSessionSending, looksDormantNoProcess, startCodexWakeBreakdown, durableActionId, isClaudeSource, markPendingSendQueued, tapbackTakePending, fetchInjectWithRetry, tapbackRestorePending, _showTerminalSuspectedDialog, removePendingSendEcho, bindPendingSendDeliveryId, renderConvWakeOutcome, markPendingSendDelivered, refreshLiveStatus, scheduleFireAndWatchRefresh, applyClearSuccession, beginWtReceiptTracking, compactResponseIsComplete, adoptCompactRunResult, markCompactRunWorking, scheduleCompactUsageRefresh, handleCompactTimeout, formatInjectFailure, _isCompactTimeoutReason, failCompactRun, isCursorUsageLimitFailure, appendSendFailureNotice, renderInlineWakeError, isTouchPrimary, updateMicButtonsState, mountStatusRailForPaneId, getSplitStateKey, paneCategoryForRow, paneTitleForRow, continuationBackstopTitle, rowRawTitle, workerTitleForPane, workerRowFacts, _waAvatarHtml, paneEngineIconHtml, sourceLabelForPane, sessionDriverHtml, sidebarSessionIdChipHtml, workerOriginBadgeHtml, updateConvProcessIndicator, _renderRailSpawnedVia, openActivityLogModal, formatSize, railSessionIdLabel, paneIdForSessionId, _codexDiagStop, _codexDiagPaneIsCodex, _codexDiagMetadataTabActive, renderCodexDiagnostics, cancelCodexDesktopHandover, activeConvSession, jumpButtonsForActiveTab, allJumpButtons, launchButtonsForActiveTab, launchWrapsForActiveTab, allLaunchWraps, allLaunchButtons, renderLaunchChoiceMenu, launchTerminal, lastMessageTtsData, _ttsLog, isMobile, beginCompactProgress, postRunCompactForSession, _compactToastNeeded, compactRequestSuccessMessage, touchSessionOptimistically, offerManualCompact, syncPaneHasFlags, _convOverflowHasActions, _closeConvOverflow, refreshLiveSessionsActivity, refreshMsgTimestamps, _isAbsoluteLocalPath, _openConversationRow, sessionReadyToClose, _applyLiveOverlayToRow, sessionIsOptimisticallySending, syncSessionStateCloseActions, goalStatusUi, conversationGoalActionButtonsHtml, f2RailEl, f2PanelEl, f2InputEl, f2PaneKey, f2ContinuedIntoSessionId, f2ResumeGate, f2ManualGate, f2StateFor, f2ComposerText, f2FmtTokens, f2FmtAge, f2RoutesHtml, f2FitSheet, normalizeSpawnCwdPath, findSpawnCwdRepo, normalizeSpawnDefaultEngine, _compactRunFor, _normalizeModelId, _modelAllowedForEngine, latestModelsOnly, _engineSupportsCustomModel, _speakBtnSavedPos, _syncSpeakerTools, scheduleInputContextFit, claudeModelSupportsOneM, spawnEngineLabel, _getCtxLimitOverride, ff, _contextRingSvg, cycleAutoHandoverModeForPane, openPlanUsagePopover, openModelPicker, _rowSubscriptionCostUsd, _rowBadgeShowsCost, _formatRowCostUsd, bugErrorAction, stripLeadingPathOrUrl, capitalizeSessionTitleStart, stripSessionIdPrefix, _isComposerFocused, _sessionUsagePaneIsVisible, sessionUsageRefreshDecision, _renderRailTokens, markFireAndWatchSpawnFailed, renderAntigravityLogHtml, renderGeminiLogHtml, renderCursorLogHtml, renderCodexLogHtml, engineModelEffortBits, _retryFailedPendingSpawn, _removePendingSpawnCard, setSpawnCwdInputValue, setSpawnEngine, enterNewSessionMode, _showPendingSpawnRepoPathEditor, showOptimisticAgentIndicator, renderPendingCodexStats, spawnStatsEnabled, continuationParentIdForSid, _convCacheDb, _convDirectUrl, _convResourceTiming, timeAgo, _clientLog, _flushAfterConvTail, _continuationRowForSid, sessionIconEngine, _placeFirstPromptPin, _perfLongTaskMs, _perfListOverlapMs, _ensureLoadEarlierStyle, _showConvLoading, fmtStatMs, releaseClaudeSpawnPaintGate, conversationPaneForId, conversationBgPrimaryKeyForPane, renderConversationBackgroundPalette, renderTtsVoiceStepper, applyConversationBackgroundToPane, storedConversationBgForPane, setLiveBadgeVisible, clearStreamingBubble, handleSpawnEvents, _stopCompactRunTimer, conversationScrollViews, _lastWrittenAgo, updateTopbarTtsControl, fetchSessionTimeline, fetchSessionWorkspace, _convReplayRevealAllWordsInstantly, _convReplayTextContainer, _convReplayClearWordReveal, _convReplayResetHumanTyping, _orchReplayStep, _scrollConvReplayToBottom, _pollerSkip, _timePoller, _ultraFreshAccept, _kimiTidyToolGroups, openConvRow, continuationParentId, f2EffectiveParentSessionId, spawnParentVisibleId, firstSentenceOf, _dynAskUpdate, _railSeedLastAsk, filterConversations, _compactRunPaint, _compactRunPollAfter, _compactRefreshContextPill, codexTurnSteerable, devinTurnSteerable, splitTopLevelCommas, peerReportImagesHtml, _convPaneTabState, _convPaneRenderTabStrip, _kimiToolStatusOf, _webuiToolDisplayName, _kimiToolSummary, _kimiDiffHtml, _kimiNormToolName, _kimiTodoChecklistHtml, _kimiToolGlyph, _kimiNormBlockText, _kimiTurnCoveredBlocks, latestCompletedPresentationAnswer, mode3BootstrapAnswerKey, _compactRunIsForeground, _convPaneCloseSubagentTab, _convShouldLiveRevealNewText, _convLiveRevealContainersForEvent, _wrapReplayWordsInHtml, _convLiveRevealWords, updateLiveStripOffset, setOptimisticAgentThinking, _settleWebuiRunningTools, getSingleLiveToolInline, settleStaleOptimisticAgentIndicator, _codexRequestCardShowing, respondCodexApproval, respondClaudePermission, grabBackCodexSession, codexActiveItemLabel, codexTokenUsageText, _wireLiveInlineExpand, _kimiMoonHtml, cleanLiveActivityDetail, shortenLiveActivityDetail, liveActivityToolLabel, liveActivityTitle, liveQuestionDetailHtml, liveActivityDetailClass, wakeCodexSession, _optimisticAgeLabel, _removePriorWakeStatus, stopCodexWakeBreakdown, _stopOptimisticAgeTicker, _compactRunView, steerIsInFlight, queuedSteerCardCount, queuedSteerSource, sessionSupportsQueuedSteer, queuedSteerBlockedReason, syncQueuedFromLabel, applyQueuedSteerError, syncQueuedSteerAllControl, _conversationIsQuiet, _confirmSessionNotLiveThenRenderOutcomeBanner, _renderOutcomeBanner, attachConversationEndAffordance, _prevUserMessageTarget, _nextUserMessageTarget, _visibleSpeakButton, _syncSpeakFloatPlayback, _batchHasSpeakableReply, _disarmPhoneModeRead, readLastMessageAloud, _convReplayCollectItems, _convReplayTagWithTs, renderConvReplayControls, playNextConvReplayStep, clearTtsHighlight, clearTtsCaption, _ttsShowVoice, _ttsPerfFlush, _ttsEngineCancel, setTtsButtonsBusy, setTtsButtonsState, _setTtsDirectBtnState, _compactContextNow, _tickCompactRun, sessionIsActivelyWorking, injectToSession, beginOptimisticSteerMove, _sessionRowMatches, syncCodexWakeUsage, renderCodexWakeBreakdown, handleCodexWakeOutcome, tapbackLoad, tapbackSave, _cccPlayTurnEnd, _cccGlowCompletedConversation, _cccPlayDone, maybeCatchUpCodexConversationFromAppServer, maybeCatchUpAcpConversationFromWire, _rememberLiveOverlay, _liveOverlayFieldsFromRow, _scheduleSidebarRender, syncRelayedQuestionModal, markStaleStreamingBubbles, updateSilentInvestigateBar, f2RecordContinuationLineage, wtTransportStageLabel, _wtSetEchoNote, _wtFindLivePendingEcho, _wtNativeFallbackResend, micButtons, micButtonPaneId, stripTitle, stripGhIssueProjectTag, isContinuationBoilerplateTitle, continuationFallbackTitle, rowLocalTitle, _workerRoleFromPrompt, _uxFixesWorkerTicketsForRow, workerSelfTicketRef, workerTaskTicketRef, workerQueueOf, workerStateBucket, _ideaAvatarHtml, _repoSessionAvatarHtml, _waCategory, sessionEngineIconHtml, _procCheckedAgoLabel, _procCheckedClock, closeActivityLogModal, _loadActivityLogInto, codexDiagPanelEl, _codexDiagRow, _codexDiagPathHtml, _codexDiagAge, _codexDiagClock, launchTargetsForCurrentSession, actionButtonSnapshot, setActionButtonText, restoreActionButtonText, _ttsSpeakButtonData, isPendingSendEchoElement, buildTtsDataFromElements, _sanitizeTtsText, _ttsIsHebrew, ttsButtons, ttsButtonPaneId, postCompactSession, _applyOptimisticTouchToRow, backgroundApiFetch, _handleKillEvents, _handlePrewarmEvents, _renderInterruptAsks, syncExternalSpawnPlaceholders, _scheduleTurnEndListRefresh, _ultraFreshSchedule, _ultraFreshWaitingAt, conversationGoalSourceKind, f2PaneRoot, _f2ContinuationEdges, _contextFieldsFromRow, f2EngineKey, f2DemoForceMatches, f2LaunchEngines, f2ModelsForEngine, f2EffortsForEngine, f2EffortLabel, f2EngineLabel, f2ModelLabel, f2ConfigHtml, _knownModelForEngine, _modelUnavailableReason, _knownModelForOtherEngine, _fitInputContextStrip, _autoHandoverCurrentState, commitAutoHandoverMode, closePlanUsagePopover, closeModelPicker, _buildClaudeModelMenuHtml, _reasoningSectionHtml, postInjectInput, railQuotaEngine, _monthlyClaudePlanUsd, _monthlyCodexPlanUsd, railQuotaCostPresentation, bugOpenModal, _isComposerElement, railUsageBreakdown, _claudeFriendlyModelName, railCostHeadline, railUsageBreakdownHtml, railQuotaCostHtml, _railTurnGraphHtml, _refreshQuotaCostCalibration, getEngineSvg, isBenignCodexErrorItem, isBenignCodexStderrLine, adoptPendingSpawnPid, _watchCodexSpawnRegistration, _watchPendingSpawnRegistration, chasePendingSpawn, _failPendingSpawnCard, persistSpawnCwdPickerValue, _showSpawnCwdTail, markNsAdvisorManual, syncSpawnEngineDependentUi, recordSpawnChoice, requestClaudePrewarm, syncNsModelOverrideSelects, renderNsAdvisor, resetRepoGuess, refreshJevRepoPromo, abortBackgroundApiReadsForSpawn, populateSpawnCwdPicker, ensureSpawnCwdOptionsLoaded, _wireNewSessionChooser, _renderNsExtensions, loadNsAdvisor, renderNsAdvisorEditor, renderNsModelPickerPills, cancelOptimisticAgentTurn, _startOptimisticAgeTicker, _armOptimisticAgentSafetyTimer, _convDirectProbe, conversationBgKeysForPane, updateConversationBackgroundPaletteState, setConversationPanePaletteVars, conversationPaletteVars, conversationBgPaletteItem, persistConversationBgForPane, readConversationBgPrefs, _effectiveThemeIsLight, flushScheduledStreamTextRenders, _ultraFreshSpawnFeed, ensureStreamingBubble, scheduleStreamTextRender, _replayRevealAllShells, _replayRevealRun, orchFlashPlaybook, orchPaneVisible, _convReplayViewForPane, _ultraFreshTime, _ultraFreshPaint, _ultraFreshParseState, _ultraFreshRow, _ultraFreshSendBarrier, manualSubsessionParentId, _f2OriginIndex, _continuationSuccessorIndex, _dynAskItems, _dynAskApply, _setEarlierAskLabel, _bridgeSearchNeedle, recencyCutoffSec, _uuidSearchNeedle, _sessionIdSearchRank, rowMatchesEffortQuery, _prioritizeNameMatches, _prioritizeSessionIdMatches, applyConvSort, _decorateWithHistoryMatches, _compactRunResultHtml, _compactRunStepsHtml, _compactUsageShape, _convPaneTabStrip, _convPaneApplyActiveTab, _convPaneRestoreTabScroll, _convShouldLiveRevealStickToBottom, formatCompactCount, liveQuestionDisplayOptions, queuedFromDescription, queuedSteerErrorKey, jumpPresentationToEnd, _jumpToPreviousUserMessage, _scrollToConversationUserMessage, _attachSpeakerTools, _makeSpeakBtnDraggable, _ttsReadSelectionIfAny, _topVisibleAnchor, _observeConvEventSizes, _convReadingTop, _convUserMessageTop, agentAnswerNodeBeforeResult, assistantTextElements, _ttsFreshSelection, _ttsEnginePause, _ttsEngineResume, _primeTtsEngine, selectedConversationTtsData, _ttsStartChunkedSpeech, _isConvReplayMeaningful, stepConvReplayBack, _convReplayResume, _convReplayJumpToLine, _convReplayIsTyped, _convReplayPrepareWordsForItem, _convReplayHumanStep, _convReplayRevealWords, _ttsClientTag, _ttsSetStreaming, _compactRunSettleAcpTurn, showInjectError, _wakeStageQuietLabel, _wakeStageLabel, _codexWakeTransportLabel, _wakeInt, _cccBeep, _cccPaintCompletionGlow, _dashboardCoveredByApp, _pausePeriodicSidebarRender, closeRelayedQuestionInline, showRelayedQuestionInline, _dropStreamBubble, silentNudgeAttempt, nudgeSilentSession, investigateSilentSession, flowNodeKey, isFlowView, isGenericHandoffTitle, _withTicketPrefix, _uxFixesWorkerDisplayTitle, _uxFixesRowIdentityKeys, ideaTicketsOn, sessionIconPresentation, _avatarModelBadgeHtml, _hashHue, sessionRepoAvatarPath, repoAvatarHtml, repoInitials, _waCategoryIn, _renderReadableActivityLog, _codexDiagTilde, _ttsPlaybackElements, assistantNodeTextForCopy, _ttsBlockAncestor, _ttsParagraphBreak, _chunkTtsText, _ttsSetEnabled, _appEmbedSkips, _appEmbedSkippedResponse, _startupCriticalApiRead, _backgroundApiReadSkipsQueue, _startBackgroundApiRead, _drainBackgroundApiReads, _appendActivityLog, resolveInterruptAsk, _interruptAskSessionLabel, _pruneExternalSpawnSeen, _sessionRowExists, spawnSourceForEngine, _scheduleDashboardArchiveRefresh, _ultraFreshSync, f2AllLaunchEngines, f2SelectHtml, f2QuickPickHtml, _claudeModelMenuOptions, _monthlyPlanUsd, bugResetState, bugApplyMode, bugDiagSetStatus, bugRenderMeta, bugApplyDestinationUI, _refreshArchiveListIfCostMode, _ensureEngineSvgSprite, _engineSvgInline, _engineSvgSymbolId, bindAcceptedCodexSpawn, _pendingSpawnStillWaiting, refreshArchiveData, markPendingSpawnNotAcknowledged, deferSidebarRenderIfDragging, rebindCurrentSelectionToRealCard, resolvePlaceholderPanes, renderRepoGuessChips, isSpawnCwdMenuOpen, renderSpawnCwdMenu, renderSpawnCwdQuickChips, updateNewSessionCwdNotice, scheduleClaudePrewarm, refreshEngineMissingNotice, renderEngineMissingNotice, spawnSupportsWorktree, spawnModelCostTier, spawnModelCostSummary, formatModelNameForBadge, renderNsModelComparison, fetchModelPickerPicksFromServer, claudePrewarmSpec, nsAdvisorChoices, applyNsAdvisorChoice, getModelPillLabel, currentSpawnChoice, setRepoGuessPickerValue, renderSpawnCwdSummary, _archiveFolderOptions, verifySavedSpawnCwd, loadRepoList, refreshNewSessionCwdUi, _loadNsExtensionTemplates, nsAdvisorLocalTime, getTopSpawnPicks, selectSpawnPick, showNsManualModelCatalog, recentNsModelPicks, nsAdvisorRanksPicker, _tickOptimisticAgeNow, rowForConversationId, _restartTtsAtCurrentPosition, relLuminance, hexToRgb, readableTextRgb, mixRgb, contrastRatio, rgbToHex, conversationBgKeyIsPersistable, writeConversationBgPrefs, _convPaneEnsureSubagentTab, _replayRevealShellsForRun, orchPlaybookEl, _ultraFreshCurrent, rowOutcomeView, readyToCloseArchiveHtml, ticketSessionSection, syncRowQuickActions, _workersPaintTicketUpdate, preSendPreviewFor, _manualSubsessionEdges, _conversationNameMatchesQuery, _pinSortKey, _convTitleForSort, _historySyntheticRow, _prioritizeSearchResultBands, _compactStepIndexFor, _convPaneActivateTab, liveQuestionOptionParts, queuedFromSessionRow, renderPresentationCursor, _stepTtsRate, _ttsJumpToNextSentence, _ttsCycleVoice, _syncTtsRateUi, _ttsSyncEnabledControls, elementForSelectionNode, buildTtsDataFromRange, _cccPlaySpeakerCue, _ttsSpeakNextChunk, _convReplayLooksInjected, _convReplayWrapWordsInHtml, settleCompactRunUnconfirmed, _cccSoundsEnabled, _ensureAudioCtx, _cccGlowTargets, _readAloudThrottlesSidebar, shouldPausePeriodicUiWork, isConversationListScrollActive, _sidebarHasHoveredConvItem, closeRelayedQuestionModal, submitRelayedQuestionAnswers, f2ResolveSpawnCwd, openConversationInPane, workerTicketIssueTitle, _uxFixesIdentityKey, sessionCostTier, _readableLogGroups, _readableLogGroupHtml, _startupApiPath, _startupPathMatches, _railAppsSaved, _bufferBackgroundApiResponse, _scheduleActivityLogRender, _queueDashboardArchiveRender, _workersLatestTicketCard, _ultraFreshPaintBatch, f2TopLaunchPicks, railMonthlyPlanUsd, bugResetMessages, bugClearShot, bugFetchVersion, bugEscape, bugRenderPreview, bugDestination, bugLoadDiagnostics, markSpawnRowPaint, _whenDashboardUncovered, _startArchiveProgressPoll, _archiveWindow, _archiveQuery, loadArchiveAll, _applyPendingDashboardConversationPatches, _mergeArchivePrSnapshot, _mergeIntoMasterRows, _resetArchiveUnknownPatchIds, _hydrateArchiveSideData, _stopArchiveProgressPoll, _markArchiveFirstLoaded, isSidebarDragInProgress, setSpawnCwdMenuOpen, spawnCwdQuickChipOptions, chooseSpawnCwdFolder, renderOrchPlaybooks, _emnLabel, installMissingEngine, spawnModelDescription, setSpawnDefaultModel, rankNsAdvisorChoices, _archiveFolderValue, _pathParentLeaf, spawnCwdKnownToExist, forgetMissingSpawnCwd, _isUnnamedSpawnModel, _namedSpawnModelForEngine, _replayRunId, sidebarSessionWorking, sessionAttentionStep, rowActionSelector, loadRowDecisionReply, rowQuickActionSource, checkRowInvestigation, currentRowQuickActionSource, paintRowQuickAction, syncRowPopouts, _uxqItemForRef, _uxqItemRef, _workersTicketContextHtml, _workersTicketState, _stripHistoryHtml, _historyTsSeconds, _isRecallHistoryMatch, _convPaneRememberTabScroll, _convPaneEnsureJsonlTaskLane, presentationPaneElement, ensurePresentationStage, _refreshTtsRateBtns, _ttsSpeakBrowser, _ttsPerfStart, _ttsSetPlay, highlightTtsWord, updateTtsCaption, _ttsBindChunkCompletion, claudeFastSpawnAwaitingPaint, spawningSelectionStillPending, attachAllPaneDropZones, _readableLogPresentation, _readableLogEpoch, _activityLogTimestampLocal, _readableLogTime, _renderActivityLogPanel, bugBuildReportMarkdown, _renderArchiveLoadingStages, _recoverArchiveRenderIfStuck, _mergeArchiveListDelta, _scheduleArchiveStaleRetry, _scheduleArchiveSidebarCache, _archiveRowStableKey, loadCrossRepoIssues, refreshArchivedGroupChats, refreshUxFixesQueueMeta, _renderArchiveIfLoaded, hideLoadingOverlay, _releaseStartupApiReads, spawnCwdOptionForPath, closeSpawnCwdMenu, openWebFolderPicker, useSpawnCwdSelection, webPickerFallbackNote, orchExecutor, orchTester, orchCritics, orchMoreOpen, orchExecLabel, rowHandoff, _attentionActionOwner, rowDecisionReplyText, rowInvestigationTranscriptIdle, _workersTicketContext, _workersTicketChoices, _workersIdeaTicket, _workersIdeaTicketState, _uxqTicketAttention, _workersActiveClaim, stepPresentationSlide, ensurePresentationLiveRegion, _ttsWordAtProgress, attachDropZones, _logSessionName, _readableInjectParts, _dismissActivityLog, bugFullDescription, _archiveListStillShowsLoader, shouldPauseSidebarRender, _archiveListFetchInflight, _scheduleArchiveStuckRetry, _writeArchiveSidebarCache, _queueListFetch, _setUxFixesQueueMeta, _startupReplaysDirect, closeWebFolderPicker, folderPickerNavigate, _workersMeaningfulUpdate, _uxqProjectKey, attachPresentationLiveResize, syncPresentationLiveResizeAria, forwardPresentationProjectionEvent, dragHasConversationPayload, readConvIdFromDrop, showConvToast, loadAttentionList, bugDiagnosticsMarkdown, _archiveSidebarCacheRow, _archiveSidebarCacheKey, _queueListMerge, _uxFixesSeq, _uxFixesPlausibleSessionId, _uxFixesClosedAtMs, _uxFixesClaimedAtMs, folderPickerShowError, presentationLiveHeightPercent, applyPresentationLiveHeight, presentationLiveMinimumPercent, presentationElementPath, presentationResolvePath, readConvIdsFromDrop, _ipNyaDetailsOn, repoUrl };
+    return { ...archiveController, refreshArchiveData, loadArchiveAll, stopSpeechRecognition, mountStatusRailForActivePane, saveSplitState, updatePaneHeader, setCopyableSessionId, fetchCodexDiagnostics, _codexDiagHidePanel, updateResumeButton, updateAnnounceButton, updateJumpButton, updateSplitToolbar, resetLocalhostPill, _applyStatusRailLayout, sendEscToTerminal, compactCurrentSession, syncAllPaneHasFlags, convScopeSignal, updateConvOverflowButton, startLiveStatusPolling, rowRepoPath, popoutRepoPath, isImeKey, syncConversationArchiveButton, liveStatusMatchesOpenConv, antigravityCanSend, renderConversationGoalStrip, f2RenderComposer, getSpawnCwd, activeConvRepoPath, spawnCwdLabel, _pathLeaf, getSpawnEngine, antigravityInputPlaceholder, _relayedQuestionInlineEl, devinSteerCapableNow, isCompactionCapableSource, hasPendingSendEchoBeforeCompact, _compactRunBlocksResend, modelOptionsForSpawnEngine, engineSupportsEffort, effortLevelsForEngine, renderEffortOptions, newSessionPaneId, positionConversationEndAffordance, getInputContextSlot, renderSessionWorkspaceIntoSticky, renderSessionUsageIntoStrip, syncInputContextVisibility, composerUploadIsPending, showOpToast, sidebarRowDisplayTitle, shortSessionId, sessionCompletionDetails, fetchSessionUsage, resolvedSpawnConversationId, isSpawnLogPlaceholderSource, loadCodexLog, stopCodexLogPoller, _pollerOff, _pollerTick, renderPendingSpawnConversation, _contEnsureSegments, _contNextParentForPane, convTailLines, convFirstOpenLines, _takePrefetchedConversationTail, _convCacheEligible, _convCacheGet, _fetchConvJsonTimed, _markConvCachePreview, noteAppEmbedDrawn, _perfEvent, _perfActiveElapsed, _flushAfterConvTailAfterPaint, _contSegmentTitle, _contSegmentConfig, _prependConversationEvents, _convCachePutSoon, _renderFirstPromptPin, _convOpenPhases, _convOpenAfterPaint, _insertLoadEarlierBanner, _scheduleConvOpenBackfill, restorePendingSendEchoes, optimisticPromptForSession, spawnStatsMark, markSpawnAssistantPaint, markClaudeFirstVisibleOutput, _closeWtLogPanel, refreshConversationBackgroundForPane, syncPaneLastUserMessage, abortConvScopedRequests, _prefetchConversationTail, stopSpawnStream, startSpawnStream, syncPendingSendsMapForConv, rememberRecentConv, getLastConvKey, _compactRunActive, discardCompactRun, rememberConvScroll, closeStatusRailFileViewer, _updateLastWrittenLine, updateTtsFloatingControl, syncMobileOriginalAsk, _afterConvTail, scheduleSessionMetadataFetches, exitConvReplayMode, stopPkoodTailPoller, loadPkoodTail, _gated, _ultraFreshFeed, resetTtsOnNewTurn, _kimiRegroupTools, _removeStaleProvisionalsForTurn, _isOriginalAskText, convRowForPane, originalAskTextForEvent, renderImageDescriptors, breadcrumbSpawnedByChipHtml, _dynAskSchedule, _updateStickyAskSlots, renderSessionTimelineIntoSticky, repoPathForIssueNumber, clearSessionSending, completeCompactRun, _compactRunAnchorTo, userMessageSteerHtml, formatPeerMessageHtml, _convPaneSeedTaskInfo, _kimiToolRowHtml, _imageGenerationBlockHtml, _kimiAppendAssistantEvent, attachPresentationArtifactToAssistant, _compactRunAdoptDevinSummary, _recordCacheMissLog, _convPaneMarkTaskCompleted, stampCurrentToolGroup, _convLiveRevealNewText, _kimiFlushRegroups, _convPaneSyncJsonlTaskTabs, updateLiveToolStrip, updateCodexStateBadge, clearOptimisticAgentIndicator, _compactRunClaimSummary, _compactRunMount, _compactRunAdoptBoundary, syncQueuedSteerTray, takeQueuedSendAcknowledgement, updateSessionOutcomeBanner, updateConversationEndAffordance, scrollConversationToEnd, _firePhoneModeReadIfDone, _ensureFirstUserPinned, _syncLiveQuestionDuplicateHide, syncUserMessageSteerButtons, _convReplaySweepNewItems, hideSlashCommandMenu, stopTextToSpeech, applyOptimisticConversationGoalAction, beginCompactRun, appendPendingSendEcho, markSessionSending, looksDormantNoProcess, startCodexWakeBreakdown, durableActionId, isClaudeSource, markPendingSendQueued, tapbackTakePending, fetchInjectWithRetry, tapbackRestorePending, _showTerminalSuspectedDialog, removePendingSendEcho, bindPendingSendDeliveryId, renderConvWakeOutcome, markPendingSendDelivered, refreshLiveStatus, scheduleFireAndWatchRefresh, applyClearSuccession, beginWtReceiptTracking, compactResponseIsComplete, adoptCompactRunResult, markCompactRunWorking, scheduleCompactUsageRefresh, handleCompactTimeout, formatInjectFailure, _isCompactTimeoutReason, failCompactRun, isCursorUsageLimitFailure, appendSendFailureNotice, renderInlineWakeError, isTouchPrimary, updateMicButtonsState, mountStatusRailForPaneId, getSplitStateKey, paneCategoryForRow, paneTitleForRow, continuationBackstopTitle, rowRawTitle, workerTitleForPane, workerRowFacts, _waAvatarHtml, paneEngineIconHtml, sourceLabelForPane, sessionDriverHtml, sidebarSessionIdChipHtml, workerOriginBadgeHtml, updateConvProcessIndicator, _renderRailSpawnedVia, openActivityLogModal, formatSize, railSessionIdLabel, paneIdForSessionId, _codexDiagStop, _codexDiagPaneIsCodex, _codexDiagMetadataTabActive, renderCodexDiagnostics, cancelCodexDesktopHandover, activeConvSession, jumpButtonsForActiveTab, allJumpButtons, launchButtonsForActiveTab, launchWrapsForActiveTab, allLaunchWraps, allLaunchButtons, renderLaunchChoiceMenu, launchTerminal, lastMessageTtsData, _ttsLog, isMobile, beginCompactProgress, postRunCompactForSession, _compactToastNeeded, compactRequestSuccessMessage, touchSessionOptimistically, offerManualCompact, syncPaneHasFlags, _convOverflowHasActions, _closeConvOverflow, refreshLiveSessionsActivity, refreshMsgTimestamps, _isAbsoluteLocalPath, _openConversationRow, sessionReadyToClose, _applyLiveOverlayToRow, sessionIsOptimisticallySending, syncSessionStateCloseActions, goalStatusUi, conversationGoalActionButtonsHtml, f2RailEl, f2PanelEl, f2InputEl, f2PaneKey, f2ContinuedIntoSessionId, f2ResumeGate, f2ManualGate, f2StateFor, f2ComposerText, f2FmtTokens, f2FmtAge, f2RoutesHtml, f2FitSheet, normalizeSpawnCwdPath, findSpawnCwdRepo, normalizeSpawnDefaultEngine, _compactRunFor, _normalizeModelId, _modelAllowedForEngine, latestModelsOnly, _engineSupportsCustomModel, _speakBtnSavedPos, _syncSpeakerTools, scheduleInputContextFit, claudeModelSupportsOneM, spawnEngineLabel, _getCtxLimitOverride, ff, _contextRingSvg, cycleAutoHandoverModeForPane, openPlanUsagePopover, openModelPicker, _rowSubscriptionCostUsd, _rowBadgeShowsCost, _formatRowCostUsd, bugErrorAction, stripLeadingPathOrUrl, capitalizeSessionTitleStart, stripSessionIdPrefix, _isComposerFocused, _sessionUsagePaneIsVisible, sessionUsageRefreshDecision, _renderRailTokens, markFireAndWatchSpawnFailed, renderAntigravityLogHtml, renderGeminiLogHtml, renderCursorLogHtml, renderCodexLogHtml, engineModelEffortBits, _retryFailedPendingSpawn, _removePendingSpawnCard, setSpawnCwdInputValue, setSpawnEngine, enterNewSessionMode, _showPendingSpawnRepoPathEditor, showOptimisticAgentIndicator, renderPendingCodexStats, spawnStatsEnabled, continuationParentIdForSid, _convCacheDb, _convDirectUrl, _convResourceTiming, timeAgo, _clientLog, _flushAfterConvTail, _continuationRowForSid, sessionIconEngine, _placeFirstPromptPin, _perfLongTaskMs, _perfListOverlapMs, _ensureLoadEarlierStyle, _showConvLoading, fmtStatMs, releaseClaudeSpawnPaintGate, conversationPaneForId, conversationBgPrimaryKeyForPane, renderConversationBackgroundPalette, renderTtsVoiceStepper, applyConversationBackgroundToPane, storedConversationBgForPane, setLiveBadgeVisible, clearStreamingBubble, handleSpawnEvents, _stopCompactRunTimer, conversationScrollViews, _lastWrittenAgo, updateTopbarTtsControl, fetchSessionTimeline, fetchSessionWorkspace, _convReplayRevealAllWordsInstantly, _convReplayTextContainer, _convReplayClearWordReveal, _convReplayResetHumanTyping, _orchReplayStep, _scrollConvReplayToBottom, _pollerSkip, _timePoller, _ultraFreshAccept, _kimiTidyToolGroups, openConvRow, continuationParentId, f2EffectiveParentSessionId, spawnParentVisibleId, firstSentenceOf, _dynAskUpdate, _railSeedLastAsk, filterConversations, _compactRunPaint, _compactRunPollAfter, _compactRefreshContextPill, codexTurnSteerable, devinTurnSteerable, splitTopLevelCommas, peerReportImagesHtml, _convPaneTabState, _convPaneRenderTabStrip, _kimiToolStatusOf, _webuiToolDisplayName, _kimiToolSummary, _kimiDiffHtml, _kimiNormToolName, _kimiTodoChecklistHtml, _kimiToolGlyph, _kimiNormBlockText, _kimiTurnCoveredBlocks, latestCompletedPresentationAnswer, mode3BootstrapAnswerKey, _compactRunIsForeground, _convPaneCloseSubagentTab, _convShouldLiveRevealNewText, _convLiveRevealContainersForEvent, _wrapReplayWordsInHtml, _convLiveRevealWords, updateLiveStripOffset, setOptimisticAgentThinking, _settleWebuiRunningTools, getSingleLiveToolInline, settleStaleOptimisticAgentIndicator, _codexRequestCardShowing, respondCodexApproval, respondClaudePermission, grabBackCodexSession, codexActiveItemLabel, codexTokenUsageText, _wireLiveInlineExpand, _kimiMoonHtml, cleanLiveActivityDetail, shortenLiveActivityDetail, liveActivityToolLabel, liveActivityTitle, liveQuestionDetailHtml, liveActivityDetailClass, wakeCodexSession, _optimisticAgeLabel, _removePriorWakeStatus, stopCodexWakeBreakdown, _stopOptimisticAgeTicker, _compactRunView, steerIsInFlight, queuedSteerCardCount, queuedSteerSource, sessionSupportsQueuedSteer, queuedSteerBlockedReason, syncQueuedFromLabel, applyQueuedSteerError, syncQueuedSteerAllControl, _conversationIsQuiet, _confirmSessionNotLiveThenRenderOutcomeBanner, _renderOutcomeBanner, attachConversationEndAffordance, _prevUserMessageTarget, _nextUserMessageTarget, _visibleSpeakButton, _syncSpeakFloatPlayback, _batchHasSpeakableReply, _disarmPhoneModeRead, readLastMessageAloud, _convReplayCollectItems, _convReplayTagWithTs, renderConvReplayControls, playNextConvReplayStep, clearTtsHighlight, clearTtsCaption, _ttsShowVoice, _ttsPerfFlush, _ttsEngineCancel, setTtsButtonsBusy, setTtsButtonsState, _setTtsDirectBtnState, _compactContextNow, _tickCompactRun, sessionIsActivelyWorking, injectToSession, beginOptimisticSteerMove, _sessionRowMatches, syncCodexWakeUsage, renderCodexWakeBreakdown, handleCodexWakeOutcome, tapbackLoad, tapbackSave, _cccPlayTurnEnd, _cccGlowCompletedConversation, _cccPlayDone, maybeCatchUpCodexConversationFromAppServer, maybeCatchUpAcpConversationFromWire, _rememberLiveOverlay, _liveOverlayFieldsFromRow, _scheduleSidebarRender, syncRelayedQuestionModal, markStaleStreamingBubbles, updateSilentInvestigateBar, f2RecordContinuationLineage, wtTransportStageLabel, _wtSetEchoNote, _wtFindLivePendingEcho, _wtNativeFallbackResend, micButtons, micButtonPaneId, stripTitle, stripGhIssueProjectTag, isContinuationBoilerplateTitle, continuationFallbackTitle, rowLocalTitle, _workerRoleFromPrompt, _uxFixesWorkerTicketsForRow, workerSelfTicketRef, workerTaskTicketRef, workerQueueOf, workerStateBucket, _ideaAvatarHtml, _repoSessionAvatarHtml, _waCategory, sessionEngineIconHtml, _procCheckedAgoLabel, _procCheckedClock, closeActivityLogModal, _loadActivityLogInto, codexDiagPanelEl, _codexDiagRow, _codexDiagPathHtml, _codexDiagAge, _codexDiagClock, launchTargetsForCurrentSession, actionButtonSnapshot, setActionButtonText, restoreActionButtonText, _ttsSpeakButtonData, isPendingSendEchoElement, buildTtsDataFromElements, _sanitizeTtsText, _ttsIsHebrew, ttsButtons, ttsButtonPaneId, postCompactSession, _applyOptimisticTouchToRow, backgroundApiFetch, _handleKillEvents, _handlePrewarmEvents, _renderInterruptAsks, syncExternalSpawnPlaceholders, _scheduleTurnEndListRefresh, _ultraFreshSchedule, _ultraFreshWaitingAt, conversationGoalSourceKind, f2PaneRoot, _f2ContinuationEdges, _contextFieldsFromRow, f2EngineKey, f2DemoForceMatches, f2LaunchEngines, f2ModelsForEngine, f2EffortsForEngine, f2EffortLabel, f2EngineLabel, f2ModelLabel, f2ConfigHtml, _knownModelForEngine, _modelUnavailableReason, _knownModelForOtherEngine, _fitInputContextStrip, _autoHandoverCurrentState, commitAutoHandoverMode, closePlanUsagePopover, closeModelPicker, _buildClaudeModelMenuHtml, _reasoningSectionHtml, postInjectInput, railQuotaEngine, _monthlyClaudePlanUsd, _monthlyCodexPlanUsd, railQuotaCostPresentation, bugOpenModal, _isComposerElement, railUsageBreakdown, _claudeFriendlyModelName, railCostHeadline, railUsageBreakdownHtml, railQuotaCostHtml, _railTurnGraphHtml, _refreshQuotaCostCalibration, getEngineSvg, isBenignCodexErrorItem, isBenignCodexStderrLine, adoptPendingSpawnPid, _watchCodexSpawnRegistration, _watchPendingSpawnRegistration, chasePendingSpawn, _failPendingSpawnCard, persistSpawnCwdPickerValue, _showSpawnCwdTail, markNsAdvisorManual, syncSpawnEngineDependentUi, recordSpawnChoice, requestClaudePrewarm, syncNsModelOverrideSelects, renderNsAdvisor, resetRepoGuess, refreshJevRepoPromo, abortBackgroundApiReadsForSpawn, populateSpawnCwdPicker, ensureSpawnCwdOptionsLoaded, _wireNewSessionChooser, _renderNsExtensions, loadNsAdvisor, renderNsAdvisorEditor, renderNsModelPickerPills, cancelOptimisticAgentTurn, _startOptimisticAgeTicker, _armOptimisticAgentSafetyTimer, _convDirectProbe, conversationBgKeysForPane, updateConversationBackgroundPaletteState, setConversationPanePaletteVars, conversationPaletteVars, conversationBgPaletteItem, persistConversationBgForPane, readConversationBgPrefs, _effectiveThemeIsLight, flushScheduledStreamTextRenders, _ultraFreshSpawnFeed, ensureStreamingBubble, scheduleStreamTextRender, _replayRevealAllShells, _replayRevealRun, orchFlashPlaybook, orchPaneVisible, _convReplayViewForPane, _ultraFreshTime, _ultraFreshPaint, _ultraFreshParseState, _ultraFreshRow, _ultraFreshSendBarrier, manualSubsessionParentId, _f2OriginIndex, _continuationSuccessorIndex, _dynAskItems, _dynAskApply, _setEarlierAskLabel, _bridgeSearchNeedle, recencyCutoffSec, _uuidSearchNeedle, _sessionIdSearchRank, rowMatchesEffortQuery, _prioritizeNameMatches, _prioritizeSessionIdMatches, applyConvSort, _decorateWithHistoryMatches, _compactRunResultHtml, _compactRunStepsHtml, _compactUsageShape, _convPaneTabStrip, _convPaneApplyActiveTab, _convPaneRestoreTabScroll, _convShouldLiveRevealStickToBottom, formatCompactCount, liveQuestionDisplayOptions, queuedFromDescription, queuedSteerErrorKey, jumpPresentationToEnd, _jumpToPreviousUserMessage, _scrollToConversationUserMessage, _attachSpeakerTools, _makeSpeakBtnDraggable, _ttsReadSelectionIfAny, _topVisibleAnchor, _observeConvEventSizes, _convReadingTop, _convUserMessageTop, agentAnswerNodeBeforeResult, assistantTextElements, _ttsFreshSelection, _ttsEnginePause, _ttsEngineResume, _primeTtsEngine, selectedConversationTtsData, _ttsStartChunkedSpeech, _isConvReplayMeaningful, stepConvReplayBack, _convReplayResume, _convReplayJumpToLine, _convReplayIsTyped, _convReplayPrepareWordsForItem, _convReplayHumanStep, _convReplayRevealWords, _ttsClientTag, _ttsSetStreaming, _compactRunSettleAcpTurn, showInjectError, _wakeStageQuietLabel, _wakeStageLabel, _codexWakeTransportLabel, _wakeInt, _cccBeep, _cccPaintCompletionGlow, _dashboardCoveredByApp, _pausePeriodicSidebarRender, closeRelayedQuestionInline, showRelayedQuestionInline, _dropStreamBubble, silentNudgeAttempt, nudgeSilentSession, investigateSilentSession, flowNodeKey, isFlowView, isGenericHandoffTitle, _withTicketPrefix, _uxFixesWorkerDisplayTitle, _uxFixesRowIdentityKeys, ideaTicketsOn, sessionIconPresentation, _avatarModelBadgeHtml, _hashHue, sessionRepoAvatarPath, repoAvatarHtml, repoInitials, _waCategoryIn, _renderReadableActivityLog, _codexDiagTilde, _ttsPlaybackElements, assistantNodeTextForCopy, _ttsBlockAncestor, _ttsParagraphBreak, _chunkTtsText, _ttsSetEnabled, _appEmbedSkips, _appEmbedSkippedResponse, _startupCriticalApiRead, _backgroundApiReadSkipsQueue, _startBackgroundApiRead, _drainBackgroundApiReads, _appendActivityLog, resolveInterruptAsk, _interruptAskSessionLabel, _pruneExternalSpawnSeen, _sessionRowExists, spawnSourceForEngine, _scheduleDashboardArchiveRefresh, _ultraFreshSync, f2AllLaunchEngines, f2SelectHtml, f2QuickPickHtml, _claudeModelMenuOptions, _monthlyPlanUsd, bugResetState, bugApplyMode, bugDiagSetStatus, bugRenderMeta, bugApplyDestinationUI, _refreshArchiveListIfCostMode, _ensureEngineSvgSprite, _engineSvgInline, _engineSvgSymbolId, bindAcceptedCodexSpawn, _pendingSpawnStillWaiting, markPendingSpawnNotAcknowledged, deferSidebarRenderIfDragging, rebindCurrentSelectionToRealCard, resolvePlaceholderPanes, renderRepoGuessChips, isSpawnCwdMenuOpen, renderSpawnCwdMenu, renderSpawnCwdQuickChips, updateNewSessionCwdNotice, scheduleClaudePrewarm, refreshEngineMissingNotice, renderEngineMissingNotice, spawnSupportsWorktree, spawnModelCostTier, spawnModelCostSummary, formatModelNameForBadge, renderNsModelComparison, fetchModelPickerPicksFromServer, claudePrewarmSpec, nsAdvisorChoices, applyNsAdvisorChoice, getModelPillLabel, currentSpawnChoice, setRepoGuessPickerValue, renderSpawnCwdSummary, _archiveFolderOptions, verifySavedSpawnCwd, loadRepoList, refreshNewSessionCwdUi, _loadNsExtensionTemplates, nsAdvisorLocalTime, getTopSpawnPicks, selectSpawnPick, showNsManualModelCatalog, recentNsModelPicks, nsAdvisorRanksPicker, _tickOptimisticAgeNow, rowForConversationId, _restartTtsAtCurrentPosition, relLuminance, hexToRgb, readableTextRgb, mixRgb, contrastRatio, rgbToHex, conversationBgKeyIsPersistable, writeConversationBgPrefs, _convPaneEnsureSubagentTab, _replayRevealShellsForRun, orchPlaybookEl, _ultraFreshCurrent, rowOutcomeView, readyToCloseArchiveHtml, ticketSessionSection, syncRowQuickActions, _workersPaintTicketUpdate, preSendPreviewFor, _manualSubsessionEdges, _conversationNameMatchesQuery, _pinSortKey, _convTitleForSort, _historySyntheticRow, _prioritizeSearchResultBands, _compactStepIndexFor, _convPaneActivateTab, liveQuestionOptionParts, queuedFromSessionRow, renderPresentationCursor, _stepTtsRate, _ttsJumpToNextSentence, _ttsCycleVoice, _syncTtsRateUi, _ttsSyncEnabledControls, elementForSelectionNode, buildTtsDataFromRange, _cccPlaySpeakerCue, _ttsSpeakNextChunk, _convReplayLooksInjected, _convReplayWrapWordsInHtml, settleCompactRunUnconfirmed, _cccSoundsEnabled, _ensureAudioCtx, _cccGlowTargets, _readAloudThrottlesSidebar, shouldPausePeriodicUiWork, isConversationListScrollActive, _sidebarHasHoveredConvItem, closeRelayedQuestionModal, submitRelayedQuestionAnswers, f2ResolveSpawnCwd, openConversationInPane, workerTicketIssueTitle, _uxFixesIdentityKey, sessionCostTier, _readableLogGroups, _readableLogGroupHtml, _startupApiPath, _startupPathMatches, _railAppsSaved, _bufferBackgroundApiResponse, _scheduleActivityLogRender, _queueDashboardArchiveRender, _workersLatestTicketCard, _ultraFreshPaintBatch, f2TopLaunchPicks, railMonthlyPlanUsd, bugResetMessages, bugClearShot, bugFetchVersion, bugEscape, bugRenderPreview, bugDestination, bugLoadDiagnostics, markSpawnRowPaint, _whenDashboardUncovered, _archiveWindow, _archiveQuery, _mergeIntoMasterRows, isSidebarDragInProgress, setSpawnCwdMenuOpen, spawnCwdQuickChipOptions, chooseSpawnCwdFolder, renderOrchPlaybooks, _emnLabel, installMissingEngine, spawnModelDescription, setSpawnDefaultModel, rankNsAdvisorChoices, _archiveFolderValue, _pathParentLeaf, spawnCwdKnownToExist, forgetMissingSpawnCwd, _isUnnamedSpawnModel, _namedSpawnModelForEngine, _replayRunId, sidebarSessionWorking, sessionAttentionStep, rowActionSelector, loadRowDecisionReply, rowQuickActionSource, checkRowInvestigation, currentRowQuickActionSource, paintRowQuickAction, syncRowPopouts, _uxqItemForRef, _uxqItemRef, _workersTicketContextHtml, _workersTicketState, _stripHistoryHtml, _historyTsSeconds, _isRecallHistoryMatch, _convPaneRememberTabScroll, _convPaneEnsureJsonlTaskLane, presentationPaneElement, ensurePresentationStage, _refreshTtsRateBtns, _ttsSpeakBrowser, _ttsPerfStart, _ttsSetPlay, highlightTtsWord, updateTtsCaption, _ttsBindChunkCompletion, claudeFastSpawnAwaitingPaint, spawningSelectionStillPending, attachAllPaneDropZones, _readableLogPresentation, _readableLogEpoch, _activityLogTimestampLocal, _readableLogTime, _renderActivityLogPanel, bugBuildReportMarkdown, _archiveRowStableKey, loadCrossRepoIssues, refreshArchivedGroupChats, refreshUxFixesQueueMeta, _renderArchiveIfLoaded, hideLoadingOverlay, _releaseStartupApiReads, spawnCwdOptionForPath, closeSpawnCwdMenu, openWebFolderPicker, useSpawnCwdSelection, webPickerFallbackNote, orchExecutor, orchTester, orchCritics, orchMoreOpen, orchExecLabel, rowHandoff, _attentionActionOwner, rowDecisionReplyText, rowInvestigationTranscriptIdle, _workersTicketContext, _workersTicketChoices, _workersIdeaTicket, _workersIdeaTicketState, _uxqTicketAttention, _workersActiveClaim, stepPresentationSlide, ensurePresentationLiveRegion, _ttsWordAtProgress, attachDropZones, _logSessionName, _readableInjectParts, _dismissActivityLog, bugFullDescription, shouldPauseSidebarRender, _queueListFetch, _setUxFixesQueueMeta, _startupReplaysDirect, closeWebFolderPicker, folderPickerNavigate, _workersMeaningfulUpdate, _uxqProjectKey, attachPresentationLiveResize, syncPresentationLiveResizeAria, forwardPresentationProjectionEvent, dragHasConversationPayload, readConvIdFromDrop, showConvToast, loadAttentionList, bugDiagnosticsMarkdown, _queueListMerge, _uxFixesSeq, _uxFixesPlausibleSessionId, _uxFixesClosedAtMs, _uxFixesClaimedAtMs, folderPickerShowError, presentationLiveHeightPercent, applyPresentationLiveHeight, presentationLiveMinimumPercent, presentationElementPath, presentationResolvePath, readConvIdsFromDrop, _ipNyaDetailsOn, repoUrl };
   }
   root.CCCConversationCore = Object.freeze({ createController });
 })(typeof window === 'undefined' ? globalThis : window);

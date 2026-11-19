@@ -35,6 +35,21 @@ const footer = r => '<session-state>\nNEXT_STEP_USER: None.\nCOMPLETION: '
   + JSON.stringify(r.session_state.completion) + '\n</session-state>';
 const finalReply = r => ({ type: 'assistant', blocks: [{ kind: 'text', text: footer(r) }] });
 
+test('numbered chips require the exact latest finished reply before sending', () => {
+  const r = { session_id: 'numbered', last_event_type: 'assistant', state: 'idle',
+    last_assistant_text: 'Ready for your call on the change: **1** (spawn a subagent to port and merge) or **2** (skip)?',
+    session_state: { next_step_user: 'Decide on the change', numbered_choice: true,
+      next_actions: [{label: 'Spawn a subagent to port and merge', reply: '1'}, {label: 'Skip', reply: '2'}] } };
+  const candidate = actionSource(r, true);
+  assert.deepEqual(Array.from(candidate.actions, action => action.reply), ['1', '2']);
+  assert.equal(actionSource(r), null);
+  const reply = {type: 'assistant', turn_complete: true, blocks: [{kind: 'text', text: r.last_assistant_text}]};
+  assert.equal(transcriptIdle(candidate, [reply]), true);
+  assert.equal(transcriptIdle(candidate, [{...reply, turn_complete: false}]), false);
+  assert.equal(transcriptIdle(candidate, [reply, {type: 'user_text', text: '1'}]), false);
+  assert.equal(transcriptIdle(candidate, [{...reply, blocks: [{kind: 'text', text: 'A different reply.'}]}]), false);
+});
+
 test('unassigned investigations get a literal continuation without inventing approval', () => {
   const r = row();
   assert.equal(actionSource(r), null, 'a stale idle list snapshot is insufficient');

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 import server
-from ccc_server import engines
+from ccc_server import engines, log_parse
 
 
 @pytest.fixture
@@ -103,7 +103,6 @@ def test_missing_file_is_not_a_cached_negative(head):
 
 
 def test_codex_only_parser_updates_persist_without_a_claude_parse(head, monkeypatch):
-    from ccc_server import log_parse
     monkeypatch.setattr(log_parse, '_conv_meta_cache_dirty', False)
     write(head, [codex('An ordinary prompt'), {'type': 'event_msg', 'payload': {
         'type': 'agent_message', 'message': 'A reply'}}])
@@ -122,6 +121,36 @@ def test_codex_only_parser_updates_persist_without_a_claude_parse(head, monkeypa
         return original(candidate, *args, **kw)
     monkeypatch.setattr(Path, 'open', guarded)
     assert server._extract_codex_tail_meta(head) == meta
+
+
+def test_metadata_cache_batch_save_retries_without_replacing_previous_snapshot(head, monkeypatch):
+    monkeypatch.setattr(log_parse, '_conv_meta_cache_dirty', False)
+    target = server._CONV_META_CACHE_FILE
+    previous = json.dumps({'schema_version': log_parse._CONV_META_SCHEMA_VERSION, 'entries': {}})
+    target.write_text(previous)
+    # Cross a batch boundary, retaining escapes, tuples and nested values.
+    entries = {str(index): {'mtime': index, 'cache_key': (index, 8), 'title': 'Résumé\n"quoted"'}
+               for index in range(66)}
+    server._conv_meta_cache.update(entries)
+    server._conv_meta_cache_dirty = True
+
+    def fail_mid_write(handle, _entries):
+        handle.write('{"schema_version":')
+        assert target.read_text() == previous
+        raise OSError('test write failure')
+
+    with monkeypatch.context() as failure:
+        failure.setattr(log_parse, '_write_conv_meta_cache', fail_mid_write)
+        server._save_conv_meta_cache()
+
+    assert target.read_text() == previous
+    assert not list(target.parent.glob(f'.{target.name}.*.tmp'))
+    assert server._conv_meta_cache_dirty
+    server._save_conv_meta_cache()
+    assert target.read_text() == json.dumps({
+        'schema_version': log_parse._CONV_META_SCHEMA_VERSION, 'entries': entries,
+    })
+    assert not server._conv_meta_cache_dirty
 
 
 def test_changed_during_read_does_not_certify_a_partial_head(head, monkeypatch):

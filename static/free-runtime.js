@@ -228,7 +228,7 @@
     }
   }, true);
 
-  // Metadata rail chip for the open session ("via: UI" gets a "$0" sibling).
+  // Keep runtime visible even when the origin disclosure is collapsed.
   function renderRailRuntime(row) {
     var via = document.getElementById('railSpawnedVia');
     if (!via || !via.parentNode) return;
@@ -237,7 +237,9 @@
       el = document.createElement('span');
       el.id = 'railRuntime';
       el.className = 'rail-runtime-free';
-      via.parentNode.insertBefore(el, via.nextSibling);
+      var actions = document.getElementById('railActions');
+      if (actions) actions.appendChild(el);
+      else via.parentNode.insertBefore(el, via.nextSibling);
     }
     if (isFreeRow(row)) {
       el.hidden = false;

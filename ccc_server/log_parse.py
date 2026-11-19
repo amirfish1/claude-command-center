@@ -7,6 +7,7 @@ in server.py are reached via `_core` at call time."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone, time as datetime_time
+from itertools import islice
 from pathlib import Path
 import contextlib
 import json
@@ -745,6 +746,7 @@ def get_model_picker_picks() -> list:
 _conv_meta_cache = {}
 _conv_meta_cache_dirty = False
 _conv_meta_cache_lock = threading.Lock()
+_conv_meta_cache_save_lock = threading.Lock()
 _CONV_META_SCHEMA_VERSION = 17
 
 # Dedup set for transcript-scanned interrupts — prevents re-firing the same
@@ -1079,40 +1081,58 @@ def _gc_scratch_jsonls(max_age_days=7):
         )
 
 
-def _save_conv_meta_cache():
-    """Atomic write of _conv_meta_cache to disk if dirty since last save.
+def _write_conv_meta_cache(handle, entries):
+    # json.dump uses the Python incremental encoder. Small independent
+    # dictionaries use the C encoder without making a second copy of the
+    # entire cache in memory. Keep the existing JSON layout and ordering.
+    handle.write('{"schema_version": ' + json.dumps(_CONV_META_SCHEMA_VERSION) + ', "entries": {')
+    items = iter(entries.items())
+    separator = ""
+    while batch := dict(islice(items, 64)):
+        handle.write(separator + json.dumps(batch)[1:-1])
+        separator = ", "
+    handle.write("}}")
 
-    Called at the end of /api/conversations so saves are amortized over
-    user actions, never blocking the response (already-built rows have
-    been sent by then in the streaming-friendly write path; for the
-    current send_json path, the extra <50 ms write is fine).
-    """
+
+def _save_conv_meta_cache():
+    """Save dirty metadata atomically without holding the readers' lock."""
     global _conv_meta_cache_dirty
-    with _core._conv_meta_cache_lock:
-        # Extracted parsers mark dirty through _core (server.py), while this
-        # module's own parser updates its local binding. Honor both until the
-        # shared snapshot is saved; otherwise Codex-only changes are lost at
-        # each detached worker exit and reparsed on the next refresh.
-        if not (_conv_meta_cache_dirty or _core._conv_meta_cache_dirty):
-            return
-        snapshot = {
-            "schema_version": _CONV_META_SCHEMA_VERSION,
-            "entries": dict(_core._conv_meta_cache),
-        }
-        _conv_meta_cache_dirty = False
-        _core._conv_meta_cache_dirty = False
-    try:
-        _core._CONV_META_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = _core._CONV_META_CACHE_FILE.with_suffix(".json.tmp")
-        with tmp.open("w") as f:
-            json.dump(snapshot, f)
-        tmp.replace(_core._CONV_META_CACHE_FILE)
-    except OSError as e:
-        # Restore the dirty flag so we'll retry on the next call.
+    if not (_conv_meta_cache_dirty or _core._conv_meta_cache_dirty):
+        return
+    with _conv_meta_cache_save_lock:
         with _core._conv_meta_cache_lock:
-            _conv_meta_cache_dirty = True
-            _core._conv_meta_cache_dirty = True
-        print(f"  [conv-meta-cache] save failed: {e}")
+            # Local parsers mark this module dirty and other engines mark
+            # the core binding. Recheck both after any earlier writer.
+            if not (_conv_meta_cache_dirty or _core._conv_meta_cache_dirty):
+                return
+            entries = dict(_core._conv_meta_cache)
+            _conv_meta_cache_dirty = False
+            _core._conv_meta_cache_dirty = False
+        target = _core._CONV_META_CACHE_FILE
+        temporary = None
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            # The detached archive builder and dashboard have independent
+            # locks. A unique temp file prevents crossed writes or renames.
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="ascii", dir=target.parent, prefix=f".{target.name}.",
+                suffix=".tmp", delete=False,
+            ) as handle:
+                temporary = Path(handle.name)
+                _write_conv_meta_cache(handle, entries)
+            temporary.replace(target)
+            temporary = None
+        except (OSError, TypeError, ValueError) as exc:
+            with _core._conv_meta_cache_lock:
+                _conv_meta_cache_dirty = True
+                _core._conv_meta_cache_dirty = True
+            if not isinstance(exc, OSError):
+                raise
+            print(f"  [conv-meta-cache] save failed: {exc}")
+        finally:
+            if temporary is not None:
+                with contextlib.suppress(OSError):
+                    temporary.unlink()
 
 
 _META_MARKERS = (

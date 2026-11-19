@@ -170,6 +170,11 @@
     state = state || {};
     const many = Array.isArray(state.next_actions) ? state.next_actions.map(sessionQuickAction) : [];
     if (many.length && many.every(Boolean)) return many.slice(0, 4);
+    if (state.numbered_choice === true && state.next_actions?.length === 2
+        && new Set(state.next_actions.map(action => action?.reply)).size === 2
+        && state.next_actions.every(action => /^[12]$/.test(action?.reply)
+          && typeof action.label === 'string' && action.label.length <= 48
+          && /^\p{L}+(?: \p{L}+){0,6}$/u.test(action.label))) return state.next_actions;
     const one = sessionQuickAction(state.next_action);
     if (one) return [one];
     const step = String(next == null ? state.next_step_user || '' : next).trim();

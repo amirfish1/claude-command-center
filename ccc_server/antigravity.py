@@ -93,6 +93,8 @@ def live_cli_session_ids():
 
 def archive_terminal_overlay(rows, *, existing_ids=None):
     """Fill snapshot gaps from terminal-owned logs, without an archive scan."""
+    from ccc_server.engines import _antigravity_response_state
+
     existing = (_core._archive_overlay_existing_ids(rows)
                 if existing_ids is None else existing_ids)
     archived, trashed = _core._load_conversation_lifecycle_sets()
@@ -141,6 +143,8 @@ def archive_terminal_overlay(rows, *, existing_ids=None):
             'model': tail.get('model') or meta.get('model') or '',
             'last_event_type': tail.get('last_event_type'),
             'last_assistant_text': tail.get('last_assistant_text'),
+            'session_state': _antigravity_response_state(
+                tail.get('last_assistant_text'), tail.get('turn_complete')),
             **_core._antigravity_activity_fields_from_tail(tail, True),
             'can_headless_resume': bool(
                 _core._antigravity_cli_conversation_path(sid).is_file()),

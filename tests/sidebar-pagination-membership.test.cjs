@@ -18,6 +18,8 @@ function setup(rows, {engine = '', cutoff = 0, f2 = {}, workerIds = [], ticketVi
     continuationParentId: row => row.continued_from_session_id || '',
     ideaTicketsOn: () => true,
     ticketViewOn: () => ticketView,
+    _ultraFreshCurrent: row => row.fresh || row,
+    ticketSessionSection: row => row.state === 'working' ? 'active' : 'needs-you',
     _uxqHealthCache: {worker_session_ids: workerIds}, _wtWorkersCache: {}, _wtWorkerConvsCache: {},
     classifyKanbanColumn: row => {
       classifications.push(row.session_id);
@@ -107,6 +109,21 @@ test('Other uses real ledger, Hermes profiles, typed lanes and the full-list tic
   assert.equal(model.matches(ticket, 'archived', false), false);
   assert.equal(page('archived', 20).omitted, 42);
   assert.equal(page('archived', 80).omitted, 0);
+});
+
+test('live unticketed decisions reach All and Ticket view when routine terminal rows go to Other', () => {
+  const actions = [{ label: 'Port the change', reply: '1' }, { label: 'Skip', reply: '2' }];
+  const terminal = row('terminal', {engine: 'antigravity', state: 'idle'});
+  terminal.fresh = {...terminal, session_state: {next_actions: actions}};
+  const working = row('working', {state: 'working', session_state: terminal.fresh.session_state});
+  const explicitOther = {...terminal, session_id: 'explicit', all_lane_override: 'other'};
+  const ordinary = Array.from({length: 51}, (_, i) => row('ordinary-' + i));
+  const {model, page} = setup([...ordinary, terminal, working, explicitOther], {ticketView: true});
+  assert.deepEqual(Array.from(page('alltickets', 1).rows), [terminal]);
+  assert.deepEqual(Array.from(page('workers', 1).rows), [terminal]);
+  assert.equal(model.matches(terminal, 'archived', false), false);
+  assert.equal(model.matches(working, 'archived', false), true);
+  assert.equal(model.matches(explicitOther, 'archived', false), true);
 });
 
 test('engine and time filters exclude hidden rows from the remaining count; search spans both', () => {

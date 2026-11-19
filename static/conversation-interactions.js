@@ -2012,7 +2012,7 @@ document.addEventListener('click', async ev => {
     let accepted = false;
     try {
       if (current.investigation && !await (0, sharedState.checkRowInvestigation)(current, true)) {
-        throw new Error('The transcript changed or the investigation is already running. Refresh the row.');
+        throw new Error('The transcript changed or the agent is already running. Refresh the row.');
       }
       if (current.investigation) {
         const base = (0, sharedState._ultraFreshRow)(sid);

@@ -3,7 +3,8 @@
   'use strict';
   function createHost({ documentReady } = {}) {
     const state = {};
-    const adapters = { state, helpers: state, documentReady };
+    const adapters = { state, helpers: state, documentReady, loadDetailsScript };
+    let detailsPromise;
     for (const controller of [root.CCCConversationCore, root.CCCConversationPanes,
       root.CCCConversationControls, root.CCCConversationInteractions,
       root.CCCConversationServices, root.CCCConversationViews,
@@ -49,14 +50,8 @@
         window.open('/?ccc_settings=appearance', '_blank', 'noopener');
       },
     });
-    let detailsPromise;
-    async function ensureDetails() {
-      if (root.CCCConversationDetails) {
-        Object.assign(state, root.CCCConversationDetails.createController({
-          ...adapters, functions: state,
-        }));
-        return;
-      }
+    async function loadDetailsScript() {
+      if (root.CCCConversationDetails) return;
       if (!detailsPromise) {
         const dependency = document.querySelector('[data-ccc-conversation-details]');
         detailsPromise = new Promise((resolve, reject) => {
@@ -69,6 +64,10 @@
         }).catch(error => { detailsPromise = null; throw error; });
       }
       await detailsPromise;
+    }
+
+    async function ensureDetails() {
+      await loadDetailsScript();
       Object.assign(state, root.CCCConversationDetails.createController({
         ...adapters, functions: state,
       }));
