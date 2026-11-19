@@ -2377,7 +2377,7 @@ def _strip_image_markup(text):
     t = _IMAGE_TAG_RE.sub(" ", str(text or ""))
     if _IMAGE_PATH_MARKER_RE.search(t):
         t = _IMAGE_PATH_RE.sub(" ", t)
-    return re.sub(r"\s+", " ", t).strip()
+    return " ".join(t.split())
 
 
 def _title_opener_is_thin(text):

@@ -1686,12 +1686,16 @@ def _truncate_session_name(name):
     sidebar instead of stretching the column or breaking layout."""
     if name is None:
         return None
-    s = re.sub(r"\s+", " ", str(name)).strip()
+    limit = _core.SESSION_NAME_MAX_CHARS
+    # Only the normalized prefix can appear in the sidebar. One extra word
+    # proves truncation even for one-character words, without normalizing the
+    # remainder of a long pasted prompt on every list refresh.
+    s = " ".join(str(name).split(None, limit + 1)[:limit + 1])
     if not s:
         return s
-    if len(s) <= _core.SESSION_NAME_MAX_CHARS:
+    if len(s) <= limit:
         return s
-    return s[: _core.SESSION_NAME_MAX_CHARS - 1].rstrip() + "…"
+    return s[:limit - 1].rstrip() + "…"
 
 
 _session_names_cache_lock = threading.Lock()
