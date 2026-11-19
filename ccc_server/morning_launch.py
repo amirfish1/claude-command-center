@@ -25,6 +25,7 @@ from ccc_server import core as _core
 from ccc_server import test_isolation_active as _test_isolation_active
 from ccc_server.paths import _is_pid_alive
 from ccc_server import github_quota as _github_quota
+from ccc_server.bounded_cache import ByteBudgetCache
 
 # How many trailing assistant turns /usage ships for the status-rail
 # per-turn token graph. Older turns are noise in the rail; the full history
@@ -2169,6 +2170,183 @@ def _extract_kimi_usage(session_id):
     return result
 
 
+# Retain aggregates, never transcript text or message-ID sets. Every read checks
+# file identity and nanosecond metadata; concurrent readers share one parse.
+_CLAUDE_USAGE_SNAPSHOTS = ByteBudgetCache(max_bytes=4 << 20, max_entries=32)
+_CLAUDE_USAGE_PARSE_LOCKS = tuple(threading.Lock() for _ in range(16))
+
+
+def _claude_usage_file_version(jsonl):
+    info = jsonl.stat()
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _read_claude_usage_snapshot(jsonl, model):
+    """Aggregate the transcript using the same rules as a fresh usage read."""
+    latest = 0
+    peak = 0
+    total_in = 0
+    total_cw = 0
+    total_cr = 0
+    total_out = 0
+    live_effort = ""
+    diagnostic_latest = 0
+    diagnostic_peak = 0
+    live_context = None
+    max_observed_window = 0
+    # Claude Code re-records the same Anthropic API response (same
+    # `message.id`) under a fresh event uuid every time a session is
+    # resumed or forked from a parent turn. Tracking which message.ids
+    # have already contributed to the totals keeps cost from inflating
+    # by the resume count — see issue #60.
+    seen_message_ids = set()
+    # `/compact` (manual or auto) emits a `{type: system, subtype: compact_boundary}`
+    # event. Pre-compact assistant turns no longer contribute to the live
+    # context window, so reset both latest and peak whenever we cross a
+    # boundary — the displayed numbers reflect only the post-most-recent-
+    # compact segment, which matches what the user sees in the TUI. Recent
+    # Claude Code builds also include `postTokens`; use that as the live value
+    # until the next assistant turn writes a normal `usage` block.
+    compact_count = 0
+    # Per-turn tail for the status-rail column graph: one entry per billed
+    # assistant message (same message.id dedupe as the totals above), newest
+    # last. Raw counts only — the client applies the same cache-read discount
+    # it uses for the per-turn chip, so a bar equals the chip's number.
+    turn_series = collections.deque(maxlen=USAGE_TURN_SERIES_MAX)
+    with open(jsonl, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if ev.get("type") == "system" and ev.get("subtype") == "compact_boundary":
+                meta = ev.get("compactMetadata")
+                if not isinstance(meta, dict):
+                    meta = {}
+                pre_tokens = _core._codex_int(meta.get("preTokens"))
+                post_tokens = _core._codex_int(meta.get("postTokens"))
+                max_observed_window = max(max_observed_window, pre_tokens, post_tokens)
+                latest = post_tokens
+                peak = post_tokens
+                diagnostic_latest = post_tokens
+                diagnostic_peak = post_tokens
+                live_context = None
+                compact_count += 1
+                continue
+            if ev.get("type") == "system" and ev.get("subtype") == "local_command":
+                parsed_context = _local_command_context_usage(ev)
+                if parsed_context:
+                    live_context = parsed_context
+                    max_observed_window = max(
+                        max_observed_window,
+                        parsed_context["tokens"],
+                        parsed_context["limit"],
+                    )
+                    if parsed_context.get("model"):
+                        model = parsed_context["model"]
+                continue
+            if ev.get("type") != "assistant":
+                continue
+            if ev.get("isSidechain"):
+                continue
+            msg = _core._safe_parse_message(ev.get("message", {}))
+            if msg.get("model"):
+                model = msg.get("model")
+            # Claude Code stamps the turn's effort on the assistant record,
+            # a sibling of `message` rather than a field inside it. That is
+            # the ground truth: it reflects a `/effort` typed into the TUI
+            # just as much as CCC's own `--effort`, where the override file
+            # only knows what CCC set.
+            if ev.get("effort"):
+                live_effort = str(ev.get("effort")).strip()
+            diag_window = _diagnostic_context_tokens(
+                msg.get("diagnostics") or ev.get("diagnostics")
+            )
+            if diag_window:
+                diagnostic_latest = diag_window
+                diagnostic_peak = max(diagnostic_peak, diag_window)
+                max_observed_window = max(max_observed_window, diag_window)
+            u = msg.get("usage") or {}
+            if not isinstance(u, dict):
+                continue
+            ti = u.get("input_tokens") or 0
+            tcw = u.get("cache_creation_input_tokens") or 0
+            tcr = u.get("cache_read_input_tokens") or 0
+            tout = u.get("output_tokens") or 0
+            window = ti + tcw + tcr
+            # Window/peak observe every event — re-seeing the same
+            # usage is harmless for a max() — but totals must skip
+            # message.ids we've already billed.
+            if window:
+                latest = window
+                if window > peak:
+                    peak = window
+                max_observed_window = max(max_observed_window, window)
+            mid = msg.get("id") if isinstance(msg.get("id"), str) else None
+            if mid:
+                if mid in seen_message_ids:
+                    continue
+                seen_message_ids.add(mid)
+            if isinstance(ti, int):
+                total_in += ti
+            if isinstance(tcw, int):
+                total_cw += tcw
+            if isinstance(tcr, int):
+                total_cr += tcr
+            if isinstance(tout, int):
+                total_out += tout
+            if window or tout:
+                turn_series.append({
+                    "ts": ev.get("timestamp") or "",
+                    "tokens_in": window,
+                    "tokens_cached": tcr if isinstance(tcr, int) else 0,
+                    "tokens_out": tout if isinstance(tout, int) else 0,
+                })
+
+    if not latest and diagnostic_latest:
+        latest = diagnostic_latest
+    if not peak and diagnostic_peak:
+        peak = diagnostic_peak
+
+    return {
+        "latest": latest,
+        "peak": peak,
+        "total_in": total_in,
+        "total_cw": total_cw,
+        "total_cr": total_cr,
+        "total_out": total_out,
+        "model": model,
+        "live_effort": live_effort,
+        "live_context": live_context,
+        "max_observed_window": max_observed_window,
+        "compact_count": compact_count,
+        "turn_series": list(turn_series),
+    }
+
+
+def _claude_usage_snapshot(jsonl, model):
+    from copy import deepcopy
+    jsonl = Path(jsonl)
+    # Stripes bound lock storage and coalesce scans of the same file without
+    # serializing every session behind one expensive transcript parse.
+    with _CLAUDE_USAGE_PARSE_LOCKS[hash(str(jsonl)) % len(_CLAUDE_USAGE_PARSE_LOCKS)]:
+        version = _claude_usage_file_version(jsonl)
+        key = (str(jsonl), model, version)
+        cached = _CLAUDE_USAGE_SNAPSHOTS.get(key)
+        if cached is not None:
+            return deepcopy(cached)
+        result = _read_claude_usage_snapshot(jsonl, model)
+        # A writer may append or replace the file during the scan. Return the
+        # normal fresh-read result, but never retain it under the old version.
+        if _claude_usage_file_version(jsonl) == version:
+            weight = 4 * (len(repr(key)) + len(json.dumps(result))) + 2048
+            _CLAUDE_USAGE_SNAPSHOTS.put(key, result, weight)
+        return deepcopy(result)
+
+
 def extract_session_usage(session_id):
     """Walk a session's JSONL transcript and return token-usage stats.
 
@@ -2239,137 +2417,22 @@ def extract_session_usage(session_id):
     if not jsonl:
         return {**empty, "model": desktop_meta.get("model") or ""}
 
-    latest = 0
-    peak = 0
-    total_in = 0
-    total_cw = 0
-    total_cr = 0
-    total_out = 0
-    model = desktop_meta.get("model") or ""
-    live_effort = ""
-    diagnostic_latest = 0
-    diagnostic_peak = 0
-    live_context = None
-    max_observed_window = 0
-    # Claude Code re-records the same Anthropic API response (same
-    # `message.id`) under a fresh event uuid every time a session is
-    # resumed or forked from a parent turn. Tracking which message.ids
-    # have already contributed to the totals keeps cost from inflating
-    # by the resume count — see issue #60.
-    seen_message_ids = set()
-    # `/compact` (manual or auto) emits a `{type: system, subtype: compact_boundary}`
-    # event. Pre-compact assistant turns no longer contribute to the live
-    # context window, so reset both latest and peak whenever we cross a
-    # boundary — the displayed numbers reflect only the post-most-recent-
-    # compact segment, which matches what the user sees in the TUI. Recent
-    # Claude Code builds also include `postTokens`; use that as the live value
-    # until the next assistant turn writes a normal `usage` block.
-    compact_count = 0
-    # Per-turn tail for the status-rail column graph: one entry per billed
-    # assistant message (same message.id dedupe as the totals above), newest
-    # last. Raw counts only — the client applies the same cache-read discount
-    # it uses for the per-turn chip, so a bar equals the chip's number.
-    turn_series = collections.deque(maxlen=USAGE_TURN_SERIES_MAX)
     try:
-        with open(jsonl, "r") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if ev.get("type") == "system" and ev.get("subtype") == "compact_boundary":
-                    meta = ev.get("compactMetadata")
-                    if not isinstance(meta, dict):
-                        meta = {}
-                    pre_tokens = _core._codex_int(meta.get("preTokens"))
-                    post_tokens = _core._codex_int(meta.get("postTokens"))
-                    max_observed_window = max(max_observed_window, pre_tokens, post_tokens)
-                    latest = post_tokens
-                    peak = post_tokens
-                    diagnostic_latest = post_tokens
-                    diagnostic_peak = post_tokens
-                    live_context = None
-                    compact_count += 1
-                    continue
-                if ev.get("type") == "system" and ev.get("subtype") == "local_command":
-                    parsed_context = _local_command_context_usage(ev)
-                    if parsed_context:
-                        live_context = parsed_context
-                        max_observed_window = max(
-                            max_observed_window,
-                            parsed_context["tokens"],
-                            parsed_context["limit"],
-                        )
-                        if parsed_context.get("model"):
-                            model = parsed_context["model"]
-                    continue
-                if ev.get("type") != "assistant":
-                    continue
-                if ev.get("isSidechain"):
-                    continue
-                msg = _core._safe_parse_message(ev.get("message", {}))
-                if msg.get("model"):
-                    model = msg.get("model")
-                # Claude Code stamps the turn's effort on the assistant record,
-                # a sibling of `message` rather than a field inside it. That is
-                # the ground truth: it reflects a `/effort` typed into the TUI
-                # just as much as CCC's own `--effort`, where the override file
-                # only knows what CCC set.
-                if ev.get("effort"):
-                    live_effort = str(ev.get("effort")).strip()
-                diag_window = _diagnostic_context_tokens(
-                    msg.get("diagnostics") or ev.get("diagnostics")
-                )
-                if diag_window:
-                    diagnostic_latest = diag_window
-                    diagnostic_peak = max(diagnostic_peak, diag_window)
-                    max_observed_window = max(max_observed_window, diag_window)
-                u = msg.get("usage") or {}
-                if not isinstance(u, dict):
-                    continue
-                ti = u.get("input_tokens") or 0
-                tcw = u.get("cache_creation_input_tokens") or 0
-                tcr = u.get("cache_read_input_tokens") or 0
-                tout = u.get("output_tokens") or 0
-                window = ti + tcw + tcr
-                # Window/peak observe every event — re-seeing the same
-                # usage is harmless for a max() — but totals must skip
-                # message.ids we've already billed.
-                if window:
-                    latest = window
-                    if window > peak:
-                        peak = window
-                    max_observed_window = max(max_observed_window, window)
-                mid = msg.get("id") if isinstance(msg.get("id"), str) else None
-                if mid:
-                    if mid in seen_message_ids:
-                        continue
-                    seen_message_ids.add(mid)
-                if isinstance(ti, int):
-                    total_in += ti
-                if isinstance(tcw, int):
-                    total_cw += tcw
-                if isinstance(tcr, int):
-                    total_cr += tcr
-                if isinstance(tout, int):
-                    total_out += tout
-                if window or tout:
-                    turn_series.append({
-                        "ts": ev.get("timestamp") or "",
-                        "tokens_in": window,
-                        "tokens_cached": tcr if isinstance(tcr, int) else 0,
-                        "tokens_out": tout if isinstance(tout, int) else 0,
-                    })
+        snapshot = _claude_usage_snapshot(jsonl, desktop_meta.get("model") or "")
     except OSError:
-        return {**empty, "model": model}
-
-    if not latest and diagnostic_latest:
-        latest = diagnostic_latest
-    if not peak and diagnostic_peak:
-        peak = diagnostic_peak
+        return {**empty, "model": desktop_meta.get("model") or ""}
+    latest = snapshot["latest"]
+    peak = snapshot["peak"]
+    total_in = snapshot["total_in"]
+    total_cw = snapshot["total_cw"]
+    total_cr = snapshot["total_cr"]
+    total_out = snapshot["total_out"]
+    model = snapshot["model"]
+    live_effort = snapshot["live_effort"]
+    live_context = snapshot["live_context"]
+    max_observed_window = snapshot["max_observed_window"]
+    compact_count = snapshot["compact_count"]
+    turn_series = snapshot["turn_series"]
 
     # Best-effort context limit. Claude Code's 1M-context variant uses a
     # `[1m]` suffix in some surfaces, but the JSONL strips it ("claude-

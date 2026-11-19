@@ -1,0 +1,1 @@
+- Reuse token-usage aggregates for unchanged Claude transcripts, reducing background CPU work while keeping edits, compaction, overrides, and pricing current.
