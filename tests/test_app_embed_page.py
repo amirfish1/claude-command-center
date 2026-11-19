@@ -35,7 +35,7 @@ def test_embed_preserves_all_shared_controls_and_conversation_extensions():
             'voiceModal', 'promptModal'} <= after.ids
     assert {'settingsModal', 'settingsRail', 'kanbanLayout', 'sidebarNewBtn'}.isdisjoint(after.ids)
     assert len(after.ids) < len(before.ids)
-    shared_pane = SOURCE[SOURCE.index('  <div class="main">'):
+    shared_pane = SOURCE[SOURCE.index('  <div class="main" id="cccDashboardMain">'):
                          SOURCE.index('  <!-- ── Split Kanban Layout')]
     assert shared_pane in conversation_page(SOURCE)
     delivered = {source for url in after.scripts
@@ -61,8 +61,10 @@ def test_embed_boot_precedes_renderer_and_keeps_icon_markup_intact():
 
 def test_app_shell_keeps_navigation_and_holds_surrounding_assets():
     html = application_shell_page(SOURCE)
-    assert {'settingsModal', 'settingsRail', 'kanbanLayout'}.isdisjoint(Assets(html).ids)
-    assert {'settingsBtn', 'convInput', 'cccLoadingOverlay', 'convList'} <= Assets(html).ids
+    assert {'settingsModal', 'settingsRail', 'kanbanLayout', 'cccDashboardMain',
+            'convInput'}.isdisjoint(Assets(html).ids)
+    assert {'settingsBtn', 'cccLoadingOverlay', 'convList'} <= Assets(html).ids
+    assert '<template data-ccc-dashboard-panel="cccDashboardMain"></template>' in html
     assert '<template data-ccc-dashboard-panel="settingsModal"></template>' in html
     assert '<template data-ccc-dashboard-panel="kanbanLayout"></template>' in html
     assert len(html) < len(SOURCE) - 60000

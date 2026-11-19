@@ -62,6 +62,8 @@ test('desktop app keeps its document and draft through on-demand Settings and na
     assert.equal(requests.includes('/static/app.js'),false,'no hidden dashboard download after app readiness');
     assert.equal(await page.evaluate(() => !!document.getElementById('settingsModal')),false,
       'unused settings markup is absent from the initial app shell');
+    assert.equal(await page.evaluate(() => !!document.getElementById('cccDashboardMain')),false,
+      'the parent conversation workspace is absent while the app is open');
     await page.evaluate(() => {
       const frame = document.getElementById('cccMobileAppFrame');
       window.keptDocument = frame.contentDocument;
@@ -84,7 +86,8 @@ test('desktop app keeps its document and draft through on-demand Settings and na
       await page.waitForFunction(() => !document.querySelector('[aria-busy="true"]'));
       assert.equal(await page.evaluate(() => !document.getElementById('settingsModal')
         && !document.getElementById('kanbanLayout')
-        && document.querySelectorAll('template[data-ccc-dashboard-panel]').length===2
+        && !document.getElementById('cccDashboardMain')
+        && document.querySelectorAll('template[data-ccc-dashboard-panel]').length===3
         && document.getElementById('cccMobileAppFrame').contentDocument===window.keptDocument
         && window.keptDocument.getElementById('draft').value==='Unsent app draft'),true);
       assert.equal(requests.includes('/static/app.js'),false);
@@ -101,7 +104,8 @@ test('desktop app keeps its document and draft through on-demand Settings and na
     assert.equal(await page.evaluate(() => {
       const frame = document.getElementById('cccMobileAppFrame');
       return frame.contentDocument === window.keptDocument
-        && frame.contentDocument.getElementById('draft').value==='Unsent app draft';
+        && frame.contentDocument.getElementById('draft').value==='Unsent app draft'
+        && !!document.querySelector('#cccDashboardMain #convInput');
     }),true);
     if (process.env.CCC_APP_SHELL_SCREENSHOTS) await page.screenshot({path:process.env.CCC_APP_SHELL_SCREENSHOTS+'/shell-settings.png'});
     await page.click('#settingsModalClose');

@@ -187,11 +187,11 @@ def application_page(html, app_id, agent_id=None, kit_url="/static/app-kit.js"):
 @lru_cache(maxsize=2)
 def _application_shell_template(html):
     """Transform the shared template once, rather than on each app reload."""
-    # Keep the standalone rail's source controls, but fetch unused settings
-    # and board markup only before the dashboard controllers are requested.
+    # Keep the standalone rail's source controls, but fetch the conversation
+    # workspace, settings and board when the dashboard controllers are requested.
     # An unexpected template retains its full markup rather than a partial
     # panel. The normal dashboard remains the single source of these trees.
-    panel_ids = frozenset(("settingsModal", "kanbanLayout"))
+    panel_ids = frozenset(("cccDashboardMain", "settingsModal", "kanbanLayout"))
     panels = _DashboardPanels(html, sidebar=False, panel_ids=panel_ids).ranges
     identified = [(start, end, re.search(r'\bid="([^"]+)"', html[start:html.index('>', start)]))
                   for start, end in panels]
