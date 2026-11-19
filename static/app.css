@@ -35605,8 +35605,7 @@ body.ccc-app-embed.conversation-popout .main > .toolbar {
 }
 .worker-activity-line > span { flex: 0 0 auto; }
 .worker-activity-label { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; }
-.worker-activity-now { color: var(--green); font-weight: 600; }
-.worker-activity-recent, .worker-activity-muted { color: var(--text-muted); }
+.worker-activity-muted { color: var(--text-muted); }
 .worker-activity-repo { color: var(--blue, var(--accent)); }
 .worker-activity-line:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 @media (max-width: 1200px) {
