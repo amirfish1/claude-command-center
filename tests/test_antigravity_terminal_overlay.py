@@ -1,8 +1,10 @@
 """Terminal AGY sessions reach the sidebar while its archive is stale."""
+import json
+
 import pytest
 
 import server
-from ccc_server import antigravity
+from ccc_server import antigravity, engines
 
 SID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 OLD = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -82,3 +84,54 @@ def test_source_includes_terminal_overlay_in_body_version(terminal, monkeypatch)
     assert base == [{'session_id': 'stored'}]
     assert captured == rows[1:]
     assert cached and version == 8
+
+
+def test_native_launch_requires_parent_receipt_at_the_invoke_result_step(tmp_path, monkeypatch):
+    peer = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+    paths = {}
+    for sid in (SID, OLD, peer):
+        folder = tmp_path / sid / '.system_generated' / 'logs'
+        folder.mkdir(parents=True)
+        paths[sid] = folder / 'transcript_full.jsonl'
+        paths[sid].touch()
+    monkeypatch.setattr(server, '_conv_meta_cache', {})
+    monkeypatch.setattr(server, '_antigravity_tail_resume', {})
+    monkeypatch.setattr(server, '_antigravity_transcript_path', paths.get)
+    monkeypatch.setattr(server, '_antigravity_transcript_paths', lambda: [paths[SID], paths[peer]])
+    monkeypatch.setattr(server, '_load_repo_pins', lambda: {})
+    monkeypatch.setattr(server, '_load_session_name_overrides', lambda: {})
+    monkeypatch.setattr(server, '_load_antigravity_summary_titles', lambda: {})
+    monkeypatch.setattr(server, '_load_conversation_lifecycle_sets', lambda: (set(), set()))
+    monkeypatch.setattr(engines, '_antigravity_spawn_pid_by_session_id', lambda: {})
+    monkeypatch.setattr(engines, '_antigravity_cli_log_paths', lambda *a: [])
+    monkeypatch.setattr(engines, '_antigravity_list_context_usage', lambda *a, **kw: (0, 0))
+
+    def append(sid, **event):
+        with paths[sid].open('a') as stream:
+            stream.write(json.dumps(event) + '\n')
+        server._conv_meta_cache.pop(str(paths[sid]), None)
+
+    for sid in (SID, peer):
+        append(sid, type='SYSTEM_MESSAGE', source='SYSTEM', step_index=0,
+               content=f'Engine message\n<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-19T19:54:13Z '
+                       f'sender={OLD} priority=MESSAGE_PRIORITY_HIGH content=Check the release.\n</SYSTEM_MESSAGE>')
+        append(sid, type='PLANNER_RESPONSE', source='MODEL', status='DONE', step_index=1,
+               content='I checked the release.')
+
+    append(OLD, type='PLANNER_RESPONSE', source='MODEL', step_index=41, tool_calls=[
+        {'name': 'run_command'},
+        {'name': 'invoke_subagent', 'args': {'Role': 'Release checker'}},
+    ])
+    server._extract_antigravity_tail_meta(paths[OLD])
+    receipt = 'Created the following subagent:\n' + json.dumps({'conversationId': peer})
+    append(OLD, type='GENERIC', source='MODEL', status='DONE', step_index=42, content=receipt)
+    receipt = 'Created the following subagent:\n' + json.dumps({'conversationId': SID})
+    append(OLD, type='GENERIC', source='MODEL', status='DONE', step_index=43, content=receipt)
+    rows = {row['session_id']: row for row in
+            engines.find_antigravity_conversations(repo_only=False, resolve_worktree_dirty=False)}
+    assert rows[SID]['parent_session_id'] == OLD
+    assert rows[SID]['display_name'] == 'Release checker'
+    assert rows[SID]['first_message'] == 'Check the release.'
+    assert rows[SID]['turn_driver']['id'] == OLD
+    assert rows[peer]['parent_session_id'] == ''
+    assert rows[peer]['display_name'] == 'Antigravity session'

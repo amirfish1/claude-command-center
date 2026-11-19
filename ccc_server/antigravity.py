@@ -93,7 +93,7 @@ def live_cli_session_ids():
 
 def archive_terminal_overlay(rows, *, existing_ids=None):
     """Fill snapshot gaps from terminal-owned logs, without an archive scan."""
-    from ccc_server.engines import _antigravity_response_state
+    from ccc_server.engines import _antigravity_native_launch, _antigravity_response_state
 
     existing = (_core._archive_overlay_existing_ids(rows)
                 if existing_ids is None else existing_ids)
@@ -123,17 +123,20 @@ def archive_terminal_overlay(rows, *, existing_ids=None):
     pins = _core._load_repo_pins()
     titles = _core._load_antigravity_summary_titles()
     out = []
+    parent_tails = {}
     for sid, (proc, meta) in candidates.items():
         path = _core._antigravity_transcript_path(sid)
         tail = _core._extract_antigravity_tail_meta(path) if path else {}
         tail = tail or {}
         cwd = pins.get(sid) or meta.get('cwd') or proc.get('cwd') or tail.get('cwd') or ''
-        prompt = (tail.get('first_message') or '').strip()
+        parent, native_role, native_prompt = _antigravity_native_launch(sid, tail, parent_tails)
+        prompt = (tail.get('first_message') or native_prompt).strip()
         stamp = tail.get('last_meaningful_ts') or time.time()
-        title = names.get(sid) or titles.get(sid) or prompt[:80] or 'Antigravity session'
+        title = names.get(sid) or titles.get(sid) or native_role or prompt[:80] or 'Antigravity session'
         out.append({
             'id': sid, 'session_id': sid, 'source': 'antigravity', 'engine': 'antigravity',
             'display_name': title, 'first_message': prompt[:200],
+            'parent_session_id': parent,
             'name_overridden': bool(names.get(sid)), 'ai_title': titles.get(sid),
             'folder_path': cwd, 'folder_label': Path(cwd).name if cwd else 'Antigravity',
             'session_cwd': cwd, 'session_cwd_exists': bool(cwd and Path(cwd).is_dir()),

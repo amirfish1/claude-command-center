@@ -829,7 +829,7 @@ _ANTIGRAVITY_APP_LS_TOKEN_RE = re.compile(
     r"--csrf_token\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
     re.IGNORECASE,
 )
-_ANTIGRAVITY_META_VERSION = 6
+_ANTIGRAVITY_META_VERSION = 7
 # An Antigravity transcript writes every assistant tool call / message, so if
 # the file moved within this window we treat the session as live. Antigravity
 # has no hook system that CCC could listen to (the way Claude Code does via
@@ -1731,6 +1731,35 @@ def _antigravity_response_state(text, turn_complete):
             "next_actions": actions}
 
 
+def _antigravity_subagent_receipt(content):
+    # The tool's structured receipt follows native timestamps in the
+    # GENERIC event. Never open the path supplied by receipt text.
+    start = content.find("Created the following subagent:\n{", 0, 1024)
+    if start < 0:
+        return ""
+    start = content.index("{", start)
+    try:
+        receipt, _ = json.JSONDecoder().raw_decode(content[start:start + 4096])
+    except (ValueError, RecursionError):
+        return ""
+    sid = receipt.get("conversationId")
+    return sid if isinstance(sid, str) and _core._SESSION_UUID_RE.fullmatch(sid) else ""
+
+
+def _antigravity_native_launch(sid, tail, parent_tails):
+    """Verify a launch message against the parent's native tool receipt."""
+    parent = tail.get("native_launch_sender")
+    if not parent or parent == sid:
+        return "", "", ""
+    if parent not in parent_tails:
+        path = _core._antigravity_transcript_path(parent)
+        parent_tails[parent] = (_core._extract_antigravity_tail_meta(path) or {}) if path else {}
+    children = parent_tails[parent].get("native_subagents") or {}
+    if sid not in children:
+        return "", "", ""
+    return parent, children[sid], tail.get("native_launch_prompt") or ""
+
+
 def _extract_antigravity_tail_meta(path_or_session_id):
     path = Path(path_or_session_id) if isinstance(path_or_session_id, (str, Path)) else None
     if path and not path.is_file():
@@ -1765,6 +1794,7 @@ def _extract_antigravity_tail_meta(path_or_session_id):
         meta = resume["meta"]
         cwd_candidates = resume["cwd_candidates"]
         pending_tool = resume["pending_tool"]
+        subagent_roles = dict(resume["subagent_roles"])
         pos = resume["pos"]
         start_offset = resume["offset"]
     else:
@@ -1799,6 +1829,7 @@ def _extract_antigravity_tail_meta(path_or_session_id):
         }
         cwd_candidates = []
         pending_tool = False
+        subagent_roles = {}
         pos = 0
         start_offset = 0
     pr_url_re = re.compile(r"github\.com/([^/\s]+/[^/\s]+)/pull/(\d{1,7})")
@@ -1865,9 +1896,17 @@ def _extract_antigravity_tail_meta(path_or_session_id):
                         meta["last_assistant_text"] = content
                         meta.update(_core._extract_codex_summary_signals(content, pr_url_re))
                     meta["last_event_type"] = "assistant"
-                    calls = [c for c in (ev.get("tool_calls") or []) if isinstance(c, dict)]
-                    for call in calls:
+                    subagent_roles.clear()
+                    step = ev.get("step_index")
+                    for index, call in enumerate(ev.get("tool_calls") or [], start=1):
+                        if not isinstance(call, dict):
+                            continue
                         name = _antigravity_tool_name(call)
+                        if name == "invoke_subagent" and isinstance(step, int):
+                            # The tool batch's results occupy the next steps
+                            # in call order, including the non-launch tools.
+                            role = _antigravity_arg(_antigravity_tool_args(call), "Role")
+                            subagent_roles[step + index] = " ".join(role[:160].split())
                         detail = _antigravity_tool_detail(call)
                         meta["pending_tool"] = name
                         meta["pending_file"] = detail[:80] if isinstance(detail, str) else None
@@ -1898,8 +1937,22 @@ def _extract_antigravity_tail_meta(path_or_session_id):
                             if signals.get("worktree_branch"):
                                 meta["tail_branch"] = signals["worktree_branch"]
                     continue
+                if ev_type == "SYSTEM_MESSAGE" and source == "SYSTEM" and ev.get("step_index") == 0:
+                    _, _, body = content_text.partition("\n<SYSTEM_MESSAGE>\n")
+                    match = _core._ANTIGRAVITY_EMBEDDED_MESSAGE_RE.match(body.partition("\n</SYSTEM_MESSAGE>")[0])
+                    if match and _core._SESSION_UUID_RE.fullmatch(match["sender"]):
+                        meta["native_launch_sender"] = match["sender"]
+                        meta["native_launch_prompt"] = match["content"][:200].strip()
                 if ev_type in ("CONVERSATION_HISTORY", "SYSTEM_MESSAGE", "EPHEMERAL_MESSAGE", "CHECKPOINT"):
                     continue
+                step = ev.get("step_index")
+                if (ev_type == "GENERIC" and source == "MODEL" and ev.get("status") == "DONE"
+                        and isinstance(step, int)):
+                    role = subagent_roles.pop(step, None)
+                    if role is not None:
+                        child = _antigravity_subagent_receipt(content_text)
+                        if child:
+                            meta.setdefault("native_subagents", {})[child] = role
                 meta["turn_complete"] = False
                 if pending_tool:
                     meta["pending_tool"] = None
@@ -1928,6 +1981,7 @@ def _extract_antigravity_tail_meta(path_or_session_id):
             "offset": end_offset,
             "pos": pos,
             "pending_tool": pending_tool,
+            "subagent_roles": subagent_roles,
             "cwd_candidates": cwd_candidates,
             "meta": meta,
         }
@@ -2026,6 +2080,7 @@ def find_antigravity_conversations(
     max_rows = _core._session_scan_file_limit(include_old)
     spawn_by_sid = _antigravity_spawn_pid_by_session_id()
     summary_titles = _core._load_antigravity_summary_titles()
+    parent_tails = {}
     git_top_cache = {}
     # Build a session_id → cli-log meta map ONCE for this scan.
     # The old per-row `_antigravity_cli_log_meta_for_session` re-iterated every
@@ -2108,11 +2163,16 @@ def find_antigravity_conversations(
             continue
         if not include_old and max_rows > 0 and len(out) >= max_rows:
             continue
-        first_message = (tail.get("first_message") or "").strip()
+        parent = spawn_info.get("parent_session_id") or ""
+        native_role = native_prompt = ""
+        if not parent:
+            parent, native_role, native_prompt = _antigravity_native_launch(sid, tail, parent_tails)
+        first_message = (tail.get("first_message") or native_prompt).strip()
         ai_title = summary_titles.get(sid)
         display_name = (
             name_overrides.get(sid)
             or ai_title
+            or native_role
             or (first_message[:80] if first_message else None)
             or ((spawn_info.get("prompt") or "").strip()[:80] if spawn_info.get("prompt") else None)
             or "Antigravity session"
@@ -2148,8 +2208,8 @@ def find_antigravity_conversations(
             "display_name": display_name,
             "ai_title": ai_title or None,
             "name_overridden": bool(name_overrides.get(sid)),
-            "last_prompt": (tail.get("last_prompt") or "")[:200],
-            **_driver.fields(tail, sid),
+            "last_prompt": (tail.get("last_prompt") or native_prompt)[:200],
+            **_driver.fields(tail, sid, parent_session_id=parent),
             "size": st.st_size,
             "modified": modified,
             "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(modified)),
@@ -2196,7 +2256,7 @@ def find_antigravity_conversations(
             "last_interacted": last_interactions.get(sid),
             "is_live": is_live,
             "spawn_pid": spawn_pid,
-            "parent_session_id": spawn_info.get("parent_session_id") or "",
+            "parent_session_id": parent,
             "can_headless_resume": bool(
                 _core._antigravity_cli_conversation_path(sid)
                 and _core._antigravity_cli_conversation_path(sid).is_file()

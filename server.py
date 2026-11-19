@@ -16802,7 +16802,8 @@ def find_all_conversations(
 # v14: Recompute Close gates; inapplicable delivery no longer passes.
 # v16: Rebuild persisted rows to include turn-driver and owner-input metadata.
 # v17: Attribute native subagent prompts to their parent, not owner input.
-_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 17
+# v18: Restore native Antigravity parent links and launch titles.
+_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 18
 if test_isolation_active():
     # Same isolation as ACTIVITY_LOG_FILE: archive-build tests persist rows
     # for synthetic session ids into this shared cache (CCC-1165).
