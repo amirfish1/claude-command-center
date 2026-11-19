@@ -36,6 +36,7 @@ import errno
 import http.server
 import ipaddress
 import json
+import linecache
 import marshal
 import math
 import os
@@ -43,6 +44,7 @@ import platform
 import queue
 import re
 import select
+import selectors
 import shlex
 import shutil
 import signal
@@ -1086,13 +1088,40 @@ def _python_stack_snapshot():
     """Every live thread's current Python stack, as plain data."""
     names = {t.ident: t.name for t in threading.enumerate()}
     current = threading.get_ident()
+    source_files = set()
+    frame_summaries = {}
+    formatted_stacks = {}
     threads = []
     for ident, frame in sys._current_frames().items():
+        stack = traceback.StackSummary()
+        locations = []
+        while frame is not None:
+            code = frame.f_code
+            location = (code, frame.f_lasti)
+            summary = frame_summaries.get(location)
+            if summary is None:
+                filename = code.co_filename
+                lineno = frame.f_lineno
+                if filename not in source_files:
+                    # A busy server has many threads stopped in the same HTTP
+                    # code. Refresh source once per file in this snapshot.
+                    source_files.add(filename)
+                    linecache.lazycache(filename, frame.f_globals)
+                    linecache.checkcache(filename)
+                summary = traceback.FrameSummary(filename, lineno, code.co_name)
+                frame_summaries[location] = summary
+            locations.append(location)
+            stack.append(summary)
+            frame = frame.f_back
+        key = tuple(locations)
+        if key not in formatted_stacks:
+            stack.reverse()
+            formatted_stacks[key] = "".join(stack.format())
         threads.append({
             "ident": ident,
             "name": names.get(ident, "?"),
             "current": ident == current,
-            "stack": "".join(traceback.format_stack(frame)),
+            "stack": formatted_stacks[key],
         })
     threads.sort(key=lambda t: (not t["current"], t["name"]))
     return threads
@@ -1106,7 +1135,7 @@ def _format_python_stack_snapshot(threads, header):
     return "".join(lines)
 
 
-def _dump_python_stacks(reason="manual", samples=1, interval_s=0.5):
+def _dump_python_stacks(reason="manual", samples=1, interval_s=0.5, *, cancelled=None):
     """Append all-thread stacks to python-stacks.log; return the samples.
 
     Safe to call from any thread, any number of times. Callers that need the
@@ -1122,9 +1151,14 @@ def _dump_python_stacks(reason="manual", samples=1, interval_s=0.5):
     except (TypeError, ValueError):
         interval_s = 0.5
     out = []
+    next_sample_at = time.monotonic()
     for i in range(samples):
         if i:
-            time.sleep(interval_s)
+            # Count snapshot and log work toward the requested cadence.
+            time.sleep(max(0, next_sample_at - time.monotonic()))
+        if cancelled is not None and cancelled():
+            break
+        next_sample_at = time.monotonic() + interval_s
         at = datetime.now(tz=timezone.utc).isoformat()
         threads = _python_stack_snapshot()
         out.append({"at": at, "threads": threads})
@@ -1142,6 +1176,23 @@ def _dump_python_stacks(reason="manual", samples=1, interval_s=0.5):
         except (OSError, ValueError):
             pass
     return out
+
+
+def _http_python_stack_samples(conn, samples, interval_s):
+    with selectors.DefaultSelector() as selector:
+        selector.register(conn, selectors.EVENT_READ)
+
+        def disconnected():
+            try:
+                return bool(selector.select(0)) and not conn.recv(1, socket.MSG_PEEK)
+            except OSError:
+                return True
+
+        out = _dump_python_stacks(
+            "api/debug/stacks", samples=samples, interval_s=interval_s,
+            cancelled=disconnected,
+        )
+        return None if disconnected() else out
 
 
 def _python_stack_dump_loop():
@@ -34020,11 +34071,13 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 self.send_json({"ok": False, "error": "stack dumps are local-only"}, 403)
                 return
             qs = urllib.parse.parse_qs(parsed.query)
-            samples = _dump_python_stacks(
-                "api/debug/stacks",
+            samples = _http_python_stack_samples(
+                self.connection,
                 samples=(qs.get("samples") or ["1"])[0],
                 interval_s=(qs.get("interval") or ["0.5"])[0],
             )
+            if samples is None:
+                return
             self.send_json({
                 "ok": True,
                 "pid": os.getpid(),
