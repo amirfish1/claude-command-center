@@ -8,6 +8,13 @@ from urllib.parse import parse_qs, urlsplit
 
 def _app_read(path):
     parsed = urlsplit(path)
+    # The app's fresh data and transcript use the same upstream connection
+    # pool as its documents. Closing these reads throws away a warm socket
+    # and makes the next asset or reload wait for connection admission again.
+    if parsed.path in ('/api/apps/data', '/api/apps/routines'):
+        return True
+    if re.fullmatch(r'/api/conversations/(?!all$|list$|order$)[A-Za-z0-9_.:-]+', parsed.path):
+        return True
     if re.fullmatch(r"/static/[A-Za-z0-9_./-]+", parsed.path):
         return True
     if re.fullmatch(r"/(?:view|app-static)/[a-z0-9_-]+(?:/[A-Za-z0-9_.-]+)?", parsed.path):

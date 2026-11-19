@@ -1,6 +1,7 @@
 """Real HTTP clients exercise framing, access checks, reuse and idle release."""
 import http.client
 import http.server
+import json
 import socket
 from contextlib import closing
 import threading
@@ -73,7 +74,9 @@ def request(conn, path, *, method='GET', headers=None, body=None):
 def test_reuses_connection_and_handler_but_checks_each_request(service):
     with closing(http.client.HTTPConnection(*service.server_address, timeout=2)) as conn:
         for path in ['/static/one.js', '/?ccc_app=demo', '/view/demo',
-                     '/?ccc_popout=conversation&embed=app&conv=example', '/app-static/demo/items.json']:
+                     '/?ccc_popout=conversation&embed=app&conv=example', '/app-static/demo/items.json',
+                     '/api/apps/data?app=demo&key=items', '/api/apps/routines?app=demo',
+                     '/api/conversations/example?tail=120']:
             response, body = request(conn, path, headers={'X-Test-Authorized':'test-access'})
             assert response.status == 200
             assert response.version == 11
@@ -87,6 +90,11 @@ def test_reuses_connection_and_handler_but_checks_each_request(service):
 
 @pytest.mark.parametrize('method,path,headers,body', [
     ('GET', '/api/health', {}, None),
+    ('GET', '/api/conversations/list', {}, None),
+    ('GET', '/api/conversations/all', {}, None),
+    ('GET', '/api/conversations/order', {}, None),
+    ('GET', '/api/conversations/example/stream', {}, None),
+    ('GET', '/api/apps/routines/run', {}, None),
     ('POST', '/view/demo', {}, 'input'),
     ('GET', '/view/demo', {'Connection':'close'}, None),
     ('GET', '/view/demo', {'Connection':'upgrade, Close'}, None),
@@ -148,3 +156,50 @@ def test_duplicate_framing_and_connection_headers_cannot_enable_reuse(service, h
         response.begin()
         assert response.read() == b'/view/demo'
         assert response.version == 10 and response.will_close
+
+
+def test_app_reads_reuse_real_handler_and_recheck_access_and_fresh_data(tmp_path, monkeypatch):
+    import server
+
+    app = tmp_path / 'demo'
+    (app / 'data').mkdir(parents=True)
+    (app / 'app.json').write_text(json.dumps({'label': 'Demo', 'routines': []}))
+    value_file = app / 'data' / 'items.json'
+    value_file.write_text(json.dumps({'value': 1, 'updated': 1}))
+    monkeypatch.setattr(server, 'USER_APPS_DIR', tmp_path)
+    monkeypatch.setenv('CCC_PROXY_SECRET', 'test-proxy-secret')
+
+    class Handler(server.CommandCenterHandler):
+        def log_message(self, *_):
+            pass
+
+    class Server(server.ThreadedHTTPServer):
+        accepts = 0
+
+        def get_request(self):
+            self.accepts += 1
+            return super().get_request()
+
+    httpd = Server(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    headers = {'X-CCC-Proxy-Secret': 'test-proxy-secret'}
+    try:
+        with closing(http.client.HTTPConnection(*httpd.server_address, timeout=3)) as conn:
+            for value in (1, 2):
+                value_file.write_text(json.dumps({'value': value, 'updated': value}))
+                response, body = request(conn, '/api/apps/data?app=demo&key=items', headers=headers)
+                assert response.status == 200 and not response.will_close
+                assert json.loads(body)['value'] == value
+                response, body = request(conn, '/api/apps/routines?app=demo', headers=headers)
+                assert response.status == 200 and not response.will_close
+                assert json.loads(body)['ok'] is True
+            denied, body = request(conn, '/api/apps/data?app=demo&key=items')
+            assert denied.status == 401 and json.loads(body)['error'] == 'unauthorized'
+            response, body = request(conn, '/api/apps/data?app=demo&key=../outside', headers=headers)
+            assert response.status == 400 and json.loads(body)['error'] == 'bad key'
+            assert httpd.accepts == 1
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=2)
