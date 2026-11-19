@@ -32040,7 +32040,10 @@ def _load_application_html(name, *, conversation_document=False):
         html = application_page(
             source, app_id=name, agent_id=agent_id,
             kit_url=script_url(source, STATIC_DIR, _static_asset_url("app-kit.js")))
-        html = _stamp_static_urls(app_initial_reads.application_page(html, name, USER_APPS_DIR))
+        # The startup reads are inert JSON. Only stamp actual asset markup.
+        html = app_initial_reads.application_page(
+            _stamp_static_urls(html), name, USER_APPS_DIR,
+            prepare_bootstrap=_stamp_static_urls)
         if conversation_document and agent_id and re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", agent_id):
             from ccc_server.app_embed import application_document
             url = "/?ccc_popout=conversation&embed=app&conv=" + urllib.parse.quote(agent_id, safe="")

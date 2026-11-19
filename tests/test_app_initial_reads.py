@@ -124,13 +124,19 @@ def test_full_application_builder_uses_inline_adapter_and_current_payload(app,mo
     import server
     base,folder=app
     configure(folder,['items.json'])
-    (folder/'items.json').write_text('{"count":1}')
-    (folder/'index.html').write_text('<head><script>app()</script></head>')
+    payload = {'count': 1, 'markup': '<link href="/static/app.css">'}
+    (folder/'items.json').write_text(json.dumps(payload))
+    (folder/'index.html').write_text(
+        '<head><link href="/static/app.css"><script>app()</script></head>')
     monkeypatch.setattr(server,'USER_APPS_DIR',base)
     html=server._load_application_html('demo')
-    assert 'data-ccc-bootstrap-src="/static/app-read-boot.js?v=' in html
+    prefix = 'data-ccc-bootstrap-src="/static/app-read-boot.js?v='
+    assert html.index('cccAppInitialReads') < html.index(prefix) < html.index('app()')
     assert 'root.CCCAppReads = Object.freeze' in html
-    assert '\\"count\\":1' in html
+    assert f'href="{server._static_asset_url("app.css")}"' in html
+    from tests.test_app_page_reader import _document_payload
+    embedded = _document_payload(html, 'cccAppInitialReads')['reads']
+    assert json.loads(embedded['/app-static/demo/items.json']) == payload
     assert '<script data-ccc-inline-bootstrap src=' not in html
 
 

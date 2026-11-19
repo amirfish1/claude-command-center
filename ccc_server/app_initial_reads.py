@@ -87,7 +87,7 @@ def read(app_id, apps_dir):
     return out
 
 
-def application_page(html, app_id, apps_dir):
+def application_page(html, app_id, apps_dir, *, prepare_bootstrap=None):
     try:
         reads = read(app_id, apps_dir)
     except (OSError, ValueError, TypeError):
@@ -96,6 +96,8 @@ def application_page(html, app_id, apps_dir):
         return html
     html = application_json(html, 'cccAppInitialReads', {'app':app_id,'reads':reads})
     marker = '<script data-ccc-inline-bootstrap src="/static/app-read-boot.js"></script>'
+    if prepare_bootstrap is not None:
+        marker = prepare_bootstrap(marker)
     # Place the adapter immediately after its inert data, before app code.
     start = html.index('id="cccAppInitialReads"')
     end = html.index('</script>', start) + len('</script>')
