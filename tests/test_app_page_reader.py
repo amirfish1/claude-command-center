@@ -25,9 +25,16 @@ def wire_page(server, path, query, accept):
         assert not thread.is_alive()
 
 
+@pytest.mark.parametrize('encoding', ['gzip', 'br'])
 @pytest.mark.parametrize('path,query', [('/', 'ccc_app=demo'),
     ('/', 'ccc_popout=conversation&embed=app&conv=session-test'), ('/view/demo', '')])
-def test_private_page_reply_matches_canonical_http_and_keeps_no_store(tmp_path, monkeypatch, path, query):
+def test_private_page_reply_matches_canonical_http_and_keeps_no_store(tmp_path, monkeypatch, path, query, encoding):
+    from ccc_server import static_encoding
+    from tests.test_static_encoding import decode
+    if encoding == 'br' and static_encoding._encoder() is None:
+        pytest.skip('optional system Brotli encoder unavailable')
+    def unpack(body):
+        return decode(body, 1 << 20) if encoding == 'br' else gzip.decompress(body)
     server = _server()
     source = tmp_path/'index.html'
     source.write_text('<html lang="en"><head><meta charset="utf-8"></head><body class="voice-call-btn-off">'+ 'shared page '*300 +'</body></html>')
@@ -39,21 +46,22 @@ def test_private_page_reply_matches_canonical_http_and_keeps_no_store(tmp_path, 
     monkeypatch.setattr(server,'USER_APPS_DIR',tmp_path)
     monkeypatch.setattr(server,'_INDEX_HTML_PATH',source)
     monkeypatch.setattr(server,'_resolve_apps',lambda **_: [{'id':'demo','nav':'/view/demo'}])
-    head, body = wire_page(server,path,query,'gzip')
-    assert head['ok'] and head['encoding']=='gzip'
-    canonical = gzip.decompress(body)
+    head, body = wire_page(server,path,query,encoding)
+    assert head['ok'] and head['encoding']==encoding
+    canonical = unpack(body)
     # The foreground fallback uses exactly the same template and encoder.
     monkeypatch.setattr(conv_reader,'forward_page',lambda *_: None)
-    status, headers, fallback = _get(server,path+'?'+query,{'Accept-Encoding':'gzip'})
-    assert status==200 and gzip.decompress(fallback)==canonical
+    status, headers, fallback = _get(server,path+'?'+query,{'Accept-Encoding':encoding})
+    assert status==200 and unpack(fallback)==canonical
     # A prepared reply crosses HTTP with the same security/cache contract.
     calls=[]
-    monkeypatch.setattr(conv_reader,'forward_page',lambda *args: (calls.append(args),{'body':body,'encoding':'gzip','cache':'reader-html-hit'})[1])
-    status, headers, forwarded = _get(server,path+'?'+query,{'Accept-Encoding':'gzip'})
+    monkeypatch.setattr(conv_reader,'forward_page',lambda *args: (calls.append(args),{'body':body,'encoding':encoding,'cache':'reader-html-hit'})[1])
+    status, headers, forwarded = _get(server,path+'?'+query,{'Accept-Encoding':encoding})
     assert status==200 and forwarded==body
+    assert headers['content-encoding']==encoding and headers['vary']=='Accept-Encoding'
     assert headers['cache-control']=='no-store, must-revalidate'
     assert 'reader-html-hit' in headers['server-timing']
-    assert calls==[(path,query,'gzip')]
+    assert calls==[(path,query,encoding)]
 
 
 @pytest.mark.parametrize('path,query',[('/', ''),('/', 'ccc_app=sessions'),
@@ -191,3 +199,31 @@ def test_page_tail_cache_miss_never_parses_or_attaches(monkeypatch):
     monkeypatch.setattr(server, '_session_acp_harness', lambda _: 'kimi')
     assert server._conversation_open_response('session-test', 'tail=120', '',
                                               in_reader=True, cached_only=True) is None
+
+
+def test_html_encoding_cache_negotiation_and_optional_fallback(monkeypatch):
+    from ccc_server import static_encoding
+    from ccc_server.bounded_cache import ByteBudgetCache
+    from tests.test_static_encoding import decode
+    server = _server()
+    monkeypatch.setattr(server, '_HTML_GZIP_CACHE', ByteBudgetCache(max_bytes=4096, max_entries=8))
+    html = '<body>' + 'same canonical page ' * 200 + '</body>'
+    raw = html.replace('<body>', '<body data-repo="">', 1).encode()
+    if static_encoding._encoder() is not None:
+        for encoding in ('br', 'gzip'):
+            first = server._prepare_html_response(html, encoding)
+            second = server._prepare_html_response(html, encoding)
+            assert first['cache'] == 'html-miss' and second['cache'] == 'html-hit'
+            assert second['encoding'] == encoding
+            assert (decode(second['body'], len(raw)) if encoding == 'br'
+                    else gzip.decompress(second['body'])) == raw
+        assert server._prepare_html_response(html, 'br;q=0, gzip')['encoding'] == 'gzip'
+        assert server._prepare_html_response(html, 'br;q=.1, gzip;q=.9')['encoding'] == 'gzip'
+    for accept in ('', 'br;q=0, gzip;q=0'):
+        assert server._prepare_html_response(html, accept) == {'body': raw, 'encoding': None}
+    server._HTML_GZIP_CACHE.clear()
+    monkeypatch.setattr(static_encoding, 'brotli', lambda _: None)
+    fallback = server._prepare_html_response(html, 'br, gzip')
+    assert fallback['encoding'] == 'gzip' and gzip.decompress(fallback['body']) == raw
+    assert server._prepare_html_response(html, 'br') == {'body': raw, 'encoding': None}
+    assert server._prepare_html_response('<body>small</body>', 'br, gzip')['encoding'] is None

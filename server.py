@@ -32000,20 +32000,27 @@ def _load_app_shell_html(selected_app):
 
 
 def _prepare_html_response(content, accept):
+    from ccc_server.static_encoding import accepted_encodings, brotli
+
     content = content.replace('<body>', '<body data-repo="">', 1)
     body = content.encode()
-    if "gzip" not in (accept or "").lower() or len(body) < 1024:
+    if len(body) < 1024:
         return {"body": body, "encoding": None}
     key = hashlib.sha256(body).digest()
-    compressed = _HTML_GZIP_CACHE.get(key)
-    hit = compressed is not None
-    if compressed is None:
+    for encoding in accepted_encodings(accept):
+        encoding_key = key if encoding == "gzip" else (key, encoding)
+        compressed = _HTML_GZIP_CACHE.get(encoding_key)
+        hit = compressed is not None
+        if hit:
+            return {"body": compressed, "encoding": encoding, "cache": "html-hit"}
         try:
-            compressed = gzip.compress(body, compresslevel=5)
-            _HTML_GZIP_CACHE.put(key, compressed, len(compressed))
+            compressed = brotli(body) if encoding == "br" else gzip.compress(body, compresslevel=5)
         except Exception:
-            return {"body": body, "encoding": None}
-    return {"body": compressed, "encoding": "gzip", "cache": "html-hit" if hit else "html-miss"}
+            continue
+        if compressed is not None:
+            _HTML_GZIP_CACHE.put(encoding_key, compressed, len(compressed))
+            return {"body": compressed, "encoding": encoding, "cache": "html-miss"}
+    return {"body": body, "encoding": None}
 
 
 def _app_page_response(path, query, accept):
