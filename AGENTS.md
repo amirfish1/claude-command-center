@@ -187,11 +187,16 @@ processes. State it clearly in the final summary, e.g.:
 - Worker: **no restart needed**
 - WatchTower: **no restart needed**
 
-To restart, run `ccc restart` (or `ccc restart dashboard` / `ccc restart worker`).
-Never run `systemctl --user restart ccc*` or `launchctl kickstart` yourself:
-`ccc restart` uses the drain-aware restart endpoints and merges restarts within
-5 minutes of the last one into a single deferred restart (OPS-150). See
-`docs/agent-rules.md`.
+For dashboard-only changes, run `ccc restart dashboard`. Use
+`ccc restart worker` for worker-only changes and `ccc restart` when both need
+to restart. Routine requests use the drain-aware endpoints and merge into one
+pending restart within 30 minutes of the last restart by default. Coordinate
+one restart for related changes and reuse its live adoption check.
+
+Use `--now` only when a human explicitly requests an immediate restart.
+It bypasses batching and can restart the dashboard while requests are active.
+Never run `systemctl --user restart ccc*` or `launchctl kickstart` yourself.
+See `docs/agent-rules.md`.
 
 ## How users get changes
 
