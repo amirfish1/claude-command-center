@@ -1,0 +1,1 @@
+- Batch Codex thread schema reads to reduce sidebar delays while sessions update.

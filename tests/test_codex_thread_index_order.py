@@ -24,6 +24,33 @@ def _schema(con, suffix=""):
     con.execute("CREATE INDEX recent ON threads(updated_at_ms DESC, id DESC)")
 
 
+def test_projection_discovers_columns_after_schema_change(thread_db):
+    with sqlite3.connect(thread_db) as con:
+        con.execute("CREATE TABLE threads (id TEXT PRIMARY KEY, updated_at INTEGER, created_at INTEGER)")
+        con.execute("INSERT INTO threads VALUES ('thread', 1, 1)")
+    assert codex._codex_fetch_threads_in_home(columns=("id", "model")) == [{"id": "thread"}]
+    with sqlite3.connect(thread_db) as con:
+        con.execute("ALTER TABLE threads ADD COLUMN model TEXT")
+        con.execute("UPDATE threads SET model='test-model'")
+    assert codex._codex_fetch_threads_in_home(columns=("id", "model")) == [
+        {"id": "thread", "model": "test-model"}]
+
+
+def test_projection_supports_sqlite_without_table_valued_pragma(thread_db, monkeypatch):
+    with sqlite3.connect(thread_db) as con:
+        _schema(con)
+        con.execute("INSERT INTO threads VALUES ('thread', 1, 1000, 0, 0, 0)")
+    read = codex._sqlite_fetch_rows
+
+    def older_sqlite(con, sql, params, columns):
+        if "pragma_table_info" in sql:
+            raise sqlite3.OperationalError("no such table: pragma_table_info")
+        return read(con, sql, params, columns)
+
+    monkeypatch.setattr(codex, "_sqlite_fetch_rows", older_sqlite)
+    assert codex._codex_fetch_threads_in_home(limit=1, columns=("id",)) == [{"id": "thread"}]
+
+
 def test_indexed_projection_work_is_bounded_and_preserves_ties(thread_db, monkeypatch):
     with sqlite3.connect(thread_db) as con:
         _schema(con)

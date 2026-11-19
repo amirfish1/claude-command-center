@@ -9096,10 +9096,18 @@ def _codex_fetch_threads_in_home(where="", params=(), limit=None, columns=None, 
         except sqlite3.Error:
             continue
         try:
-            cols = {
-                row["name"]
-                for row in con.execute("PRAGMA table_info(threads)").fetchall()
-            }
+            try:
+                # Schema rows also cross SQLite's per-row GIL boundary.
+                # Read their names in one batch on frequently changing WALs.
+                cols = {row[0] for row in _sqlite_fetch_rows(
+                    con, "SELECT name FROM pragma_table_info('threads')",
+                    (), ("name",))}
+            except sqlite3.OperationalError as exc:
+                if "no such table: pragma_table_info" not in str(exc):
+                    raise
+                # Older SQLite builds expose only the PRAGMA statement.
+                cols = {row["name"] for row in con.execute(
+                    "PRAGMA table_info(threads)").fetchall()}
             if not cols:
                 continue
             wanted = [
