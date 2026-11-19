@@ -14119,17 +14119,36 @@ def _live_activity_via_helper(detail):
     if not isinstance(data, dict) or not isinstance(built_at, (int, float)):
         return None, None
     data = dict(data)
-    local = _live_state_only_in_dashboard()
-    if not _control_plane_routes_engines():
-        # Codex app-server activity is only readable here when no worker owns it.
-        local.update(sid for sid in data if _detect_session_engine(sid) == "codex")
-    for sid in local:
-        if not _archive_session_is_live(sid):
-            data.pop(sid, None)
-            continue
-        raw = _live_activity_entry_for_session(sid)
-        data[sid] = {k: raw.get(k) for k in _LIVE_ACTIVITY_FIELD_KEYS}
+    overlay_phases = {}
+
+    def measured(name, fn, *args):
+        t0, c0 = time.perf_counter(), time.thread_time()
+        try:
+            return fn(*args)
+        finally:
+            phase = overlay_phases.setdefault(name, {"wall_ms": 0.0, "cpu_ms": 0.0})
+            phase["wall_ms"] += (time.perf_counter() - t0) * 1000.0
+            phase["cpu_ms"] += (time.thread_time() - c0) * 1000.0
+
+    # The helper cannot see dashboard-owned sessions. Their reconciliation
+    # needs the same shared worker-read budget as the in-process builder;
+    # otherwise a successful helper reply still permits a full timeout per row.
+    with _control_plane_status_budget():
+        local = measured("discovery", _live_state_only_in_dashboard)
+        if not _control_plane_routes_engines():
+            # Codex app-server activity is only readable here without a worker.
+            local.update(sid for sid in data if _detect_session_engine(sid) == "codex")
+        for sid in local:
+            if not measured("liveness", _archive_session_is_live, sid):
+                data.pop(sid, None)
+                continue
+            raw = measured("activity", _live_activity_entry_for_session, sid)
+            data[sid] = {k: raw.get(k) for k in _LIVE_ACTIVITY_FIELD_KEYS}
     detail.update(reply.get("detail") or {})
+    detail["overlay_phases"] = {
+        name: {key: round(value, 2) for key, value in phase.items()}
+        for name, phase in overlay_phases.items()
+    }
     detail.update(helper=True, helper_pid=reply.get("pid"),
                   helper_build_ms=round(float(reply.get("build_ms") or 0.0), 1),
                   helper_rtt_ms=round(rtt_ms, 1),

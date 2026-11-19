@@ -10,6 +10,70 @@ import pytest
 import server
 from ccc_server import codex
 from control_plane import ControlPlaneClient
+from ccc_server import bg_helper
+
+
+@pytest.mark.parametrize('phase', ['liveness', 'activity'])
+def test_helper_overlay_shares_worker_budget_across_local_rows(tmp_path, phase):
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock_path = tmp_path / 'overlay.sock'
+    listener.bind(str(sock_path))
+    listener.listen()
+    release = threading.Event()
+    requests = []
+    token = tmp_path / 'token'
+    token.write_text('test-local-auth')
+
+    def stalled_worker():
+        conn, _ = listener.accept()
+        with conn:
+            requests.append(json.loads(conn.makefile('rb').readline()))
+            release.wait(3)
+
+    worker = threading.Thread(target=stalled_worker, daemon=True)
+    worker.start()
+    replies = []
+
+    def probe(sid):
+        replies.append(server._control_plane_engine_call(
+            'codex', 'thread_states', {}, mutate=False))
+        return True if phase == 'liveness' else {'is_live': True, 'pending_tool': sid}
+
+    helper_reply = {'data': {'remote': {'is_live': True}},
+                    'built_at': time.time(), 'build_ms': 1, 'pid': 123}
+    try:
+        with mock.patch.object(server, '_CONTROL_PLANE_ENGINE_CLIENT',
+                               ControlPlaneClient(path=sock_path, token_file=token, timeout=0.8)), \
+             mock.patch.object(bg_helper, 'is_child', return_value=False), \
+             mock.patch.object(bg_helper, 'live_enabled', return_value=True), \
+             mock.patch.object(bg_helper, 'call', return_value=helper_reply), \
+             mock.patch.object(server, '_control_plane_routes_engines', return_value=True), \
+             mock.patch.object(server, '_live_state_only_in_dashboard',
+                               return_value={'one', 'two', 'three'}), \
+             mock.patch.object(server, '_archive_session_is_live',
+                               side_effect=probe if phase == 'liveness' else lambda sid: True), \
+             mock.patch.object(server, '_live_activity_entry_for_session',
+                               side_effect=probe if phase == 'activity' else lambda sid: {'is_live': True}):
+            detail = {}
+            started = time.monotonic()
+            data, built_at = server._live_activity_via_helper(detail)
+            elapsed = time.monotonic() - started
+        assert elapsed < 0.65, f'worker stalled helper overlay for {elapsed:.3f}s'
+        assert set(data) == {'remote', 'one', 'two', 'three'}
+        assert all(row['is_live'] for row in data.values())
+        assert built_at == helper_reply['built_at']
+        assert len(requests) == 1
+        assert len(replies) == 3 and not any(reply['ok'] for reply in replies)
+        assert replies[-1]['error'] == 'Live-status worker read budget exhausted'
+        assert getattr(server._CONTROL_PLANE_REQUEST_CONTEXT, 'status_deadline', None) is None
+        assert set(detail['overlay_phases']) == {'discovery', 'liveness', 'activity'}
+        assert detail['overlay_phases'][phase]['wall_ms'] >= 200
+        assert all(set(values) == {'wall_ms', 'cpu_ms'}
+                   for values in detail['overlay_phases'].values())
+    finally:
+        release.set()
+        worker.join(2)
+        listener.close()
 
 
 def test_live_build_shares_budget_across_rows(tmp_path):
