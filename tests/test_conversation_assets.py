@@ -4,7 +4,7 @@ import os
 import pytest
 from pathlib import Path
 
-from ccc_server.conversation_assets import SCRIPT_NAME, SCRIPTS, BUNDLES, ConversationScript
+from ccc_server.conversation_assets import SCRIPT_NAME, STYLE_NAME, SCRIPTS, BUNDLES, ConversationScript
 from tests.test_static_asset_caching import _get, _server
 
 
@@ -21,7 +21,7 @@ def test_bundle_manifest_follows_dashboard_controller_order():
 def test_canonical_bundle_cache_and_page_stamp_follow_same_size_edits(tmp_path, monkeypatch, name):
     server = _server()
     for index, source_name in enumerate(BUNDLES[name]):
-        (tmp_path / source_name).write_text(f"// module {index}\n" + "void 1;\n" * 100)
+        (tmp_path / source_name).write_text(f"// module {index}\n" + "void 1;\n" * 200)
     monkeypatch.setattr(server, "STATIC_DIR", tmp_path)
     source = tmp_path / "index.html"
     source.write_text(f'<script src="/static/{name}"></script>')
@@ -57,7 +57,7 @@ def test_extensions_retain_canonical_order_and_execution_phase():
     html = (root / "index.html").read_text()
     output = conversation_page(html)
     for name, sources in BUNDLES.items():
-        if name == SCRIPT_NAME:
+        if name in (SCRIPT_NAME, STYLE_NAME):
             continue
         positions = [html.index('/static/' + source + '"') for source in sources]
         assert positions == sorted(positions)

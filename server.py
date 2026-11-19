@@ -35374,7 +35374,8 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             self.end_headers()
             self.wfile.write(body)
         elif path in ("/static/conversation-app.js", "/static/conversation-extensions.js",
-                      "/static/conversation-deferred.js", "/static/conversation-extensions.css"):
+                      "/static/conversation-deferred.js", "/static/conversation-extensions.css",
+                      "/static/conversation-base.css"):
             from ccc_server.conversation_assets import ConversationScript
             name = path.removeprefix("/static/")
             self._send_static_asset(None, "text/css" if name.endswith(".css") else "application/javascript",

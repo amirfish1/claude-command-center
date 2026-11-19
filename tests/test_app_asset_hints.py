@@ -135,7 +135,7 @@ def test_real_connection_sees_hints_before_page_and_reuses_final_framing(apps):
             while (line := stream.readline()) != b'\r\n':
                 final.append(line)
             assert b'Link: </static/conversation-app.js?v=current>; rel=preload; as=script\r\n' in final
-            assert b'Link: </static/app.css?v=current>; rel=preload; as=style\r\n' in final
+            assert b'Link: </static/conversation-base.css?v=current>; rel=preload; as=style\r\n' in final
             from ccc_server.app_asset_hints import _ASSETS
             assert sum(line.startswith(b'Link:') for line in final) == len(_ASSETS)
             for name, kind in _ASSETS:

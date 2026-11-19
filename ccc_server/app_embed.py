@@ -6,7 +6,7 @@ from functools import lru_cache
 from html.parser import HTMLParser
 
 from .bounded_cache import ByteBudgetCache
-from .conversation_assets import SCRIPT_NAME, SCRIPTS, EXTENSIONS, DEFERRED, STYLES
+from .conversation_assets import SCRIPT_NAME, STYLE_NAME, SCRIPTS, EXTENSIONS, DEFERRED, STYLES
 
 
 _JSON_ELEMENTS = ByteBudgetCache(max_bytes=16 << 20, max_entries=32)
@@ -73,6 +73,7 @@ def conversation_page(html):
         return "" if match[1].startswith(_PANEL_ASSETS) else match[0]
 
     html = _STYLE.sub(keep, _SCRIPT.sub(keep, html))
+    html = html.replace('href="/static/app.css"', f'href="/static/{STYLE_NAME}"')
     panels = _DashboardPanels(html).ranges
     # A changed template must fall back to the full shared page, never remove
     # a partial tree. The composer and all its dialogs remain original markup.
@@ -166,7 +167,7 @@ def application_page(html, app_id, agent_id=None, kit_url="/static/app-kit.js"):
         metadata += f'<link rel="preload" as="script" href="{kit_url}">'
     if agent_id:
         metadata += (f'<link rel="preload" as="script" href="/static/{SCRIPT_NAME}">'
-                     '<link rel="preload" as="style" href="/static/app.css">')
+                     f'<link rel="preload" as="style" href="/static/{STYLE_NAME}">')
     html = re.sub(r'(["\'])/static/app-kit\.js\1',
                   lambda match: match[1] + kit_url + match[1], html)
     head = re.search(r"<head\b[^>]*>", html, re.I)

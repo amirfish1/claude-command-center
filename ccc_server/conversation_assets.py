@@ -6,6 +6,7 @@ from .asset_versions import STATIC_ASSET_VERSIONS
 
 
 SCRIPT_NAME = "conversation-app.js"
+STYLE_NAME = "conversation-base.css"
 SCRIPTS = tuple("conversation-" + name + ".js" for name in (
     "state", "text", "selection", "events", "composer", "transport", "content",
     "panes", "input", "core", "defaults", "preferences", "bootstrap",
@@ -32,6 +33,7 @@ STYLES = (
 )
 BUNDLES = {
     SCRIPT_NAME: SCRIPTS,
+    STYLE_NAME: ("app.css",),
     "conversation-extensions.js": EXTENSIONS,
     "conversation-deferred.js": DEFERRED,
     "conversation-extensions.css": STYLES,
@@ -51,6 +53,10 @@ class ConversationScript:
         if any(len(info) != 4 for info in versions):
             raise FileNotFoundError("conversation controller source missing")
         size = sum(info[3] for info in versions)
+        if self.name == STYLE_NAME:
+            # Change the representation version when its token-preserving
+            # transform changes, so immutable browser/disk entries invalidate.
+            versions = ("css-comments-v1", versions)
         version = hashlib.sha256(repr(versions).encode()).hexdigest()[:24]
         return version, (str(self.static_dir), self.name, tuple(versions)), size
 
@@ -58,4 +64,8 @@ class ConversationScript:
         # Every file retains its own native function scope. A separator protects
         # against a future module ending without a semicolon or final newline.
         separator = b"\n" if self.name.endswith(".css") else b"\n;\n"
-        return separator.join((self.static_dir / name).read_bytes() for name in self.sources)
+        body = separator.join((self.static_dir / name).read_bytes() for name in self.sources)
+        if self.name == STYLE_NAME:
+            from .css_delivery import compact_comments
+            return compact_comments(body)
+        return body

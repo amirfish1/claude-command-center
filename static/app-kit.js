@@ -146,7 +146,7 @@
         if (url.origin !== location.origin) return;
         var kind = url.pathname === '/static/app.js' ? 'dashboard_script'
           : url.pathname === '/static/app-kit.js' ? 'app_kit'
-          : url.pathname === '/static/app.css' ? 'dashboard_style'
+          : (url.pathname === '/static/app.css' || url.pathname === '/static/conversation-base.css') ? 'dashboard_style'
           : url.pathname === '/static/app-embed-boot.js' ? 'agent_boot'
           : url.pathname === '/api/apps/routines' ? 'routines'
           : sessionId && url.pathname === '/api/conversations/' + encodeURIComponent(sessionId) ? 'conversation' : '';

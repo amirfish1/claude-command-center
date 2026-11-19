@@ -111,18 +111,21 @@ test('critical styles and agent boot retain bounded transport and server attribu
     { name: 'http://localhost:8090/static/app.css?v=private', nextHopProtocol: 'h2',
       encodedBodySize: 300000, decodedBodySize: 1400000,
       serverTiming: [{name: 'app', duration: 60}, {name: 'cpu', duration: 20}] },
+    { name: 'http://localhost:8090/static/conversation-base.css?v=private',
+      encodedBodySize: 160000, decodedBodySize: 1200000 },
     { name: 'http://localhost:8090/static/app-embed-boot.js', nextHopProtocol: 'private-protocol' },
     { name: 'http://localhost:8090/static/unrelated-private-file.js' },
   ];
   const result = ctx.timingSnapshot({ performance: {
     getEntriesByType: type => type === 'resource' ? entries : [],
   } }, '');
-  assert.deepEqual(Array.from(result.resources, r => r.kind), ['dashboard_style', 'agent_boot']);
+  assert.deepEqual(Array.from(result.resources, r => r.kind), ['dashboard_style', 'dashboard_style', 'agent_boot']);
   assert.equal(result.resources[0].protocol, 'h2');
   assert.equal(result.resources[0].encodedBodySize, 300000);
   assert.equal(result.resources[0].decodedBodySize, 1400000);
   assert.deepEqual({...result.resources[0].server}, {app: 60, cpu: 20});
-  assert.equal('protocol' in result.resources[1], false);
+  assert.equal(result.resources[1].encodedBodySize, 160000);
+  assert.equal('protocol' in result.resources[2], false);
   assert.equal(JSON.stringify(result).includes('private'), false);
 });
 

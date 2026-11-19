@@ -3,13 +3,14 @@
 import re
 
 from . import app_routines
+from .conversation_assets import STYLE_NAME
 
 
 # These bundles are all consumed by the canonical conversation page. Hint the
 # extension phases too: a preloaded renderer still waits for their downloads
 # before its normal initialization can finish. Hints never execute scripts.
 _ASSETS = (
-    ("conversation-app.js", "script"), ("app.css", "style"),
+    ("conversation-app.js", "script"), (STYLE_NAME, "style"),
     ("conversation-extensions.js", "script"),
     ("conversation-deferred.js", "script"),
     ("conversation-extensions.css", "style"),
