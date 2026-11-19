@@ -24,6 +24,34 @@ def row(sid, title='', origin=''):
     return {'session_id': sid, 'display_name': title, 'continued_from_session_id': origin}
 
 
+def test_repeated_metadata_fallback_reuses_paths_but_reads_changed_titles(store, monkeypatch):
+    metadata = {'/archive/untitled.jsonl': {'ai_title': ''},
+                '/archive/other.jsonl': {'ai_title': 'Other'}}
+    monkeypatch.setattr(server, '_conv_meta_cache', metadata)
+    topics._metadata_session_id.cache_clear()
+    original_path = topics.Path
+    parsed = []
+
+    def tracked_path(filename):
+        if filename in metadata:
+            parsed.append(filename)
+        return original_path(filename)
+
+    monkeypatch.setattr(topics, 'Path', tracked_path)
+    topics.attach_topics([row('untitled')], names={})
+    topics.attach_topics([row('untitled')], names={})
+    assert sorted(parsed) == sorted(metadata)
+
+    # Caching the filename must not freeze the mutable metadata fallback.
+    metadata['/archive/untitled.jsonl']['ai_title'] = 'Discovered topic: task'
+    topics.attach_topics([row('untitled')], names={})
+    topics.record_continuation('untitled', 'child')
+    child = row('child')
+    topics.attach_topics([child], names={})
+    assert child['continuation_topic_title'] == 'Discovered topic'
+    assert sorted(parsed) == sorted(metadata)
+
+
 def test_multihop_survives_missing_ancestors_and_database_reopen(store):
     root = row('root-session', 'PROJECT DESIGN: first task')
     child = row('child-session', 'current task: detail', 'root-session')

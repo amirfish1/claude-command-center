@@ -119,6 +119,13 @@ def _topic(title):
     return ' '.join(str(title or '').split()).split(':', 1)[0].strip()[:240]
 
 
+@functools.lru_cache(maxsize=32768)
+def _metadata_session_id(filename):
+    # Paths stay stable while metadata titles change. Avoid parsing every
+    # filename again when a new session makes the topic projection miss.
+    return Path(filename).stem
+
+
 def _file_stat_sig(db_path):
     if not db_path:
         return None
@@ -364,7 +371,7 @@ class _Batch:
             self.cached_titles = {}
             for filename, meta in list(getattr(_core, '_conv_meta_cache', {}).items()):
                 if isinstance(meta, dict):
-                    self.cached_titles[Path(filename).stem] = (
+                    self.cached_titles[_metadata_session_id(filename)] = (
                         meta.get('custom_title') or meta.get('agent_name') or meta.get('ai_title'))
         cached = self.cached_titles.get(sid)
         if not cached:
@@ -571,7 +578,7 @@ def _try_attach_from_cache(rows, conn, names, diagnostics=None):
                     # Copy items before scanning the concurrently filled map.
                     if external_titles is None:
                         external_titles = {
-                            Path(filename).stem: (meta.get('custom_title')
+                            _metadata_session_id(filename): (meta.get('custom_title')
                                                   or meta.get('agent_name')
                                                   or meta.get('ai_title'))
                             for filename, meta in list(
