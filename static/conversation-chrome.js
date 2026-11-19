@@ -2490,6 +2490,8 @@
     const presentationEnabled = presentationFeatureEnabled();
     toolbar.classList.toggle('is-reader-only', !presentationEnabled);
     toolbar.hidden = !hasAnswers;
+    const audioDock = pane.querySelector('.conv-reader-audio');
+    if (audioDock) audioDock.hidden = !hasAnswers;
     toolbar.querySelectorAll('[data-presentation-mode]').forEach(button => {
       const active = button.dataset.presentationMode === mode;
       button.setAttribute('aria-pressed', active ? 'true' : 'false');

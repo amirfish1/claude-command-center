@@ -820,10 +820,11 @@
   }
 
   function sessionDriverHtml(c, now = Date.now() / 1000, header = false) {
+    if (header) return '';
     if (!c || c.source === 'backlog' || c.source === 'github_pr' || c.backlog_type === 'github') return '';
     const driver = c.turn_driver || {};
     const kind = driver.kind || 'unknown';
-    if (!header && kind === 'unknown') return '';
+    if (kind === 'unknown') return '';
     let name = String(driver.name || driver.id || '').trim();
     const fullName = name;
     if (/^[0-9a-f]{8}-[0-9a-f-]{20,}$/i.test(name)) name = name.slice(0, 8);
@@ -844,10 +845,8 @@
     const tip = 'Driven by ' + label + (fullName && fullName !== name ? ' (' + fullName + ')' : '') + ' · ' + stamp(driver.at)
       + '\nLast owner input: ' + stamp(owner) + '. Recorded attribution; not an authentication claim.';
     return '<span class="conv-driver" data-role="session-driver" data-driver-session-id="' + (0, sharedState.escapeAttr)(c.session_id || c.id || '') + '" data-driver-kind="' + (0, sharedState.escapeAttr)(kind) + '" title="' + (0, sharedState.escapeAttr)(tip) + '">'
-      + '<span class="conv-driver-label">' + (header ? 'Driven by ' : '') + (0, sharedState.escapeHtml)(label) + '</span>'
+      + '<span class="conv-driver-label">' + (0, sharedState.escapeHtml)(label) + '</span>'
       + (driver.at ? ' · <span class="conv-driver-age">' + (0, sharedState.escapeHtml)(age(driver.at)) + '</span>' : '')
-      + (!header || kind === 'human' || (kind === 'session' && !owner) ? '' : '<span class="conv-driver-owner">You · '
-        + (owner ? '<span class="conv-driver-age">' + (0, sharedState.escapeHtml)(age(owner)) + '</span>' : 'no input recorded') + '</span>')
       + '</span>';
   }
 
@@ -12333,10 +12332,11 @@
     // read. Clicking it again on the same turn pauses/resumes (same as the
     // per-turn button, which it delegates to).
     const toolbar = host.querySelector('[data-role="presentation-toolbar"]');
-    let audioDock = toolbar && toolbar.querySelector('.conv-reader-audio');
+    let audioDock = host.querySelector('.conv-reader-audio');
     if (toolbar && !audioDock) {
       audioDock = document.createElement('div');
       audioDock.className = 'conv-reader-audio';
+      audioDock.hidden = toolbar.hidden;
       audioDock.setAttribute('role', 'group');
       audioDock.setAttribute('aria-label', 'Read aloud');
       toolbar.appendChild(audioDock);
@@ -12354,6 +12354,26 @@
     }
     speakBtn._convTargetView = view;
     _attachSpeakerTools(speakBtn, audioHost);
+    const header = host.querySelector('[data-role="pane-header"]');
+    if (audioDock && header) {
+      // Reuse the same controls and handlers as the header appears/disappears
+      // across phone, split-pane and popout layouts.
+      const placeAudio = () => {
+        const inHeader = getComputedStyle(header).display !== 'none';
+        const target = inHeader ? header : toolbar;
+        if (audioDock.parentElement !== target) {
+          if (inHeader) header.querySelector('[data-role="pane-titlebar"]')?.after(audioDock);
+          else toolbar.appendChild(audioDock);
+        }
+        toolbar.classList.toggle('has-header-audio', inHeader);
+        _syncSpeakerTools(speakBtn);
+      };
+      const observer = new ResizeObserver(placeAudio);
+      observer.observe(header);
+      observer.observe(host);
+      audioDock._headerObserver = observer;
+      placeAudio();
+    }
     speakBtn.addEventListener('click', () => {
       const v = speakBtn._convTargetView || view;
       if (_ttsReadSelectionIfAny(v.closest('.conv-pane')?.getAttribute('data-pane-id') || (0, sharedState.activePaneId)())) return;
