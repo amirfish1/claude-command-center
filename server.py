@@ -22259,6 +22259,51 @@ def _fetch_latest_release():
         return json.loads(resp.read().decode("utf-8"))
 
 
+_GIT_BEHIND_CACHE = {"ts": 0.0, "data": None}
+_GIT_BEHIND_TTL = 30 * 60  # 30min — one `git fetch` per window
+
+
+def _git_commits_behind(force=False):
+    """Commits on origin/main that local HEAD lacks, for 'main'-channel
+    installs (dev clones). Returns {"behind": int|None, "error"|None,
+    "sha", "compare_url"} or None on the release channel. One network fetch
+    per TTL window; force= bypasses it. Never raises."""
+    if _update_channel() != "main":
+        return None
+    now = time.time()
+    if (not force and _GIT_BEHIND_CACHE["data"]
+            and (now - _GIT_BEHIND_CACHE["ts"]) < _GIT_BEHIND_TTL):
+        return _GIT_BEHIND_CACHE["data"]
+    d = _install_dir()
+    data = {"behind": None, "error": None, "sha": None, "compare_url": None}
+    if not (d / ".git").exists():
+        data["error"] = "not a git clone"
+    else:
+        rc, _, err = _git(["fetch", "origin", "--quiet"], d, timeout=30)
+        if rc != 0:
+            data["error"] = f"git fetch failed: {(err or '').strip() or rc}"
+        else:
+            rc, out, err = _git(
+                ["rev-list", "--count", "HEAD..origin/main"], d, timeout=10)
+            if rc != 0:
+                data["error"] = f"git rev-list failed: {(err or '').strip() or rc}"
+            else:
+                try:
+                    data["behind"] = int((out or "").strip() or "0")
+                except ValueError:
+                    data["error"] = "unparsable rev-list output"
+            rc, sha, _ = _git(["rev-parse", "HEAD"], d, timeout=10)
+            if rc == 0 and (sha or "").strip():
+                data["sha"] = sha.strip()
+                data["compare_url"] = (
+                    "https://github.com/amirfish1/claude-command-center/"
+                    f"compare/{sha.strip()}...main"
+                )
+    _GIT_BEHIND_CACHE["data"] = data
+    _GIT_BEHIND_CACHE["ts"] = now
+    return data
+
+
 def _version_check(force=False):
     """Return {ok, current, latest, behind, changelog_url} for the UI.
     Caches for 6h to stay well under GitHub's unauthenticated rate limit.
@@ -33462,6 +33507,8 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         elif path == "/api/usage/current":
             self.send_json(usage_current_payload())
         elif path == "/api/headroom":
+            from ccc_server import gemini_spend as _gemini_spend
+            _gemini_spend.refresh_gemini_daily_spend_async()
             self.send_json(_swr.cached(
                 ("headroom",), _headroom.headroom_payload,
                 fresh_s=10.0, max_stale_s=300.0))
@@ -36283,7 +36330,20 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             # hides the pill and logs silently.
             qs = urllib.parse.parse_qs(parsed.query)
             force = qs.get("force", ["0"])[0] in ("1", "true")
-            self.send_json(_version_check(force=force))
+            data = dict(_version_check(force=force))
+            # 'main'-channel installs track commits, not releases: report
+            # HEAD..origin/main separately (own 30min fetch cache) so the
+            # pill can light up between release tags.
+            gb = _git_commits_behind(force=force)
+            if gb is not None:
+                data["commits_behind"] = gb.get("behind")
+                if gb.get("compare_url"):
+                    data["commits_compare_url"] = gb["compare_url"]
+                if gb.get("sha"):
+                    data["commits_sha"] = gb["sha"][:8]
+                if gb.get("error"):
+                    data["commits_behind_error"] = gb["error"]
+            self.send_json(data)
         elif path == "/phone-unlock":
             self.send_html(phone_access.UNLOCK_PAGE)
         elif path == "/api/phone-access/status":

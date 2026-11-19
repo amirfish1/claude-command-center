@@ -45040,22 +45040,35 @@
   const $updNowBtn = document.getElementById('updNowBtn');
   let updCheckData = null;
 
+  // 'main'-channel installs (dev clones) track commits, not release tags:
+  // commits_behind > 0 is their "update available" signal.
+  function updCommitsBehind() {
+    return (updCheckData && updCheckData.commits_behind) || 0;
+  }
+  function updIsBehind() {
+    return !!(updCheckData && (updCheckData.behind || updCommitsBehind() > 0));
+  }
+
   // Prominent update experience: the modal opens ITSELF once per new
   // version instead of relying on the user noticing the pill. Suppressed
   // per version via localStorage so a dismissal doesn't nag on every load,
   // and skipped entirely while the First Flight tour owns first-run.
   const UPD_DISMISS_KEY = 'ccc-update-modal-dismissed';
-  function updDismissedFor(version) {
-    try { return localStorage.getItem(UPD_DISMISS_KEY) === String(version || ''); }
+  function updDismissKey() {
+    if (updCommitsBehind() > 0) return 'main:' + updCommitsBehind();
+    return String((updCheckData && updCheckData.latest) || '');
+  }
+  function updDismissedFor(key) {
+    try { return localStorage.getItem(UPD_DISMISS_KEY) === String(key || ''); }
     catch (_) { return true; }
   }
   function updMarkDismissed() {
     if (!updCheckData) return;
-    try { localStorage.setItem(UPD_DISMISS_KEY, String(updCheckData.latest || '')); } catch (_) {}
+    try { localStorage.setItem(UPD_DISMISS_KEY, updDismissKey()); } catch (_) {}
   }
   function updAutoOpen() {
-    if (!updCheckData || !updCheckData.behind) return;
-    if (updDismissedFor(updCheckData.latest)) return;
+    if (!updIsBehind()) return;
+    if (updDismissedFor(updDismissKey())) return;
     try { if (!localStorage.getItem('ccc-tour-done')) return; } catch (_) {}
     updOpenModal();
   }
@@ -45080,14 +45093,18 @@
   }
 
   function updOpenModal() {
-    if (!updCheckData || !updCheckData.behind) return;
+    if (!updIsBehind()) return;
     if ($updVersions) {
-      $updVersions.innerHTML =
-        'Current: <strong>v' + String(updCheckData.current).replace(/[<>&]/g, '') + '</strong> &middot; ' +
-        'Latest: <strong>v' + String(updCheckData.latest).replace(/[<>&]/g, '') + '</strong>';
+      const n = updCommitsBehind();
+      $updVersions.innerHTML = n > 0
+        ? 'Behind origin/main by <strong>' + n + '</strong> commit' + (n === 1 ? '' : 's') +
+          ' &middot; installed <strong>' + String(updCheckData.commits_sha || 'v' + updCheckData.current).replace(/[<>&]/g, '') + '</strong>'
+        : 'Current: <strong>v' + String(updCheckData.current).replace(/[<>&]/g, '') + '</strong> &middot; ' +
+          'Latest: <strong>v' + String(updCheckData.latest).replace(/[<>&]/g, '') + '</strong>';
     }
-    if ($updCompareLink && updCheckData.changelog_url) {
-      $updCompareLink.href = updCheckData.changelog_url;
+    const compareUrl = updCheckData.commits_compare_url || updCheckData.changelog_url;
+    if ($updCompareLink && compareUrl) {
+      $updCompareLink.href = compareUrl;
     }
     updRenderPromo();
     if ($updError) {
@@ -45211,17 +45228,33 @@
     });
   }
 
+  function updShowPillFor(d) {
+    // Render the pill from a /api/version/check payload. Returns true when
+    // an update (release or commits) is available.
+    updCheckData = d;
+    const n = updCommitsBehind();
+    if ($updPillText) {
+      $updPillText.textContent = n > 0
+        ? 'Update · ' + n + ' commit' + (n === 1 ? '' : 's') + ' behind'
+        : 'Update → v' + String(d.latest).replace(/[<>&]/g, '');
+    }
+    if ($updPill) {
+      $updPill.classList.add('visible');
+      if (n > 0) {
+        $updPill.title = 'This install is ' + n + ' commit' + (n === 1 ? '' : 's') +
+          ' behind origin/main. Click to review and update.';
+      }
+    }
+    return true;
+  }
+
   if (!READER_ONLY_POPOUT) {
     (async () => {
       try {
         const r = await fetch('/api/version/check', { cache: 'no-store' });
         const d = await r.json();
-        if (d && d.ok && d.behind) {
-          updCheckData = d;
-          if ($updPillText) {
-            $updPillText.textContent = 'Update → v' + String(d.latest).replace(/[<>&]/g, '');
-          }
-          if ($updPill) $updPill.classList.add('visible');
+        if (d && ((d.ok && d.behind) || (d.commits_behind || 0) > 0)) {
+          updShowPillFor(d);
           // Let the page settle before the modal takes focus.
           setTimeout(updAutoOpen, 1200);
         }
@@ -45282,12 +45315,8 @@
       try {
         const r = await fetch('/api/version/check?force=1', { cache: 'no-store' });
         const d = await r.json();
-        if (d && d.ok && d.behind) {
-          updCheckData = d;
-          if ($updPillText) {
-            $updPillText.textContent = 'Update → v' + String(d.latest).replace(/[<>&]/g, '');
-          }
-          if ($updPill) $updPill.classList.add('visible');
+        if (d && ((d.ok && d.behind) || (d.commits_behind || 0) > 0)) {
+          updShowPillFor(d);
           updOpenModal();
         } else if (d && d.ok) {
           showOpToast('Up to date - v' + (d.current || '?'));
