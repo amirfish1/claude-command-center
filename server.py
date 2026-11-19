@@ -18639,8 +18639,8 @@ def _archive_list_window_allows_row(row, cutoff, idea_tickets_by_sid=None):
     engine = ((row or {}).get("engine") or (row or {}).get("source") or "").lower()
     if bool((row or {}).get("pinned")) or engine == "hermes" or _archive_list_row_ts(row) >= cutoff:
         return True
-    ticket = (idea_tickets_by_sid or {}).get(_archive_row_sid(row)) or {}
-    return _archive_list_row_ts({"idea_ticket": ticket}) >= cutoff
+    ticket = (idea_tickets_by_sid or {}).get(_archive_row_sid(row))
+    return bool(ticket) and _archive_list_row_ts({"idea_ticket": ticket}) >= cutoff
 
 
 _PREVIEW_STATE_RE = re.compile(r"(?:<!--\s*)?<session-state>.*?(</session-state>\s*-->|</session-state>|$)", re.S)
@@ -19783,9 +19783,19 @@ def _archive_list_initial_selection(rows, window, now, parents, ideas, version):
         entry = _ARCHIVE_LIST_INITIAL_SELECTION_CACHE.get(key)
         if entry and entry[2] <= now < entry[3]:
             return [rows[i] for i in entry[0]], entry[1], True
-    selected = _archive_list_window_rows(
-        rows, _archive_list_window_cutoff(window, now=now), ideas, parents)
-    recent = sorted(selected, key=_archive_list_row_ts, reverse=True)[:500]
+    cutoff = _archive_list_window_cutoff(window, now=now)
+    selected = _archive_list_window_rows(rows, cutoff, ideas, parents)
+    # The sort already computes each selected row's activity. Reuse it to
+    # find the selection cache expiry for bounded windows.
+    row_times = {}
+
+    def remember_activity(row):
+        stamp = _archive_list_row_ts(row)
+        row_times[id(row)] = stamp
+        return stamp
+
+    activity = remember_activity if key is not None and cutoff is not None else _archive_list_row_ts
+    recent = sorted(selected, key=activity, reverse=True)[:500]
     wanted = {id(row) for row in recent}
     wanted.update(id(row) for row in selected if row.get("pinned"))
     initial = _archive_list_family_rows(
@@ -19802,8 +19812,10 @@ def _archive_list_initial_selection(rows, window, now, parents, ideas, version):
                 engine = (row.get('engine') or row.get('source') or '').lower()
                 if row.get('pinned') or engine == 'hermes':
                     continue
-                stamp = max(_archive_list_row_ts(row),
-                            _archive_list_row_ts({'idea_ticket': ideas.get(_archive_row_sid(row)) or {}}))
+                stamp = row_times[id(row)]
+                ticket = ideas.get(_archive_row_sid(row))
+                if ticket:
+                    stamp = max(stamp, _archive_list_row_ts({"idea_ticket": ticket}))
                 if stamp >= now - seconds:
                     expires = min(expires, stamp + seconds)
         positions = {id(row): i for i, row in enumerate(rows)}

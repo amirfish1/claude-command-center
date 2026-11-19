@@ -73,6 +73,17 @@ def test_ticket_activity_and_archive_and_parent_changes_invalidate():
                   ideas={'old': {'explicitly_archived': True}})[2] is True
 
 
+def test_cached_selection_expires_at_external_ticket_activity_boundary():
+    now = 1000000
+    rows = [{'session_id': 'old', 'mtime': 1}]
+    ideas = {'old': {'moved_at': now - 28800 + 2}}
+    assert ids(select(rows, window='8h', now=now, ideas=ideas)) == ['old']
+    inside = select(rows, window='8h', now=now + 1, ideas=ideas)
+    assert ids(inside) == ['old'] and inside[2] is True
+    after = select(rows, window='8h', now=now + 3, ideas=ideas)
+    assert ids(after) == [] and after[2] is False
+
+
 def test_version_and_scope_and_missing_version_invalidate():
     rows = [{'session_id': 'a', 'mtime': 1}]
     assert select(rows)[2] is False
