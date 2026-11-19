@@ -1,12 +1,14 @@
 """Continuation metadata must survive preambles and engine-specific paths."""
 import json
 from unittest.mock import Mock
+import pytest
 
 import server
 from ccc_server import codex_parse
 
 
-def test_codex_list_keeps_origin_beyond_preview(tmp_path, monkeypatch):
+@pytest.mark.parametrize('resolve_activity', [None, True, False])
+def test_codex_list_keeps_origin_beyond_preview(tmp_path, monkeypatch, resolve_activity):
     origin = 'origin-session-123'
     prompt = '<instructions>' + 'preamble ' * 100 + '</instructions>\nOrigin session id: ' + origin
     rollout = tmp_path / 'rollout.jsonl'
@@ -33,10 +35,16 @@ def test_codex_list_keeps_origin_beyond_preview(tmp_path, monkeypatch):
     fake._first_existing_dir.return_value = ''
     fake._continued_from_session_id_from_text.side_effect = server._continued_from_session_id_from_text
     monkeypatch.setattr(codex_parse, '_core', fake)
-    rows = codex_parse.find_codex_conversations(repo_only=False, resolve_pr_states=False, resolve_worktree_dirty=False)
+    options = {} if resolve_activity is None else {'resolve_activity': resolve_activity}
+    rows = codex_parse.find_codex_conversations(repo_only=False, resolve_pr_states=False,
+                                               resolve_worktree_dirty=False, **options)
     assert len(rows[0]['first_message']) == 200
     assert 'Origin session id:' not in rows[0]['first_message']
     assert rows[0]['continued_from_session_id'] == origin
+    if resolve_activity is False:
+        fake._codex_app_server_activity_fields.assert_not_called()
+    else:
+        fake._codex_app_server_activity_fields.assert_called_once_with('child-session-123')
 
 
 def test_conversation_open_reads_codex_origin_without_claude_transcript(tmp_path, monkeypatch):

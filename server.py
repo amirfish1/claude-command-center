@@ -15867,6 +15867,7 @@ def find_all_conversations(
     resolve_worktree_dirty=True,
     only_jsonl_paths=None,
     progress_step=None,
+    resolve_codex_activity=True,
 ):
     """Walk ~/.claude/projects/ for every subdir and return a flat list of
     conversation metadata across every folder you've ever Claude-Code'd in.
@@ -15891,6 +15892,9 @@ def find_all_conversations(
     finders. Callers merge the result into a cached full row set
     (_archive_merge_incremental_rows); rows for sources skipped here are
     carried over from that cache.
+
+    resolve_codex_activity: historical aggregations can omit per-thread live
+    activity RPCs while retaining transcript metadata and tail-derived state.
     """
     _only_dirs = None
     if only_jsonl_paths is not None:
@@ -16572,6 +16576,7 @@ def find_all_conversations(
             limit=limit_per_folder,
             resolve_pr_states=resolve_pr_states,
             resolve_worktree_dirty=resolve_worktree_dirty,
+            resolve_activity=resolve_codex_activity,
         ))
     except Exception:
         pass

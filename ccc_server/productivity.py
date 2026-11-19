@@ -283,6 +283,7 @@ def _productivity_build_snapshot(now=None):
         resolve_pr_states=False,
         resolve_effective=False,
         resolve_worktree_dirty=False,
+        resolve_codex_activity=False,
     )
     watchtower_status = {"available": True, "items": 0, "reason": None}
     try:

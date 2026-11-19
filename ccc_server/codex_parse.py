@@ -107,13 +107,16 @@ def find_codex_conversations(
     resolve_pr_states=True,
     resolve_worktree_dirty=True,
     reuse_rows=None,
+    resolve_activity=True,
 ):
     """`reuse_rows` (sid -> previously built row) lets the archive's
     incremental refresh skip the per-row tail parse / git / fs work for
     rollouts whose file is byte-for-byte unchanged (same path, size, mtime)
     and which are not live on either side. Sidecar-derived fields are still
     refreshed. Without it every Codex change re-derived all rows (CCC-142:
-    37-79s per refresh in the detached worker)."""
+    37-79s per refresh in the detached worker). Historical aggregations set
+    resolve_activity=False to omit live worker RPCs; normal views retain them.
+    """
     rows = _core._codex_fetch_threads(limit=limit)
     task_titles = _core._auto_titled_session_ids()
     if repo_only:
@@ -338,7 +341,9 @@ def find_codex_conversations(
         spawn_pid = spawn_info.get("pid")
         spawn_alive = bool(spawn_info.get("alive"))
         codex_activity = _core._codex_activity_fields_from_tail(tail, spawn_alive)
-        app_activity = _core._codex_app_server_activity_fields(sid)
+        # Historical aggregations consume transcript metadata, not live
+        # approval/tool state. Avoid a worker RPC for every historical row.
+        app_activity = _core._codex_app_server_activity_fields(sid) if resolve_activity else {}
         if app_activity.get("sidecar_status") and not _core._codex_app_activity_superseded_by_tail(app_activity, tail):
             codex_activity.update(app_activity)
         codex_stale_tool = _core._codex_stale_tool_fields(tail)

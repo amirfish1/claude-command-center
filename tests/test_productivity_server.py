@@ -431,6 +431,7 @@ def test_build_snapshot_reads_each_global_source_once(monkeypatch):
 
     def conversations(**kwargs):
         calls["conversations"] += 1
+        assert kwargs['resolve_codex_activity'] is False
         return []
 
     def tickets():
