@@ -18153,12 +18153,11 @@
     const scrollTop = view && view.scrollTop;
     const previousRail = turn.querySelector(':scope > .conversation-media-rail');
     if (previousRail) {
-      for (const card of Array.from(previousRail.children)) {
+      for (const card of Array.from(previousRail.querySelectorAll('.image-gen-card'))) {
         const anchor = card._conversationMediaAnchor;
         turn.insertBefore(card, anchor && anchor.parentNode === turn ? anchor : null);
         if (anchor) anchor.remove();
       }
-      previousRail.remove();
     }
     Array.from(turn.querySelectorAll(':scope > .kimi-tool-group')).forEach(g => {
       const body = g.querySelector('.kimi-tool-group-body');
@@ -18235,9 +18234,9 @@
       flush();
     }
     flush();
-    // Keep media in a single float so text and tools can flow independently
-    // of thumbnail heights. Leave transcript markers and tools as direct
-    // children: live reconciliation and compact folding depend on them.
+    // Keep tool screenshots in a bounded stack; the full gallery opens above
+    // the transcript. Retain the rail during regrouping so an open popover,
+    // focus, and loaded image nodes survive live tool updates.
     const mediaCards = Array.from(turn.querySelectorAll(':scope > .image-gen-card'));
     let mediaRail = turn.querySelector(':scope > .conversation-media-rail');
     if (mediaCards.length) {
@@ -18245,15 +18244,65 @@
         mediaRail = document.createElement('div');
         mediaRail.className = 'conversation-media-rail';
       }
+      const stackable = mediaCards.every(card => card.classList.contains('tool-result-images'));
+      mediaRail.classList.toggle('is-image-stack', stackable);
+      let gallery = mediaRail.querySelector('.conversation-media-gallery');
+      let stack = mediaRail.querySelector('.conversation-media-stack');
+      if (stackable && !gallery) {
+        stack = document.createElement('button');
+        stack.type = 'button';
+        stack.className = 'conversation-media-stack';
+        stack.setAttribute('aria-haspopup', 'dialog');
+        stack.setAttribute('aria-expanded', 'false');
+        gallery = document.createElement('div');
+        gallery.className = 'conversation-media-gallery';
+        gallery.setAttribute('popover', 'auto');
+        gallery.setAttribute('role', 'dialog');
+        gallery.setAttribute('aria-label', 'Tool images');
+        gallery.addEventListener('toggle', () => {
+          stack.setAttribute('aria-expanded', String(gallery.matches(':popover-open')));
+        });
+        gallery.innerHTML = '<button type="button" class="conversation-media-close" aria-label="Close image gallery">Close</button>';
+        mediaRail.append(stack, gallery);
+      }
+      if (!stackable && gallery) {
+        gallery.remove();
+        stack.remove();
+        gallery = null;
+      }
       for (const card of mediaCards) {
         const anchor = document.createComment('conversation media');
         card.before(anchor);
         card._conversationMediaAnchor = anchor;
-        mediaRail.append(card);
+        (gallery || mediaRail).append(card);
       }
-      turn.prepend(mediaRail);
+      if (stackable) {
+        const images = Array.from(gallery.querySelectorAll('img.msg-image'));
+        const sources = images.map(img => img.getAttribute('src'));
+        if (!stack._imageSources || sources.length !== stack._imageSources.length
+            || sources.some((src, index) => src !== stack._imageSources[index])) {
+          stack._imageSources = sources;
+          stack.replaceChildren();
+          const preview = document.createElement('span');
+          preview.className = 'conversation-media-stack-preview';
+          preview.setAttribute('aria-hidden', 'true');
+          for (const img of images.slice(0, 3).reverse()) {
+            const thumb = document.createElement('img');
+            thumb.src = img.getAttribute('src');
+            thumb.alt = '';
+            thumb.loading = 'lazy';
+            preview.append(thumb);
+          }
+          const label = document.createElement('span');
+          label.className = 'conversation-media-stack-label';
+          label.textContent = images.length + (images.length === 1 ? ' image' : ' images') + ' · Open';
+          stack.append(preview, label);
+          stack.setAttribute('aria-label', 'Open gallery of ' + images.length + (images.length === 1 ? ' image' : ' images'));
+        }
+      }
+      if (turn.firstElementChild !== mediaRail) turn.prepend(mediaRail);
     }
-    if (mediaRail && !mediaRail.children.length) mediaRail.remove();
+    if (mediaRail && !mediaCards.length) mediaRail.remove();
     // Moving a tall expanded result briefly shrinks its scroller. Restore
     // the reading position after the complete group is back in the DOM.
     if (view && view.scrollTop !== scrollTop) view.scrollTop = scrollTop;

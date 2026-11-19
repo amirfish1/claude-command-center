@@ -146,11 +146,11 @@ test('a first render regroups each turn once, after its events are in place', as
   }
 });
 
-test('conversation media packs on the right without image-height gaps between text blocks', async () => {
+test('tool image stack stays within the reply and opens a usable gallery', async () => {
   const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
   try {
     const page = await browser.newPage();
-    await page.setViewport({ width: 1400, height: 900 });
+    await page.setViewport({ width: 1400, height: 900, hasTouch: true });
     await page.setContent('<body class="conv-compact"><div class="conv-pane is-webui-session">'
       + '<div class="conversations-view"><div class="kimi-turn"></div></div></div></body>');
     await page.addStyleTag({ content: fs.readFileSync(require.resolve('../static/app.css'), 'utf8') });
@@ -160,37 +160,82 @@ test('conversation media packs on the right without image-height gaps between te
       (0, eval)('const _KIMI_GLYPHS = new Proxy({}, { get: () => "" });'
         + 'const escapeAttr = s => String(s).replace(/"/g, "&quot;");'
         + code + '\nwindow.regroup = _kimiRegroupTools;');
-      const image = line => window.CCCToolResultImagesCardHtml({ images: [{ kind: 'base64', line,
-        data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=' }] }, 'example');
       const turn = document.querySelector('.kimi-turn');
-      turn.innerHTML = '<div class="assistant-text">Checking the settings screenshot.</div>' + image(10)
-        + '<div class="assistant-text">The session is running and visible.</div>' + image(20)
-        + '<div class="assistant-text">The navigation path is confirmed.</div>';
+      turn.innerHTML = '<div class="assistant-text">The screenshots are ready.</div>'
+        + window.CCCToolResultImagesCardHtml({ images: Array.from({ length: 7 }, (_, idx) => ({
+          kind: 'base64', line: 10, idx,
+          data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=',
+        })) }, 'example');
       regroup(turn);
-      for (const img of turn.querySelectorAll('img')) img.style.height = '200px';
     }, imageSlice + slice);
-    const measure = () => page.evaluate(() => {
-      const turn = document.querySelector('.kimi-turn');
-      const texts = [...turn.querySelectorAll('.assistant-text')].map(n => n.getBoundingClientRect());
-      const cards = [...turn.querySelectorAll('.image-gen-card')].map(n => n.getBoundingClientRect());
-      return { gap: texts[1].top - texts[0].bottom,
-        right: cards[0].left >= texts[0].right,
-        topAligned: Math.abs(cards[0].top - texts[0].top) < 2,
-        packed: Math.abs(cards[1].top - cards[0].bottom) < 2,
-        overflow: turn.scrollWidth > turn.clientWidth,
-        stacked: cards[0].top >= texts[2].bottom };
+    await page.addScriptTag({ content: fs.readFileSync(require.resolve('../static/conversation-interactions.js'), 'utf8') });
+    await page.evaluate(() => {
+      CCCConversationInteractions.createController({ state: {
+        openMediaLightbox: src => { window.openedImage = src; },
+      }, helpers: {} }).installConversationInteraction79();
     });
-    const desktop = await measure();
-    assert.ok(desktop.right && desktop.topAligned && desktop.packed, JSON.stringify(desktop));
-    assert.ok(desktop.gap <= 12 && !desktop.overflow, JSON.stringify(desktop));
-    // The breakpoint follows the conversation width, even on a wide screen.
+    const desktop = await page.evaluate(() => {
+      const turn = document.querySelector('.kimi-turn');
+      const text = turn.querySelector('.assistant-text').getBoundingClientRect();
+      const stack = turn.querySelector('.conversation-media-stack').getBoundingClientRect();
+      const turnHeight = turn.getBoundingClientRect().height;
+      const rail = turn.querySelector('.conversation-media-rail');
+      rail.remove();
+      const withoutImages = turn.getBoundingClientRect().height;
+      turn.prepend(rail);
+      return { textHeight: text.height, stackHeight: stack.height, turnHeight, withoutImages,
+        right: stack.left >= text.right, gap: stack.top - text.top,
+        label: turn.querySelector('.conversation-media-stack').textContent, overflow: turn.scrollWidth > turn.clientWidth };
+    });
+    assert.ok(desktop.stackHeight <= desktop.turnHeight && desktop.turnHeight === desktop.withoutImages, JSON.stringify(desktop));
+    assert.ok(desktop.right && Math.abs(desktop.gap) <= 2 && !desktop.overflow, JSON.stringify(desktop));
+    assert.match(desktop.label, /7 images/);
+    await page.click('.conversation-media-stack');
+    assert.equal(await page.$eval('.conversation-media-gallery', el => el.matches(':popover-open')), true);
+    const gallery = await page.evaluate(() => {
+      const gallery = document.querySelector('.conversation-media-gallery');
+      const before = gallery.querySelector('img');
+      const focused = document.activeElement;
+      regroup(document.querySelector('.kimi-turn'));
+      const box = gallery.getBoundingClientRect();
+      return { open: gallery.matches(':popover-open'), sameImage: gallery.querySelector('img') === before,
+        sameFocus: document.activeElement === focused, images: gallery.querySelectorAll('figure').length,
+        downloads: gallery.querySelectorAll('a[download]').length, bounded: box.top >= 0 && box.bottom <= innerHeight,
+        noOverflow: gallery.scrollWidth === gallery.clientWidth };
+    });
+    assert.deepEqual(gallery, { open: true, sameImage: true, sameFocus: true, images: 7, downloads: 7, bounded: true, noOverflow: true });
+    await page.click('.conversation-media-close');
+    assert.equal(await page.$eval('.conversation-media-gallery', el => el.matches(':popover-open')), false);
+    assert.equal(await page.$eval('.conversation-media-stack', el => el === document.activeElement), true);
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.$eval('.conversation-media-gallery', el => el.matches(':popover-open')), false);
+    // A narrow split pane follows its own width, rather than the browser width.
     await page.addStyleTag({ content: '.conv-pane { flex: none; width: 600px; }' });
-    const narrowPane = await measure();
-    assert.ok(narrowPane.stacked && !narrowPane.overflow, JSON.stringify(narrowPane));
-    await page.setViewport({ width: 390, height: 844 });
+    const stacked = () => page.evaluate(() => {
+      const turn = document.querySelector('.kimi-turn');
+      const text = turn.querySelector('.assistant-text').getBoundingClientRect();
+      const stack = turn.querySelector('.conversation-media-stack').getBoundingClientRect();
+      return { stacked: stack.top >= text.bottom, height: stack.height, overflow: turn.scrollWidth > turn.clientWidth };
+    });
+    assert.deepEqual(await stacked(), { stacked: true, height: 72, overflow: false });
+    await page.setViewport({ width: 390, height: 844, hasTouch: true });
     await page.addStyleTag({ content: '.conv-pane { flex: none; width: 100%; }' });
-    const mobile = await measure();
-    assert.ok(mobile.stacked && !mobile.overflow && mobile.packed, JSON.stringify(mobile));
+    assert.deepEqual(await stacked(), { stacked: true, height: 72, overflow: false });
+    await page.tap('.conversation-media-stack');
+    const phone = await page.$eval('.conversation-media-gallery', el => {
+      const rect = el.getBoundingClientRect();
+      const focus = document.activeElement.getBoundingClientRect();
+      return { open: el.matches(':popover-open'), bounded: rect.left >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight,
+        scrolls: el.scrollHeight > el.clientHeight,
+        closeReachable: document.elementFromPoint(focus.left + focus.width / 2, focus.top + focus.height / 2) === document.activeElement };
+    });
+    assert.deepEqual(phone, { open: true, bounded: true, scrolls: true, closeReachable: true });
+    await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
+    assert.equal(await page.$eval('.tool-result-image', el => getComputedStyle(el).animationName), 'none');
+    await page.click('.tool-result-image-zoom');
+    assert.equal(await page.$eval('.conversation-media-gallery', el => el.matches(':popover-open')), false);
+    assert.ok(await page.evaluate(() => window.openedImage.startsWith('data:image/png;base64,')));
   } finally {
     await browser.close();
   }

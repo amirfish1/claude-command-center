@@ -2416,6 +2416,65 @@
     .kimi-turn > .conversation-media-rail { order: 1; margin-top: 8px; }
   }
 
+  .conversation-media-stack {
+    position: relative; display: block; width: 100%; height: 120px;
+    padding: 0; overflow: hidden; border: 0; border-radius: 6px;
+    background: var(--surface); color: var(--text); cursor: pointer;
+    font: inherit; font-size: 12px;
+  }
+  .conversation-media-stack:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .conversation-media-stack-preview { position: absolute; inset: 8px 16px 30px; }
+  .conversation-media-stack-preview img {
+    position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+    border-radius: 4px; background: var(--surface-2);
+    transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .conversation-media-stack-preview img:nth-last-child(2) { transform: translate(5px, -2px) rotate(4deg); }
+  .conversation-media-stack-preview img:nth-last-child(3) { transform: translate(10px, -4px) rotate(8deg); }
+  .conversation-media-stack:hover .conversation-media-stack-preview img:nth-last-child(2) { transform: translate(9px, -3px) rotate(6deg); }
+  .conversation-media-stack:hover .conversation-media-stack-preview img:nth-last-child(3) { transform: translate(18px, -6px) rotate(12deg); }
+  .conversation-media-stack-label { position: absolute; inset: auto 4px 2px; line-height: 20px; }
+  .kimi-turn:has(> .conversation-media-rail.is-image-stack) { position: relative; }
+  @container (min-width: 720px) {
+    .kimi-turn > .conversation-media-rail.is-image-stack {
+      position: absolute; top: 0; right: 0; height: 100%; max-height: 144px;
+      width: 28%; margin: 0;
+    }
+    .is-image-stack .conversation-media-stack { height: 100%; }
+    .kimi-turn:has(> .conversation-media-rail.is-image-stack) > :not(.conversation-media-rail) { max-width: calc(72% - 16px); }
+    .conv-pane.is-webui-session .kimi-turn > .conversation-media-rail.is-image-stack + * { margin-top: 0; }
+  }
+  @container (max-width: 719px) {
+    .conversation-media-rail.is-image-stack { align-self: flex-end; width: min(180px, 100%); }
+    .is-image-stack .conversation-media-stack { height: 72px; }
+  }
+  .conversation-media-gallery {
+    position: fixed; inset: 0; box-sizing: border-box;
+    width: min(960px, calc(100vw - 32px)); max-height: min(80dvh, 900px);
+    margin: auto; padding: 16px; overflow: auto;
+    border: 1px solid var(--border); border-radius: 12px;
+    background: var(--bg); color: var(--text);
+  }
+  .conversation-media-gallery::backdrop { background: rgba(0, 0, 0, 0.45); }
+  .conversation-media-close {
+    display: block; position: sticky; top: 0; z-index: 2; margin: 0 0 12px auto;
+    min-height: 44px; padding: 6px 14px; border: 1px solid var(--border);
+    border-radius: 6px; background: var(--surface); color: var(--text); cursor: pointer;
+  }
+  .conversation-media-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .conversation-media-gallery > .image-gen-card { margin: 0 0 12px; max-width: none; }
+  .conversation-media-gallery .tool-result-image { flex: 1 1 200px; max-width: 100%; }
+  .conversation-media-gallery .tool-result-image img { width: 100%; height: 180px; object-fit: contain; }
+  .conversation-media-gallery:popover-open .tool-result-image { animation: conversation-card-unstack 220ms cubic-bezier(0.16, 1, 0.3, 1); }
+  @keyframes conversation-card-unstack {
+    from { transform: translateY(12px) rotate(-2deg); opacity: 0.6; }
+    to { transform: none; opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .conversation-media-stack-preview img { transition: none; }
+    .conversation-media-gallery:popover-open .tool-result-image { animation: none; }
+  }
+
   /* Inline `codex_request` card: approval/question/permission/elicitation,
      rendered in the transcript instead of only in the live strip. */
   .codex-request-card {

@@ -2492,6 +2492,20 @@ window.addEventListener('popstate', (ev) => {
 
   function installConversationInteraction79() {
 document.addEventListener('click', (ev) => {
+    const stack = ev.target.closest('.conversation-media-stack');
+    const closeGallery = ev.target.closest('.conversation-media-close');
+    if (stack || closeGallery) {
+      const rail = (stack || closeGallery).closest('.conversation-media-rail');
+      const gallery = rail.querySelector('.conversation-media-gallery');
+      if (stack) {
+        gallery.showPopover();
+        gallery.querySelector('.conversation-media-close').focus({ preventScroll: true });
+      } else {
+        gallery.hidePopover();
+        rail.querySelector('.conversation-media-stack').focus({ preventScroll: true });
+      }
+      return;
+    }
     const shotLink = ev.target.closest('a.uxq-td-img-wrap, .ann-ux-preview-shot a');
     if (shotLink && shotLink.getAttribute('href')) {
       ev.preventDefault();
@@ -2502,12 +2516,16 @@ document.addEventListener('click', (ev) => {
     const zoomBtn = ev.target.closest('.tool-result-image-zoom[data-zoom-src]');
     if (zoomBtn) {
       ev.preventDefault();
+      const gallery = zoomBtn.closest('.conversation-media-gallery');
+      if (gallery && gallery.matches(':popover-open')) gallery.hidePopover();
       (0, sharedState.openMediaLightbox)(zoomBtn.getAttribute('data-zoom-src'), { kind: 'image', title: zoomBtn.getAttribute('data-zoom-title') || 'image.png' });
       return;
     }
     const img = ev.target.closest('img.msg-image');
     if (img) {
       ev.preventDefault();
+      const gallery = img.closest('.conversation-media-gallery');
+      if (gallery && gallery.matches(':popover-open')) gallery.hidePopover();
       (0, sharedState.openMediaLightbox)(img.dataset.fullSrc || img.src, { kind: 'image', title: img.alt || 'image.png' });
       return;
     }
