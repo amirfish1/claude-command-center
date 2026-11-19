@@ -3083,6 +3083,18 @@ def _queue_config_from_payload(payload):
             )
         else:
             config["fallback_to_default_worker"] = bool(raw_fallback)
+    # Same present-only rule: callers without the field keep the stored value,
+    # the merged dialog sends null/on/off to follow or override headroom.
+    if "headroom_dispatch" in payload:
+        raw_headroom = payload.get("headroom_dispatch")
+        if raw_headroom is None:
+            config["headroom_dispatch"] = None
+        elif isinstance(raw_headroom, str):
+            config["headroom_dispatch"] = raw_headroom.strip().lower() in (
+                "1", "true", "yes", "on",
+            )
+        else:
+            config["headroom_dispatch"] = bool(raw_headroom)
     if backend == "github" and not config.get("github_repo"):
         raise ValueError("GitHub repository is required for the GitHub backend")
     if backend != "github":

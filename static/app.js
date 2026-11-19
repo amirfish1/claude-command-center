@@ -35421,9 +35421,8 @@
   }
 
   // The launch chip and configuration gear share the canonical queue controls.
-  // Queue exceptions are staged locally rather than saved on a quick-pick tap.
   async function _openFqPlanPopover(btn, queue) {
-    await openQueueManager(queue, false, btn);
+    await openQueueManager(queue, btn);
   }
   function _uxqRepaintStatusStrip() {
     const liveWorkers = ((_uxqHealthCache && _uxqHealthCache.wt_workers) || [])
@@ -36277,7 +36276,7 @@
         const btn = ev.target && ev.target.closest && ev.target.closest('[data-fq-config-queue], #filesQueueConfigure');
         if (!btn) return;
         ev.preventDefault(); ev.stopPropagation();
-        await openQueueManager(btn.getAttribute('data-fq-config-queue') || _uxqLastResolvedProject || _uxqWorkerProject(), false, btn);
+        await openQueueManager(btn.getAttribute('data-fq-config-queue') || _uxqLastResolvedProject || _uxqWorkerProject(), btn);
       });
       $health.addEventListener('click', scopeFromRow);
       $health.addEventListener('keydown', (ev) => {
@@ -36759,9 +36758,9 @@
   // The compact health-row controls remain useful shortcuts; this manager is
   // the discoverable place for every field `wt config` supports.
   window.openQueueManager = openQueueManager;
-  async function openQueueManager(initialQueue, fullConfig = false, trigger = document.activeElement) {
+  async function openQueueManager(initialQueue, trigger = document.activeElement) {
     // Queue status can repaint during loading or while the dialog is open.
-    const opener = trigger;
+    const opener = (trigger && trigger.nodeType === 1 ? trigger : null) || document.activeElement;
     const openerId = opener?.id;
     const openerAttribute = ['data-fq-plan-queue', 'data-fq-config-queue', 'data-queue-policy']
       .find(attribute => opener?.hasAttribute(attribute));
@@ -36785,7 +36784,6 @@
     const defaults = options.defaults || {};
     const queues = Array.isArray(options.queues) ? options.queues : [];
     const findQueue = (name) => queues.find(q => String(q.queue).toUpperCase() === String(name || '').toUpperCase());
-    const policyMode = !!findQueue(initialQueue) && !fullConfig && !!window.cccQueuePolicy;
     const pathChoices = (options.repo_paths || []).map(p => '<option value="' + escapeAttr(p) + '"></option>').join('');
     const githubRepoChoices = (options.github_repos || []).map(repo => '<option value="' + escapeAttr(repo) + '"></option>').join('');
     const modelsByEngine = options.models_by_engine || {};
@@ -36806,26 +36804,14 @@
       +       '<div class="fq-config-field"><label for="fqConfigWorkers">Workers</label><input id="fqConfigWorkers" type="number" min="1" max="16"><span class="fq-config-help">Concurrent workers when auto-drain is on.</span></div>'
       +       '<div class="fq-config-field wide"><label>Ticket backend</label><div class="fq-seg" id="fqBackendSeg" role="group" aria-label="Ticket backend"><button type="button" data-backend="file">Local WatchTower queue</button><button type="button" data-backend="github">GitHub issues</button></div><select id="fqConfigBackend" name="fq-config-backend" hidden><option value="file">Local WatchTower queue</option><option value="github">GitHub issues</option></select><span class="fq-config-help">GitHub queues require an owner/repository.</span></div>'
       +     '</div></div>'
-      +     '<div class="fq-config-section"><div class="fq-config-eyebrow">Worker</div><div class="fq-config-grid">'
-      +       '<div class="fq-config-field wide"><label>Engine</label><div class="fq-engine-chips" id="fqEngineSeg" role="radiogroup" aria-label="Worker engine">'
-      +         '<button type="button" class="orch-tier-chip" data-engine="" role="radio"><span class="orch-glyph" style="font-size:8px">⚙</span>Worker default</button>'
-      +         '<button type="button" class="orch-tier-chip" data-engine="claude" role="radio"><span class="orch-glyph orch-glyph-claude">C</span>Claude</button>'
-      +         '<button type="button" class="orch-tier-chip" data-engine="codex" role="radio"><span class="orch-glyph orch-glyph-codex">X</span>Codex</button>'
-      +         '<button type="button" class="orch-tier-chip" data-engine="gemini" role="radio"><span class="orch-glyph orch-glyph-gemini">G</span>Gemini</button>'
-      +         '<button type="button" class="orch-tier-chip" data-engine="cursor" role="radio"><span class="orch-glyph orch-glyph-cursor">U</span>Cursor</button>'
-      +         '<button type="button" class="orch-tier-chip" data-engine="antigravity" role="radio"><span class="orch-glyph orch-glyph-antigravity">A</span>Antigravity</button>'
-      +         '<button type="button" class="orch-tier-chip" data-engine="kilo" role="radio"><span class="orch-glyph orch-glyph-kilo">L</span>Kilo</button>'
-      +         '<button type="button" class="orch-tier-chip" data-engine="opencode" role="radio"><span class="orch-glyph orch-glyph-opencode">O</span>OpenCode</button>'
-      +         '<button type="button" class="orch-tier-chip" data-engine="kimi" role="radio"><span class="orch-glyph orch-glyph-kimi">K</span>Kimi</button>'
-      +         '<button type="button" class="orch-tier-chip" data-engine="hermes" role="radio"><span class="orch-glyph orch-glyph-hermes">H</span>Hermes</button>'
-      +         '<button type="button" class="orch-tier-chip" data-engine="devin" role="radio"><span class="orch-glyph orch-glyph-devin">D</span>Devin</button>'
-      +         '<button type="button" class="orch-tier-chip" data-engine="grok" role="radio"><span class="orch-glyph orch-glyph-grok">G</span>Grok</button>'
-      +         '<button type="button" class="orch-tier-chip" data-engine="aider" role="radio"><span class="orch-glyph orch-glyph-aider">A</span>Aider</button>'
-      +         '<button type="button" class="orch-tier-chip" data-engine="droid" role="radio"><span class="orch-glyph orch-glyph-droid">D</span>Droid</button>'
-      +         '<button type="button" class="orch-tier-chip" data-engine="pi" role="radio"><span class="orch-glyph orch-glyph-pi">P</span>Pi</button>'
-      +       '</div><select id="fqConfigEngine" hidden><option value="">Follow worker default</option><option value="claude">Claude</option><option value="codex">Codex</option><option value="gemini">Gemini</option><option value="cursor">Cursor</option><option value="antigravity">Antigravity</option><option value="kilo">Kilo</option><option value="opencode">OpenCode</option><option value="kimi">Kimi</option><option value="hermes">Hermes</option><option value="devin">Devin</option><option value="grok">Grok</option><option value="aider">Aider</option><option value="droid">Droid</option><option value="pi">Pi</option></select><span class="fq-config-help">Choose an override, or let CCC pick its shared worker engine default.</span></div>'
-      +       '<div class="fq-config-field"><label for="fqConfigModel">Model (optional)</label><select id="fqConfigModel"></select><input id="fqConfigCustomModel" placeholder="Model id" hidden><span class="fq-config-help">Cost tiers shown per model; Highspeed is the fast (2× price) tier.</span></div>'
-      +       '<div class="fq-config-field"><label for="fqConfigEffort">Effort (optional)</label><select id="fqConfigEffort"><option value="">Follow worker default</option><option value="low">Light</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra High</option><option value="max">Max</option></select><span class="fq-config-help">Reasoning budget passed to WatchTower workers for this queue.</span></div>'
+      +     '<div class="fq-config-section" id="fqWorkerSection"><div class="fq-config-eyebrow">Worker</div>'
+      +       '<div class="fq-runs-on"><div class="fq-runs-on-line" id="fqRunsOn"></div><p class="fq-config-help" id="fqRunsOnNote"></p></div>'
+      +       '<div class="fq-config-grid">'
+      +       '<div class="fq-config-field wide"><label>Run new workers on</label><div class="fq-engine-chips" id="fqWorkerSeg" role="radiogroup" aria-label="Worker engine, model and effort"></div><select id="fqConfigEngine" hidden><option value="">Follow worker default</option><option value="claude">Claude</option><option value="codex">Codex</option><option value="gemini">Gemini</option><option value="cursor">Cursor</option><option value="antigravity">Antigravity</option><option value="kilo">Kilo</option><option value="opencode">OpenCode</option><option value="kimi">Kimi</option><option value="hermes">Hermes</option><option value="devin">Devin</option><option value="grok">Grok</option><option value="aider">Aider</option><option value="droid">Droid</option><option value="pi">Pi</option></select><span class="fq-config-help">Common engine · model · effort combos, like the new-session picks. "Worker default" follows the shared worker defaults; Custom covers anything else.</span></div>'
+      +       '<div class="fq-config-field wide"><details class="fq-custom" id="fqCustomDetails"><summary>Custom model or effort</summary><div class="fq-config-grid fq-custom-grid">'
+      +         '<div class="fq-config-field"><label for="fqConfigModel">Model</label><select id="fqConfigModel"></select><input id="fqConfigCustomModel" placeholder="Model id" hidden><span class="fq-config-help">Cost tiers shown per model; Highspeed is the fast (2× price) tier.</span></div>'
+      +         '<div class="fq-config-field"><label for="fqConfigEffort">Effort</label><select id="fqConfigEffort"><option value="">Follow worker default</option><option value="low">Light</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra High</option><option value="max">Max</option></select><span class="fq-config-help">Reasoning budget passed to WatchTower workers for this queue.</span></div>'
+      +       '</div></details></div>'
       +       '<div class="fq-config-field wide"><label for="fqConfigPath">Working repository</label><input id="fqConfigPath" list="fqConfigPaths" placeholder="/path/to/repository"><datalist id="fqConfigPaths">' + pathChoices + '</datalist><span class="fq-config-help">Suggestions come from queues already configured on this machine.</span></div>'
       +     '</div></div>'
       +     '<div class="fq-config-section fq-config-roles" hidden><div class="fq-config-eyebrow">Roles</div>'
@@ -36835,7 +36821,8 @@
       +       '<div class="fq-config-field"><label>Drain policy</label><div class="fq-config-checkrow"><button type="button" class="settings-toggle" id="fqDrainToggle" role="switch" aria-checked="false" aria-label="Auto-drain new work"><span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span></button><span class="fq-config-checkrow-label">Auto-drain new work</span></div><input type="checkbox" id="fqConfigDrain" hidden><span class="fq-config-help">Off keeps tickets as a deliberate backlog until run manually.</span></div>'
       +       '<div class="fq-config-field"><label>Claim types</label><div class="fq-config-checks"><label><input name="fq-config-claim-type" value="bug" type="checkbox"> Bugs</label><label><input name="fq-config-claim-type" value="feature" type="checkbox"> Features</label></div><span class="fq-config-help">Choose neither to accept both ticket types.</span></div>'
       +       '<div class="fq-config-field"><label>Product gate</label><div class="fq-config-checkrow"><button type="button" class="settings-toggle" id="fqGateToggle" role="switch" aria-checked="false" aria-label="Require Ack before workers implement"><span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span></button><span class="fq-config-checkrow-label">Require my Ack before implementing</span></div><input type="checkbox" id="fqConfigGate" hidden><span class="fq-config-help">Workers post a short pitch after diagnosis and wait for Ack/Nack.</span></div>'
-      +       '<div class="fq-config-field"><label for="fqConfigFallback">Worker fallback</label><select id="fqConfigFallback" class="bug-input"><option value="">Use machine default</option><option value="on">On</option><option value="off">Off</option></select><span class="fq-config-help">Unset follows the machine worker fallback policy. Off is an explicit queue exception. Fallback never rewrites stored pins.</span></div>'
+      +       '<div class="fq-config-field"><label for="fqConfigFallback">Worker fallback · retry on another engine</label><select id="fqConfigFallback" class="bug-input"><option value="">Use machine default</option><option value="on">On</option><option value="off">Off</option></select><span class="fq-config-help">Unset follows the machine worker fallback policy. Off is an explicit queue exception. Fallback never rewrites stored pins.</span></div>'
+      +       '<div class="fq-config-field"><label for="fqConfigHeadroom">Switch engines when quota runs low</label><select id="fqConfigHeadroom" class="bug-input"><option value="">Use machine default</option><option value="on">On</option><option value="off">Off</option></select><span class="fq-config-help">Unset follows the machine headroom dispatch policy. Off is an explicit queue exception.</span></div>'
       +     '</div></div>'
       +     '<div class="fq-config-section fq-config-github" hidden><div class="fq-config-eyebrow">GitHub</div><div class="fq-config-grid">'
       +       '<div class="fq-config-field wide"><label for="fqConfigGithubRepo">GitHub repository</label><input id="fqConfigGithubRepo" list="fqConfigGithubRepos" placeholder="owner/repository"><datalist id="fqConfigGithubRepos">' + githubRepoChoices + '</datalist><span class="fq-config-help">Choose a configured repository or enter owner/repository.</span></div>'
@@ -36847,7 +36834,7 @@
       + '</div>';
     document.body.appendChild(modal);
     const $ = (sel) => modal.querySelector(sel);
-    const fields = { queue: $('#fqConfigQueue'), workers: $('#fqConfigWorkers'), backend: $('#fqConfigBackend'), engine: $('#fqConfigEngine'), path: $('#fqConfigPath'), model: $('#fqConfigModel'), customModel: $('#fqConfigCustomModel'), effort: $('#fqConfigEffort'), drain: $('#fqConfigDrain'), gate: $('#fqConfigGate'), repo: $('#fqConfigGithubRepo'), assignee: $('#fqConfigGithubAssignee'), queueLabel: $('#fqConfigQueueLabel'), fallback: $('#fqConfigFallback') };
+    const fields = { queue: $('#fqConfigQueue'), workers: $('#fqConfigWorkers'), backend: $('#fqConfigBackend'), engine: $('#fqConfigEngine'), path: $('#fqConfigPath'), model: $('#fqConfigModel'), customModel: $('#fqConfigCustomModel'), effort: $('#fqConfigEffort'), drain: $('#fqConfigDrain'), gate: $('#fqConfigGate'), repo: $('#fqConfigGithubRepo'), assignee: $('#fqConfigGithubAssignee'), queueLabel: $('#fqConfigQueueLabel'), fallback: $('#fqConfigFallback'), headroom: $('#fqConfigHeadroom') };
     // Friendly model labels + cost tiers (the "which model should this queue
     // run on" answer inline): curated labels from the picker registry, tier
     // from the production cost classifier ($$$/$$/$/low cost).
@@ -36870,15 +36857,117 @@
       const isBlocked = (id) => typeof spawnDefaultsState === 'object' && spawnDefaultsState.blockedModels instanceof Set
         && spawnDefaultsState.blockedModels.has(String(id || '').trim().toLowerCase());
       fields.model.innerHTML = '<option value="">Follow worker default</option>'
-        + choices.map(choice => '<option value="' + escapeAttr(choice) + '">' + escapeHtml(modelLabel(fields.engine.value, choice) + tierText(fields.engine.value, choice) + (isBlocked(choice) ? (policyMode ? ' - ⚠ blocked by model policy' : ' - ⚠ policy blocked, asks to confirm') : '')) + '</option>').join('')
+        + choices.map(choice => '<option value="' + escapeAttr(choice) + '">' + escapeHtml(modelLabel(fields.engine.value, choice) + tierText(fields.engine.value, choice) + (isBlocked(choice) ? ' - ⚠ blocked by model policy' : '')) + '</option>').join('')
         + '<option value="__custom__">Custom model…</option>';
       fields.model.value = known ? selected : '__custom__';
       fields.customModel.hidden = known;
       fields.customModel.value = known ? '' : selected;
-      window.cccChoiceEligibility?.decorate(fields.model,{kind:'model',engine:()=>fields.engine.value || '',context:()=>({name:'queue',policyConfirmation:!policyMode})});
+      window.cccChoiceEligibility?.decorate(fields.model,{kind:'model',engine:()=>fields.engine.value || '',context:()=>({name:'queue',policyConfirmation:true})});
     };
+    // One "Runs on" line answers what new workers launch as; below it the
+    // common engine·model·effort combos ride as chips (the same top-used
+    // picks the new-session bar and Settings offer), with the full selects
+    // folded under Custom for anything the picks don't cover.
+    const currentModel = () => fields.model.value === '__custom__' ? fields.customModel.value.trim() : fields.model.value;
+    function syncRunsOn() {
+      const line = $('#fqRunsOn'), note = $('#fqRunsOnNote');
+      if (!line || !note) return;
+      const dfl = (typeof spawnDefaultsState === 'object' && spawnDefaultsState) || {};
+      const engine = fields.engine.value || dfl.worker_engine || '';
+      const model = currentModel() || dfl.worker_model || '';
+      const effort = fields.effort.value || dfl.worker_reasoning_effort || '';
+      line.textContent = 'Runs on ' + (engine || 'worker default') + ' · ' + (model || 'engine default') + ' · ' + (effort || 'default effort');
+      const pinned = [['engine', fields.engine.value], ['model', currentModel()], ['effort', fields.effort.value]].filter(pair => pair[1]).map(pair => pair[0]);
+      note.textContent = pinned.length
+        ? 'Set on this queue: ' + pinned.join(', ') + '. The rest follows the worker defaults.'
+        : 'Follows the shared worker defaults.';
+    }
+    function workerComboPicks() {
+      const picks = [];
+      try {
+        const allowed = typeof ENGINE_HUB_WORKER_ENGINES !== 'undefined' ? ENGINE_HUB_WORKER_ENGINES : null;
+        const top = typeof getTopSpawnPicks === 'function' ? (getTopSpawnPicks() || []) : [];
+        for (const p of top) {
+          if (!p || !p.engine || (allowed && !allowed.includes(p.engine))) continue;
+          picks.push(p);
+          if (picks.length >= 6) break;
+        }
+      } catch (_) {}
+      return picks;
+    }
+    function syncWorkerChips() {
+      const seg = $('#fqWorkerSeg');
+      if (!seg) return;
+      const model = currentModel();
+      seg.querySelectorAll('.orch-tier-chip').forEach(chip => {
+        let on;
+        if (chip.hasAttribute('data-fq-custom')) on = fields.model.value === '__custom__';
+        else if (!chip.hasAttribute('data-engine')) on = !fields.engine.value && !model && !fields.effort.value;
+        else on = chip.dataset.engine === fields.engine.value
+          && _normalizeModelId(chip.dataset.model || '') === _normalizeModelId(model)
+          && (chip.dataset.effort || '') === fields.effort.value;
+        chip.classList.toggle('is-selected', on);
+        chip.setAttribute('aria-checked', on ? 'true' : 'false');
+      });
+    }
+    function syncWorker() { syncWorkerChips(); syncRunsOn(); }
+    function pickWorkerCombo(engine, model, effort) {
+      if (fields.engine.value !== engine) {
+        fields.engine.value = engine;
+        fields.engine.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      setModel(model);
+      const levels = engine ? effortLevelsForEngine(engine) : allEffortLevels();
+      renderEffortOptions(fields.effort, levels, effort || '', 'Follow worker default');
+      // The engine change above re-rendered chips mid-transition (model was
+      // still blank); reconcile once the final combo is in place.
+      renderWorkerChips();
+      syncWorker();
+    }
+    function renderWorkerChips() {
+      const seg = $('#fqWorkerSeg');
+      if (!seg) return;
+      const hadFocus = seg.contains(document.activeElement);
+      const model = currentModel();
+      const picks = workerComboPicks();
+      // The stored combo is always one of the chips so the current pin lights.
+      if (fields.engine.value && !picks.some(p => p.engine === fields.engine.value && _normalizeModelId(p.model || '') === _normalizeModelId(model))) {
+        picks.unshift({ engine: fields.engine.value, model, effort: fields.effort.value });
+      }
+      const glyphs = (typeof MODEL_PICKER_ENGINE_GLYPHS !== 'undefined' && MODEL_PICKER_ENGINE_GLYPHS) || {};
+      const comboLabel = (engine, mdl, eff) => typeof getModelPillLabel === 'function'
+        ? getModelPillLabel(engine, mdl, eff) : (mdl || engine + ' default');
+      seg.innerHTML = '<button type="button" class="orch-tier-chip" data-fq-combo role="radio"><span class="orch-glyph" style="font-size:8px">⚙</span>Worker default</button>'
+        + picks.map(p => '<button type="button" class="orch-tier-chip" data-fq-combo role="radio"'
+          + ' data-engine="' + escapeAttr(p.engine) + '" data-model="' + escapeAttr(p.model || '') + '" data-effort="' + escapeAttr(p.effort || '') + '">'
+          + '<span class="orch-glyph orch-glyph-' + escapeAttr(p.engine) + '">' + escapeHtml(glyphs[p.engine] || '?') + '</span>'
+          + escapeHtml(comboLabel(p.engine, p.model || '', p.effort || '')) + '</button>').join('')
+        + '<button type="button" class="orch-tier-chip fq-custom-chip" data-fq-custom role="radio">Custom…</button>';
+      seg.querySelectorAll('[data-fq-combo]').forEach(chip => chip.addEventListener('click', () => {
+        if (!chip.hasAttribute('data-engine')) {
+          fields.engine.value = '';
+          fields.engine.dispatchEvent(new Event('change', { bubbles: true }));
+          syncWorker();
+          return;
+        }
+        pickWorkerCombo(chip.dataset.engine || '', chip.dataset.model || '', chip.dataset.effort || '');
+      }));
+      seg.querySelector('[data-fq-custom]')?.addEventListener('click', () => {
+        const details = $('#fqCustomDetails');
+        if (details) details.open = true;
+        fields.model.focus();
+      });
+      syncWorkerChips();
+      const details = $('#fqCustomDetails');
+      // A pin no combo chip expresses (effort-only, custom id) shows where it lives.
+      if (details) details.open = details.open || fields.model.value === '__custom__'
+        || (!seg.querySelector('.is-selected') && !!(fields.engine.value || model || fields.effort.value));
+      if (hadFocus) seg.querySelector('.is-selected')?.focus();
+    }
     const apply = (entry) => {
       const c = (entry && entry.config) || defaults;
+      const title = $('#fqConfigTitle');
+      if (title) title.textContent = entry && entry.queue ? entry.queue + ' · queue settings' : 'Queue configuration';
       fields.queue.value = (entry && entry.queue) || initialQueue || '';
       fields.workers.value = c.desired_workers == null ? 1 : c.desired_workers;
       fields.backend.value = c.backend || 'file';
@@ -36894,6 +36983,7 @@
       if (!supportsCustom && fields.model.value === '__custom__') { fields.customModel.hidden = false; }
       fields.drain.checked = !!c.auto_drain; fields.gate.checked = !!c.product_gate;
       fields.fallback.value = typeof c.fallback_to_default_worker === 'boolean' ? (c.fallback_to_default_worker ? 'on' : 'off') : '';
+      fields.headroom.value = typeof c.headroom_dispatch === 'boolean' ? (c.headroom_dispatch ? 'on' : 'off') : '';
       fields.repo.value = c.github_repo || ''; fields.assignee.value = c.github_assignee || '';
       fields.queueLabel.value = c.queue_label || '';
       fields.queueLabel.placeholder = 'watchtower:' + (String(fields.queue.value || '').trim().toUpperCase() || 'QUEUE');
@@ -36902,7 +36992,9 @@
       syncSegmented();
       syncDrainToggle();
       syncGateToggle();
-      window.cccChoiceEligibility?.decorate(fields.engine,{kind:'engine',engine:()=>fields.engine.value,context:()=>({name:'queue'}),chips:$('#fqEngineSeg')});
+      renderWorkerChips();
+      syncRunsOn();
+      window.cccChoiceEligibility?.decorate(fields.engine,{kind:'engine',engine:()=>fields.engine.value,context:()=>({name:'queue'})});
       loadRoles(entry ? entry.queue : '');
     };
     // CCC-1235: per-role engine/model (WatchTower WT-14). Loaded per queue
@@ -36916,7 +37008,6 @@
       Object.keys(roleEdits).forEach(k => delete roleEdits[k]);
       if (!section) return;
       section.hidden = true;
-      if (policyMode) return;
       if (!queueName) return;
       try {
         const r = await fetch('/api/queue/roles?queue=' + encodeURIComponent(queueName));
@@ -36996,14 +37087,8 @@
       });
     };
     function syncSegmented() {
-      const bseg = $('#fqBackendSeg'), eseg = $('#fqEngineSeg');
+      const bseg = $('#fqBackendSeg');
       if (bseg) bseg.querySelectorAll('button').forEach(b => b.classList.toggle('is-active', (b.getAttribute('data-backend') || '') === fields.backend.value));
-      if (eseg && fields.engine.value && !Array.from(eseg.querySelectorAll('[data-engine]')).some(b=>b.dataset.engine===fields.engine.value)) { const b=document.createElement('button');b.type='button';b.className='orch-tier-chip';b.dataset.engine=fields.engine.value;b.textContent=fields.engine.value+' · stored engine';b.setAttribute('role','radio');b.onclick=()=>{fields.engine.value=b.dataset.engine;fields.engine.dispatchEvent(new Event('change',{bubbles:true}));syncSegmented();};eseg.append(b); }
-      if (eseg) eseg.querySelectorAll('.orch-tier-chip').forEach(b => {
-        const sel = (b.getAttribute('data-engine') || '') === fields.engine.value;
-        b.classList.toggle('is-selected', sel);
-        b.setAttribute('aria-checked', sel ? 'true' : 'false');
-      });
     }
     function syncDrainToggle() {
       const t = $('#fqDrainToggle');
@@ -37014,7 +37099,6 @@
       if (t) { t.classList.toggle('is-on', fields.gate.checked); t.setAttribute('aria-checked', fields.gate.checked ? 'true' : 'false'); }
     }
     segBtns('#fqBackendSeg', 'backend', fields.backend);
-    segBtns('#fqEngineSeg', 'engine', fields.engine);
     const drainToggle = $('#fqDrainToggle');
     if (drainToggle) drainToggle.addEventListener('click', () => {
       fields.drain.checked = !fields.drain.checked;
@@ -37045,7 +37129,7 @@
     // Handle the top dialog before document-level shortcuts for Settings below it.
     document.addEventListener('keydown', onKey, true);
     apply(findQueue(initialQueue));
-    fields.queue.addEventListener('change', () => { const found = findQueue(fields.queue.value); if (found) apply(found); else loadRoles(''); });
+    fields.queue.addEventListener('change', () => { const found = findQueue(fields.queue.value); if (found) apply(found); else { loadRoles(''); const title = $('#fqConfigTitle'); if (title) title.textContent = 'Queue configuration'; } });
     fields.backend.addEventListener('change', () => modal.querySelectorAll('.fq-config-github').forEach(el => { el.hidden = fields.backend.value !== 'github'; }));
     fields.engine.addEventListener('change', () => {
       setModel('');
@@ -37058,19 +37142,25 @@
       const customOpt = fields.model.querySelector('option[value="__custom__"]');
       if (customOpt) customOpt.hidden = !supportsCustom;
       if (!supportsCustom) { fields.customModel.hidden = true; fields.customModel.value = ''; if (fields.model.value === '__custom__') fields.model.value = ''; }
+      renderWorkerChips();
+      syncWorker();
     });
     fields.model.addEventListener('change', () => {
       const custom = fields.model.value === '__custom__';
       fields.customModel.hidden = !custom;
       if (custom) fields.customModel.focus();
+      const details = $('#fqCustomDetails');
+      if (custom && details) details.open = true;
+      syncWorker();
     });
+    fields.customModel.addEventListener('input', syncWorker);
+    fields.effort.addEventListener('change', syncWorker);
     modal.querySelectorAll('[data-fq-config-cancel]').forEach(el => el.addEventListener('click', close));
     modal.querySelector('[data-fq-config-save]').addEventListener('click', async () => {
-      if (policyMode) return;
       const save = modal.querySelector('[data-fq-config-save]');
       const claim_types = Array.from(modal.querySelectorAll('input[name="fq-config-claim-type"]:checked')).map(box => box.value);
       const model = fields.model.value === '__custom__' ? fields.customModel.value : fields.model.value;
-      const payload = { queue: fields.queue.value, workers: fields.workers.value, backend: fields.backend.value, engine: fields.engine.value, repo_path: fields.path.value, model, effort: fields.effort.value, auto_drain: fields.drain.checked, product_gate: fields.gate.checked, claim_types, github_repo: fields.repo.value, github_assignee: fields.assignee.value, queue_label: fields.queueLabel.value, fallback_to_default_worker: fields.fallback.value === '' ? null : fields.fallback.value === 'on', roles: changedRoles() };
+      const payload = { queue: fields.queue.value, workers: fields.workers.value, backend: fields.backend.value, engine: fields.engine.value, repo_path: fields.path.value, model, effort: fields.effort.value, auto_drain: fields.drain.checked, product_gate: fields.gate.checked, claim_types, github_repo: fields.repo.value, github_assignee: fields.assignee.value, queue_label: fields.queueLabel.value, fallback_to_default_worker: fields.fallback.value === '' ? null : fields.fallback.value === 'on', headroom_dispatch: fields.headroom.value === '' ? null : fields.headroom.value === 'on', roles: changedRoles() };
       save.disabled = true;
       save.classList.add('is-saving');
       try {
@@ -37081,17 +37171,23 @@
         if (data.configuration_history?.warning) warnings.push(data.configuration_history.warning);
         showOpToast(escapeHtml('Saved ' + data.queue + ' queue configuration' + (warnings.length ? '. ' + warnings.join(' ') : '')), warnings.length ? 'warning' : 'success');
         _uxqHealthCache.ts = 0; _uxqItemsCache.ts = 0; close();
+        window.dispatchEvent(new CustomEvent('ccc:queue-policy-changed', { detail: { queue: data.queue || fields.queue.value } }));
+        window.cccLaunchPreview?.refresh();
         try { _renderQueuePanel(); }
         catch (_) { showOpToast('Queue configuration saved; the visible queue list could not refresh. Reopen it before relying on its display.', 'warning'); }
       } catch (e) { showOpToast(escapeHtml('Could not save queue: ' + e.message), 'error'); save.disabled = false; save.classList.remove('is-saving'); if (document.activeElement === document.body) save.focus(); }
     });
-    if (policyMode) {
-      window.cccQueuePolicy.mount({modal, fields, queue: initialQueue,
-        hydrate: config => apply({queue: initialQueue, config}),
-        configure: () => { close(); openQueueManager(initialQueue, true); },
-        saved: () => { _uxqHealthCache.ts = 0; _uxqItemsCache.ts = 0; _renderQueuePanel(); }
-      });
-    } else requestAnimationFrame(() => fields.queue.focus());
+    requestAnimationFrame(() => {
+      // Worker-intent openers (the launch chip, Edit exceptions) land on the
+      // worker section; anything else starts at the queue name.
+      if (findQueue(initialQueue) && (openerAttribute === 'data-fq-plan-queue' || openerAttribute === 'data-queue-policy')) {
+        const section = $('#fqWorkerSection');
+        section?.scrollIntoView({ block: 'start' });
+        section?.querySelector('.orch-tier-chip')?.focus();
+      } else {
+        fields.queue.focus();
+      }
+    });
   }
 
   // Routes a ticket into the panel's current scope. The trigger is rendered
@@ -51795,7 +51891,7 @@
   document.getElementById('settingsQueueRefresh')?.addEventListener('click', refreshSettingsQueues);
   document.getElementById('settingsQueueTable')?.addEventListener('click', event => {
     const button = event.target.closest('[data-queue-policy]');
-    if (button) openQueueManager(button.dataset.queuePolicy, false, button);
+    if (button) openQueueManager(button.dataset.queuePolicy, button);
   });
   document.getElementById('settingsQueueScope')?.addEventListener('change', () => { document.getElementById('settingsQueuePreviewBody').hidden = true; });
   document.getElementById('settingsQueuePreview')?.addEventListener('click', async () => {
@@ -54683,7 +54779,7 @@
   });
 
   window.cccSettingsTaskSearch?.mount({
-    queue: (name, trigger) => openQueueManager(name, false, trigger),
+    queue: (name, trigger) => openQueueManager(name, trigger),
     open: async task => {
       clearTimeout(settingsSearchFocusTimer);
       if (task.section === 'reader' && (!currentConversation || currentConversation === '__new__')) return null;
@@ -54725,7 +54821,7 @@
       if ($settingsModal.hidden) openSettingsModal({focusSearch:false}); else clearSettingsSearch();
       setActiveSettingsRailSection('preferences');
     },
-    queue: (name, trigger) => openQueueManager(name, false, trigger),
+    queue: (name, trigger) => openQueueManager(name, trigger),
     edit: async edit => {
       clearTimeout(settingsSearchFocusTimer);
       if (edit.kind === 'policy') {

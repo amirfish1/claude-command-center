@@ -21,7 +21,7 @@ ${efforts}
 ${toast}
 ${manager}
 ${renderFlags}
-document.addEventListener('click',e=>{${flags}});document.getElementById('opener').onclick=()=>openQueueManager('MANUAL',true);
+document.addEventListener('click',e=>{${flags}});document.getElementById('opener').onclick=function(){openQueueManager('MANUAL',this)};
 </script>`;
 let child,browser,url,original;
 const file=path.join(scratch,'queue-config.json');

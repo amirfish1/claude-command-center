@@ -104,7 +104,7 @@ def save_queue_form(core, payload, normalized, session_link):
         conf = copy.deepcopy(normalized['config'])
         fields = {'engine', 'model', 'effort', 'backend', 'repo_path', 'github_repo',
                   'github_assignee', 'auto_drain', 'product_gate', 'desired_workers', 'claim_types'}
-        present_only = {'queue_label', 'grace_s', 'fallback_to_default_worker', 'session_id', 'offer_workers'}
+        present_only = {'queue_label', 'grace_s', 'fallback_to_default_worker', 'headroom_dispatch', 'session_id', 'offer_workers'}
         for key, value in previous.items():
             if key not in fields and (key not in present_only or key not in payload):
                 conf[key] = copy.deepcopy(value)
@@ -122,6 +122,8 @@ def save_queue_form(core, payload, normalized, session_link):
                 conf.pop(key, None)
         if conf.get('fallback_to_default_worker') is None:
             conf.pop('fallback_to_default_worker', None)
+        if conf.get('headroom_dispatch') is None:
+            conf.pop('headroom_dispatch', None)
         wt = core._wt_config if core._WT_CONFIG_AVAILABLE else None
         repo = conf.get('github_repo', '')
         if repo:

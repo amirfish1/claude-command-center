@@ -47,11 +47,21 @@ except ImportError:
     server._WT_CONFIG_AVAILABLE = False
 publish = queue_policy.publish
 
-def guarded_publish(*args):
+def guarded_publish(*args, **kwargs):
     if (base / 'fail-write').exists():
         raise OSError('simulated queue save failure')
-    return publish(*args)
+    return publish(*args, **kwargs)
 queue_policy.publish = guarded_publish
+
+# The merged dialog saves through the full queue form, whose publication
+# lives in settings_transactions; guard it with the same fail flag.
+from ccc_server import settings_transactions
+_tx_publish = settings_transactions.publish
+def guarded_tx_publish(*args, **kwargs):
+    if (base / 'fail-write').exists():
+        raise OSError('simulated queue save failure')
+    return _tx_publish(*args, **kwargs)
+settings_transactions.publish = guarded_tx_publish
 
 class Handler(server.CommandCenterHandler):
     def _phone_pin_blocked(self, path): return False
@@ -62,7 +72,7 @@ class Handler(server.CommandCenterHandler):
         if self.path.startswith('/api/queue/roles'): return self.send_json({'ok': True, 'available': False})
         if self.path == '/':
             body = (base / 'fixture.html').read_bytes(); mime = 'text/html; charset=utf-8'
-        elif self.path in ('/static/app.css', '/static/queue-policy.css', '/static/queue-policy.js', '/static/settings-launch-preview.js'):
+        elif self.path in ('/static/app.css', '/static/settings-launch-preview.js'):
             body = (Path.cwd() / self.path.lstrip('/')).read_bytes()
             mime = 'text/css' if self.path.endswith('css') else 'application/javascript'
         else: return self.send_error(404)
