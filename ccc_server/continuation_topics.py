@@ -123,6 +123,13 @@ def _topic(title):
 def _metadata_session_id(filename):
     # Paths stay stable while metadata titles change. Avoid parsing every
     # filename again when a new session makes the topic projection miss.
+    # The first pass also covers a large archive: ordinary POSIX filenames
+    # need only the final component and suffix, without allocating a Path.
+    if isinstance(filename, str) and os.name == 'posix':
+        name = filename.rsplit('/', 1)[-1]
+        if name and not name.endswith('.'):
+            dot = name.rfind('.')
+            return name[:dot] if 0 < dot < len(name) - 1 else name
     return Path(filename).stem
 
 

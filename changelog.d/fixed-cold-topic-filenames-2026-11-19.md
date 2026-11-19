@@ -1,0 +1,1 @@
+- Reduce cold sidebar topic lookup work when loading large metadata archives.

@@ -29,18 +29,9 @@ def test_repeated_metadata_fallback_reuses_paths_but_reads_changed_titles(store,
                 '/archive/other.jsonl': {'ai_title': 'Other'}}
     monkeypatch.setattr(server, '_conv_meta_cache', metadata)
     topics._metadata_session_id.cache_clear()
-    original_path = topics.Path
-    parsed = []
-
-    def tracked_path(filename):
-        if filename in metadata:
-            parsed.append(filename)
-        return original_path(filename)
-
-    monkeypatch.setattr(topics, 'Path', tracked_path)
     topics.attach_topics([row('untitled')], names={})
     topics.attach_topics([row('untitled')], names={})
-    assert sorted(parsed) == sorted(metadata)
+    assert topics._metadata_session_id.cache_info().misses == len(metadata)
 
     # Caching the filename must not freeze the mutable metadata fallback.
     metadata['/archive/untitled.jsonl']['ai_title'] = 'Discovered topic: task'
@@ -49,7 +40,27 @@ def test_repeated_metadata_fallback_reuses_paths_but_reads_changed_titles(store,
     child = row('child')
     topics.attach_topics([child], names={})
     assert child['continuation_topic_title'] == 'Discovered topic'
-    assert sorted(parsed) == sorted(metadata)
+    assert topics._metadata_session_id.cache_info().misses == len(metadata)
+
+
+@pytest.mark.parametrize('filename', [
+    '/archive/session.jsonl', 'session', '.session', '..session',
+    '.session.jsonl', 'session.', 'session..', 'session.part.jsonl',
+    '/archive//session.jsonl', '/archive/../session.jsonl',
+    '/archive/session.jsonl/', '/archive/.', '/archive/..',
+    '', '.', '..', '/', '//', 'folder/שלום.jsonl',
+])
+def test_metadata_session_identity_matches_pathlib(filename):
+    from pathlib import Path
+
+    assert topics._metadata_session_id(filename) == Path(filename).stem
+
+
+def test_metadata_session_identity_accepts_path_objects():
+    from pathlib import Path
+
+    filename = Path('/archive/session.part.jsonl')
+    assert topics._metadata_session_id(filename) == filename.stem
 
 
 def test_multihop_survives_missing_ancestors_and_database_reopen(store):
