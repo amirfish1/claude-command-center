@@ -455,8 +455,11 @@ def lookup(cache_file, key, sids, *, schema_version=None, include_ancestors=True
         if include_ancestors:
             bodies = con.execute(query, (key, *sids, key, key))
         else:
+            # Sorting a few matching rows is cheaper than walking the whole
+            # variant in position order to find them.
             bodies = con.execute(
-                f'SELECT body FROM rows WHERE variant=? AND sid IN ({placeholders}) ORDER BY position',
+                f'SELECT body FROM rows INDEXED BY rows_sid '
+                f'WHERE variant=? AND sid IN ({placeholders}) ORDER BY position',
                 (key, *sids))
         rows = [json.loads(raw) for (raw,) in bodies]
         if schema_version is not None:

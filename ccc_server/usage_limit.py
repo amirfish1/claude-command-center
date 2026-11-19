@@ -404,38 +404,56 @@ _USAGE_LIMIT_ENGINE_LOCATE = {
 
 
 def _usage_limit_row_for_session(sid, engine=None):
-    """One-shot conversation-row lookup by session id, from the same cached
-    archive rows every other view reads (no fresh scan). Conditional-send
-    preflight also uses this lookup, so cold history stays on disk. Kimi rows carry
-    CCC's own "session_" display prefix on session_id (see CCC-861's
-    lookup-side normalization fix); codex/claude ids never do -- try both
-    so this works regardless of engine."""
     sid = str(sid or "")
-    candidates = {sid, "session_" + sid}
+    return _usage_limit_rows_for_sessions([sid]).get(sid)
+
+
+def _usage_limit_rows_for_sessions(sids):
+    """Resolve requested identities from the published archive, then its disk index."""
+    unresolved = set(sids)
+    result = {}
+    if not unresolved:
+        return result
+    # Kimi archive rows can carry a "session_" prefix. Preserve archive order
+    # if both spellings exist, separately for each requested identity.
+    requested_by_alias = {}
+    for sid in unresolved:
+        for alias in (sid, "session_" + sid):
+            requested_by_alias.setdefault(alias, []).append(sid)
+
+    def collect(rows):
+        for row in rows:
+            alias = str(row.get("session_id") or row.get("id") or "")
+            for sid in requested_by_alias.get(alias, ()):
+                if sid in unresolved:
+                    result[sid] = dict(row)
+                    unresolved.remove(sid)
+            if not unresolved:
+                return
+
     key = _core._archive_response_cache_key()
-    # Never materialize the full cold archive to answer one session's
-    # preflight. Peek at already-published rows, then use the sid index.
     for lock, cache, field in (
         (_core._archive_serve_lock, _core._archive_serve_cache, 'rows'),
         (_core._ARCHIVE_RESPONSE_CACHE_LOCK, _core._ARCHIVE_RESPONSE_CACHE, 'conversations'),
     ):
         if not lock.acquire(blocking=False):
-            continue  # a bulk publisher must not hold up one-session preflight
+            continue  # a bulk publisher must not hold up a detail read
         try:
-            rows = (cache.get(key) or {}).get(field) or []
-            for r in rows:
-                if str(r.get('session_id') or r.get('id') or '') in candidates:
-                    return dict(r)
+            collect((cache.get(key) or {}).get(field) or ())
         finally:
             lock.release()
+        if not unresolved:
+            return result
+
     from ccc_server import archive_store
     import sqlite3
     try:
-        rows = archive_store.lookup(_core._ARCHIVE_RESPONSE_CACHE_FILE, key, candidates,
-                                    include_ancestors=False)
-        return rows[0] if rows else None
+        candidates = {alias for sid in unresolved for alias in (sid, "session_" + sid)}
+        collect(archive_store.lookup(_core._ARCHIVE_RESPONSE_CACHE_FILE, key, candidates,
+                                     include_ancestors=False))
     except (OSError, ValueError, sqlite3.Error):
-        return None
+        pass
+    return result
 
 
 def _usage_limit_context_tokens(engine, path, row):

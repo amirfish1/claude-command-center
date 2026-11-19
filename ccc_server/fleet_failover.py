@@ -81,14 +81,16 @@ def free_failover_fleet_details(session_ids):
     tracked = _core._load_usage_limit_resumes() or {}
     failovers = _core._load_free_failovers() or {}
     overrides = _core._load_session_name_overrides()
+    entries = {sid: tracked.get(sid) or failovers.get(sid)
+               for sid in dict.fromkeys(_core._normalize_sid(sid) for sid in session_ids)}
+    archive_rows = _core._usage_limit_rows_for_sessions(
+        sid for sid, entry in entries.items() if isinstance(entry, dict))
     sessions, errors = {}, {}
-    for sid in dict.fromkeys(_core._normalize_sid(sid) for sid in session_ids):
-        entry = tracked.get(sid) or failovers.get(sid)
+    for sid, entry in entries.items():
         if not isinstance(entry, dict):
             errors[sid] = "This session no longer has a limit notice."
             continue
-        row = _core._usage_limit_row_for_session(sid, engine=entry.get("engine")) or {}
-        row = dict(row)
+        row = archive_rows.get(sid, {})
         try:
             if entry.get("engine") == "claude" and entry.get("transcript_path"):
                 transcript = Path(entry["transcript_path"]).resolve()

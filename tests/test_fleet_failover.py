@@ -384,7 +384,7 @@ class FleetDetailsTests(_FleetBase):
         self._track(sid)
         self.server._save_usage_limit_resume_entry(sid, {'engine': 'claude', 'transcript_path': str(transcript)})
         with mock.patch.object(self.server, 'PROJECTS_ROOT', project.parent), \
-             mock.patch.object(self.server, '_usage_limit_row_for_session', return_value=None), \
+             mock.patch.object(self.server, '_usage_limit_rows_for_sessions', return_value={}), \
              mock.patch.object(self.server, '_load_session_name_overrides', return_value={}), \
              mock.patch.object(self.server, 'find_all_conversations', side_effect=AssertionError('global scan')):
             result = self.server.free_failover_fleet_details([sid])
@@ -408,8 +408,42 @@ class FleetDetailsTests(_FleetBase):
         sid = 'bbbbbbbb-0000-0000-0000-000000000099'
         self._track(sid)
         self.server._save_usage_limit_resume_entry(sid, {'transcript_path': str(Path(self.tmp_dir) / 'private.jsonl')})
-        with mock.patch.object(self.server, '_usage_limit_row_for_session', return_value=None), \
+        with mock.patch.object(self.server, '_usage_limit_rows_for_sessions', return_value={}), \
              mock.patch.object(self.server, '_extract_tail_meta', side_effect=AssertionError('read unrelated path')):
             result = self.server.free_failover_fleet_details([sid])
         self.assertIn(sid, result['errors'])
         self.assertNotIn(sid, result['sessions'])
+
+    def test_details_batch_uses_archive_precedence_and_one_index_lookup(self):
+        from ccc_server import archive_store
+
+        server = self.server
+        key = server._archive_response_cache_key()
+        target = Path(self.tmp_dir) / 'archive.json'
+        disk_rows = [
+            {'id': 'cold-first', 'display_name': 'First cold lane'},
+            {'session_id': 'session_cold-second', 'display_name': 'Second cold lane'},
+            {'session_id': 'cold-second', 'display_name': 'Later alias'},
+            {'session_id': 'memory', 'display_name': 'Older disk row'},
+        ]
+        archive_store.save(target, {'schema_version': 17, 'build_id': '17',
+                                    'entries': {key: {'cached_at': time.time(), 'conversations': disk_rows}}})
+        for sid in ('memory', 'cached', 'cold-first', 'cold-second'):
+            self._track(sid, engine='kimi')
+        served = {key: {'rows': [{'session_id': 'session_memory', 'display_name': 'Published lane'}]}}
+        cached = {key: {'conversations': [{'id': 'cached', 'display_name': 'Cached lane'},
+                                         {'id': 'memory', 'display_name': 'Older memory row'}]}}
+        with mock.patch.object(server, '_archive_serve_cache', served), \
+             mock.patch.object(server, '_ARCHIVE_RESPONSE_CACHE', cached), \
+             mock.patch.object(server, '_ARCHIVE_RESPONSE_CACHE_FILE', target), \
+             mock.patch.object(server, '_load_session_name_overrides', return_value={}), \
+             mock.patch.object(archive_store, 'lookup', wraps=archive_store.lookup) as lookup:
+            result = server.free_failover_fleet_details(
+                ['memory', 'cached', 'cold-first', 'cold-second', 'untracked', 'memory'])
+        self.assertEqual({sid: row['display_name'] for sid, row in result['sessions'].items()},
+                         {'memory': 'Published lane', 'cached': 'Cached lane',
+                          'cold-first': 'First cold lane', 'cold-second': 'Second cold lane'})
+        self.assertEqual(list(result['errors']), ['untracked'])
+        lookup.assert_called_once_with(
+            target, key, {'cold-first', 'session_cold-first', 'cold-second', 'session_cold-second'},
+            include_ancestors=False)
