@@ -16,6 +16,7 @@ from pathlib import Path
 import sqlite3
 import shutil
 import tempfile
+import threading
 import time
 
 from .bounded_cache import ByteBudgetCache
@@ -104,7 +105,7 @@ def database_path(cache_file):
     return Path(cache_file).with_suffix('.sqlite3')
 
 
-def _connect(cache_file, *, write=False):
+def _connect(cache_file, *, write=False, shared_reader=False):
     target = database_path(cache_file)
     if write:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -145,7 +146,8 @@ def _connect(cache_file, *, write=False):
         return con
     # Read-only connections never create an empty store that hides the JSON
     # fallback if a previous migration was interrupted.
-    return sqlite3.connect(target.resolve().as_uri() + '?mode=ro', uri=True, timeout=0.5)
+    return sqlite3.connect(target.resolve().as_uri() + '?mode=ro', uri=True,
+                           timeout=0.5, check_same_thread=not shared_reader)
 
 
 def save(cache_file, snapshot, *, complete=False):
@@ -223,79 +225,127 @@ def save(cache_file, snapshot, *, complete=False):
     return changed
 
 
-def load_attention(cache_file, key, *, schema_version, build_id):
-    """Complete classifier inputs, or None until a normal publication upgrades.
+class _AttentionReader:
+    """Keep one read-only connection so data_version can guard the row order."""
 
-    Read the tiny header instead of the canonical metadata's corpus stat maps.
-    The digest join detects an older writer updating rows without projections.
-    """
-    if not database_path(cache_file).exists():
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.conn = None
+        self.identity = None
+        self.manifest = object()
+
+    def _close(self):
+        if self.conn is not None:
+            self.conn.close()
+            self.conn = None
+        self.identity = None
+        _ATTENTION_CACHE.pop(self.manifest)
+
+    def read(self, cache_file, key, schema_version, build_id):
+        with self.lock:
+            target = database_path(cache_file).resolve()
+            try:
+                stat = target.stat()
+            except FileNotFoundError:
+                self._close()
+                return None
+            identity = (str(target), stat.st_dev, stat.st_ino)
+            if identity != self.identity:
+                self._close()
+                self.conn = _connect(cache_file, shared_reader=True)
+                self.identity = identity
+
+            conn = self.conn
+            try:
+                # Do not leave a read transaction open between calls. A
+                # committed write from any writer, even one that leaves the
+                # snapshot header untouched, invalidates this manifest.
+                version = conn.execute('PRAGMA data_version').fetchone()[0]
+                guard = (version, key, schema_version, build_id, ATTENTION_VERSION)
+                cached = _ATTENTION_CACHE.get(self.manifest)
+                if cached is not None and cached[0] == guard:
+                    _, timestamp, keys = cached
+                    values = _ATTENTION_CACHE.get_many(keys)
+                    if all(value is not None for value in values):
+                        return timestamp, keys, values
+
+                with conn:
+                    conn.execute('BEGIN')
+                    snapshot = _read_attention(conn, key, (*identity, key), schema_version, build_id)
+                # A publication between the version read and the transaction
+                # leaves this memo tagged with an obsolete version. The next
+                # reader will validate again rather than replaying stale rows.
+                if snapshot is not None:
+                    timestamp, keys, _ = snapshot
+                    if len(keys) < _ATTENTION_CACHE.max_entries:
+                        weight = 512 + sum(128 + 4 * (len(k[-2]) + len(k[-1])) for k in keys)
+                        _ATTENTION_CACHE.put(self.manifest, (guard, timestamp, keys), weight)
+                return snapshot
+            except sqlite3.Error:
+                self._close()
+                raise
+
+
+_ATTENTION_READER = _AttentionReader()
+
+
+def _read_attention(conn, key, namespace, schema_version, build_id):
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='attention_variants'").fetchone():
         return None
-    con = _connect(cache_file)
-    try:
-        con.execute('BEGIN')
-        if not con.execute("SELECT 1 FROM sqlite_master WHERE name='attention_variants'").fetchone():
-            return None
-        header = con.execute('SELECT cached_at,schema_version,build_id,version '
-                             'FROM attention_variants WHERE key=?', (key,)).fetchone()
-        if not header or header[1:] != (schema_version, build_id, ATTENTION_VERSION):
-            return None
-        current = con.execute('SELECT cached_at FROM variants WHERE key=?', (key,)).fetchone()
-        if not current or current[0] != header[0]:
-            return None
-        stat = database_path(cache_file).stat()
-        namespace = (str(database_path(cache_file).resolve()), stat.st_dev, stat.st_ino, key)
-        # Validate and collect order in one index traversal, under the same
-        # read transaction. Missing projections must still invalidate warm
-        # decoded rows rather than silently shortening the attention feed.
-        records = con.execute('''SELECT r.identity,a.digest,a.digest=?||r.digest
-            FROM rows r LEFT JOIN session_attention a
-            ON a.variant=r.variant AND a.identity=r.identity
-            WHERE r.variant=? ORDER BY r.position''', (ATTENTION_VERSION, key)).fetchall()
-        if any(not valid for _, _, valid in records):
-            return None
-        signatures = [(rid, digest) for rid, digest, _ in records]
-        cached, missing = {}, []
-        for rid, digest in signatures:
-            row = _ATTENTION_CACHE.get((*namespace, rid, digest))
-            if row is None:
-                missing.append(rid)
-            else:
-                cached[rid] = row
-        # Read bodies only for new/changed rows. Validation, order and these
-        # bodies share one transaction, including across concurrent writers.
-        if missing:
-            bodies = con.execute('''SELECT identity,digest,body FROM session_attention
-                WHERE variant=? AND identity IN (SELECT value FROM json_each(?))''',
-                                 (key, json.dumps(missing)))
-            for rid, digest, body in bodies:
-                row = json.loads(body)
-                nested = {name: item for name, item in row.items()
-                          if isinstance(item, (dict, list))}
-                # These bytes come only from our own JSON-decoded containers
-                # and stay in memory; never deserialize marshal from disk or
-                # an external request. Fresh decoding avoids recursive Python
-                # copies on every poll. Placeholders preserve field order.
-                encoded = marshal.dumps(nested, 2) if nested else None
-                for name in nested:
-                    row[name] = None
-                value = (row, encoded)
-                cached[rid] = value
-                # Account for decoded containers and keys as well as strings.
-                # Oversized rows remain readable without being retained.
-                _ATTENTION_CACHE.put((*namespace, rid, digest), value, 4 * (len(rid) + len(body)))
-        decoded = []
-        for rid, _ in signatures:
-            row, nested = cached[rid]
-            # Lifecycle overlays and consumer enrichment must never mutate
-            # cached inputs, including nested structured state and labels.
-            result = row.copy()
-            if nested is not None:
-                result.update(marshal.loads(nested))
-            decoded.append((rid, result))
-        return {'cached_at': header[0], 'rows': decoded}
-    finally:
-        con.close()
+    header = conn.execute('SELECT cached_at,schema_version,build_id,version '
+                          'FROM attention_variants WHERE key=?', (key,)).fetchone()
+    if not header or header[1:] != (schema_version, build_id, ATTENTION_VERSION):
+        return None
+    current = conn.execute('SELECT cached_at FROM variants WHERE key=?', (key,)).fetchone()
+    if not current or current[0] != header[0]:
+        return None
+    # Validate and collect order in one index traversal. Missing projections
+    # must invalidate warm decoded rows rather than shortening the feed.
+    records = conn.execute('''SELECT r.identity,a.digest,a.digest=?||r.digest
+        FROM rows r LEFT JOIN session_attention a
+        ON a.variant=r.variant AND a.identity=r.identity
+        WHERE r.variant=? ORDER BY r.position''', (ATTENTION_VERSION, key)).fetchall()
+    if any(not valid for _, _, valid in records):
+        return None
+    keys = tuple((*namespace, rid, digest) for rid, digest, _ in records)
+    values = _ATTENTION_CACHE.get_many(keys)
+    missing = [row_key[-2] for row_key, value in zip(keys, values) if value is None]
+    if missing:
+        # The bodies and their validation share the same read transaction.
+        bodies = conn.execute('''SELECT identity,digest,body FROM session_attention
+            WHERE variant=? AND identity IN (SELECT value FROM json_each(?))''',
+                              (key, json.dumps(missing)))
+        loaded = {}
+        for rid, digest, body in bodies:
+            row = json.loads(body)
+            nested = {name: item for name, item in row.items() if isinstance(item, (dict, list))}
+            # The marshal bytes come only from JSON decoded here and stay
+            # in memory. Placeholders preserve field order on replay.
+            encoded = marshal.dumps(nested, 2) if nested else None
+            for name in nested:
+                row[name] = None
+            value = (row, encoded)
+            loaded[rid] = value
+            _ATTENTION_CACHE.put((*namespace, rid, digest), value, 4 * (len(rid) + len(body)))
+        values = [loaded[row_key[-2]] if value is None else value
+                  for row_key, value in zip(keys, values)]
+    return header[0], keys, values
+
+
+def load_attention(cache_file, key, *, schema_version, build_id):
+    """Complete classifier inputs, or None until a normal publication upgrades."""
+    snapshot = _ATTENTION_READER.read(cache_file, key, schema_version, build_id)
+    if snapshot is None:
+        return None
+    timestamp, keys, values = snapshot
+    decoded = []
+    for row_key, (row, nested) in zip(keys, values):
+        # Callers can modify their own copy, including structured state.
+        result = row.copy()
+        if nested is not None:
+            result.update(marshal.loads(nested))
+        decoded.append((row_key[-2], result))
+    return {'cached_at': timestamp, 'rows': decoded}
 
 
 def load_inventory(cache_file, key, *, schema_version, build_id=None,

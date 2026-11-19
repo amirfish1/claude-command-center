@@ -194,3 +194,45 @@ def test_missing_projection_invalidates_warm_decoded_rows(tmp_path, monkeypatch)
                     'SELECT identity FROM rows WHERE variant=? ORDER BY position LIMIT 1)',
                     (key, key))
     assert load() is None
+
+
+def test_unchanged_attention_generation_skips_validation_scan(tmp_path, monkeypatch):
+    target, key, _, _, snapshot = setup_archive(tmp_path, monkeypatch)
+
+    def load():
+        return store.load_attention(target, key, schema_version=snapshot['schema_version'],
+                                    build_id=snapshot['build_id'])
+
+    expected = load()
+    assert expected is not None
+
+    def unexpected_scan(*args):
+        pytest.fail('unchanged database repeated projection validation')
+
+    monkeypatch.setattr(store, '_read_attention', unexpected_scan)
+    assert load() == expected
+
+
+def test_attention_reader_reopens_replaced_database_with_same_header(tmp_path, monkeypatch):
+    target, key, cold, _, snapshot = setup_archive(tmp_path, monkeypatch)
+
+    def load():
+        return store.load_attention(target, key, schema_version=snapshot['schema_version'],
+                                    build_id=snapshot['build_id'])
+
+    original = load()
+    assert original['rows'][1][1]['question_text'] == 'Choose a folder?'
+    replacement = tmp_path / 'replacement.json'
+    cold[1]['question_text'] = 'Choose a file?'
+    store.save(replacement, snapshot, complete=True)
+    for cache_file in (target, replacement):
+        conn = sqlite3.connect(store.database_path(cache_file))
+        try:
+            conn.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()
+        finally:
+            conn.close()
+    store.database_path(replacement).replace(store.database_path(target))
+
+    current = load()
+    assert current['cached_at'] == original['cached_at']
+    assert current['rows'][1][1]['question_text'] == 'Choose a file?'
