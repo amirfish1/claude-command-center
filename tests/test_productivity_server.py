@@ -53,11 +53,28 @@ def test_project_lookup_does_not_assign_shared_parent_to_first_child(tmp_path):
     workspace = tmp_path / "workspace"
     repo = workspace / "child-repo"
     repo.mkdir(parents=True)
-    project = server._productivity_project_for_path(
-        workspace,
-        [{"id": "child", "name": "Child", "path": str(repo), "paths": [str(repo)]}],
+    project_for_path = server._productivity_project_lookup(
+        [{"id": "child", "name": "Child", "path": str(repo), "paths": [str(repo)]}]
     )
-    assert project is None
+    assert project_for_path(workspace) is None
+
+
+def test_project_lookup_preserves_alias_and_repository_priority(tmp_path):
+    outer = tmp_path / "outer"
+    inner = outer / "inner"
+    inner.mkdir(parents=True)
+    alias = tmp_path / "alias"
+    alias.symlink_to(outer, target_is_directory=True)
+    repositories = [
+        {"id": "outer", "name": "Outer", "paths": [None, alias]},
+        {"id": "inner", "name": "Inner", "path": inner},
+    ]
+    project_for_path = server._productivity_project_lookup(repositories)
+
+    assert project_for_path(inner) == {"id": "outer", "name": "Outer"}
+    assert project_for_path(alias / "inner" / "nested") == {"id": "outer", "name": "Outer"}
+    assert project_for_path(tmp_path / "outside") is None
+    assert project_for_path([]) is None
 
 
 def test_productivity_payload_selects_cached_range(monkeypatch):

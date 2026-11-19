@@ -7,6 +7,7 @@ in server.py are reached via `_core` at call time."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone, time as datetime_time
+from functools import cache
 from pathlib import Path
 from productivity import (
     ProductivityStore,
@@ -123,28 +124,41 @@ def _productivity_known_repos(conversations):
     return list(described.values()), sorted(set(warnings))
 
 
-def _productivity_project_for_path(path, repositories):
-    try:
-        target = Path(path).expanduser().resolve(strict=False)
-    except (OSError, ValueError, TypeError):
-        target = None
-    if target is not None:
-        for repo in repositories:
-            for candidate in repo.get("paths") or [repo.get("path")]:
-                try:
-                    root = Path(candidate).expanduser().resolve(strict=False)
-                    if target == root or root in target.parents:
-                        return {"id": repo["id"], "name": repo["name"]}
-                except (OSError, ValueError, TypeError):
-                    continue
-    return None
+def _productivity_project_lookup(repositories):
+    """Resolve repository aliases once for a productivity scan."""
+    roots = {}
+    for priority, repo in enumerate(repositories):
+        project = {"id": repo["id"], "name": repo["name"]}
+        for candidate in repo.get("paths") or [repo.get("path")]:
+            try:
+                root = Path(candidate).expanduser().resolve(strict=False)
+            except (OSError, ValueError, TypeError, RuntimeError):
+                continue
+            roots.setdefault(root, (priority, project))
+
+    @cache
+    def match(path):
+        target = path.expanduser().resolve(strict=False)
+        matches = (roots[parent] for parent in (target, *target.parents) if parent in roots)
+        # Preserve collection order when two repositories cover the same path.
+        first = min(matches, key=lambda entry: entry[0], default=None)
+        return first[1] if first is not None else None
+
+    def project_for_path(path):
+        try:
+            return match(Path(path))
+        except (OSError, ValueError, TypeError, RuntimeError):
+            return None
+
+    return project_for_path
 
 
 def _productivity_queue_projects(repositories):
+    project_for_path = _productivity_project_lookup(repositories)
     out = {}
     for queue, config in (_core._wt_read_config() or {}).items():
         config = config if isinstance(config, dict) else {}
-        project = _core._productivity_project_for_path(config.get("repo_path"), repositories)
+        project = project_for_path(config.get("repo_path"))
         if project:
             out[str(queue).upper()] = project
     return out
@@ -184,6 +198,7 @@ def _productivity_normalize_ticket(item, queue_projects):
 
 
 def _productivity_turn_rows(conversations, repositories, cutoff_epoch):
+    project_for_path = _productivity_project_lookup(repositories)
     turns = []
     considered = parsed_count = error_count = 0
     for row in conversations or []:
@@ -195,12 +210,11 @@ def _productivity_turn_rows(conversations, repositories, cutoff_epoch):
                 continue
         except (TypeError, ValueError):
             pass
-        project = _core._productivity_project_for_path(
+        project = project_for_path(
             row.get("session_cwd")
             or row.get("cwd")
             or row.get("folder_path")
-            or row.get("repo_path"),
-            repositories,
+            or row.get("repo_path")
         )
         if not project:
             continue
