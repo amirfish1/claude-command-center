@@ -126,33 +126,38 @@ def conversation_page(html):
                         '<body class="voice-call-btn-off conversation-popout ccc-app-embed">', 1)
 
 
-def _json_element(element_id, data):
-    # Serialize the current value before looking up a pure escaping result.
-    # Mutable app data and changing conversation tails never use a TTL.
-    text = json.dumps(data)
-    key = (element_id, text)
+def _json_element(element_id, data, *, source=None):
+    # Mutable values are serialized before lookup. A child document already
+    # has immutable inputs that can key the same bounded cache.
+    text = json.dumps(data) if source is None else None
+    key = (element_id, text) if source is None else (element_id, *source)
     element = _JSON_ELEMENTS.get(key)
     if element is None:
+        if text is None:
+            text = json.dumps(data)
         escaped = text.replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
         element = f'<script type="application/json" id="{element_id}">{escaped}</script>'
-        # Include the retained source key as well as the output, allowing
-        # four bytes per character for Python's widest string representation.
-        _JSON_ELEMENTS.put(key, element, 4 * (len(element_id) + len(text) + len(element)))
+        # Allow four bytes per character for the retained inputs and result.
+        _JSON_ELEMENTS.put(key, element, 4 * (sum(map(len, key)) + len(element)))
     return element
+
+
+def _insert_json_element(html, element):
+    head = re.search(r"<head\b[^>]*>", html, re.I)
+    if head:
+        return html[:head.end()] + element + html[head.end():]
+    return element + html
 
 
 def application_document(html, element_id, url, document):
     """Carry a current canonical child page in its no-store parent response."""
-    return application_json(html, element_id, {"url": url, "html": document})
+    element = _json_element(element_id, {"url": url, "html": document}, source=(url, document))
+    return _insert_json_element(html, element)
 
 
 def application_json(html, element_id, data):
     """Carry escaped, inert bootstrap data in a current application page."""
-    payload = _json_element(element_id, data)
-    head = re.search(r"<head\b[^>]*>", html, re.I)
-    if head:
-        return html[:head.end()] + payload + html[head.end():]
-    return payload + html
+    return _insert_json_element(html, _json_element(element_id, data))
 
 
 def application_page(html, app_id, agent_id=None, kit_url="/static/app-kit.js"):

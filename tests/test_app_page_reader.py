@@ -165,6 +165,38 @@ def test_document_json_does_not_turn_child_markup_into_parent_markup():
     assert _document_payload(html, 'cccAppStartupDocument') == {'url': '/view/demo', 'html': document}
 
 
+def test_child_document_cache_reuses_exact_inputs_before_serialization(monkeypatch):
+    from ccc_server import app_embed
+    from ccc_server.bounded_cache import ByteBudgetCache
+    cache = ByteBudgetCache(max_bytes=2048, max_entries=32)
+    monkeypatch.setattr(app_embed, '_JSON_ELEMENTS', cache)
+    dumps = json.dumps
+    serialized = []
+
+    def record(value):
+        serialized.append(value)
+        return dumps(value)
+
+    monkeypatch.setattr(app_embed.json, 'dumps', record)
+    html, element_id = '<head></head>', 'payload'
+    cases = [('/view/demo', '<b>one</b>'),
+             ('/view/other', '<b>one</b>'),
+             ('/view/other', '<b>two</b>')]
+    for url, body in cases:
+        result = app_embed.application_document(html, element_id, url, body)
+        assert _document_payload(result, element_id) == {'url': url, 'html': body}
+        assert app_embed.application_document(html, element_id, url, body) == result
+        assert cache.bytes <= cache.max_bytes
+    assert serialized == [{'url': url, 'html': body} for url, body in cases]
+
+    oversized = '<p>' + 'x' * cache.max_bytes + '</p>'
+    for _ in range(2):
+        result = app_embed.application_document(html, element_id, '/view/demo', oversized)
+        assert _document_payload(result, element_id)['html'] == oversized
+    assert len(serialized) == len(cases) + 2
+    assert cache.bytes <= cache.max_bytes
+
+
 def test_cached_json_escaping_tracks_mutated_values_and_bounds_both_strings(monkeypatch):
     from ccc_server import app_embed
     from ccc_server.bounded_cache import ByteBudgetCache
