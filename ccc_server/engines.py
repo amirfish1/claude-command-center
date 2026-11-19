@@ -829,7 +829,7 @@ _ANTIGRAVITY_APP_LS_TOKEN_RE = re.compile(
     r"--csrf_token\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
     re.IGNORECASE,
 )
-_ANTIGRAVITY_META_VERSION = 4
+_ANTIGRAVITY_META_VERSION = 5
 # An Antigravity transcript writes every assistant tool call / message, so if
 # the file moved within this window we treat the session as live. Antigravity
 # has no hook system that CCC could listen to (the way Claude Code does via
@@ -1737,6 +1737,7 @@ def _extract_antigravity_tail_meta(path_or_session_id):
             "first_message": None,
             "last_prompt": None,
             "last_assistant_text": None,
+            "last_thinking_text": None,
             "last_event_type": None,
             "last_meaningful_ts": 0,
             "pending_tool": None,
@@ -1795,6 +1796,7 @@ def _extract_antigravity_tail_meta(path_or_session_id):
                 if selected_model:
                     meta["model"] = selected_model
                 if ev_type == "USER_INPUT" and source == "USER_EXPLICIT":
+                    meta["last_thinking_text"] = None
                     text = _antigravity_user_text(ev.get("content") or "")
                     if text:
                         meta["first_message"] = meta["first_message"] or text
@@ -1807,6 +1809,13 @@ def _extract_antigravity_tail_meta(path_or_session_id):
                     continue
                 if ev_type == "PLANNER_RESPONSE":
                     content = (ev.get("content") or "").strip()
+                    # Keep thought-only progress separate from the real reply:
+                    # it explains a busy row, but must never become its outcome.
+                    thinking = ev.get("thinking")
+                    meta["last_thinking_text"] = (
+                        thinking.strip()[:1200]
+                        if isinstance(thinking, str) and not content else None
+                    )
                     if content:
                         meta["last_assistant_text"] = content
                         meta.update(_core._extract_codex_summary_signals(content, pr_url_re))
@@ -2120,7 +2129,10 @@ def find_antigravity_conversations(
             "last_event_type": tail.get("last_event_type"),
             "pending_tool": tail.get("pending_tool"),
             "pending_file": tail.get("pending_file"),
-            "last_assistant_text": tail.get("last_assistant_text"),
+            "last_assistant_text": (
+                (tail.get("last_thinking_text") if is_live else None)
+                or tail.get("last_assistant_text")
+            ),
             "tail_issue_number": None,
             "tail_pr_number": tail.get("tail_pr_number"),
             "tail_pr_url": tail.get("tail_pr_url"),

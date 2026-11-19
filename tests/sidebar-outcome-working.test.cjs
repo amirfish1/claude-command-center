@@ -59,3 +59,14 @@ test('tool activity never replaces the agent message explanation', () => {
   assert.match(html, /I am checking the new message path/);
   assert.doesNotMatch(html, /Bash|noisy-command/);
 });
+
+test('a running Antigravity Gemini row shows its thought preview', () => {
+  const preview = { id: 'gemini-test', source: 'antigravity', engine: 'antigravity',
+    is_live: true, state: 'working', last_event_type: 'assistant',
+    last_assistant_text: '**Checking settings**\n\nI am comparing current & proposed values.' };
+  const html = renderOutcome(preview);
+  assert.match(html, /data-label="Working"/);
+  assert.match(html, /Checking settings I am comparing current &amp; proposed values/);
+  assert.doesNotMatch(html, /Working…|\*\*/);
+  assert.match(renderOutcome({ ...preview, last_event_type: 'user' }), /data-label="Working">Working…<\/span>/);
+});
