@@ -7219,11 +7219,21 @@ def _ensure_claude_desktop_session_visible(session_id, spawn_entry=None, metadat
     if not sid or not _SESSION_UUID_RE.match(sid):
         return False
 
-    summary = _claude_session_desktop_summary(sid, spawn_entry=spawn_entry)
     existing_path = _claude_desktop_metadata_path_for_cli_session(
         sid,
         metadata_index=metadata_index,
     )
+    # Visibility retries can run before Desktop has ever been installed. Do
+    # not parse a whole transcript when there is nowhere to publish it. Check
+    # on every retry so installing Desktop later still makes it visible.
+    if not existing_path:
+        if isinstance(metadata_index, dict):
+            if not metadata_index.get("workspace_dirs"):
+                return False
+        elif not _claude_desktop_sessions_root().is_dir():
+            return False
+
+    summary = _claude_session_desktop_summary(sid, spawn_entry=spawn_entry)
     existing = None
     if existing_path and isinstance(metadata_index, dict):
         existing = (metadata_index.get("data_by_path") or {}).get(str(existing_path))

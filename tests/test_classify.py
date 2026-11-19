@@ -681,6 +681,48 @@ class TestClaudeDesktopVisibility(unittest.TestCase):
         self.assertFalse(ok)
         self.assertFalse(meta_path.exists())
 
+    def test_claude_desktop_visibility_skips_scan_until_desktop_exists(self):
+        from ccc_server import session_graph
+
+        self._write_claude_session()
+        desktop_root = session_graph._claude_desktop_sessions_root()
+        shutil.rmtree(desktop_root)
+        with mock.patch.object(
+            session_graph, "_claude_session_desktop_summary",
+            wraps=session_graph._claude_session_desktop_summary,
+        ) as summary:
+            self.assertFalse(self.server._ensure_claude_desktop_session_visible(
+                CLAUDE_DESKTOP_SESSION_ID, spawn_entry={"cwd": str(self.fake_repo)},
+            ))
+            summary.assert_not_called()
+
+            self.desktop_workspace.mkdir(parents=True)
+            self.assertTrue(self.server._ensure_claude_desktop_session_visible(
+                CLAUDE_DESKTOP_SESSION_ID, spawn_entry={"cwd": str(self.fake_repo)},
+            ))
+            summary.assert_called_once()
+        self.assertTrue((self.desktop_workspace / f"local_{CLAUDE_DESKTOP_SESSION_ID}.json").is_file())
+
+    def test_claude_desktop_visibility_skips_scan_for_empty_index(self):
+        from ccc_server import session_graph
+
+        self._write_claude_session()
+        with mock.patch.object(session_graph, "_claude_session_desktop_summary") as summary:
+            self.assertFalse(self.server._ensure_claude_desktop_session_visible(
+                CLAUDE_DESKTOP_SESSION_ID, metadata_index={"workspace_dirs": []},
+            ))
+            summary.assert_not_called()
+
+    def test_claude_desktop_visibility_uses_existing_indexed_destination(self):
+        self._write_claude_session()
+        existing = self.desktop_workspace / f"local_{CLAUDE_DESKTOP_SESSION_ID}.json"
+        existing.write_text("{}", encoding="utf-8")
+        self.assertTrue(self.server._ensure_claude_desktop_session_visible(
+            CLAUDE_DESKTOP_SESSION_ID,
+            metadata_index={"by_cli": {CLAUDE_DESKTOP_SESSION_ID: existing}},
+        ))
+        self.assertEqual(json.loads(existing.read_text())["completedTurns"], 1)
+
     def test_claude_desktop_prune_removes_synthetic_unresumable_rows(self):
         bad = self.desktop_workspace / f"local_{CLAUDE_DESKTOP_MISSING_SESSION_ID}.json"
         bad.write_text(json.dumps({
