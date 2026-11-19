@@ -3,17 +3,19 @@
   'use strict';
   const button = document.createElement('button');
   button.id = 'mobileTicketRecord';
+  button.hidden = true;
   button.type = 'button';
   button.setAttribute('aria-label', 'Hold to record a ticket; drag to move');
   button.setAttribute('aria-pressed', 'false');
   button.innerHTML = '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg><span>Hold</span>';
   const status = document.createElement('div');
   status.id = 'mobileTicketRecordStatus';
+  status.hidden = true;
   status.setAttribute('role', 'status');
   const style = document.createElement('style');
   style.textContent = `
     #mobileTicketRecord, #mobileTicketRecordStatus { display:none; }
-    body.has-mobile-bottom-nav #mobileTicketRecord {
+    body.has-mobile-bottom-nav #mobileTicketRecord:not([hidden]) {
       display:flex; position:fixed; right:max(12px, env(safe-area-inset-right, 0px));
       top:calc(var(--app-vv-top, 0px) + var(--app-vh, 100dvh) - var(--ccc-mobile-app-nav-height, 70px) - 80px);
       z-index:9401; width:64px; height:64px; border:0; border-radius:50%;
@@ -24,17 +26,38 @@
     }
     #mobileTicketRecord:focus-visible { outline:2px solid var(--text); outline-offset:3px; }
     #mobileTicketRecord[data-state="recording"] { background:var(--red, #ff8585); }
-    body.has-mobile-bottom-nav #mobileTicketRecordStatus:not(:empty) {
+    body.has-mobile-bottom-nav #mobileTicketRecordStatus:not([hidden]):not(:empty) {
       display:block; position:fixed; right:88px; max-width:calc(100vw - 112px);
       bottom:calc(var(--ccc-mobile-app-nav-height, 70px) + 20px); z-index:9401;
       padding:8px 12px; border-radius:8px; background:var(--bg); color:var(--text); font-size:14px;
     }
-    body.has-upd-overlay-open #mobileTicketRecord,
-    body.has-upd-overlay-open #mobileTicketRecordStatus { display:none; }
+    body.has-upd-overlay-open #mobileTicketRecord:not([hidden]),
+    body.has-upd-overlay-open #mobileTicketRecordStatus:not([hidden]):not(:empty) { display:none; }
   `;
   document.head.append(style);
   document.body.append(button, status);
   let active = null, pendingText = '', opening = false;
+  const preferenceKey = 'ccc-mobile-ticket-record-enabled';
+  const toggle = document.getElementById('settingsTicketRecordToggle');
+  let enabled = false;
+  function applyPreference() {
+    enabled = false;
+    try { enabled = localStorage.getItem(preferenceKey) === '1'; } catch (_) {}
+    button.hidden = status.hidden = !enabled;
+    if (toggle) {
+      toggle.classList.toggle('is-on', enabled);
+      toggle.setAttribute('aria-checked', String(enabled));
+    }
+    if (!enabled && active) { active.cancelled = true; finish(active, true); }
+    if (enabled) restorePosition();
+  }
+  toggle?.addEventListener('click', () => {
+    try { localStorage.setItem(preferenceKey, enabled ? '0' : '1'); } catch (_) {}
+    applyPreference();
+  });
+  window.addEventListener('storage', event => {
+    if (event.key === preferenceKey || event.key === null) applyPreference();
+  });
   function state(label, message, recording = false) {
     button.querySelector('span').textContent = label;
     button.dataset.state = recording ? 'recording' : '';
@@ -157,7 +180,7 @@
     }
   }
   function start() {
-    if (active || opening) return;
+    if (!enabled || active || opening) return;
     if (pendingText) { openDraft(); return; }
     const native = /CCC-iOS/.test(navigator.userAgent) && window.Capacitor?.Plugins?.SpeechRecognition;
     const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -286,4 +309,5 @@
   button.addEventListener('click', event => { if (event.detail === 0) { if (active) finish(active); else start(); } });
   document.addEventListener('visibilitychange', () => { if (document.hidden && active) finish(active, true); });
   window.addEventListener('blur', () => { if (active) finish(active, true); });
+  applyPreference();
 })();

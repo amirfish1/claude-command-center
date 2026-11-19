@@ -8,11 +8,13 @@ const { findChromePath } = require('../puppeteer-browser-config.js');
   try {
     const page = await browser.newPage();
     await page.setViewport({width:390,height:844,isMobile:true,hasTouch:true});
-    async function setup(native = false) {
-      await page.goto('about:blank');
-      await page.setContent('<body class="has-mobile-bottom-nav"><button id="sidebarNewTicketBtn">Ticket</button></body>');
+    await page.setRequestInterception(true);
+    page.on('request', request => request.respond({status:200,contentType:'text/html',body:'<body class="has-mobile-bottom-nav"><button id="sidebarNewTicketBtn">Ticket</button><button id="settingsTicketRecordToggle" role="switch" aria-checked="false">Voice ticket button</button></body>'}));
+    async function setup(native = false, enabled = true) {
+      await page.goto('http://localhost/fixture');
       await page.evaluate(native => {
         window.starts = 0; window.stops = 0; window.inputs = 0;
+        Object.defineProperty(navigator, 'mediaDevices', {value:undefined, configurable:true});
         document.getElementById('sidebarNewTicketBtn').onclick = () => {
           const input = document.createElement('textarea'); input.id = 'fqTicketNote';
           input.value = '\n\nOpen sessions:\n- test';
@@ -37,11 +39,41 @@ const { findChromePath } = require('../puppeteer-browser-config.js');
         // Synthetic pointer events don't own real browser pointer capture.
         Element.prototype.setPointerCapture = () => {};
       }, native);
+      await page.evaluate(enabled => {
+        if (enabled === null) return;
+        if (enabled) localStorage.setItem('ccc-mobile-ticket-record-enabled', '1');
+        else localStorage.removeItem('ccc-mobile-ticket-record-enabled');
+      }, enabled);
       await page.addScriptTag({path:path.resolve(__dirname,'../static/mobile-ticket-record.js')});
     }
     async function pointer(type) {
       await page.evaluate(type => document.getElementById('mobileTicketRecord').dispatchEvent(new PointerEvent(type, {pointerId:1,button:0})), type);
     }
+    const visible = () => page.$eval('#mobileTicketRecord', e => e.checkVisibility());
+    await setup(false, false);
+    assert.equal(await visible(), false, 'fresh browser hides Hold');
+    await page.evaluate(() => document.getElementById('mobileTicketRecord').click());
+    assert.equal(await page.evaluate(() => starts), 0, 'disabled shortcut cannot start speech');
+    await page.click('#settingsTicketRecordToggle');
+    assert.equal(await visible(), true);
+    assert.equal(await page.$eval('#settingsTicketRecordToggle', e => e.getAttribute('aria-checked')), 'true');
+    await setup(false, null);
+    assert.equal(await visible(), true, 'opt-in survives reload');
+    await pointer('pointerdown');
+    await page.evaluate(() => recognition.onresult({results:[[{transcript:'Discard when disabled'}]]}));
+    await page.click('#settingsTicketRecordToggle');
+    await page.evaluate(() => recognition.onend());
+    assert.equal(await visible(), false);
+    assert.equal(await page.$('#fqTicketNote'), null, 'disabling cancels the recording');
+    await setup(false, null);
+    assert.equal(await visible(), false, 'opt-out survives reload');
+    await page.evaluate(() => {
+      localStorage.setItem('ccc-mobile-ticket-record-enabled', '1');
+      dispatchEvent(new StorageEvent('storage', {key:'ccc-mobile-ticket-record-enabled'}));
+    });
+    assert.equal(await visible(), true, 'other-tab preference updates visibility');
+    await page.evaluate(() => document.body.classList.add('has-upd-overlay-open'));
+    assert.equal(await visible(), false, 'overlay still hides an enabled shortcut');
     await setup();
     await pointer('pointerdown');
     assert.equal(await page.evaluate(() => starts), 1);

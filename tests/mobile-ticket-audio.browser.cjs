@@ -15,6 +15,7 @@ const {findChromePath} = require('../puppeteer-browser-config.js');
     async function setup() {
       await page.goto('http://localhost/fixture');
       await page.evaluate(() => {
+        localStorage.setItem('ccc-mobile-ticket-record-enabled', '1');
         window.uploads = []; window.stopped = 0; window.started = 0;
         window.fetch = async (url, options) => {
           if (options?.method === 'POST') {
