@@ -35047,8 +35047,10 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 self.send_json({"error": "invalid session id"}, 400)
                 return
             transcript = conversation_transcript_path(conv_id)
+            worker_origin = _wt_read_session_origins().get(conv_id)
             self.send_json(launch_metadata(conv_id, _load_spawn_markers(), transcript,
-                                           _spawn_registry_entry_for_session(conv_id)))
+                                           _spawn_registry_entry_for_session(conv_id),
+                                           _wt_origin_badge(worker_origin) if worker_origin else None))
         elif re.match(r"^/api/conversations/[^/]+/transcript-path$", path):
             conv_id = urllib.parse.unquote(path.split("/")[-2])
             qs = urllib.parse.parse_qs(parsed.query)

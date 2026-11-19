@@ -7,6 +7,8 @@
     api: 'CCC API', cli: 'CCC CLI', terminal: 'Terminal', subagent: 'Another session',
     watchtower: 'WatchTower', resumed: 'Continued session', resume: 'Continued session',
     'ccc-ask': 'ccc-ask', external: 'External tool', 'external-tool': 'External tool'};
+  const nativeClients = {'claude-command-center': 'CCC', watchtower_app_worker: 'WatchTower',
+    codex_exec: 'Codex exec', 'codex-tui': 'Codex CLI', codex_cli_rs: 'Codex CLI'};
   const escape = s => String(s == null ? '' : s).replace(/[&<>"']/g,
     c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
 
@@ -24,6 +26,7 @@
     if (via === 'tokeneconomizer' || teDirectory) tool = 'tokeneconomizer';
     else if (via === 'watchtower-model' || wtDirectory) tool = 'watchtower-model';
     const caller = String(row.spawn_caller || '').trim();
+    const nativeClient = String(row.launch_originator || '').trim();
     const kind = String(row.spawned_kind || '').trim();
     const prompt = String(row.first_message || '');
     const loopCheck = tool === 'tokeneconomizer' && (kind === 'loop-check'
@@ -44,12 +47,15 @@
       status = 'Recorded';
       evidence = 'Launch method saved in session metadata.';
       if (via === 'watchtower') {
-        status = row.worker_origin ? 'Recorded' : 'Inferred';
-        evidence = row.worker_origin ? 'WatchTower session-origin record.' : 'WatchTower attribution on the session row; original launch receipt unavailable.';
+        status = row.worker_origin || nativeClient === 'watchtower_app_worker' ? 'Recorded' : 'Inferred';
+        evidence = row.worker_origin ? 'WatchTower session-origin record.'
+          : nativeClient === 'watchtower_app_worker' ? 'Transcript records watchtower_app_worker as the creating client.'
+            : 'WatchTower attribution on the session row; original launch receipt unavailable.';
       }
-    } else if (row.launch_originator === 'codex_exec') {
-      launcher = 'Codex exec'; status = 'Recorded';
-      evidence = 'Transcript records a headless Codex exec launch; its calling tool is not identified.';
+    } else if (nativeClient) {
+      launcher = nativeClients[nativeClient] || nativeClient; status = 'Recorded';
+      evidence = 'Transcript records ' + nativeClient + ' as the creating client.';
+      if (nativeClient === 'codex_exec') evidence += ' Its calling tool is not identified.';
     } else if (parent && parent !== sid) {
       launcher = 'Another session'; status = 'Recorded'; evidence = 'A parent-session relationship was saved.';
     } else if (continued && continued !== sid) {

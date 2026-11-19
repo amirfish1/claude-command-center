@@ -49,3 +49,12 @@ def test_registry_without_marker_and_malformed_native_source(tmp_path):
         "source": {"subagent": {"thread_spawn": "unexpected"}}}}))
     assert launch_metadata("child", {}, path, {"spawned_via": "cli"}) == {
         "session_id": "child", "spawned_via": "cli"}
+
+
+def test_worker_ledger_supplies_purpose_and_parent_without_transcript():
+    origin = {"role": "verifier", "ref": "TASK-1", "parent_session_id": "parent"}
+    result = launch_metadata("child", {}, worker_origin=origin)
+    assert result["worker_origin"] == origin
+    assert result["spawned_via"] == "watchtower"
+    assert result["parent_session_id"] == "parent"
+    assert launch_metadata("child", {}, worker_origin={"parent_session_id": "child"}).get("parent_session_id") is None

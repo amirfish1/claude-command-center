@@ -1,0 +1,1 @@
+Opening a session directly now reads its recorded creating client and WatchTower origin ledger, recovering launcher, purpose and parent information even when the session list or CCC launch registry has no entry. Creating-client evidence stays separate from inferred helper identity and missing parent links.
