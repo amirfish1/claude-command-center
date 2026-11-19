@@ -56,7 +56,7 @@ def test_metadata_title_discovery_names_only_the_changed_dependency(store):
     server._conv_meta_cache['private-root.jsonl'] = {'custom_title': 'PRIVATE TITLE'}
     detail = {}
     topics.attach_topics([{'session_id': 'private-root'}], names={}, diagnostics=detail)
-    assert detail == {'hit': False, 'reason': 'external-titles', 'changed': ['metadata-count']}
+    assert detail == {'hit': False, 'reason': 'title-discovered'}
     assert 'private' not in json.dumps(detail).lower()
     assert store.execute("SELECT topic_title FROM continuation_topics WHERE sid='private-root'").fetchone()[0] == 'PRIVATE TITLE'
 

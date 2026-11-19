@@ -684,3 +684,46 @@ def test_external_title_signature_compares_only_once_per_native_snapshot(monkeyp
     for _ in range(20):
         assert topics._external_title_cache_sig() == before
     assert replacement.scans == 1
+
+
+def test_topic_cache_reuses_persisted_titles_across_metadata_churn(store, monkeypatch):
+    metadata = {'unrelated.jsonl': {'ai_title': 'Unrelated'}}
+    monkeypatch.setattr(server, '_conv_meta_cache', metadata)
+    topics.attach_topics([row('root', 'ROOT'), row('child', origin='root'), row('untitled')], names={})
+    metadata['new-session.jsonl'] = {'ai_title': 'New session'}
+    monkeypatch.setattr(server, '_codex_titles_cache', {'data': {'other': {'title': 'Changed'}}})
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError('unrelated fallback titles must not rebuild established topics')
+
+    monkeypatch.setattr(topics, '_Batch', unexpected)
+    items = [row('child', origin='root'), row('untitled')]
+    detail = {}
+    topics.attach_topics(items, names={}, diagnostics=detail)
+    assert detail == {'hit': True, 'reason': 'hit'}
+    assert items[0]['continuation_topic_title'] == 'ROOT'
+    assert 'continuation_topic_title' not in items[1]
+
+
+@pytest.mark.parametrize('field', ['custom_title', 'agent_name', 'ai_title'])
+def test_topic_cache_observes_in_place_fallback_title_discovery(store, monkeypatch, field):
+    metadata = {'root.jsonl': {}}
+    monkeypatch.setattr(server, '_conv_meta_cache', metadata)
+    topics.attach_topics([row('root')], names={})
+    # The map's identity and count stay fixed when a parser discovers a title.
+    metadata['root.jsonl'][field] = 'DISCOVERED: detail'
+    topics.attach_topics([row('root')], names={})
+    child = row('child', origin='root')
+    topics.attach_topics([child], names={})
+    assert child['continuation_topic_title'] == 'DISCOVERED'
+
+
+def test_topic_cache_keeps_persisted_title_when_fallback_changes(store, monkeypatch):
+    metadata = {'root.jsonl': {'ai_title': 'BEFORE'}}
+    monkeypatch.setattr(server, '_conv_meta_cache', metadata)
+    topics.attach_topics([row('root'), row('child', origin='root')], names={})
+    metadata['root.jsonl']['ai_title'] = 'AFTER'
+    metadata['unrelated.jsonl'] = {}
+    child = row('child', origin='root')
+    topics.attach_topics([child], names={})
+    assert child['continuation_topic_title'] == 'BEFORE'

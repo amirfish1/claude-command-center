@@ -524,20 +524,16 @@ def _try_attach_from_cache(rows, conn, names, diagnostics=None):
         return miss('no-state')
     with _CACHE_LOCK:
         previous = _TOPIC_CACHE.get('token')
-        if previous != token:
-            if previous is not None and previous[:-1] == token[:-1]:
-                # Only dependency names belong in telemetry, never filenames,
-                # session identities, title text or opaque database tokens.
-                fields = ('metadata-snapshot', 'metadata-count', 'native-titles',
-                          'native-count', 'native-lookup')
-                changed = [name for name, before, after in zip(fields, previous[-1], token[-1])
-                           if before != after]
-                return miss('external-titles', changed)
+        # External title caches are fallback inputs only. Persisted titles
+        # win during normal resolution, so their metadata churn must not
+        # discard established topics. Untitled entries recheck fallbacks below.
+        if previous != token and (previous is None or previous[:-1] != token[:-1]):
             return miss('first-observed' if previous is None else 'database')
         entries = _TOPIC_CACHE.get('entries') or {}
         if not entries:
             return miss('empty')
         resolved_names = None
+        external_titles = None
         staged = []
         for item in rows:
             sid = _sid(item)
@@ -558,6 +554,22 @@ def _try_attach_from_cache(rows, conn, names, diagnostics=None):
                     or item.get('custom_title')
                     or item.get('ai_title')
                 )
+                if not candidate:
+                    # Match _Batch._title without native I/O: these cached
+                    # standalone rows have no ancestor/root-capture lookup.
+                    # Copy items before scanning the concurrently filled map.
+                    if external_titles is None:
+                        external_titles = {
+                            Path(filename).stem: (meta.get('custom_title')
+                                                  or meta.get('agent_name')
+                                                  or meta.get('ai_title'))
+                            for filename, meta in list(
+                                getattr(_core, '_conv_meta_cache', {}).items())
+                            if isinstance(meta, dict)
+                        }
+                    native = getattr(_core, '_codex_titles_cache', {}).get('data', {}).get(sid, {})
+                    candidate = (external_titles.get(sid) or native.get('title')
+                                 or native.get('agent_nickname'))
                 if _topic(candidate):
                     return miss('title-discovered')
             staged.append((item, root, topic_title))
