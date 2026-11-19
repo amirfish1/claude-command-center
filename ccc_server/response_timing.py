@@ -9,10 +9,10 @@ import time
 
 
 def _queued_payload_ms(connection, request_started):
-    """Lower bound on payload age before this connection's first handler.
+    """Lower bound on payload age at a request boundary.
 
     Linux TCP_INFO's last_data_recv is milliseconds since the latest payload
-    arrived. Subtract handler time; later segments can only reduce the bound.
+    arrived. Subtract time since the boundary; later segments reduce the bound.
     This reads socket metadata, never packet content, and needs no privileges.
     """
     if sys.platform != "linux" or not hasattr(socket, "TCP_INFO"):
@@ -29,6 +29,13 @@ def _queued_payload_ms(connection, request_started):
 
 
 class ResponseTimingMixin:
+    def parse_request(self):
+        if not getattr(self, "_response_first_request", True):
+            # The request line has arrived. On a reused connection, the
+            # earlier handle_one_request timestamp includes the idle wait.
+            self._response_started = time.perf_counter()
+        return super().parse_request()
+
     def end_headers(self):
         measurement = getattr(self, "headers", {}).get("X-CCC-Timing", "")
         if not re.fullmatch(r"[0-9a-f]{16,32}", measurement):
@@ -38,7 +45,7 @@ class ResponseTimingMixin:
         # blocked writes between preparing and actually sending the headers.
         self.send_header("X-CCC-Timing", measurement)
         queued_ms = None
-        if (getattr(self, "_response_first_request", False) and self.command == "GET"
+        if (hasattr(self, "_response_started") and self.command == "GET"
                 and self.headers.get("Content-Length", "0") == "0"
                 and not self.headers.get("Transfer-Encoding")):
             queued_ms = _queued_payload_ms(self.connection, self._response_started)
