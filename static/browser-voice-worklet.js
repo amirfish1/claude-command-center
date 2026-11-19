@@ -12,6 +12,8 @@ class BrowserVoicePlayer extends AudioWorkletProcessor {
     this.ended = false; this.stopped = false; this.waiting = 0; this.gapSamples = 0;
     this.maxGapMs = 0; this.underruns = 0; this.maxBuffered = 0; this.tick = 0;
     this.totalMissing = 0;
+    this.phrases = [];
+    this.charsPerSecond = 15;
     // Speed changes use WSOLA time-stretching at the source rate, so pitch is preserved.
     // 1x bypasses it entirely and keeps the original sample path.
     if (this.speed !== 1) {
@@ -33,6 +35,13 @@ class BrowserVoicePlayer extends AudioWorkletProcessor {
     };
   }
   receive(data) {
+    if (data.type === 'phrase') {
+      const known = this.phrases.find(phrase => phrase.start === data.start);
+      if (known) Object.assign(known, data);
+      else this.phrases.push(data);
+      if (data.to > data.from) this.charsPerSecond = (data.end - data.start) * this.sourceRate / (data.to - data.from);
+      return;
+    }
     if (data.type === 'end') { this.ended = true; this.generated = data.samples; return; }
     if (data.type !== 'pcm' || this.stopped) return;
     if (!(data.pcm instanceof Float32Array) || data.pcm.length > this.ring.length - this.count) {
@@ -91,7 +100,14 @@ class BrowserVoicePlayer extends AudioWorkletProcessor {
   }
   push(sample) { this.fifo[(this.fifoRead + this.fifoCount) % this.fifo.length] = sample; this.fifoCount++; }
   report(type) {
-    this.port.postMessage({ type, played: this.consumed / this.sourceRate,
+    while (this.phrases.length > 1 && this.consumed >= this.phrases[1].from) this.phrases.shift();
+    const phrase = this.phrases[0];
+    this.port.postMessage({ type,
+      ...(phrase ? { textStart: phrase.start, textEnd: phrase.end,
+        phrasePlayed: Math.max(0, this.consumed - phrase.from) / this.sourceRate,
+        phraseDuration: phrase.to > phrase.from ? (phrase.to - phrase.from) / this.sourceRate
+          : (phrase.end - phrase.start) / this.charsPerSecond } : {}),
+      played: this.consumed / this.sourceRate,
       audioTime: currentTime,
       duration: this.ended ? this.generated / this.sourceRate : null,
       underruns: this.underruns, maxGapMs: this.maxGapMs,

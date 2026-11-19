@@ -68,3 +68,13 @@ test('late callbacks of a cancelled/replaced read cannot change the new read', (
   assert.equal(h.starts.length, 0);
   assert.equal(h.c._ttsChunkState.index, 4);
 });
+
+test('phrase-relative progress maps back to the selected text offset', () => {
+  const h = harness();
+  const calls = [];
+  h.c._ttsWordAtProgress = (...args) => { calls.push(args); return {start: 0, length: 4}; };
+  h.callbacks.onposition({played: 30, duration: null, textStart: 11, textEnd: 20,
+    phrasePlayed: 0.4, phraseDuration: 2});
+  assert.deepEqual(calls[0], ['long read', 0.4, 2]);
+  assert.deepEqual(h.highlights[0], [21, 4]);
+});

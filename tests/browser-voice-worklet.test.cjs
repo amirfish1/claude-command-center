@@ -158,3 +158,39 @@ test('stretching aligns frames so a gliding voiced tone keeps one clear pitch (n
     assert.ok(out > ref - 0.06, `rate ${rate}: periodicity ${out.toFixed(3)} vs 1x ${ref.toFixed(3)}`);
   }
 });
+
+test('highlight timing follows the current phrase in source audio seconds at every rate', () => {
+  for (const rate of [0.75, 1, 1.5, 2]) {
+    const h = harness(rate);
+    h.p.receive({type: 'phrase', start: 0, end: 20, from: 0, to: 4800});
+    h.p.receive({type: 'phrase', start: 22, end: 60, from: 4800, to: 14400});
+    h.p.receive({type: 'pcm', pcm: new Float32Array(14400).fill(0.2)});
+    h.p.receive({type: 'end', samples: 14400});
+    h.tick(200);
+    const reports = h.events.filter(e => e.type === 'position');
+    assert.ok(reports.some(e => e.textStart === 0));
+    assert.ok(reports.some(e => e.textStart === 22));
+    for (const report of reports) {
+      assert.equal(report.phraseDuration, report.textStart === 0 ? 0.2 : 0.4);
+      assert.ok(Math.abs(report.phrasePlayed - (report.played - (report.textStart === 0 ? 0 : 0.2))) < 1e-9);
+    }
+    h.p.port.onmessage({data: {type: 'pause', paused: true}});
+    const count = h.events.length;
+    h.tick(50);
+    assert.equal(h.events.length, count, 'paused audio never moves the highlight');
+  }
+});
+
+test('streamed phrase duration updates replace estimates without queuing duplicate phrases', () => {
+  const h = harness(1);
+  h.p.receive({type: 'phrase', start: 0, end: 60, from: 0, to: null});
+  h.p.receive({type: 'pcm', pcm: new Float32Array(12000).fill(0.1)});
+  h.tick(40);
+  assert.equal(h.events.at(-1).phraseDuration, 4);
+  h.p.receive({type: 'phrase', start: 0, end: 60, from: 0, to: 24000});
+  h.tick(40);
+  assert.equal(h.events.at(-1).phraseDuration, 1);
+  assert.equal(h.p.phrases.length, 1);
+  h.p.receive({type: 'phrase', start: 61, end: 91, from: 24000, to: null});
+  assert.equal(h.p.charsPerSecond, 60, 'the next estimate uses this voice’s measured pace');
+});

@@ -64,6 +64,25 @@ async function voiceFor(id) {
   return handle;
 }
 
+// Keep original UTF-16 offsets, including whitespace, for selection/seek mapping.
+// Short phrases let completed audio durations correct highlighting during a long read.
+function* voicePhrases(text) {
+  let start = 0;
+  while (start < text.length) {
+    while (/\s/.test(text[start] || '') && start < text.length) start++;
+    if (start === text.length) return;
+    const limit = start === 0 ? 48 : 96;
+    let end = start;
+    const words = text.slice(start).matchAll(/\S+\s*/g);
+    for (const match of words) {
+      end = start + match.index + match[0].trimEnd().length;
+      if (end - start >= limit || /[.!?;:]$/.test(match[0].trimEnd())) break;
+    }
+    yield { text: text.slice(start, end), start, end };
+    start = end;
+  }
+}
+
 async function generate(job) {
   current = job;
   let speaker = voice;
@@ -81,26 +100,34 @@ async function generate(job) {
   };
   job.port.start();
   try {
-    model.start_generation(speaker, job.text, 0.3, 4242424242424242n);
-    outer: while (!job.cancelled) {
-      if (model.next_chunk() === undefined) break;
-      while (!job.cancelled) {
-        while (job.credit < frameSize && !job.cancelled) await new Promise(resolve => { job.wake = resolve; });
-        if (job.cancelled) break outer;
-        const pcm = await model.generation_step();
-        if (!pcm) break;
-        if (job.cancelled) break outer;
-        if (pcm.length > frameSize || pcm.length > job.credit) throw new Error('Voice frame exceeds buffer credit');
-        if (first === null) {
-          first = performance.now() - t0;
-          self.postMessage({ type: 'first-pcm', id: job.id, firstPcmMs: first });
+    outer: for (const phrase of voicePhrases(job.text)) {
+      if (job.cancelled) break;
+      const from = produced;
+      job.port.postMessage({ type: 'phrase', start: phrase.start, end: phrase.end, from, to: null });
+      model.start_generation(speaker, phrase.text, 0.3, 4242424242424242n);
+      while (!job.cancelled && model.next_chunk() !== undefined) {
+        while (!job.cancelled) {
+          while (job.credit < frameSize && !job.cancelled) await new Promise(resolve => { job.wake = resolve; });
+          if (job.cancelled) break outer;
+          const pcm = await model.generation_step();
+          if (!pcm) break;
+          if (job.cancelled) break outer;
+          if (pcm.length > frameSize || pcm.length > job.credit) throw new Error('Voice frame exceeds buffer credit');
+          if (first === null) {
+            first = performance.now() - t0;
+            self.postMessage({ type: 'first-pcm', id: job.id, firstPcmMs: first });
+          }
+          produced += pcm.length;
+          job.credit -= pcm.length;
+          job.port.postMessage({ type: 'pcm', pcm }, [pcm.buffer]);
+          await yieldTask();
         }
-        produced += pcm.length;
-        job.credit -= pcm.length;
-        job.port.postMessage({ type: 'pcm', pcm }, [pcm.buffer]);
-        // Let cancellation/credits arrive between synchronous inference steps.
-        await yieldTask();
       }
+      if (job.cancelled) break;
+      // Update the same phrase in the audio thread. Audio stays streaming and
+      // bounded to one second; a completed phrase supplies its real duration.
+      job.port.postMessage({ type: 'phrase', start: phrase.start, end: phrase.end, from, to: produced });
+      model.stop_generation();
     }
     if (!job.cancelled) job.port.postMessage({ type: 'end', samples: produced });
     self.postMessage({ type: 'generated', id: job.id, cancelled: !!job.cancelled,

@@ -6864,7 +6864,12 @@
           state.perf.stalls = data.underruns || 0;
           state.perf.maxStall = Math.max(state.perf.maxStall, data.maxGapMs || 0);
         }
-        const word = _ttsWordAtProgress(chunk.text, data.played, data.duration, words);
+        const phrase = Number.isInteger(data.textStart) && Number.isInteger(data.textEnd)
+          && data.textStart >= 0 && data.textEnd > data.textStart && data.textEnd <= chunk.text.length;
+        const local = phrase
+          ? _ttsWordAtProgress(chunk.text.slice(data.textStart, data.textEnd), data.phrasePlayed, data.phraseDuration)
+          : _ttsWordAtProgress(chunk.text, data.played, data.duration, words);
+        const word = local && { start: local.start + (phrase ? data.textStart : 0), length: local.length };
         if (!word) return;
         sharedState._ttsLastCharIndex = chunk.start + word.start;
         highlightTtsWord(sharedState._ttsLastCharIndex, word.length);
