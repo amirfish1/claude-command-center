@@ -43,10 +43,22 @@ os.environ.setdefault(
 # Archive projections materialize continuation topics in the ship index. Tests
 # must never contend with (or write fixture rows into) the running dashboard.
 # Set before importing server; focused index tests may override it themselves.
-os.environ.setdefault(
-    "CCC_SHIP_GRAPH_DB",
-    os.path.join(tempfile.mkdtemp(prefix="ccc-test-ship-"), "ship_graph.sqlite"),
-)
+_test_ship_graph_dir = None
+if "CCC_SHIP_GRAPH_DB" not in os.environ:
+    _test_ship_graph_dir = tempfile.TemporaryDirectory(prefix="ccc-test-ship-")
+    os.environ["CCC_SHIP_GRAPH_DB"] = os.path.join(
+        _test_ship_graph_dir.name, "ship_graph.sqlite",
+    )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _cleanup_test_ship_graph():
+    # Function fixtures drain background index writers before this session
+    # finalizer runs. Delete only the directory this process allocated;
+    # caller-supplied database paths remain caller-owned.
+    yield
+    if _test_ship_graph_dir is not None:
+        _test_ship_graph_dir.cleanup()
 
 
 # On-call (preview) alerts a real person. With the preview on, a test that
