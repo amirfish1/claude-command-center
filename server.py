@@ -62,6 +62,7 @@ import uuid
 import urllib.parse
 import urllib.error
 import urllib.request
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone, time as datetime_time
 from pathlib import Path
@@ -30506,6 +30507,7 @@ def _latest_ask_user_question_payload_for_session(session_id, header="", questio
 # inode change, or a touch without growth means "rewritten" and restarts.
 _FFC_INCR_CACHE = {}
 _FFC_INCR_LOCK = threading.Lock()
+_FFC_TRANSCRIPT_LOCKS = weakref.WeakValueDictionary()
 _FFC_INCR_MAX = 64
 
 
@@ -30578,6 +30580,18 @@ def _ffc_walk_incremental(cache_key, filepath, scan_line):
     when the file is missing. State lives in _FFC_INCR_CACHE keyed by
     ``cache_key``; a shrink, inode change, or touch without growth restarts.
     """
+    # Concurrent tabs can request the same large transcript on startup.
+    # Keep the lock alive for its builder and waiters, then let it expire.
+    with _FFC_INCR_LOCK:
+        transcript_lock = _FFC_TRANSCRIPT_LOCKS.get(cache_key)
+        if transcript_lock is None:
+            transcript_lock = threading.Lock()
+            _FFC_TRANSCRIPT_LOCKS[cache_key] = transcript_lock
+    with transcript_lock:
+        return _ffc_walk_locked(cache_key, filepath, scan_line)
+
+
+def _ffc_walk_locked(cache_key, filepath, scan_line):
     try:
         st = os.stat(filepath)
     except OSError:
@@ -30595,6 +30609,9 @@ def _ffc_walk_incremental(cache_key, filepath, scan_line):
     if ent is None:
         ent = {"path": str(filepath), "ino": st.st_ino, "offset": 0,
                "line_num": 0, "seen": {}, "truncated": False}
+    else:
+        # A prior request may still be serializing these rows.
+        ent = {**ent, "seen": {target: row.copy() for target, row in ent["seen"].items()}}
     seen = ent["seen"]
     truncated = ent["truncated"]
     line_num = ent["line_num"]

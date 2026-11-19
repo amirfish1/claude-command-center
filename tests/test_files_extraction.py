@@ -2,7 +2,9 @@
 
 import importlib
 import sys
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -219,6 +221,47 @@ class TestExtractorIncremental(unittest.TestCase):
         second = self.server._extract_files_from_conversation("c1")
         self.assertEqual(self.cj.loads_calls, 0)
         self.assertEqual(first, second)
+
+    def test_concurrent_cold_reads_walk_once(self):
+        scanning = threading.Event()
+        release = threading.Event()
+        second_started = threading.Event()
+        original_scan = self.server._ffc_scan_event
+
+        def scan(*args):
+            if not scanning.is_set():
+                scanning.set()
+                self.assertTrue(release.wait(5))
+            return original_scan(*args)
+
+        def second_read():
+            second_started.set()
+            return self.server._extract_files_from_conversation("c1")
+
+        self.server._ffc_scan_event = scan
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(self.server._extract_files_from_conversation, "c1")
+            try:
+                self.assertTrue(scanning.wait(5))
+                second = pool.submit(second_read)
+                self.assertTrue(second_started.wait(5))
+                with self.assertRaises(TimeoutError):
+                    second.result(timeout=0.1)
+            finally:
+                release.set()
+            self.assertEqual(first.result(timeout=5), second.result(timeout=5))
+        self.assertEqual(self.cj.loads_calls, len(self.path.read_bytes().splitlines()))
+
+    def test_append_preserves_previous_response_snapshot(self):
+        before = self.server._extract_files_from_conversation("c1")
+        target = "/Users/testuser/Apps/foo/notes.pdf"
+        prior = next(row for row in before["groups"]["pdfs"] if row["target"] == target)
+        last_line = prior["last_line"]
+        self._append(self._line(target))
+        after = self.server._extract_files_from_conversation("c1")
+        updated = next(row for row in after["groups"]["pdfs"] if row["target"] == target)
+        self.assertGreater(updated["last_line"], last_line)
+        self.assertEqual(prior["last_line"], last_line)
 
     def test_appended_line_decodes_only_the_new_line(self):
         self.server._extract_files_from_conversation("c1")
