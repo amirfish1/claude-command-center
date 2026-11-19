@@ -1789,6 +1789,7 @@ def _queue_restart(state, base, target, due, why):
         "target": _merge_restart_targets(pending.get("target"), target),
         "due": max(float(pending.get("due") or 0), due),
         "retries": int(pending.get("retries") or 0),
+        "failure_retries": int(pending.get("failure_retries") or 0),
         "why": why,
     }
     runner = state.get("runner_pid")
@@ -2053,15 +2054,22 @@ def _run_pending_restart(base, due):
         if status == 0:
             continue
         retries = int(pending.get("retries") or 0) + 1
-        if retries > _RESTART_MAX_RETRIES:
-            print(f"ccc restart: giving up on {target} after {retries - 1} retries: {payload}", file=sys.stderr)
+        # A safety refusal is not a failed restart. Busy turns and native
+        # loaded-thread unload delays can outlast any fixed retry budget.
+        # Keep the request until the server permits it, without overriding
+        # its gate. Only consecutive non-safety failures exhaust the budget.
+        failures = 0 if status == 409 else int(pending.get("failure_retries") or 0) + 1
+        if failures > _RESTART_MAX_RETRIES:
+            print(f"ccc restart: giving up on {target} after {failures - 1} failed retries: {payload}", file=sys.stderr)
             break
 
-        def requeue(s, target=target, retries=retries):
+        def requeue(s, target=target, retries=retries, failures=failures):
             cur = s.get("pending") or {}
             s["pending"] = {"target": _merge_restart_targets(cur.get("target"), target),
-                            "due": time.time() + _RESTART_RETRY_S, "retries": retries,
-                            "why": f"retry after HTTP {status}"}
+                            "due": time.time() + _RESTART_RETRY_S,
+                            "retries": retries, "failure_retries": failures,
+                            "why": f"retry after HTTP {status}: "
+                                   f"{payload.get('error') or payload.get('reason') or 'restart not completed'}"}
         _restart_state_update(requeue)
     _retire_restart_runner(base, replace=True)
     return 0

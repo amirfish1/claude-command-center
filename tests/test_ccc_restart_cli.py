@@ -155,6 +155,23 @@ class CccRestartCliTests(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("failed", r.stderr)
 
+    def test_loaded_thread_refusals_outlast_retry_limit_then_restart_once(self):
+        # Exercise the actual runner and HTTP requests, with only its wait
+        # shortened. A busy fleet must not lose the request at retry eleven.
+        cli = _load_ccc_cli()
+        cli.RESTART_STATE_FILE = str(Path(self.home) / "restart.json")
+        cli.RESTART_DEBOUNCE_S = 0
+        cli._RESTART_RETRY_S = 0
+        _Stub.refuse = 12
+        cli._restart_state_update(lambda state: state.update(
+            runner_pid=os.getpid(), pending={"target": "worker", "due": 0}))
+        self.assertEqual(cli._run_pending_restart(self.base, 0), 0)
+        self.assertEqual(_Stub.posts, [("409", "/api/restart/worker")] * 12
+                         + [("200", "/api/restart/worker")])
+        state = cli._restart_state_update(lambda state: dict(state))
+        self.assertNotIn("pending", state)
+        self.assertNotIn("runner_pid", state)
+
 
 class RestartReservationTests(unittest.TestCase):
     def setUp(self):
@@ -171,6 +188,39 @@ class RestartReservationTests(unittest.TestCase):
 
     def state(self):
         return self.m._restart_state_update(lambda s: dict(s))
+
+    def _run_replies(self, replies):
+        self.m.RESTART_DEBOUNCE_S = 0
+        self.m._RESTART_RETRY_S = 0
+        self.m._restart_state_update(lambda state: state.update(
+            runner_pid=os.getpid(), pending={"target": "worker", "due": 0}))
+        with mock.patch.object(self.m, "_post_restart", side_effect=replies) as post:
+            self.assertEqual(self.m._run_pending_restart("base", 0), 0)
+        return post.call_count
+
+    def test_non_safety_failures_still_have_a_retry_limit(self):
+        self.assertEqual(self._run_replies([(503, {"error": "unavailable"})] * 11), 11)
+        self.assertNotIn("pending", self.state())
+        self.assertNotIn("runner_pid", self.state())
+
+    def test_safety_refusal_resets_consecutive_failure_budget(self):
+        self.assertEqual(self._run_replies(
+            [(503, {"error": "unavailable"})] * 10
+            + [(409, {"error": "Codex threads are loaded"})] * 12
+            + [(503, {"error": "unavailable"})] * 10
+            + [(200, {"ok": True})]), 33)
+        self.assertNotIn("pending", self.state())
+
+    def test_merging_request_preserves_failure_budget(self):
+        with mock.patch("time.time", return_value=10000):
+            self.m._reserve_restart("base", "worker")
+            self.m._reserve_restart("base", "worker")
+            self.m._restart_state_update(lambda state: state["pending"].update(
+                retries=25, failure_retries=4))
+            self.m._reserve_restart("base", "dashboard")
+            self.assertEqual(self.state()["pending"]["target"], "all")
+            self.assertEqual(self.state()["pending"]["failure_retries"], 4)
+            self.assertEqual(self.state()["pending"]["retries"], 25)
 
     def test_external_start_moves_an_already_queued_restart(self):
         with mock.patch("time.time", return_value=10000) as clock:
