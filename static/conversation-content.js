@@ -1905,7 +1905,9 @@
       members = [];
     };
     const visit = (el) => {
-      if (el.matches('.activity-run, .thinking-run-source, .line-num, .msg-ts, .actor-chip, .event-model-meta, .event-token-chips, .assistant-message-actions, .kimi-marker, .kimi-answer-meta')) return;
+      // Empty reasoning entries have no visible content and must not split
+      // consecutive commands into separate Working disclosures.
+      if (el.matches('.activity-run, .thinking-run-source, .thinking-block-silent, .line-num, .msg-ts, .actor-chip, .event-model-meta, .event-token-chips, .assistant-message-actions, .kimi-marker, .kimi-answer-meta')) return;
       // Questions, approvals, handoffs and returned images must remain visible.
       const needsAttention = el.matches('.ccc-video-cleared')
         || el.querySelector('.acp-needs-approval, .tool-result-images, .tool-inline-image, .codex-subagent')
