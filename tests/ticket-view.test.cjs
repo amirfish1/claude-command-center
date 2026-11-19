@@ -110,6 +110,8 @@ function lanes(rows, { ticketView = true, f2 = {} } = {}) {
     f2EffectiveParentSessionId: (id, parent) => f2[id] || parent || '',
     continuationParentId: row => row.continued_from_session_id || '',
     ideaTicketsOn: () => true, ticketViewOn: () => ticketView,
+    // These fixture rows have no live overlay; the current row is the input.
+    _ultraFreshCurrent: row => row,
     _uxqHealthCache: { worker_session_ids: [] }, _wtWorkersCache: {}, _wtWorkerConvsCache: {},
     classifyKanbanColumn: row => (row.archived ? 'archived' : 'active'),
     isApprovalAskRow: () => false, _archiveEngineFilter: () => '', _archiveEngineAllowsRow: () => true,

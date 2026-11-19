@@ -2022,7 +2022,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _allTabCodingConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'coding');", app_js)
         workers = app_js[app_js.index("const _allTabWorkerConvs ="):app_js.index("const _wkTicketRefOf =")]
         self.assertIn("const lane = _allTabLaneFor(c);", workers)
-        self.assertIn("lane === 'workers' || (_ticketView && _sidebarLanes.ticketViewLane(lane))", workers)
+        self.assertIn("lane === 'workers' || (_ticketView && _sidebarLanes.ticketViewLane(c, lane))", workers)
         self.assertIn("const _allTabHermesMessageConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'messages');", app_js)
         # CCC-778: the top-level Coding/Workers tabs are the All/Other lane
         # pre-filtered by sidebar tab; CCC-851: Other always shows the
