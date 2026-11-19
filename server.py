@@ -19049,6 +19049,12 @@ def _archive_list_source_rows_read(cache_options, *, force_refresh=False, phases
         rows = list(rows or []) + devin_overlay
         existing_ids.update(_archive_overlay_existing_ids(devin_overlay))
     _phase("devin_ms")
+    from ccc_server.antigravity import archive_terminal_overlay
+    antigravity_overlay = archive_terminal_overlay(rows, existing_ids=existing_ids)
+    if antigravity_overlay:
+        rows = list(rows or []) + antigravity_overlay
+        existing_ids.update(_archive_overlay_existing_ids(antigravity_overlay))
+    _phase("antigravity_ms")
     # WatchTower already knows the engine session before the archive scan.
     # Keep that worker in its normal session/queue group during the gap.
     worker_overlay = _archive_overlay_wt_worker_sessions(rows, existing_ids=existing_ids)
@@ -19065,8 +19071,8 @@ def _archive_list_source_rows_read(cache_options, *, force_refresh=False, phases
     if claude_overlay:
         rows = list(rows or []) + claude_overlay
     _phase("claude_reg_ms")
-    extra = ((codex_overlay or []) + (overlay or []) + (devin_overlay or []) + (worker_overlay or [])
-             + (claude_overlay or []))
+    extra = ((codex_overlay or []) + (overlay or []) + (devin_overlay or [])
+             + (antigravity_overlay or []) + (worker_overlay or []) + (claude_overlay or []))
     if extra:
         _apply_session_lane_overrides(extra)
     body_ver = _archive_list_body_ver(key, rows, extra)

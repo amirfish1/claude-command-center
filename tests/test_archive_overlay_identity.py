@@ -1,5 +1,6 @@
 """Engine gap fillers deduplicate against both stored and newly appended rows."""
 import server
+from ccc_server import antigravity
 
 
 def test_sources_keep_precedence_and_do_not_mutate_the_archive(monkeypatch):
@@ -26,6 +27,7 @@ def test_sources_keep_precedence_and_do_not_mutate_the_archive(monkeypatch):
     monkeypatch.setattr(server, '_archive_overlay_codex_sessions', source([native]))
     monkeypatch.setattr(server, '_archive_overlay_acp_sessions', source([dict(native, source='kimi')]))
     monkeypatch.setattr(server, '_archive_overlay_devin_cli_sessions', source([]))
+    monkeypatch.setattr(antigravity, 'archive_terminal_overlay', source([]))
     monkeypatch.setattr(server, '_archive_live_wt_workers', lambda: [
         {'session_id': 'new-native', 'alive': True}, {'session_id': base[0]['session_id'], 'alive': True}])
     monkeypatch.setattr(server, '_archive_claude_registry_rows', lambda **kw: [native, terminal])

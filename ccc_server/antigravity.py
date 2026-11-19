@@ -17,6 +17,7 @@ import sqlite3
 import os
 import shlex
 import subprocess
+import time
 from pathlib import Path
 
 from ccc_server import core as _core
@@ -88,6 +89,64 @@ def live_cli_session_ids():
                     and _core._command_targets_engine_session(command, word, 'antigravity')):
                 sids.add(word)
     return sids
+
+
+def archive_terminal_overlay(rows, *, existing_ids=None):
+    """Fill snapshot gaps from terminal-owned logs, without an archive scan."""
+    existing = (_core._archive_overlay_existing_ids(rows)
+                if existing_ids is None else existing_ids)
+    archived, trashed = _core._load_conversation_lifecycle_sets()
+    excluded = existing | archived | trashed
+    candidates = {}
+    for proc in _core.find_live_antigravity_processes():
+        owned = {}
+        for log in _cli_process_logs(proc['pid']):
+            meta = _core._antigravity_cli_log_meta(log)
+            sid = meta.get('session_id') or ''
+            if _core._SESSION_UUID_RE.fullmatch(sid):
+                owned[sid] = meta
+        # A switched chat's log identity wins over the original resume argv.
+        if not owned:
+            command = proc.get('command') or ''
+            for word in _core._command_tokens(command):
+                if (_core._SESSION_UUID_RE.fullmatch(word)
+                        and _core._command_targets_engine_session(command, word, 'antigravity')):
+                    owned[word] = {}
+        for sid, meta in owned.items():
+            if sid not in excluded:
+                candidates[sid] = (proc, meta)
+    if not candidates:
+        return []
+    names = _core._load_session_name_overrides()
+    pins = _core._load_repo_pins()
+    titles = _core._load_antigravity_summary_titles()
+    out = []
+    for sid, (proc, meta) in candidates.items():
+        path = _core._antigravity_transcript_path(sid)
+        tail = _core._extract_antigravity_tail_meta(path) if path else {}
+        tail = tail or {}
+        cwd = pins.get(sid) or meta.get('cwd') or proc.get('cwd') or tail.get('cwd') or ''
+        prompt = (tail.get('first_message') or '').strip()
+        stamp = tail.get('last_meaningful_ts') or time.time()
+        title = names.get(sid) or titles.get(sid) or prompt[:80] or 'Antigravity session'
+        out.append({
+            'id': sid, 'session_id': sid, 'source': 'antigravity', 'engine': 'antigravity',
+            'display_name': title, 'first_message': prompt[:200],
+            'name_overridden': bool(names.get(sid)), 'ai_title': titles.get(sid),
+            'folder_path': cwd, 'folder_label': Path(cwd).name if cwd else 'Antigravity',
+            'session_cwd': cwd, 'session_cwd_exists': bool(cwd and Path(cwd).is_dir()),
+            'pinned_repo': bool(pins.get(sid)), 'jsonl_path': str(path) if path else '',
+            'mtime': stamp, 'modified': stamp, 'is_live': True, 'spawn_pid': proc['pid'],
+            'archived': False, 'trashed': False,
+            'model': tail.get('model') or meta.get('model') or '',
+            'last_event_type': tail.get('last_event_type'),
+            'last_assistant_text': tail.get('last_assistant_text'),
+            **_core._antigravity_activity_fields_from_tail(tail, True),
+            'can_headless_resume': bool(
+                _core._antigravity_cli_conversation_path(sid).is_file()),
+            'can_app_resume': bool(_core._antigravity_app_conversation_path(sid)),
+        })
+    return out
 
 def _antigravity_transcript_path(session_id):
     if not session_id:
