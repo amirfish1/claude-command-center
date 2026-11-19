@@ -106,6 +106,51 @@ def test_without_rowid_and_nonnull_timestamps_use_legacy_query(thread_db):
     assert [r["id"] for r in rows] == ["newer"]
 
 
+def test_sidebar_title_omission_keeps_order_and_revalidates_cache(thread_db, monkeypatch):
+    with sqlite3.connect(thread_db) as con:
+        _schema(con)
+        con.execute("ALTER TABLE threads ADD COLUMN title TEXT")
+        con.executemany("INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, ?)", [
+            ("known", 3, 3000, 0, 0, 0, "Long title " * 300),
+            ("missing", 2, 2000, 0, 0, 0, "Title for missing row"),
+            ("outside", 1, 1000, 0, 0, 0, "Outside the limit"),
+        ])
+    columns = ("id", "title")
+    fetch = codex._codex_fetch_threads_in_home
+    assert fetch(limit=2, columns=columns, omit_titles_for={"known"}) == [
+        {"id": "known", "title": None},
+        {"id": "missing", "title": "Title for missing row"},
+    ]
+    assert fetch(limit=2, columns=columns)[0]["title"] == "Long title " * 300
+    # A different archive snapshot needs the title of the formerly loaded row.
+    assert fetch(limit=2, columns=columns, omit_titles_for={"missing"}) == [
+        {"id": "known", "title": "Long title " * 300},
+        {"id": "missing", "title": None},
+    ]
+    monkeypatch.setattr(server, "_codex_deleted_thread_ids", lambda: {"known"})
+    assert fetch(limit=2, columns=columns, omit_titles_for={"missing"}) == [
+        {"id": "missing", "title": None},
+    ]
+
+
+def test_sidebar_title_omission_falls_back_without_json_each(thread_db, monkeypatch):
+    with sqlite3.connect(thread_db) as con:
+        _schema(con, "WITHOUT ROWID")
+        con.execute("ALTER TABLE threads ADD COLUMN title TEXT")
+        con.execute("INSERT INTO threads VALUES ('known', 1, 1000, 0, 0, 0, 'Original')")
+    read = codex._sqlite_fetch_rows
+
+    def older_sqlite(con, sql, params, columns):
+        if "json_each" in sql:
+            raise sqlite3.OperationalError("no such table: json_each")
+        return read(con, sql, params, columns)
+
+    monkeypatch.setattr(codex, "_sqlite_fetch_rows", older_sqlite)
+    assert codex._codex_fetch_threads_in_home(
+        limit=1, columns=("id", "title"), omit_titles_for={"known"},
+    ) == [{"id": "known", "title": "Original"}]
+
+
 def test_null_guard_and_top_n_share_a_read_snapshot(thread_db, monkeypatch):
     with sqlite3.connect(thread_db) as con:
         con.execute("PRAGMA journal_mode=WAL")

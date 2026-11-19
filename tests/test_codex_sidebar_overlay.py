@@ -31,6 +31,7 @@ def test_indexed_threads_fill_stale_sidebar_without_transcript_or_engine_io(tmp_
     fetch.assert_called_once()
     assert fetch.call_args.kwargs["limit"] == 200
     assert "first_user_message" not in fetch.call_args.kwargs["columns"]
+    assert fetch.call_args.kwargs["omit_titles_for"] == {"known"}
     forbidden.assert_not_called()
     spawn_lookup.assert_called_once_with(engine="codex", session_ids={"new-thread"})
 

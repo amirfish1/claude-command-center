@@ -9061,33 +9061,42 @@ def _codex_db_signature(db):
     return tuple(sig)
 
 
-def _codex_fetch_threads(where="", params=(), limit=None, columns=None):
+def _codex_fetch_threads(where="", params=(), limit=None, columns=None, *, omit_titles_for=None):
     from ccc_server.codex_accounts import homes
     bases = [_core._codex_home()] if os.environ.get("CCC_CODEX_ACCOUNT_KEY") else homes()
     rows = {}
     for home in bases:
-        for row in _codex_fetch_threads_in_home(where, params, limit, columns, None if home == _core._codex_home() else home):
+        for row in _codex_fetch_threads_in_home(
+            where, params, limit, columns, None if home == _core._codex_home() else home,
+            omit_titles_for=omit_titles_for,
+        ):
             rows.setdefault(row["id"], row)
     result = sorted(rows.values(), key=lambda r: r.get("updated_at_ms") or (r.get("updated_at") or 0) * 1000, reverse=True)
     return result[:int(limit)] if limit else result
 
 
-def _codex_fetch_threads_in_home(where="", params=(), limit=None, columns=None, home=None):
+def _codex_fetch_threads_in_home(
+    where="", params=(), limit=None, columns=None, home=None, *, omit_titles_for=None,
+):
     """Read rows from Codex's local thread index without creating files.
 
     Codex stores durable conversation metadata in ~/.codex/state_*.sqlite,
     with each row pointing at a rollout JSONL. We open SQLite in read-only URI
     mode so a dashboard scan cannot create a missing DB or mutate state.
     Narrow projections avoid reading prompt/source payloads on liveness paths.
+    The bounded sidebar projection can leave out titles for already-loaded IDs.
     """
     columns = tuple(columns) if columns is not None else None
+    omit_titles_for = omit_titles_for or ()
+    params = tuple(params)
+    query_params = (*params, int(limit)) if limit else params
     for db in (_codex_state_db_candidates() if home is None else _codex_state_db_candidates(home)):
         sig = _codex_db_signature(db)
-        cache_key = (str(db), where, tuple(params), limit, columns)
+        cache_key = (str(db), where, params, limit, columns, bool(omit_titles_for))
         if sig is not None:
             with _CODEX_THREADS_CACHE_LOCK:
                 hit = _CODEX_THREADS_CACHE.get(cache_key)
-            if hit is not None and hit[0] == sig:
+            if hit is not None and hit[0] == sig and hit[2].issubset(omit_titles_for):
                 deleted = _core._codex_deleted_thread_ids()
                 return [dict(r) for r in hit[1] if str(r["id"]) not in deleted]
         try:
@@ -9133,9 +9142,9 @@ def _codex_fetch_threads_in_home(where="", params=(), limit=None, columns=None, 
             if "created_at" in cols:
                 order_terms.append("created_at * 1000")
             order = f"COALESCE({', '.join(order_terms)}) DESC" if order_terms else "id DESC"
-            sql = f"SELECT {', '.join(selected)} FROM threads"
+            from_threads = "FROM threads"
             if where:
-                sql += f" WHERE {where}"
+                from_threads += f" WHERE {where}"
             fallback_order = order
             if limit and columns is not None and order_terms and not where:
                 # Bounded sidebar/liveness projections must not sort the whole
@@ -9153,32 +9162,54 @@ def _codex_fetch_threads_in_home(where="", params=(), limit=None, columns=None, 
                     # Preserve that order rather than adopting the index's id
                     # tie-breaker (which could change which rows fit the limit).
                     order = f"{primary} DESC, rowid ASC"
-            base_sql = sql
-            sql += f" ORDER BY {order}"
-            if limit:
-                sql += " LIMIT ?"
-                params = tuple(params) + (int(limit),)
             deleted = _core._codex_deleted_thread_ids()
 
-            def read_rows(query):
+            def read_rows(order_by, omit_titles=False):
+                fields = selected
+                bindings = query_params
+                if omit_titles:
+                    # Keep these rows in the top-N and multi-home merge. The
+                    # overlay only needs titles for IDs absent from its snapshot.
+                    fields = [
+                        "CASE WHEN typeof(id) = 'text' AND id COLLATE BINARY IN "
+                        "(SELECT value FROM json_each(?)) THEN NULL ELSE title END AS title"
+                        if field == "title" else field for field in selected
+                    ]
+                    bindings = (json.dumps(list(omit_titles_for)), *bindings)
+                query = f"SELECT {', '.join(fields)} {from_threads} ORDER BY {order_by}"
+                if limit:
+                    query += " LIMIT ?"
                 if columns is not None:
                     return [dict(zip(selected, row)) for row in _sqlite_fetch_rows(
-                        con, query, tuple(params), selected)]
-                return [dict(r) for r in con.execute(query, tuple(params)).fetchall()]
+                        con, query, bindings, selected)]
+                return [dict(r) for r in con.execute(query, bindings).fetchall()]
+
+            omit_titles = bool(limit and not where and omit_titles_for
+                               and columns is not None and "title" in selected)
+
+            def read_with_order_fallback():
+                try:
+                    return read_rows(order, omit_titles)
+                except sqlite3.OperationalError as exc:
+                    if order == fallback_order or "no such column: rowid" not in str(exc):
+                        raise
+                    # Unusual WITHOUT ROWID stores still support the legacy query.
+                    return read_rows(fallback_order, omit_titles)
 
             try:
-                all_rows = read_rows(sql)
+                all_rows = read_with_order_fallback()
             except sqlite3.OperationalError as exc:
-                if order == fallback_order or "no such column: rowid" not in str(exc):
+                if not omit_titles or "no such table: json_each" not in str(exc):
                     raise
-                # Unusual WITHOUT ROWID stores still support the legacy query.
-                sql = f"{base_sql} ORDER BY {fallback_order} LIMIT ?"
-                all_rows = read_rows(sql)
+                omit_titles = False
+                all_rows = read_with_order_fallback()
             if sig is not None and _codex_db_signature(db) == sig:
+                omitted = ({r["id"] for r in all_rows if r["id"] in omit_titles_for}
+                           if omit_titles else set())
                 with _CODEX_THREADS_CACHE_LOCK:
                     if len(_CODEX_THREADS_CACHE) > 64:
                         _CODEX_THREADS_CACHE.clear()
-                    _CODEX_THREADS_CACHE[cache_key] = (sig, all_rows)
+                    _CODEX_THREADS_CACHE[cache_key] = (sig, all_rows, omitted)
             return [dict(r) for r in all_rows if str(r["id"]) not in deleted]
         except sqlite3.Error:
             continue
