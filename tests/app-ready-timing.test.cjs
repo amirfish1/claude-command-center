@@ -129,6 +129,21 @@ test('critical styles and agent boot retain bounded transport and server attribu
   assert.equal(JSON.stringify(result).includes('private'), false);
 });
 
+test('navigation keeps reader build and encoding clocks without arbitrary server metadata', () => {
+  const { ctx } = harness();
+  const entry = { serverTiming: [
+    {name: 'page_build', duration: 120.4}, {name: 'page_build_cpu', duration: 21.2},
+    {name: 'page_encode', duration: 8.6}, {name: 'page_encode_cpu', duration: 7.8},
+    {name: 'private-path', duration: 4}, {name: 'cpu', duration: NaN},
+  ] };
+  const result = ctx.timingSnapshot({ performance: {
+    getEntriesByType: type => type === 'navigation' ? [entry] : [],
+  } }, '');
+  assert.deepEqual({...result.navigation.server}, {
+    page_build: 120, page_build_cpu: 21, page_encode: 9, page_encode_cpu: 8,
+  });
+});
+
 test('a link to an open app counts the dashboard page that loaded first', () => {
   // The dashboard page was requested 300 ms before this app page began.
   const { ctx, beacons } = harness({ waitFrom: '0', parentOrigin: 100000 - 300 });

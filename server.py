@@ -32029,6 +32029,7 @@ def _app_page_response(path, query, accept):
     This runs behind the dashboard's existing request checks and private
     reader socket. It adds no direct HTTP surface to the reader process.
     """
+    build_start = time.perf_counter(), time.thread_time()
     html = None
     if path in ("", "/"):
         params = urllib.parse.parse_qs(query)
@@ -32045,7 +32046,19 @@ def _app_page_response(path, query, accept):
         html = _load_application_html(path[len("/view/"):])
     if html is None:
         return None
-    return _prepare_html_response(html, accept)
+    encode_start = time.perf_counter(), time.thread_time()
+    prepared = _prepare_html_response(html, accept)
+    encode_end = time.perf_counter(), time.thread_time()
+    # The foreground handler's CPU excludes this reader process. Preserve
+    # both clocks so page construction and encoding can be distinguished
+    # from socket dispatch and transfer delays in the same browser trace.
+    prepared["page_timing"] = {
+        "page_build": (encode_start[0] - build_start[0]) * 1000,
+        "page_build_cpu": (encode_start[1] - build_start[1]) * 1000,
+        "page_encode": (encode_end[0] - encode_start[0]) * 1000,
+        "page_encode_cpu": (encode_end[1] - encode_start[1]) * 1000,
+    }
+    return prepared
 
 
 # Voice-focus signal: a tiny remote-focus channel. An external controller (e.g. the
@@ -47138,7 +47151,8 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         body, enc = prepared["body"], prepared.get("encoding")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
-        self._send_server_timing(cache=prepared.get("cache"))
+        self._send_server_timing(cache=prepared.get("cache"),
+                                 page_timing=prepared.get("page_timing"))
         # Page HTML always revalidates the current source and agent identity.
         self.send_header("Cache-Control", "no-store, must-revalidate")
         self.send_header("Content-Length", str(len(body)))
@@ -47262,7 +47276,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         except Exception:
             pass
 
-    def _send_server_timing(self, cache=None):
+    def _send_server_timing(self, cache=None, page_timing=None):
         # Server-side time for this response so the client's conv_open perf
         # event can split network/queue wait from handler time (CCC-143).
         # cpu well below app means the handler waited (GIL, locks, disk).
@@ -47282,6 +47296,11 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 val += ', req_wait;dur=%.0f;desc="socket accept to first handler"' % accept_wait
             if cache:
                 val += ', cache;desc="%s"' % cache
+            if isinstance(page_timing, dict):
+                for name in ("page_build", "page_build_cpu", "page_encode", "page_encode_cpu"):
+                    duration = page_timing.get(name)
+                    if type(duration) in (int, float) and 0 <= duration <= 86400000:
+                        val += ", %s;dur=%.3f" % (name, duration)
             self.send_header("Server-Timing", val)
         except Exception:
             pass

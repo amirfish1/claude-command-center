@@ -244,8 +244,11 @@ def _forward_binary(request, timeout=None):
         _stats["served"] += 1
         _state["errors"] = 0
     cache = header.get("cache")
-    return {"body": body, "encoding": header.get("encoding"),
-            "cache": f"reader-{cache}" if cache else "reader"}
+    result = {"body": body, "encoding": header.get("encoding"),
+              "cache": f"reader-{cache}" if cache else "reader"}
+    if request.get("op") == "app_page" and isinstance(header.get("page_timing"), dict):
+        result["page_timing"] = header["page_timing"]
+    return result
 
 
 def call(op, timeout=None, **fields):
@@ -314,6 +317,8 @@ def _handle(conn, server_mod):
         body = out["body"]
         head = {"ok": True, "len": len(body), "encoding": out.get("encoding"),
                 "cache": out.get("cache")}
+        if req.get("op") == "app_page" and isinstance(out.get("page_timing"), dict):
+            head["page_timing"] = out["page_timing"]
         conn.sendall(json.dumps(head).encode() + b"\n" + body)
     except Exception:
         pass

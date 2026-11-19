@@ -31,7 +31,8 @@ class _FakeServer:
         self.calls.append((path, query, accept))
         if path == "/missing":
             return None
-        return {"body": b"<body>Shared app</body>", "encoding": None, "cache": "html-hit"}
+        return {"body": b"<body>Shared app</body>", "encoding": None, "cache": "html-hit",
+                "page_timing": {"page_build": 40, "page_build_cpu": 12}}
 
 
 class ConvReaderProtocolTest(unittest.TestCase):
@@ -69,7 +70,8 @@ class ConvReaderProtocolTest(unittest.TestCase):
     def test_app_page_binary_reply_uses_existing_private_channel(self):
         out = conv_reader.forward_page("/", "ccc_app=demo", "identity")
         self.assertEqual(out, {"body": b"<body>Shared app</body>",
-                               "encoding": None, "cache": "reader-html-hit"})
+                               "encoding": None, "cache": "reader-html-hit",
+                               "page_timing": {"page_build": 40, "page_build_cpu": 12}})
         self.assertEqual(self.fake.calls, [("/", "ccc_app=demo", "identity")])
 
     def test_declined_page_keeps_foreground_fallback(self):

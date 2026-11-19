@@ -133,7 +133,8 @@
           result.protocol = entry.nextHopProtocol;
         }
         (entry.serverTiming || []).forEach(function (item) {
-          if (['app', 'cpu', 'req_wait'].indexOf(item.name) !== -1 && Number.isFinite(item.duration)) {
+          if (['app', 'cpu', 'req_wait', 'page_build', 'page_build_cpu',
+            'page_encode', 'page_encode_cpu'].indexOf(item.name) !== -1 && Number.isFinite(item.duration)) {
             if (!result.server) result.server = {};
             result.server[item.name] = Math.round(item.duration);
           }
