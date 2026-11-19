@@ -1,0 +1,1 @@
+- Allow hiding scheduled-resume session notices without cancelling the scheduled resume. Hidden notices stay dismissed across reloads and reappear when the session's limit or resume state changes.

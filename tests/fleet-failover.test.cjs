@@ -6,14 +6,14 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '../static/fleet-failover.js'), 'utf8');
 
-function load({ allowed = false, missingGate = false, response } = {}) {
+function load({ allowed = false, missingGate = false, response, storage = new Map() } = {}) {
   const requests = [];
   const gate = { allowed };
   const window = { addEventListener() {} };
   if (!missingGate) window.cccPopups = { allowed: (id) => gate.allowed && id === 'fleet-limit' };
   const context = {
     window, document: { readyState: 'loading', hidden: false, addEventListener() {}, dispatchEvent() {}, getElementById: () => null },
-    localStorage: { getItem: () => null }, Event: class Event {}, setInterval() {},
+    localStorage: { getItem: (key) => storage.get(key) || null, setItem: (key, value) => storage.set(key, value) }, Event: class Event {}, setInterval() {},
     fetch: async (url, init = {}) => {
       requests.push({ url, init });
       return response ? response(url, init) : { ok: true, status: 200, json: async () => ({ ok: true, groups: [] }) };
@@ -21,7 +21,7 @@ function load({ allowed = false, missingGate = false, response } = {}) {
   };
   vm.createContext(context);
   vm.runInContext(source.replace('  function boot() {',
-    '  window.testFleet = { popupAllowed, receive, selected, change, groupHtml, act };\n  function boot() {'), context);
+    '  window.testFleet = { popupAllowed, receive, selected, change, groupHtml, act, click };\n  function boot() {'), context);
   return { window, requests, api: window.testFleet, gate };
 }
 
@@ -128,4 +128,50 @@ test('404 clears fleet ownership so the legacy view can degrade gracefully', asy
   loaded.window.cccFleetFailover.refresh();
   await settle();
   assert.equal(loaded.window.cccFleetFailover.covers('session-0'), false);
+});
+
+test('hiding an armed notice preserves the schedule through polls and reloads', () => {
+  const storage = new Map();
+  const loaded = load({ allowed: true, storage });
+  const data = fixture(1);
+  const group = data.groups[0];
+  group.sessions[0].state = 'armed';
+  loaded.api.receive(data);
+  assert.match(loaded.api.groupHtml(group, true), /Hide notice/);
+  const card = { getAttribute: () => group.key };
+  const control = { disabled: false, closest: () => card,
+    getAttribute: (name) => name === 'data-act' ? 'hide-notice' : null };
+  loaded.api.click({ target: { closest: () => control } });
+  loaded.api.receive(data);
+  assert.equal(loaded.api.groupHtml(group, true), '');
+  assert.equal(loaded.requests.length, 0);
+  assert.equal(group.sessions[0].state, 'armed');
+  assert.match(loaded.api.groupHtml(group, false), /Will resume/);
+  assert.match(loaded.api.groupHtml(group, false), /Cancel/);
+
+  const reloaded = load({ allowed: true, storage });
+  reloaded.api.receive(data);
+  assert.equal(reloaded.api.groupHtml(group, true), '');
+  group.sessions[0].resume_at += 60;
+  reloaded.api.receive(data);
+  assert.match(reloaded.api.groupHtml(group, true), /Hide notice/);
+});
+
+test('notice dismissal works when browser storage is unavailable', () => {
+  const loaded = load({ allowed: true, storage: {
+    get() { throw new Error('storage blocked'); },
+    set() { throw new Error('storage blocked'); },
+  } });
+  const data = fixture(1);
+  const group = data.groups[0];
+  group.sessions[0].state = 'armed';
+  loaded.api.receive(data);
+  const control = { disabled: false, closest: () => ({ getAttribute: () => group.key }),
+    getAttribute: (name) => name === 'data-act' ? 'hide-notice' : null };
+  loaded.api.click({ target: { closest: () => control } });
+  assert.equal(loaded.api.groupHtml(group, true), '');
+  assert.equal(loaded.requests.length, 0);
+  group.sessions.push({ session_id: 'new-session', state: 'armed', resume_at: Date.now() / 1000 + 60 });
+  loaded.api.receive(data);
+  assert.match(loaded.api.groupHtml(group, true), /Hide notice/);
 });

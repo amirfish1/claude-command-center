@@ -13,6 +13,7 @@
   var errors = Object.create(null);
   var rowErrors = Object.create(null);
   var covered = Object.create(null);
+  var hiddenNotices = Object.create(null);
   var banner;
   var panel;
   var section;
@@ -71,6 +72,20 @@
     catch (_) { return false; }
   }
 
+  function noticeVersion(group) {
+    return JSON.stringify(group.sessions.map(function (m) {
+      return [m.session_id, m.state, m.detected_at || 0,
+        m.auto_resume_fire_at || m.resume_at || 0, m.free_since || 0, !!m.switch_back_offered];
+    }).sort(function (a, b) { return a[0].localeCompare(b[0]); }));
+  }
+
+  function hiddenNotice(group) {
+    var version = noticeVersion(group);
+    if (hiddenNotices[group.key] === version) return true;
+    try { return localStorage.getItem('ccc.fo.hide-notice.' + group.key) === version; } catch (_) {}
+    return false;
+  }
+
   function row(group, m, automatic) {
     var sid = m.session_id;
     var disabled = !!busy[group.key];
@@ -104,6 +119,7 @@
   }
 
   function groupHtml(group, automatic) {
+    if (automatic && hiddenNotice(group)) return '';
     var members = group.sessions.filter(function (m) { return !automatic || !hiddenFree(m); });
     if (!members.length) return '';
     var limited = members.filter(function (m) { return m.state === 'limited'; });
@@ -134,6 +150,7 @@
       actions += button('switch_back', 'Switch all ' + offered.length + ' back to your plan', null, disabled)
         + button('keep-free', 'Keep them free', null, disabled);
     }
+    if (automatic && !limited.length) actions += button('hide-notice', 'Hide notice', null, false);
     var open = expanded[group.key] == null ? members.length <= 10 : expanded[group.key];
     var body = open ? '<div class="ccc-fleet-rows">' + members.map(function (m) { return row(group, m, automatic); }).join('') + '</div>' : '';
     if (members.length > 10) body += button('expand', open ? 'Show fewer' : 'Choose sessions (' + members.length + ')', null, disabled);
@@ -272,6 +289,11 @@
     if (action === 'open') { if (typeof window.cccOpenSession === 'function') window.cccOpenSession(sid); return; }
     if (action === 'setup') { var tab = document.getElementById('settingsRailTab-free'); if (tab) tab.click(); return; }
     if (action === 'expand') { expanded[group.key] = !(expanded[group.key] == null ? group.sessions.length <= 10 : expanded[group.key]); render(); return; }
+    if (action === 'hide-notice') {
+      hiddenNotices[group.key] = noticeVersion(group);
+      try { localStorage.setItem('ccc.fo.hide-notice.' + group.key, hiddenNotices[group.key]); } catch (_) {}
+      render(); return;
+    }
     if (action === 'hide-free') {
       var m = group.sessions.find(function (item) { return item.session_id === sid; });
       try { localStorage.setItem('ccc.fo.hide-free.' + sid + '.' + (m.free_since || 0), '1'); } catch (_) {}
