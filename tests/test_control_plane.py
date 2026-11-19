@@ -147,17 +147,23 @@ class TestWorkerHealthCodexTurns(unittest.TestCase):
         )
 
     def test_reports_live_turns_from_loaded_server(self):
-        fake = mock.Mock(__version__="0", _ccc_content_hash="h", _ccc_closure={})
+        fake = mock.Mock(
+            __version__="0", _SERVER_CODE_REV="a" * 40,
+            _ccc_content_hash="h", _ccc_closure={},
+        )
         fake._codex_app_server_live_turns.return_value = ["t1", "t2"]
         with mock.patch.dict(sys.modules, {"server": fake}):
             health = self.runtime.dispatch("health", {})
+        self.assertEqual(health["code_rev"], "a" * 40)
         self.assertEqual(health["codex_live_turns"], 2)
         self.assertEqual(health["active"], 0)
 
     def test_zero_when_server_not_loaded_unknown_when_probe_fails(self):
         with mock.patch.dict(sys.modules):
             sys.modules.pop("server", None)
-            self.assertEqual(self.runtime.dispatch("health", {})["codex_live_turns"], 0)
+            health = self.runtime.dispatch("health", {})
+            self.assertIsNone(health["code_rev"])
+            self.assertEqual(health["codex_live_turns"], 0)
         fake = mock.Mock(__version__="0", _ccc_content_hash="h", _ccc_closure={})
         fake._codex_app_server_live_turns.side_effect = RuntimeError("boom")
         with mock.patch.dict(sys.modules, {"server": fake}):

@@ -102,6 +102,9 @@ class WorkerRuntime:
             summary["codex_live_turns"] = -1 if live_turns is None else len(live_turns)
             return {
                 "ok": True,
+                # WatchTower observes the worker's loaded server revision via
+                # /api/control-plane/status, which forwards this health reply.
+                "code_rev": getattr(server_mod, "_SERVER_CODE_REV", None),
                 "worker": {
                     "pid": self.pid,
                     "epoch": self.epoch,

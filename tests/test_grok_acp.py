@@ -1,5 +1,6 @@
 """Grok ACP harness registration and spawn wiring."""
 from tests.dashboard_source import dashboard_source
+import json
 import pathlib
 from types import SimpleNamespace
 from unittest import mock
@@ -189,7 +190,105 @@ def test_session_new_sends_yolo_meta(monkeypatch, effort):
     assert captured["method"] == "session/new"
     assert captured["params"]["_meta"]["yoloMode"] is True
     assert result["session_id"] == "01a00000-0000-0000-0000-000000000001"
+    assert server._acp_session("grok", result["session_id"])["desired_mode"] == "yolo"
     assert set_configs == ([(("grok", result["session_id"], "reasoning_effort", effort), {})] if effort else [])
+
+
+@pytest.fixture
+def grok_reattach(monkeypatch, tmp_path):
+    calls = []
+    errors = {}
+    sid = "01a00000-0000-0000-0000-000000000009"
+    conn = {"initialized": True}
+    transcript = tmp_path / "transcript.jsonl"
+
+    def ensure(harness):
+        with server._ACP_LOCK:
+            acp._acp_load_state(harness)
+        return conn
+
+    def request(harness, method, params, timeout=30, **kwargs):
+        calls.append((method, dict(params)))
+        if errors.get(method):
+            return {"ok": False, "code": errors[method].pop(0)}
+        return {"ok": True, "result": {"sessionId": sid}}
+
+    monkeypatch.setattr(server, "COMMAND_CENTER_STATE_DIR", tmp_path)
+    monkeypatch.setattr(server, "_ACP_SESSION_STATE", {})
+    monkeypatch.setattr(server, "_ACP_STATE_LOADED", set())
+    monkeypatch.setattr(server, "_ACP_CONNS", {})
+    monkeypatch.setattr(server, "_acp_ensure", ensure)
+    monkeypatch.setattr(server, "_acp_request", request)
+    monkeypatch.setattr(server, "_grok_external_writer_active", lambda session_id: False)
+    monkeypatch.setattr(server, "_acp_transcript_path", lambda harness, session_id: transcript)
+    monkeypatch.setattr(server, "_acp_wire_tail_start", lambda harness: None)
+    return SimpleNamespace(calls=calls, errors=errors, sid=sid, transcript=transcript)
+
+
+@pytest.mark.parametrize(("mode", "meta"), [
+    ("yolo", {"yoloMode": True}),
+    ("auto", {"autoMode": True}),
+    ("default", None),
+])
+def test_grok_reattach_uses_the_persisted_spawn_mode(monkeypatch, grok_reattach, mode, meta):
+    probe = grok_reattach
+    monkeypatch.setenv("CCC_GROK_SPAWN_MODE", mode)
+    result = acp._acp_session_new("grok", "/tmp/repo")
+    assert result["session_id"] == probe.sid
+    state = json.loads(server._acp_state_file("grok").read_text())
+    assert state["sessions"][probe.sid]["desired_mode"] == mode
+
+    monkeypatch.setenv("CCC_GROK_SPAWN_MODE", "auto" if mode == "yolo" else "yolo")
+    for has_transcript, verb in [(True, "resume"), (False, "load")]:
+        server._ACP_SESSION_STATE.clear()
+        server._ACP_STATE_LOADED.clear()
+        if has_transcript:
+            probe.transcript.write_text("{}\n")
+        else:
+            probe.transcript.unlink()
+        assert acp._acp_load("grok", probe.sid, "/tmp/repo")["via"] == f"acp-{verb}"
+
+    assert [method for method, _ in probe.calls] == [
+        "session/new", "session/resume", "session/load",
+    ]
+    for _, params in probe.calls:
+        if meta is None:
+            assert "_meta" not in params
+        else:
+            assert params["_meta"] == meta
+
+
+def test_grok_reattach_preserves_meta_in_fallback_and_retry(monkeypatch, grok_reattach):
+    probe = grok_reattach
+    assert acp._acp_session_new("grok", "/tmp/repo", mode="auto")["ok"]
+    probe.transcript.write_text("{}\n")
+    probe.errors.update({"session/resume": [-32601], "session/load": [-32603]})
+    monkeypatch.setattr(acp.time, "sleep", lambda seconds: None)
+
+    assert acp._acp_load("grok", probe.sid, "/tmp/repo")["via"] == "acp-load"
+    assert [method for method, _ in probe.calls[1:]] == [
+        "session/resume", "session/load", "session/load",
+    ]
+    assert all(params["_meta"] == {"autoMode": True} for _, params in probe.calls)
+
+
+@pytest.mark.parametrize("record", [None, {}, {"desired_mode": "unrecognized"}])
+def test_grok_attach_on_view_prompts_without_a_known_spawn_mode(monkeypatch, grok_reattach, record):
+    probe = grok_reattach
+    if record is not None:
+        server._acp_state_file("grok").write_text(
+            json.dumps({"sessions": {probe.sid: {"cwd": "/tmp/repo", **record}}})
+        )
+    monkeypatch.setenv("CCC_GROK_SPAWN_MODE", "yolo")
+    monkeypatch.setattr(server, "_acp_harness_enabled", lambda harness: True)
+    monkeypatch.setattr(server, "_control_plane_engine_call", lambda *args, **kwargs: None)
+    monkeypatch.setattr(server, "_grok_session_dir", lambda sid: pathlib.Path("/tmp/native") / sid)
+    monkeypatch.setattr(server, "_grok_decode_bucket_cwd", lambda bucket: "/tmp/repo")
+
+    assert acp._acp_maybe_attach_on_view("grok", probe.sid)["via"] == "acp-load"
+    assert probe.calls == [("session/load", {
+        "sessionId": probe.sid, "cwd": "/tmp/repo", "mcpServers": [],
+    })]
 
 
 def test_grok_approval_mode_is_not_sent_as_a_live_config_change(monkeypatch):

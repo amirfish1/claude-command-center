@@ -71,7 +71,9 @@ _ACP_HARNESSES = {
     },
     # xAI Grok Build. Official long-lived path is `grok agent stdio` (ACP).
     # --no-leader keeps CCC off the user's TUI leader socket. Always-approve
-    # is per-session via session/new `_meta.yoloMode`, not a process flag.
+    # is per-session via `_meta.yoloMode` on session/new, session/load, and
+    # session/resume, not a process flag. Omitting it on a later attach
+    # drops the session back to ask mode.
     "grok": {
         "label": "Grok",
         "bin_env": "CCC_GROK_BIN",
@@ -2455,6 +2457,21 @@ def _acp_ensure(harness):
     return None
 
 
+def _grok_spawn_approval_mode(mode):
+    """Resolve the configured approval mode for a new CCC session."""
+    chosen = (mode or os.environ.get("CCC_GROK_SPAWN_MODE") or "yolo").strip()
+    return chosen if chosen in ("auto", "default") else "yolo"
+
+
+def _grok_approval_meta(mode):
+    """Send approval flags only for a known unattended mode."""
+    if mode == "auto":
+        return {"autoMode": True}
+    if mode == "yolo":
+        return {"yoloMode": True}
+    return None
+
+
 def _acp_session_new(harness, cwd, prompt=None, model=None, mode=None, effort=None):
     """session/new (+ optional config + optional first prompt)."""
     conn = _core._acp_ensure(harness)
@@ -2462,14 +2479,13 @@ def _acp_session_new(harness, cwd, prompt=None, model=None, mode=None, effort=No
         resolved = _core._acp_resolve_bin(harness)
         return {"ok": False, "error": resolved.get("reason") or f"ACP {harness} unavailable"}
     new_params = {"cwd": cwd, "mcpServers": []}
+    grok_mode = None
     if harness == "grok":
-        # Grok's official always-approve is session/new `_meta.yoloMode`.
         # CCC-spawned sessions are unattended, same as Kimi's spawn mode.
-        spawn_mode = (mode or os.environ.get("CCC_GROK_SPAWN_MODE") or "yolo").strip() or "yolo"
-        if spawn_mode == "auto":
-            new_params["_meta"] = {"autoMode": True}
-        elif spawn_mode != "default":
-            new_params["_meta"] = {"yoloMode": True}
+        grok_mode = _grok_spawn_approval_mode(mode)
+        meta = _grok_approval_meta(grok_mode)
+        if meta:
+            new_params["_meta"] = meta
     resp = _core._acp_request(harness, "session/new", new_params, timeout=25)
     if not resp.get("ok"):
         return resp
@@ -2493,6 +2509,10 @@ def _acp_session_new(harness, cwd, prompt=None, model=None, mode=None, effort=No
         modes_block = result.get("modes")
         if isinstance(modes_block, dict):
             state["mode"] = modes_block.get("currentModeId")
+        if grok_mode is not None:
+            # session/load and session/resume re-send this. Grok has no
+            # set_config_option for approval mode, so this is the record.
+            state["desired_mode"] = grok_mode
         _acp_save_state_unlocked(harness)
     # Grok applies its approval mode from session/new `_meta`. Its ACP server
     # does not implement session/set_config_option, so retrying mode here both
@@ -2820,9 +2840,13 @@ def _acp_load(harness, sid, cwd):
         state = _core._acp_session(harness, sid, create=True, cwd=cwd)
         if method == "session/load" and state.get("replay") is None:
             state["replay"] = {"kind": None, "text": "", "drop": drop_replay}
-    resp = _core._acp_request(harness, method, {
-        "sessionId": sid, "cwd": cwd, "mcpServers": [],
-    }, timeout=_acp_load_timeout(harness), sid=sid)
+        desired_mode = state.get("desired_mode")
+    attach_params = {"sessionId": sid, "cwd": cwd, "mcpServers": []}
+    if harness == "grok":
+        meta = _grok_approval_meta(desired_mode)
+        if meta:
+            attach_params["_meta"] = meta
+    resp = _core._acp_request(harness, method, attach_params, timeout=_acp_load_timeout(harness), sid=sid)
     # A harness that doesn't implement session/resume at all (-32601) —
     # the generic version of cfg["no_resume"] for harnesses we haven't
     # annotated — falls back to session/load with the replay dropped.
@@ -2832,9 +2856,10 @@ def _acp_load(harness, sid, cwd):
             state = _core._acp_session(harness, sid, create=True, cwd=cwd)
             if state.get("replay") is None:
                 state["replay"] = {"kind": None, "text": "", "drop": True}
-        resp = _core._acp_request(harness, method, {
-            "sessionId": sid, "cwd": cwd, "mcpServers": [],
-        }, timeout=_acp_load_timeout(harness), sid=sid)
+        resp = _core._acp_request(
+            harness, method, attach_params,
+            timeout=_acp_load_timeout(harness), sid=sid,
+        )
     # A dormant harness session can be mid-write from another live consumer
     # of its own on-disk store (e.g. a native TUI the user has open outside
     # CCC) right as we attach — the harness's own resume handler can trip
@@ -2847,9 +2872,10 @@ def _acp_load(harness, sid, cwd):
     # never succeed — the caller's queue fallback owns that case.
     if not resp.get("ok") and not resp.get("auth_required") and resp.get("code") not in (-32015, -32601):
         time.sleep(0.75)
-        resp = _core._acp_request(harness, method, {
-            "sessionId": sid, "cwd": cwd, "mcpServers": [],
-        }, timeout=_acp_load_timeout(harness), sid=sid)
+        resp = _core._acp_request(
+            harness, method, attach_params,
+            timeout=_acp_load_timeout(harness), sid=sid,
+        )
     with _core._ACP_LOCK:
         state = _core._acp_session(harness, sid, create=True, cwd=cwd)
         desired_mode = state.get("desired_mode")
@@ -2878,7 +2904,7 @@ def _acp_load(harness, sid, cwd):
         _acp_save_state_unlocked(harness)
     if resp.get("ok"):
         _core._acp_wire_tail_start(harness)
-        if desired_mode and desired_mode != loaded_mode:
+        if harness != "grok" and desired_mode and desired_mode != loaded_mode:
             # session/load drops back to the harness default mode — re-assert
             # the mode CCC last configured so a harness restart doesn't
             # silently downgrade e.g. a bypass session to prompting, which
