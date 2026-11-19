@@ -27,7 +27,9 @@ def _brotli(raw):
             cached = _CACHE.get(key)
             if cached is not None:
                 return cached
-            compressed = static_encoding.brotli(raw)
+            # Live list bodies change more often than static assets. Quality 5
+            # saves encoding time while keeping most of the transfer savings.
+            compressed = static_encoding.brotli(raw, quality=5)
             if compressed is not None:
                 _CACHE.put(key, compressed, len(compressed))
             return compressed

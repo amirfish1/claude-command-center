@@ -25,7 +25,7 @@ def _encoder():
         return None
 
 
-def brotli(body):
+def brotli(body, *, quality=6):
     library = _encoder()
     if library is None:
         return None
@@ -34,12 +34,11 @@ def brotli(body):
         return None
     output = ctypes.create_string_buffer(capacity)
     length = ctypes.c_size_t(capacity)
-    # Quality 6 avoids the multi-second maximum-quality build cost. CDLL
-    # releases the GIL while the system encoder processes the immutable bytes.
-    if not library.BrotliEncoderCompress(6, 22, 0, len(body), body,
+    # CDLL releases the GIL while the system encoder processes the input.
+    if not library.BrotliEncoderCompress(quality, 22, 0, len(body), body,
                                          ctypes.byref(length), output):
         return None
-    return output.raw[:length.value]
+    return output[:length.value]
 
 
 def accepted_encodings(header):
