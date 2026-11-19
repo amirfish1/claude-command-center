@@ -14,6 +14,8 @@
   var rowErrors = Object.create(null);
   var covered = Object.create(null);
   var hiddenNotices = Object.create(null);
+  var snoozedNotices = Object.create(null);
+  var snoozeDuration = 7 * 24 * 60 * 60 * 1000;
   var banner;
   var panel;
   var section;
@@ -113,6 +115,15 @@
     return false;
   }
 
+  function snoozedNotice(group) {
+    var now = Date.now();
+    if (snoozedNotices[group.key] > now) return true;
+    try {
+      var until = Number(localStorage.getItem('ccc.fo.snooze-notice.' + group.key));
+      return Number.isFinite(until) && until > now;
+    } catch (_) { return false; }
+  }
+
   function row(group, m, automatic) {
     var sid = m.session_id;
     var disabled = !!busy[group.key];
@@ -153,7 +164,9 @@
     var limited = members.filter(function (m) { return m.state === 'limited'; });
     var armed = members.filter(function (m) { return m.state === 'armed'; });
     var free = members.filter(function (m) { return m.state === 'free' || m.state === 'switch_back_pending'; });
-    var heading = limited.length || armed.length ? group.engine_label + ' limit reached' : group.engine_label + ' sessions running free';
+    var limitReached = limited.length > 0 || armed.length > 0;
+    if (automatic && limitReached && snoozedNotice(group)) return '';
+    var heading = limitReached ? group.engine_label + ' limit reached' : group.engine_label + ' sessions running free';
     var summary = [];
     if (limited.length) summary.push(limited.length + ' session' + (limited.length === 1 ? '' : 's') + ' stopped');
     if (armed.length) summary.push(armed.length + ' scheduled to resume');
@@ -179,6 +192,7 @@
         + button('keep-free', 'Keep them free', null, disabled);
     }
     if (automatic && !limited.length) actions += button('hide-notice', 'Hide notice', null, false);
+    if (automatic && limitReached) actions += button('snooze-notice', 'Don’t show me this again for 7 days', null, disabled);
     var open = expanded[group.key] == null ? members.length <= 10 : expanded[group.key];
     var body = open ? '<div class="ccc-fleet-rows">' + members.map(function (m) { return row(group, m, automatic); }).join('') + '</div>' : '';
     if (members.length > 10) body += button('expand', open ? 'Show fewer' : 'Choose sessions (' + members.length + ')', null, disabled);
@@ -372,6 +386,12 @@
     if (action === 'expand') { expanded[group.key] = !(expanded[group.key] == null ? group.sessions.length <= 10 : expanded[group.key]); render(); return; }
     if (action === 'hide-notice') {
       hideNotice(group); return;
+    }
+    if (action === 'snooze-notice') {
+      var until = Date.now() + snoozeDuration;
+      try { localStorage.setItem('ccc.fo.snooze-notice.' + group.key, String(until)); }
+      catch (_) { snoozedNotices[group.key] = until; }
+      render(); return;
     }
     if (action === 'hide-free') {
       var m = group.sessions.find(function (item) { return item.session_id === sid; });

@@ -6,7 +6,7 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '../static/fleet-failover.js'), 'utf8');
 
-function load({ allowed = false, missingGate = false, response, storage = new Map() } = {}) {
+function load({ allowed = false, missingGate = false, response, storage = new Map(), clock = Date } = {}) {
   const requests = [];
   const gate = { allowed };
   const window = { addEventListener() {} };
@@ -17,7 +17,7 @@ function load({ allowed = false, missingGate = false, response, storage = new Ma
     fetch: async (url, init = {}) => {
       requests.push({ url, init });
       return response ? response(url, init) : { ok: true, status: 200, json: async () => ({ ok: true, groups: [] }) };
-    }, console, Date, Promise,
+    }, console, Date: clock, Promise,
   };
   vm.createContext(context);
   vm.runInContext(source.replace('  function boot() {',
@@ -192,6 +192,58 @@ test('hidden limited notices remain recoverable without a dismiss request', () =
   reloaded.api.receive(data);
   assert.equal(reloaded.api.groupHtml(group, true), '');
   assert.match(reloaded.api.groupHtml(group, false), /Continue all 1 free/);
+});
+
+test('seven-day snooze survives reload and new stops for the same group', () => {
+  const storage = new Map();
+  let now = Date.now();
+  class Clock extends Date { static now() { return now; } }
+  const loaded = load({ allowed: true, storage, clock: Clock });
+  const data = fixture(1);
+  const group = data.groups[0];
+  loaded.api.receive(data);
+  assert.match(loaded.api.groupHtml(group, true), /Don’t show me this again for 7 days/);
+
+  const control = { disabled: false, closest: () => ({ getAttribute: () => group.key }),
+    getAttribute: (name) => name === 'data-act' ? 'snooze-notice' : null };
+  loaded.api.click({ target: { closest: () => control } });
+  assert.equal(loaded.api.groupHtml(group, true), '');
+  assert.match(loaded.api.groupHtml(group, false), /Resume all at reset/);
+  assert.equal(loaded.window.cccFleetFailover.covers('session-0'), true);
+  assert.equal(loaded.requests.filter(r => r.init.method === 'POST').length, 0);
+
+  const reloaded = load({ allowed: true, storage, clock: Clock });
+  const next = fixture(2, 2);
+  reloaded.api.receive(next);
+  const nextGroup = next.groups[0];
+  assert.equal(reloaded.api.groupHtml(nextGroup, true), '');
+  const codex = { ...nextGroup, key: 'codex', engine: 'codex', engine_label: 'Codex' };
+  assert.match(reloaded.api.groupHtml(codex, true), /Codex limit reached/);
+  const switchBack = { ...nextGroup, sessions: [{ ...nextGroup.sessions[0], state: 'free', switch_back_offered: true }] };
+  assert.match(reloaded.api.groupHtml(switchBack, true), /Switch back/);
+  assert.doesNotMatch(reloaded.api.groupHtml(switchBack, true), /7 days/);
+
+  now += 7 * 24 * 60 * 60 * 1000 - 1;
+  assert.equal(reloaded.api.groupHtml(nextGroup, true), '');
+  now++;
+  assert.match(reloaded.api.groupHtml(nextGroup, true), /Claude limit reached/);
+});
+
+test('seven-day snooze also hides the notice for the current tab when storage is blocked', () => {
+  const loaded = load({ allowed: true, storage: {
+    get() { throw new Error('storage blocked'); },
+    set() { throw new Error('storage blocked'); },
+  } });
+  const data = fixture(1);
+  const group = data.groups[0];
+  group.sessions[0].state = 'armed';
+  loaded.api.receive(data);
+  const control = { disabled: false, closest: () => ({ getAttribute: () => group.key }),
+    getAttribute: (name) => name === 'data-act' ? 'snooze-notice' : null };
+  loaded.api.click({ target: { closest: () => control } });
+  assert.equal(loaded.api.groupHtml(group, true), '');
+  assert.match(loaded.api.groupHtml(group, false), /Will resume/);
+  assert.equal(loaded.requests.filter(r => r.init.method === 'POST').length, 0);
 });
 
 test('notice uses escaped sidebar title, latest status and activity', () => {
