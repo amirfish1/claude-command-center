@@ -9,7 +9,11 @@ class ReadDeferredForRestart(Exception):
 @contextmanager
 def read_slot(lock, stopping):
     while not stopping.is_set():
-        if lock.acquire(timeout=0.05):
+        # Releasing the lock wakes an acquirer immediately; this timeout
+        # only bounds how long an idle waiter takes to notice a restart.
+        # Hundreds of queued reads otherwise wake twenty times a second
+        # and contend with the foreground work they are waiting behind.
+        if lock.acquire(timeout=0.25):
             break
     else:
         raise ReadDeferredForRestart
