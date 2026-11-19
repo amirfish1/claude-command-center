@@ -29,7 +29,8 @@
     cancel();
     ready = false;
     enabled = false;
-    try { localStorage.setItem(key, '0'); } catch (_) {}
+    // A runtime failure disables this page only. Persisted off is reserved for
+    // the user's switch; a failed download or slow read must recover on reload.
     worker?.terminate(); worker = null;
     if (context) { context.close().catch(() => {}); context = null; }
     message = 'Browser voice stopped: ' + String(error.message || error).slice(0, 160)

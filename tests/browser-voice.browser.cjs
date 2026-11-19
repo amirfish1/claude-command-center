@@ -99,7 +99,12 @@ test('default-on, audio-thread playback through page stalls, pause, cancellation
     await page.waitForFunction(() => window.slowError !== null);
     assert.match(await page.evaluate(() => slowError), /cannot sustain playback/);
     assert.equal(await page.evaluate(() => cccBrowserVoice.enabled), false);
-    assert.equal(await page.evaluate(() => localStorage.getItem('ccc-browser-voice')), '0');
+    assert.equal(await page.evaluate(() => localStorage.getItem('ccc-browser-voice')), '1',
+      'a playback failure must preserve the user preference');
+    await page.reload({waitUntil: 'load'});
+    await page.waitForFunction(() => cccBrowserVoice.ready);
+    assert.equal(await page.evaluate(() => cccBrowserVoice.enabled), true,
+      'a new page retries after a transient failure');
     assert.deepEqual(errors, []);
   } finally {
     await browser?.close();
