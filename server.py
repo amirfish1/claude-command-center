@@ -19408,6 +19408,7 @@ def _archive_overlay_devin_cli_sessions(rows, now=None, *, existing_ids=None):
         # a cold miss with the rebuild lock held returns [].
         devin_rows = find_devin_cli_conversations(
             include_old=True, repo_only=False, stale_ok=True,
+            exclude_session_ids=existing,
         )
     except Exception:
         return []

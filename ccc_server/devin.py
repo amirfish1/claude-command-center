@@ -2120,10 +2120,15 @@ def _devin_acp_row_tail(raw_id):
     return latest
 
 
-def find_devin_cli_conversations(*args, **kwargs):
+def find_devin_cli_conversations(*args, exclude_session_ids=None, **kwargs):
     rows = _find_devin_cli_db_conversations(*args, **kwargs)
     out = []
     for row in rows:
+        # Gap fillers discard existing rows. Skip their replay I/O before it
+        # can read changed logs or hand the GIL off once per cached session.
+        if (exclude_session_ids is not None
+                and str(row.get("session_id") or row.get("id") or "") in exclude_session_ids):
+            continue
         tail = _devin_acp_row_tail(_devin_cli_raw_id(row.get("session_id")))
         if tail and tail["ts"] > _devin_epoch(row.get("modified")):
             row = dict(row)
