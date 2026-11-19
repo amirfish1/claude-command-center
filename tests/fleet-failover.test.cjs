@@ -175,3 +175,53 @@ test('notice dismissal works when browser storage is unavailable', () => {
   loaded.api.receive(data);
   assert.match(loaded.api.groupHtml(group, true), /Hide notice/);
 });
+
+test('hidden limited notices remain recoverable without a dismiss request', () => {
+  const storage = new Map();
+  const loaded = load({ allowed: true, storage });
+  const data = fixture(1);
+  const group = data.groups[0];
+  loaded.api.receive(data);
+  const control = { disabled: false, closest: () => ({ getAttribute: () => group.key }),
+    getAttribute: (name) => name === 'data-act' ? 'hide-notice' : null };
+  loaded.api.click({ target: { closest: () => control } });
+  assert.equal(loaded.api.groupHtml(group, true), '');
+  assert.match(loaded.api.groupHtml(group, false), /Resume all at reset/);
+  assert.equal(loaded.requests.length, 0);
+  const reloaded = load({ allowed: true, storage });
+  reloaded.api.receive(data);
+  assert.equal(reloaded.api.groupHtml(group, true), '');
+  assert.match(reloaded.api.groupHtml(group, false), /Continue all 1 free/);
+});
+
+test('notice uses escaped sidebar title, latest status and activity', () => {
+  const loaded = load();
+  loaded.window.cccFleetSessionInfo = () => ({ title: 'Fix <layout>', status: 'Next', detail: '<review>',
+    repo: '/example/project', modified: '2026-11-19T12:00:00Z', model: 'test-model', effort: 'low' });
+  const data = fixture(1);
+  loaded.api.receive(data);
+  const html = loaded.api.groupHtml(data.groups[0], false);
+  for (const text of ['Fix &lt;layout&gt;', 'Next: &lt;review&gt;', 'Last activity:', '/example/project', 'test-model', 'low', 'session-0']) assert.ok(html.includes(text), text);
+  assert.doesNotMatch(html, /<review>/);
+});
+
+test('choosing a route opens the picker without a fleet mutation and preserves failures', async () => {
+  const loaded = load({ allowed: true });
+  let opened = false;
+  const calls = [];
+  loaded.window.cccChooseLimitContinuation = async (...args) => { calls.push(args); return opened; };
+  const data = fixture(1);
+  const group = data.groups[0];
+  loaded.api.receive(data);
+  const control = { disabled: false, closest: () => ({ getAttribute: () => group.key }),
+    getAttribute: (name) => name === 'data-act' ? 'choose-route' : 'session-0' };
+  loaded.api.click({ target: { closest: () => control } });
+  await settle();
+  assert.match(loaded.api.groupHtml(group, true), /Could not open the model choices/);
+  opened = true;
+  loaded.api.click({ target: { closest: () => control } });
+  await settle();
+  assert.deepEqual(calls, [['session-0', 'claude'], ['session-0', 'claude']]);
+  assert.equal(loaded.requests.length, 0);
+  assert.equal(loaded.api.groupHtml(group, true), '');
+});

@@ -17,6 +17,7 @@
   var banner;
   var panel;
   var section;
+  var recall;
 
   function esc(value) {
     return String(value == null ? '' : value).replace(/&/g, '&amp;')
@@ -35,7 +36,27 @@
   }
 
   function title(member) {
-    return member.display_name || 'Session ' + member.session_id.replace(/^devincli-/, '').slice(0, 8);
+    var info = sessionInfo(member);
+    return info.title || member.display_name || 'Session ' + member.session_id.replace(/^devincli-/, '').slice(0, 8);
+  }
+
+  function sessionInfo(member) {
+    try { return window.cccFleetSessionInfo && window.cccFleetSessionInfo(member.session_id) || {}; }
+    catch (_) { return {}; }
+  }
+
+  function sessionDetails(member) {
+    var info = sessionInfo(member);
+    var modified = info.modified;
+    var epoch = typeof modified === 'number' ? modified * 1000 : Date.parse(modified);
+    var stamp = Number.isFinite(epoch) && epoch > 0 ? new Date(epoch).toLocaleString() : '';
+    var spec = [member.engine, info.model || member.model, info.effort].filter(Boolean).join(' · ');
+    return '<div class="ccc-fleet-details">'
+      + '<div>' + esc(spec) + ' · <span title="Session ID">' + esc(member.session_id) + '</span></div>'
+      + (info.repo ? '<div>' + esc(info.repo) + '</div>' : '')
+      + (stamp ? '<div>Last activity: ' + esc(stamp) + '</div>' : '<div>Last activity not loaded</div>')
+      + (info.status || info.detail ? '<div class="ccc-fleet-last-status">' + esc([info.status, info.detail].filter(Boolean).join(': ')) + '</div>' : '<div>Open session to load its latest status.</div>')
+      + '</div>';
   }
 
   function relative(epoch) {
@@ -96,6 +117,7 @@
       check = '<input type="checkbox" class="ccc-fleet-check" data-sid="' + esc(sid)
         + '" aria-label="Include ' + esc(title(m)) + '"'
         + (selections[sid].checked ? ' checked' : '') + (disabled ? ' disabled' : '') + '>';
+      if (window.cccChooseLimitContinuation) controls = button('choose-route', 'Choose model…', sid, disabled);
       meta = (m.limit_window === 'weekly' ? 'Weekly limit. Resets ' : 'Resets ') + resetText(m);
     } else if (m.state === 'armed') {
       meta = 'Will resume ' + resetText(m);
@@ -113,7 +135,7 @@
     }
     return '<div class="ccc-fleet-row" data-row-sid="' + esc(sid) + '">' + check
       + '<div class="ccc-fleet-rowbody"><button type="button" class="ccc-fleet-name" data-act="open" data-sid="'
-      + esc(sid) + '">' + esc(title(m)) + '</button><div class="ccc-fleet-meta">' + esc(meta) + '</div>'
+      + esc(sid) + '" title="Open session">' + esc(title(m)) + '</button>' + sessionDetails(m) + '<div class="ccc-fleet-meta">' + esc(meta) + '</div>'
       + (rowErrors[sid] ? '<div class="ccc-fleet-error" role="alert">' + esc(rowErrors[sid]) + '</div>' : '')
       + '</div><div class="ccc-fleet-rowactions">' + controls + '</div></div>';
   }
@@ -143,7 +165,7 @@
       if (group.can_auto_resume) {
         actions += button('arm', all ? 'Resume all at reset' : 'Resume ' + ids.length + ' at reset', null, disabled || !ids.length);
       }
-      if (automatic) actions += button('dismiss', 'Hide notice', null, disabled);
+      if (automatic) actions += button('hide-notice', 'Hide notice', null, disabled);
     }
     var offered = free.filter(function (m) { return m.state === 'free' && m.switch_back_offered; });
     if (offered.length) {
@@ -159,12 +181,14 @@
       note = group.can_continue_free ? 'A free model can pick up the same chat.'
         : group.engine === 'claude' ? 'Set up a free model to continue for $0.'
         : 'Free continuation is not available for ' + group.engine_label + '. You can resume at reset.';
+      if (window.cccChooseLimitContinuation) note += ' Choose model opens engine, model and effort choices in a new session; your saved fallback is suggested when available.';
       if (group.can_auto_resume) note += ' Resumes are spread out, up to ' + (data.auto_resume_max_per_minute || 5) + ' per minute.';
     }
     return '<section class="ccc-fleet-card" data-group="' + esc(group.key) + '" aria-label="' + esc(heading) + '">'
       + '<h3>' + esc(heading) + '</h3><p class="ccc-fleet-summary">' + esc(summary.join(' · ')) + '</p>'
       + body + (note ? '<p class="ccc-fleet-note">' + esc(note) + '</p>' : '')
       + '<div class="ccc-fleet-actions">' + actions + '</div>'
+      + (automatic ? '<p class="ccc-fleet-return-note">Hidden notices stay in Settings → Session limits.</p>' : '')
       + (limited.length && group.can_continue_free ? '<label class="ccc-fleet-always"><input type="checkbox" data-always="'
         + esc(group.key) + '"' + (always[group.key] ? ' checked' : '') + (disabled ? ' disabled' : '')
         + '> Always continue these selected sessions free</label>' : '')
@@ -209,6 +233,11 @@
     } else {
       banner.hidden = true;
       banner.replaceChildren();
+    }
+    if (recall) {
+      var count = groups.reduce(function (n, g) { return n + g.sessions.length; }, 0);
+      recall.hidden = !count || !popupAllowed();
+      recall.textContent = 'Session limits · ' + count;
     }
     document.dispatchEvent(new Event('cccFleetRendered'));
   }
@@ -278,6 +307,12 @@
       .finally(function () { busy[group.key] = false; retryAt = 0; render(); poll(true); });
   }
 
+  function hideNotice(group) {
+    hiddenNotices[group.key] = noticeVersion(group);
+    try { localStorage.setItem('ccc.fo.hide-notice.' + group.key, hiddenNotices[group.key]); } catch (_) {}
+    render();
+  }
+
   function click(ev) {
     var buttonEl = ev.target.closest('[data-act]');
     if (!buttonEl || buttonEl.disabled) return;
@@ -286,13 +321,18 @@
     if (!group) return;
     var action = buttonEl.getAttribute('data-act');
     var sid = buttonEl.getAttribute('data-sid');
+    if (action === 'choose-route') {
+      Promise.resolve(window.cccChooseLimitContinuation(sid, group.engine)).then(function (opened) {
+        if (opened) hideNotice(group);
+        else { rowErrors[sid] = 'Could not open the model choices. Open the session and try again.'; render(); }
+      }).catch(function () { rowErrors[sid] = 'Could not open the model choices. Try again.'; render(); });
+      return;
+    }
     if (action === 'open') { if (typeof window.cccOpenSession === 'function') window.cccOpenSession(sid); return; }
     if (action === 'setup') { var tab = document.getElementById('settingsRailTab-free'); if (tab) tab.click(); return; }
     if (action === 'expand') { expanded[group.key] = !(expanded[group.key] == null ? group.sessions.length <= 10 : expanded[group.key]); render(); return; }
     if (action === 'hide-notice') {
-      hiddenNotices[group.key] = noticeVersion(group);
-      try { localStorage.setItem('ccc.fo.hide-notice.' + group.key, hiddenNotices[group.key]); } catch (_) {}
-      render(); return;
+      hideNotice(group); return;
     }
     if (action === 'hide-free') {
       var m = group.sessions.find(function (item) { return item.session_id === sid; });
@@ -347,6 +387,18 @@
     banner.hidden = true;
     banner.setAttribute('aria-live', 'polite');
     document.body.appendChild(banner);
+    recall = document.createElement('button');
+    recall.type = 'button';
+    recall.id = 'cccFleetLimitsRecall';
+    recall.className = 'ccc-fleet-btn ccc-fleet-recall';
+    recall.hidden = true;
+    recall.addEventListener('click', function () {
+      var settings = document.getElementById('settingsBtn') || document.getElementById('settingsHubBtn');
+      if (settings) settings.click();
+      tab.click();
+      poll(true);
+    });
+    document.body.appendChild(recall);
     [banner, panel].forEach(function (host) { host.addEventListener('click', click); host.addEventListener('change', change); });
     var observer = new MutationObserver(function () { if (panelVisible()) poll(true); });
     observer.observe(section, { attributes: true, attributeFilter: ['class'] });

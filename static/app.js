@@ -3178,6 +3178,50 @@
   window.cccOpenSession = function (sid) {
     try { if (sid) selectConversation(sid); } catch (_) {}
   };
+  // Reuse the sidebar's loaded facts; limit notices must not scan transcripts.
+  window.cccFleetSessionInfo = function (sid) {
+    const row = conversationsData.find(c => (c.session_id || c.id) === sid)
+      || archiveData.find(c => (c.session_id || c.id) === sid);
+    if (!row) return null;
+    const outcome = rowOutcomeView(row);
+    return {
+      title: sidebarRowDisplayTitle(rowRawTitle(row).rawTitle),
+      status: outcome.label, detail: outcome.text,
+      modified: row.modified || row.mtime,
+      model: row.model, effort: rowReasoningEffort(row),
+      repo: row.repo_path || row.cwd || row.folder_path,
+    };
+  };
+  // Open the ordinary continuation picker, with the saved fallback as a
+  // suggestion. Nothing starts until its existing Continue button is pressed.
+  window.cccChooseLimitContinuation = async function (sid, limitedEngine) {
+    closeSettingsModal();
+    const input = await withSessionComposer(sid);
+    if (!input || window.cccFrontSessionId() !== sid) return false;
+    const paneId = activePaneId();
+    const key = f2PaneKey(paneId);
+    f2DismissedPanes.delete(key);
+    f2ManualOpen(paneId);
+    const st = f2PaneState.get(key);
+    if (!st) return false;
+    const policy = spawnDefaultsState.worker_fallback;
+    const enabled = f2LaunchEngines();
+    const route = policy && policy.enabled && policy.models.find(r =>
+      r.engine !== limitedEngine && enabled.some(e => e.id === r.engine)
+      && _modelAllowedForEngine(r.engine, r.model)
+      && f2ModelsForEngine(r.engine).some(m => m.id === r.model));
+    if (route) {
+      const efforts = f2EffortsForEngine(route.engine);
+      st.launch = { engine: route.engine, model: route.model,
+        effort: efforts.some(e => e.id === route.effort) ? route.effort : (efforts[0]?.id || '') };
+    }
+    st.configOpen = true;
+    st.promptEdited = true;
+    st.promptDraft = input.value.trim() || 'Continue the unfinished task from the previous session, which stopped at a usage limit. Check its latest instructions and progress first.';
+    f2RenderComposer(paneId, { force: true });
+    f2PanelEl(paneId)?.querySelector('select')?.focus();
+    return true;
+  };
   // Question-tags panel: put text into a session's composer WITHOUT sending, so
   // the owner can stack several answers and submit on their own time. Opens the
   // session first when it is not already in front.

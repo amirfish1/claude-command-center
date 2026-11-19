@@ -61,3 +61,13 @@
   .ccc-fleet-card { padding: 11px; }
   .ccc-fleet-always { align-items: flex-start; }
 }
+
+.ccc-fleet-details { color: var(--muted, #9a9ba2); font-size: 12px; overflow-wrap: anywhere; }
+.ccc-fleet-last-status { color: var(--text, #e6e6e9); margin: 4px 0; white-space: pre-wrap; }
+.ccc-fleet-name { white-space: normal; overflow-wrap: anywhere; }
+.ccc-fleet-row { align-items: flex-start; }
+.ccc-fleet-check { margin-top: 4px; }
+.ccc-fleet-rowactions { max-width: 105px; }
+.ccc-fleet-return-note { font-size: 12px; color: var(--muted, #9a9ba2); margin: 8px 0 0; }
+.ccc-fleet-recall { position: fixed; top: 12px; right: 12px; z-index: 9399; background: var(--panel-bg, #1e1f24); color: var(--text, #e6e6e9); }
+.ccc-fleet-recall[hidden] { display: none; }
