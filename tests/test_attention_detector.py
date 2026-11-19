@@ -294,7 +294,7 @@ def _stub_feed(monkeypatch, rows):
     )
     monkeypatch.setattr(server, "_attention_read_turns", lambda *a, **k: [])
 
-    def classify(c):
+    def classify(c, *, check_unpushed):
         if not c.get("_kind"):
             return None
         return {"kind": c["_kind"], "priority": c["_priority"],
@@ -321,7 +321,7 @@ def test_attention_feed_reuses_lightweight_archive_snapshot(monkeypatch):
     monkeypatch.setattr(
         server,
         "_classify_attention",
-        lambda c: {
+        lambda c, *, check_unpushed: {
             "kind": c["_kind"],
             "priority": c["_priority"],
             "session_id": c["session_id"],
@@ -343,15 +343,31 @@ def test_attention_feed_reuses_lightweight_archive_snapshot(monkeypatch):
 
 def test_feed_default_excludes_committed_not_pushed(monkeypatch):
     now = time.time()
-    rows = [_conv("committed_not_pushed", 5, modified=now),
-            _conv("soft_block", 2, modified=now)]
-    _stub_feed(monkeypatch, rows)
+    rows = [
+        _row("Committed the change.", has_commit=True, modified=now, session_cwd="/repo"),
+        _row("Want me to proceed?", has_commit=True, modified=now, is_live=True),
+    ]
+    monkeypatch.setattr(server, "_attention_archive_rows_cached", lambda _: (rows, True))
+    monkeypatch.setattr(server, "_attention_read_turns", lambda *a, **k: [])
+    git_checks = []
+
+    def count_unpushed(cwd):
+        git_checks.append(cwd)
+        return 1
+
+    monkeypatch.setattr(server, "_count_unpushed_commits", count_unpushed)
     default = server.compute_attention_feed()
     kinds = {i["kind"] for i in default["items"]}
     assert kinds == {"soft_block"}, "git-hygiene rows must be out of the default feed"
-    # scope=all keeps the full pool.
+    assert git_checks == []
+
     allf = server.compute_attention_feed(recent_only=False)
     assert {i["kind"] for i in allf["items"]} == {"committed_not_pushed", "soft_block"}
+    assert git_checks == ["/repo"]
+
+    explicit = server.compute_attention_feed(exclude_kinds=frozenset())
+    assert explicit["items"] == allf["items"]
+    assert git_checks == ["/repo", "/repo"]
 
 
 def test_feed_default_time_bounds_soft_block(monkeypatch):

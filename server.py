@@ -48063,7 +48063,7 @@ def _session_ended_blocked(c):
     )
 
 
-def _classify_attention(c):
+def _classify_attention(c, *, check_unpushed=True):
     """For a single conv, decide whether it needs user attention and in what way.
     Returns a dict {kind, priority, where, did, insight, next_step} or None.
 
@@ -48270,7 +48270,7 @@ def _classify_attention(c):
                 "has_structured": has_structured,
             }
 
-        if c.get("has_commit") and not c.get("has_push"):
+        if check_unpushed and c.get("has_commit") and not c.get("has_push"):
             # `has_commit` is a session-tool-call flag, not a repo-state check.
             # Verify the working tree actually has unpushed commits — sessions
             # often commit duplicate work then `git pull` fast-forwards it onto
@@ -48586,8 +48586,9 @@ def compute_attention_feed(*, recent_only=True, recent_window_secs=None,
     now = time.time()
     by_sid = {}
     raw = []
+    check_unpushed = "committed_not_pushed" not in exclude_kinds
     for c in convs:
-        item = _classify_attention(c)
+        item = _classify_attention(c, check_unpushed=check_unpushed)
         if not item:
             continue
         kind = item.get("kind")
