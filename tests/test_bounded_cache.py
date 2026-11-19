@@ -46,3 +46,17 @@ def test_batch_reads_preserve_order_misses_and_lru_bounds():
     assert 'c' not in cache
     assert cache.bytes == 3 and len(cache) == 3
     assert cache.get_many([]) == []
+
+
+def test_tuple_candidate_check_does_not_touch_lru_or_retain_evicted_keys():
+    cache = ByteBudgetCache(3, 3)
+    cache.put(('first', 0, 'old-version'), 'a', 1)
+    cache.put(('second', 0, 'version'), 'b', 1)
+    cache.put('first', 'not a tuple', 1)
+    assert cache.has_key_prefix(('first', 0))
+    assert not cache.has_key_prefix(('first', 1))
+    assert not cache.has_key_prefix(('missing',))
+    cache.put(('third',), 'c', 1)
+    assert not cache.has_key_prefix(('first', 0))
+    cache.clear()
+    assert not cache.has_key_prefix(('second',))

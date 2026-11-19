@@ -52,6 +52,16 @@ class ByteBudgetCache:
                 values.append(None if item is None else item[0])
             return values
 
+    def has_key_prefix(self, prefix):
+        """Check tuple-key candidates without touching their LRU order.
+
+        A candidate still needs its normal freshness validation. A negative
+        result can avoid constructing an expensive versioned lookup key.
+        """
+        with self._lock:
+            return any(isinstance(key, tuple) and key[:len(prefix)] == prefix
+                       for key in self._items)
+
     def put(self, key, value, weight):
         weight = max(0, int(weight))
         with self._lock:

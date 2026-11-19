@@ -218,6 +218,47 @@ def test_declined_invalid_or_large_tail_retains_regular_read(monkeypatch, result
     assert server._load_app_conversation_document('session-test') == template
 
 
+def test_page_tail_absent_candidate_never_resolves_engine_or_transcript(monkeypatch):
+    from ccc_server.bounded_cache import ByteBudgetCache
+    server = _server()
+    cache = ByteBudgetCache(4096, 8)
+    monkeypatch.setattr(server, '_CONV_BYTES_CACHE', cache)
+    cache.put(('other-session', 0, 'mtime', (120, None), 'overlay'), {}, 1)
+    cache.put(('session-test', 42, 'mtime', (120, None), 'overlay'), {}, 1)
+
+    def forbidden(*_a, **_kw):
+        pytest.fail('An absent cached tail performed session resolution')
+    for name in ('_session_acp_harness', '_detect_session_engine',
+                 '_refresh_queued_view_if_file_changed', '_conv_response_bytes_get',
+                 'parse_conversation'):
+        monkeypatch.setattr(server, name, forbidden)
+    assert server._conversation_open_response('session-test', 'tail=120', '',
+                                              in_reader=True, cached_only=True) is None
+
+
+@pytest.mark.parametrize('valid', [False, True])
+def test_page_tail_candidate_keeps_freshness_validation(monkeypatch, valid):
+    from ccc_server.bounded_cache import ByteBudgetCache
+    server = _server()
+    cache = ByteBudgetCache(4096, 8)
+    monkeypatch.setattr(server, '_CONV_BYTES_CACHE', cache)
+    cache.put(('session-test', 0, 'old-mtime', (120, None), 'old-overlay'), {}, 1)
+    calls = []
+    monkeypatch.setattr(server, '_session_acp_harness', lambda _: None)
+    monkeypatch.setattr(server, '_detect_session_engine', lambda _: 'claude')
+    monkeypatch.setattr(server, '_refresh_queued_view_if_file_changed', lambda sid: calls.append(('queue', sid)))
+
+    def validate(sid, after, window):
+        calls.append(('validate', sid, after, window))
+        return {'raw': b'current'} if valid else None
+
+    monkeypatch.setattr(server, '_conv_response_bytes_get', validate)
+    result = server._conversation_open_response('session-test', 'tail=120', '',
+                                               in_reader=True, cached_only=True)
+    assert result == ({'body': b'current', 'encoding': None, 'cache': 'hit'} if valid else None)
+    assert calls == [('queue', 'session-test'), ('validate', 'session-test', 0, (120, None))]
+
+
 def test_page_tail_cache_miss_never_parses_or_attaches(monkeypatch):
     server = _server()
     monkeypatch.setattr(server, '_session_acp_harness', lambda _: None)

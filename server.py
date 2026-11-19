@@ -29507,6 +29507,11 @@ def _conversation_open_response(conv_id, query, accept_encoding, in_reader=False
     _before_raw = (qs.get("before", [""])[0] or "")
     before = int(_before_raw) if _before_raw.isdigit() else None
     windowed = bool(tail) or (before is not None)
+    if cached_only and not _CONV_BYTES_CACHE.has_key_prefix((conv_id, after_line)):
+        # An initial page may reuse a validated tail but must not resolve
+        # engines, registries or transcript paths for an impossible cache hit.
+        # Candidate entries still pass every existing freshness check below.
+        return None
     acp_harness = _session_acp_harness(conv_id)
     is_acp_conv = acp_harness is not None
     if cached_only and is_acp_conv:
