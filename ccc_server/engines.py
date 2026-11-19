@@ -2376,8 +2376,7 @@ def _parse_antigravity_event(ev, line_num, usage_map=None):
         thinking = (ev.get("thinking") or "").strip()
         signature = (ev.get("signature") or "").strip()
         if thinking:
-            preview = thinking[:300] + ("..." if len(thinking) > 300 else "")
-            blocks.append({"kind": "thinking", "text": preview, "signature_only": False})
+            blocks.append({"kind": "thinking", "text": thinking, "signature_only": False})
         elif signature:
             blocks.append({"kind": "thinking", "text": "", "signature_only": True})
         content = (ev.get("content") or "").strip()

@@ -54,6 +54,24 @@ def test_completed_transcript_does_not_append_old_cli_output(reader_files):
     assert parsed["last_line"] == 2
 
 
+def test_transcript_preserves_thinking_in_initial_and_incremental_reads(reader_files):
+    transcript, _, _, _ = reader_files
+    thought = "**Checking results**\n\n" + "Read another entry. " * 250 + "The final entry is ready."
+    with transcript.open("a") as f:
+        f.write(json.dumps({"type": "PLANNER_RESPONSE", "thinking": thought,
+                            "content": "Completed."}) + "\n")
+        f.write(json.dumps({"type": "PLANNER_RESPONSE", "signature": "fixture"}) + "\n")
+
+    initial = engines._parse_antigravity_conversation("example")["events"]
+    tail = engines._parse_antigravity_conversation("example", after_line=1)["events"]
+    assert initial[1:] == tail
+    assert tail[0]["blocks"] == [
+        {"kind": "thinking", "text": thought, "signature_only": False},
+        {"kind": "text", "text": "Completed."},
+    ]
+    assert tail[1]["blocks"] == [{"kind": "thinking", "text": "", "signature_only": True}]
+
+
 @pytest.mark.parametrize("source", ["stdout", "debug", "db", "wal"])
 def test_cache_key_tracks_sources_even_with_cached_transcript(reader_files, monkeypatch, source):
     transcript, stdout, debug, db = reader_files
