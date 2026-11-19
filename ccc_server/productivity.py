@@ -387,6 +387,32 @@ def _productivity_refresh_public():
         return dict(_core._PRODUCTIVITY_REFRESH)
 
 
+def _productivity_build_snapshot_offloaded():
+    """Keep historical scans off the dashboard GIL when its helper is ready."""
+    from ccc_server import bg_helper
+
+    if bg_helper.enabled() and not bg_helper.is_child():
+        # A cold 16-week transcript scan outlives ordinary helper reads. This
+        # runs inside the existing refresh worker, never the HTTP handler.
+        reply = bg_helper.call("productivity_snapshot", timeout=600, role="main")
+        snapshot = (reply or {}).get("data")
+        if (isinstance(snapshot, dict)
+                and snapshot.get("schema") == _core._PRODUCTIVITY_SCHEMA
+                and isinstance(snapshot.get("datasets"), dict)
+                and all(str(weeks) in snapshot["datasets"] for weeks in _PRODUCTIVITY_WEEKS)
+                and isinstance(snapshot.get("coverage"), dict)
+                and isinstance(snapshot["coverage"].get("presence"), dict)):
+            # The sampler lives in this process. A helper's capability state
+            # must never replace its current success/failure evidence.
+            presence = snapshot["coverage"]["presence"]
+            presence.update(_core.presence_health())
+            presence["source"] = (
+                "macos_idle_sampler" if presence.get("sample_minutes") else
+                "not_yet_sampled" if presence.get("sampler_available") else "unavailable")
+            return snapshot
+    return _core._productivity_build_snapshot()
+
+
 def _productivity_refresh_start(*, force=False):
     with _PRODUCTIVITY_REFRESH_LOCK:
         state = _core._PRODUCTIVITY_REFRESH.get("state")
@@ -404,7 +430,7 @@ def _productivity_refresh_start(*, force=False):
 
     def run():
         try:
-            snapshot = _core._productivity_build_snapshot()
+            snapshot = _core._productivity_build_snapshot_offloaded()
             watchtower = (snapshot.get("coverage") or {}).get("watchtower") or {}
             if watchtower.get("available") is False:
                 previous = _core._PRODUCTIVITY_STORE.load_payload() or {}

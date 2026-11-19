@@ -23,6 +23,8 @@ the child exits when its parent goes away.
   (MEMORY-20); the dashboard re-reads vectors only when ``semb`` changed.
 * daily throughput: ``throughput_ticket_counts`` reads and aggregates all
   queues here, returning just the four count fields to the dashboard.
+* productivity: ``productivity_snapshot`` builds the 16-week datasets here;
+  the dashboard retains refresh state, publication and live sampler health.
 * worker fingerprint: ``worker_closure`` walks imports for the diagnostic
   staleness comparison without occupying the dashboard's GIL.
 
@@ -329,6 +331,9 @@ class _Child:
         return {"ok": True, "data": usage_stats._throughput_daily_ticket_counts_local(
             float(req["start_epoch"]), float(req["end_epoch"]))}
 
+    def productivity_snapshot(self, req):
+        return {"ok": True, "data": self.server._productivity_build_snapshot()}
+
     def worker_closure(self, req):
         from ccc_server.import_closure import compute_closure
         return {"ok": True, "hash": compute_closure(self.server._install_dir())["hash"]}
@@ -356,6 +361,7 @@ class _Child:
                   "system_health": self.system_health,
                   "throughput_ticket_counts": self.throughput_ticket_counts,
                   "worker_closure": self.worker_closure,
+                  "productivity_snapshot": self.productivity_snapshot,
                   "ping": lambda r: {"ok": True}}.get(op)
             try:
                 reply = fn(req) if fn else {"ok": False, "error": "unknown op"}
