@@ -80,4 +80,43 @@ def test_thought_preview_is_bounded_and_invalidates_old_cache(chat):
         'last_assistant_text': None,
     }
     assert len(row()['last_assistant_text']) == 1200
-    assert server._extract_antigravity_tail_meta(path)['meta_version'] == 5
+    assert server._extract_antigravity_tail_meta(path)['meta_version'] == engines._ANTIGRAVITY_META_VERSION
+
+
+def test_completed_numbered_question_clears_thinking_and_tracks_current_reply(chat):
+    path, _, append, row = chat
+    question = ("Preview details.\n\nReady for your call on **Change #4 (`cli` — `recap`)**: "
+                "**1** (spawn subagent to port & merge) or **2** (skip)?")
+    append(type='PLANNER_RESPONSE', source='MODEL', status='RUNNING', content=question)
+    assert row()['sidecar_status'] == 'active'
+    assert not row()['session_state']
+    append(type='PLANNER_RESPONSE', source='MODEL', status='DONE',
+           tool_calls=[{'name': 'view_file', 'args': {'AbsolutePath': '/example/config.py'}}])
+    assert row()['pending_tool'] == 'view_file'
+    append(type='PLANNER_RESPONSE', source='MODEL', status='DONE', content=question)
+    current = row()
+    assert current['sidecar_status'] == 'idle'
+    assert not current['pending_tool']
+    assert not current['sidecar_in_flight']
+    assert current['session_state']['next_actions'] == [
+        {'label': 'Spawn subagent to port and merge', 'reply': '1'},
+        {'label': 'Skip', 'reply': '2'},
+    ]
+    assert engines._parse_antigravity_event({
+        'type': 'PLANNER_RESPONSE', 'source': 'MODEL', 'status': 'DONE', 'content': question,
+    }, 2)['turn_complete'] is True
+    append(type='USER_INPUT', source='USER_EXPLICIT', content='Check the new issue.')
+    assert not server._extract_antigravity_tail_meta(path)['turn_complete']
+    assert not row()['session_state']
+    assert row()['sidecar_status'] == 'active'
+
+
+def test_numbered_question_requires_literal_distinct_options_and_preserves_footer():
+    question = "Ready for your call on the change: **1** (merge) or **2** (skip)?"
+    for text in [question.replace('**2**', '**1**'), question + '\nHere is my recommendation.',
+                 question.replace('Ready for your call on', 'Earlier we discussed')]:
+        assert engines._antigravity_response_state(text, True) is None
+    footer = '\n<session-state>\nNEXT_STEP_USER: Choose another scope.\n</session-state>'
+    state = engines._antigravity_response_state(question + footer, True)
+    assert state['next_step_user'] == 'Choose another scope.'
+    assert not state.get('numbered_choice')

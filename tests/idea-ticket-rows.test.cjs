@@ -19,7 +19,7 @@ function representatives(rows, lane = 'ideas', bucket = 'active', trash = [], wi
   const ctx = {
     _allTabConvs: rows, _allTabTrashConvs: trash, _qActive: query,
     _ideaTicketFor: r => r.idea_ticket,
-    _ticketlessRowsInAll: false,
+    _sidebarLanes: {ticketViewLane: (_row, lane) => lane === 'ideas' || lane === 'smallbugs'},
     ARCHIVE_WINDOW_KEY: 'ccc-archive-window',
     localStorage: {getItem: () => window},
     Date: class extends Date { static now() { return 2_000_000_000 * 1000; } },
@@ -232,7 +232,8 @@ test('Auto supports every engine while retaining cancellation controls', () => {
 
 function allTabRows(rows, ticketlessInAll) {
   const ctx = {
-    _allTabConvs: rows, _allTabTrashConvs: [], _qActive: '', _ticketlessRowsInAll: ticketlessInAll,
+    _allTabConvs: rows, _allTabTrashConvs: [], _qActive: '',
+    _sidebarLanes: {ticketViewLane: (_row, lane) => lane === 'ideas' || ticketlessInAll && lane === 'coding'},
     _ideaTicketFor: r => r.idea_ticket,
     ARCHIVE_WINDOW_KEY: 'ccc-archive-window',
     localStorage: {getItem: () => 'all'},

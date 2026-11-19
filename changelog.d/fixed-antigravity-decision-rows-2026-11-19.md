@@ -1,0 +1,1 @@
+- Show explicit Antigravity reply choices on settled session rows and keep unticketed decisions visible in All.

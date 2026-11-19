@@ -25,6 +25,25 @@ def test_subscription_is_bounded_and_never_accepts_paths():
     assert session_ids({"sessions": ["../../secret,a,a"]}) == ["a"]
 
 
+def test_finished_antigravity_choice_is_enriched_only_for_the_current_reply():
+    text = "Ready for your call on the change: **1** (port the upgrade) or **2** (skip)?"
+    question = event(text, turn_complete=True)
+    newer_work = {"type": "assistant", "line": 3,
+                  "blocks": [{"kind": "tool_use", "name": "run_command"}]}
+    with mock.patch.object(server, "_conv_parse_jsonl_mtime", return_value=(1, 1)), \
+         mock.patch.object(server, "parse_conversation", side_effect=[
+             {"events": [question], "last_line": 2},
+             {"events": [question, newer_work], "last_line": 3},
+         ]), mock.patch.object(server, "_resolve_spawn_log_for_session", return_value=(None, False)), \
+         mock.patch.object(server, "_detect_session_engine", return_value="antigravity"):
+        current = FreshSession("antigravity-test").read()[0]
+        assert current["turn_complete"]
+        assert [a["reply"] for a in current["session_state"]["next_actions"]] == ["1", "2"]
+        older = FreshSession("antigravity-test").read()[0]
+        assert not older.get("turn_complete")
+        assert older["session_state"] is None
+
+
 def test_only_agent_message_text_is_explanation():
     assert message_text(event("Checking the fix.")) == "Checking the fix."
     assert message_text(event("child", parent_tool_use_id="tool-1")) == ""

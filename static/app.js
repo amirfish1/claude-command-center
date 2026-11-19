@@ -22541,9 +22541,7 @@
       if (_isHermesMessageRow(c)) return 'messages';
       return 'coding';
     };
-    // Experimental idea tickets: a ticketed row's lane is its ticket's queue
-    // (continuations and children inherit the ticket server-side). Ticketless
-    // Coding rows go to Other while the flag is on.
+    // Ticketed rows follow their queue, including inherited tickets.
     const _ideaTicketsOn = ideaTicketsOn();
     const _ideaTicketFor = (c) => {
       if (isUtility(c)) return null;
@@ -22600,10 +22598,22 @@
       && _archiveEngineAllowsRow(c, engineFilter) && laneFor(c) === 'coding').length;
     // This threshold is a property of the full list, not the current page.
     const ticketlessInAll = _ideaTicketsOn && codingCount <= 50;
+    const codingInAllCache = new Map();
+    const codingInAll = (c, lane = laneFor(c)) => {
+      if (!_ideaTicketsOn || lane !== 'coding') return false;
+      if (ticketlessInAll) return true;
+      if (!codingInAllCache.has(c)) {
+        const fresh = _ultraFreshCurrent(c);
+        const state = fresh.session_state;
+        codingInAllCache.set(c, !fresh.archived && !fresh.trashed
+          && state?.next_actions?.length > 1 && ticketSessionSection(fresh) === 'needs-you');
+      }
+      return codingInAllCache.get(c);
+    };
     const otherLane = c => {
       const lane = laneFor(c);
       return lane === 'messages' || lane === 'other'
-        || (_ideaTicketsOn && !ticketlessInAll && lane === 'coding');
+        || (_ideaTicketsOn && lane === 'coding' && !codingInAll(c, lane));
     };
     const fold = _continuationFoldMaps(rows, _allTabSessionId);
     const rawSpawnParent = c => {
@@ -22613,15 +22623,14 @@
     // Ticket view: Workers also holds what All showed (Features, Small bugs
     // and, on a small install, sessions with no ticket).
     const ticketView = _ideaTicketsOn && ticketViewOn();
-    const ticketViewLane = lane => lane === 'ideas' || lane === 'smallbugs'
-      || (ticketlessInAll && lane === 'coding');
+    const ticketViewLane = (c, lane = laneFor(c)) => lane === 'ideas' || lane === 'smallbugs'
+      || codingInAll(c, lane);
     const directMatch = (c, tab) => {
       if (!sessionAllowed(c) || !_archiveEngineAllowsRow(c, engineFilter)
           || !_archiveWindowAllowsRow(c, windowCutoff)) return false;
       const lane = laneFor(c);
-      if (ticketView && tab === 'workers') return lane === 'workers' || ticketViewLane(lane);
-      if (tab === 'alltickets') return lane === 'ideas' || lane === 'smallbugs'
-        || (ticketlessInAll && lane === 'coding');
+      if (ticketView && tab === 'workers') return lane === 'workers' || ticketViewLane(c, lane);
+      if (tab === 'alltickets') return ticketViewLane(c, lane);
       if (tab === 'ideas' || tab === 'smallbugs' || tab === 'coding' || tab === 'workers') return lane === tab;
       if (tab === 'archived') return c.trashed || otherLane(c);
       if (tab === 'inprogress') return classifyKanbanColumn(c) !== 'archived';
@@ -22661,10 +22670,10 @@
     };
     return { sessionId: _allTabSessionId, parentId: _allTabParentId,
       byId: _allTabById, laneFor, ticketFor: _ideaTicketFor, parentIds,
-      ideaTicketsOn: _ideaTicketsOn, ticketlessInAll, ticketView, ticketViewLane, matches,
+      ideaTicketsOn: _ideaTicketsOn, ticketlessInAll, ticketView, ticketViewLane, otherLane, matches,
       // Ticket view: the owner's own tickets share the page with the worker
       // fleet, so a busy queue cannot push a Features ticket off it.
-      priority: (c, tab) => ticketView && tab === 'workers' && ticketViewLane(laneFor(c)),
+      priority: (c, tab) => ticketView && tab === 'workers' && ticketViewLane(c),
       otherCount: rows.filter(c => sessionAllowed(c) && !c.trashed
         && _archiveEngineAllowsRow(c, engineFilter) && otherLane(c)).length };
   }
@@ -27082,17 +27091,12 @@
     const _ideaTicketFor = _sidebarLanes.ticketFor;
     const _allTabLaneFor = _sidebarLanes.laneFor;
     const _allTabCodingConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'coding');
-    // Sessions only get tickets when started from the UI, so someone who runs
-    // `claude` in a terminal would otherwise see "All 0" and find their work
-    // under Other. Past this size the user has a ticket habit and All is the
-    // curated list; below it, All has to mean all.
-    const _ticketlessRowsInAll = _sidebarLanes.ticketlessInAll;
     // Ticket view: the Workers list also carries the Features / Small bugs
     // sessions (and whatever else All showed), grouped under their tickets.
     const _ticketView = _sidebarLanes.ticketView;
     const _allTabWorkerConvs = _allTabConvs.filter(c => {
       const lane = _allTabLaneFor(c);
-      return lane === 'workers' || (_ticketView && _sidebarLanes.ticketViewLane(lane));
+      return lane === 'workers' || (_ticketView && _sidebarLanes.ticketViewLane(c, lane));
     });
     // The ticket a Workers-tab session is listed under. In Ticket view a
     // Features / Small bugs session belongs to its own (or its family's) idea
@@ -27107,10 +27111,7 @@
     };
     const _wkIdeaLaneCard = card => _ticketView && _allTabLaneFor(card) !== 'workers';
     const _allTabHermesMessageConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'messages');
-    const _allTabOtherConvs = _allTabConvs.filter(c => {
-      const lane = _allTabLaneFor(c);
-      return lane === 'messages' || lane === 'other' || (_ideaTicketsOn && !_ticketlessRowsInAll && lane === 'coding');
-    });
+    const _allTabOtherConvs = _allTabConvs.filter(_sidebarLanes.otherLane);
     // One row per ticket, represented by its most recent session. Liveness
     // arrives separately from archive rows: using it to pick a representative
     // swaps the whole card on status polls. Keep identity/order on recency,
@@ -27120,7 +27121,7 @@
       // CCC-285: 'alltickets' is Features + Small bugs in one list.
       const laneOf = c => {
         const l = _allTabLaneFor(c);
-        return lane === 'alltickets' && (l === 'ideas' || l === 'smallbugs' || (l === 'coding' && _ticketlessRowsInAll))
+        return lane === 'alltickets' && _sidebarLanes.ticketViewLane(c, l)
           ? 'alltickets' : l;
       };
       const inWindow = c => !!_qActive || _archiveWindowAllowsRow(c, _ipWindowCutoff);

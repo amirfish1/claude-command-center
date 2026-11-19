@@ -807,7 +807,7 @@
     const preSend = preSendPreviewFor(sid);
     if (sending && (!entry.sending || preSend !== entry.preSend)) {
       entry.sendAt = Date.now(); entry.at = entry.sendAt; entry.userAt = entry.sendAt;
-      entry.text = ''; entry.sessionState = null;
+      entry.text = ''; entry.sessionState = null; entry.turnCompleteAt = 0;
     }
     entry.preSend = preSend; entry.sending = sending;
     return sending;
@@ -831,7 +831,13 @@
     if (c.last_event_type === 'user'
         && _ultraFreshTime(c.modified || c.mtime) > Math.max(entry.at, entry.sourceAt || 0)) return c;
     const reopened = !!entry.sendAt || entry.userAt > _ultraFreshTime(c.modified || c.mtime);
-    return Object.assign({}, c, waiting, { last_assistant_text: entry.text, last_assistant_preview: entry.text,
+    const completeAt = entry.turnCompleteAt;
+    const settled = completeAt && completeAt >= _ultraFreshWaitingAt(c)
+      && !c.needs_approval && !c.question_waiting
+      ? { _turnCompleteAt: completeAt, state: c.is_live ? 'idle' : 'ended', sidecar_status: 'idle',
+          sidecar_in_flight: false, sidecar_tool: null, pending_tool: null, sidecar_ts: completeAt / 1000 }
+      : {};
+    return Object.assign({}, c, waiting, settled, { last_assistant_text: entry.text, last_assistant_preview: entry.text,
       _ownerInputAt: ownerInputAt,
       archived: reopened && !(c.explicitly_archived ?? c.idea_ticket?.explicitly_archived) ? false : c.archived,
       session_state: entry.sessionState || (entry.text === c.last_assistant_text ? c.session_state : null), last_event_type: 'assistant',
@@ -1053,8 +1059,15 @@
     const entry = sharedState._ultraFresh.entries.get(sid);
     if (!entry || generation !== sharedState._ultraFresh.generation) return;
     const userAt = _ultraFreshTime(update.user_ts);
-    if (userAt > entry.userAt) { entry.userAt = userAt; entry.text = ''; }
-    if (update.clear) { _ultraFreshPaint(sid); return; }
+    const hadDecision = entry.sessionState?.next_actions?.length > 1;
+    if (userAt > entry.userAt) {
+      entry.userAt = userAt; entry.text = ''; entry.sessionState = null; entry.turnCompleteAt = 0;
+    }
+    if (update.clear) {
+      _ultraFreshPaint(sid);
+      if (hadDecision) _scheduleSidebarRender({ lifecycle: true });
+      return;
+    }
     const text = String(update.text || '');
     if (!text.trim()) return;
     const at = _ultraFreshTime(update.ts) || (update.live ? Date.now() : 0);
@@ -1063,7 +1076,7 @@
     if (line && line < (entry.line || 0) && at <= entry.at) return;
     const sameText = text === entry.text;
     const incomingState = update.session_state || _ultraFreshParseState(text);
-    const enrich = sameText && !!incomingState;
+    const enrich = sameText && (!!incomingState || (update.turn_complete && !entry.turnCompleteAt));
     if (at < entry.at && !enrich) return;
     const base = _ultraFreshRow(sid);
     if (!base) return;
@@ -1075,10 +1088,15 @@
         && Math.max(at, sourceAt) < _ultraFreshTime(base.modified || base.mtime)) return;
     if (text === entry.text && at === entry.at && !enrich) return;
     if (line) entry.line = line;
+    if (update.turn_complete) entry.turnCompleteAt = at;
+    else if (!sameText) entry.turnCompleteAt = 0;
     entry.text = text; entry.at = Math.max(entry.at, at); entry.sourceAt = sourceAt;
     // A duplicate raw pane frame must not erase richer server metadata.
     entry.sessionState = sameText && !update.session_state && entry.sessionState
       ? entry.sessionState : incomingState;
+    if (hadDecision !== (entry.sessionState?.next_actions?.length > 1)) {
+      _scheduleSidebarRender({ lifecycle: true });
+    }
     if (!entry.paintQueued) {
       entry.paintQueued = true;
       requestAnimationFrame(() => {
@@ -2285,6 +2303,9 @@
     // An owner event supersedes the entire older activity snapshot, not
     // just its waiting flags: its idle state would erase Working as well.
     if (c._ownerInputAt && _ultraFreshWaitingAt(ov) <= c._ownerInputAt) return c;
+    if (c._turnCompleteAt && _ultraFreshWaitingAt(ov) <= c._turnCompleteAt
+        && ov.last_event_type === 'assistant' && !ov.pending_tool
+        && !ov.needs_approval && !ov.question_waiting) return c;
     const merged = Object.assign({}, c);
     const ovTs = ov.sidecar_ts || 0;
     const rowTs = merged.sidecar_ts || 0;
@@ -7511,7 +7532,12 @@
       } else return null;
     } else if (!actions.length || !next || info.kind !== 'next' || (info.next || info.text) !== next) return null;
     const source = { sid, actions, action: actions[0], key: JSON.stringify([sid, next, actions]) };
-    if (info.kind === 'plan' || build) {
+    if (c.session_state?.numbered_choice === true) {
+      if (!c.last_assistant_text) return null;
+      source.transcriptText = c.last_assistant_text;
+      source.key = JSON.stringify([source.key, source.transcriptText]);
+    }
+    if (info.kind === 'plan' || build || c.session_state?.numbered_choice === true) {
       source.investigation = next;
       const check = sharedState._rowInvestigationChecks.get(sid);
       if (!candidateOnly && (!check || check.key !== source.key || !check.idle
@@ -7528,6 +7554,7 @@
     const blocks = last.blocks || [];
     if (blocks.some(b => ['tool_use', 'tool_call'].includes(b.kind || b.type))) return false;
     const text = blocks.filter(b => (b.kind || b.type) === 'text').map(b => b.text || '').join('\n');
+    if (source.transcriptText !== undefined) return last.turn_complete === true && text === source.transcriptText;
     const state = _ultraFreshParseState(text);
     const current = state && rowQuickActionSource({ session_id: source.sid, state: 'idle',
       last_event_type: 'assistant', last_assistant_text: text, session_state: state }, true);
