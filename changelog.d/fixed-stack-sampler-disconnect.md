@@ -1,0 +1,1 @@
+- Collect Python stack snapshots with less overhead and stop sampling when the diagnostic client disconnects.

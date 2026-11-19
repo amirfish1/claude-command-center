@@ -1,6 +1,7 @@
 """Focused latency contracts for a freshly spawned Claude session."""
 
 import importlib
+import os
 import time
 from unittest import mock
 from types import SimpleNamespace
@@ -729,3 +730,31 @@ def test_preassigned_session_id_resolves_spawn_log_without_scanning(tmp_path, mo
     got = morning_launch._resolve_spawn_log_for_session("claude-preassigned")
 
     assert got == (str(log_path), True)
+
+
+def test_spawn_log_ids_reuse_reads_and_refresh_after_append_or_replacement(tmp_path, monkeypatch):
+    log = tmp_path / "spawn.jsonl"
+    log.write_text('{"session_id":"original"}\n', encoding="utf-8")
+    parser_open = mock.Mock(wraps=open)
+    monkeypatch.setattr(morning_launch, "open", parser_open, raising=False)
+
+    ids = morning_launch._log_session_ids(log)
+    assert ids == {"original"}
+    ids.clear()
+    assert morning_launch._log_session_ids(log) == {"original"}
+    assert parser_open.call_count == 1
+
+    with log.open("a", encoding="utf-8") as stream:
+        stream.write('{"session_id":"resumed"}\n')
+    assert morning_launch._log_session_ids(log) == {"original", "resumed"}
+    assert morning_launch._log_session_ids(log, max_lines=1) == {"original"}
+
+    prev = log.stat()
+    replacement = tmp_path / "replacement.jsonl"
+    replacement.write_text('{"session_id":"replaced"}\n{"session_id":"resumed"}\n', encoding="utf-8")
+    assert replacement.stat().st_size == prev.st_size
+    os.utime(replacement, ns=(prev.st_atime_ns, prev.st_mtime_ns))
+    replacement.replace(log)
+    assert morning_launch._log_session_ids(log) == {"replaced", "resumed"}
+    log.unlink()
+    assert morning_launch._log_session_ids(log) == set()

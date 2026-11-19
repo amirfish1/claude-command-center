@@ -150,8 +150,7 @@ def test_ticket_window_membership_changes_still_rebuild_with_stable_projection_c
 def test_owned_clone_preserves_json_normalization_and_byte_budget():
     original = [{'session_id': 'live', 'mtime': 1,
                  'session_state': {'values': (1, 2), 'keys': {1: 'one'}}}]
-    raw, spans = replay.encode_rows(original, {'live'})
-    entry = replay.compressed_entry(raw, spans)
+    entry = replay.encode_rows(original, {'live'})
     normalized = replay.replay_rows(entry, {'live': original[0]})
     cloned = replay.with_owned_rows(entry, normalized)
     assert replay.entry_weight(cloned) == replay.entry_weight(entry) + len(cloned[3])
@@ -261,9 +260,10 @@ def test_offsets_cover_empty_interleaved_and_multibyte_runs():
     for rows in ([], [{'id': 'a'}], [{'id': 'live'}],
                  [{'id': 'a'}, {'id': 'live', 'title': 'שלום'},
                   {'id': 'b'}, {'id': 'other'}, {'id': 'c'}]):
-        raw, spans = replay.encode_rows(rows, {'live', 'other'})
+        entry = replay.encode_rows(rows, {'live', 'other'})
+        raw = entry[0]
         assert raw == json.dumps(rows).encode()
-        assert replay.encode_replay((raw, spans), rows) == raw
+        assert replay.encode_replay(entry, rows) == raw
 
 
 def test_encoding_chunks_reuse_only_exact_projected_values(monkeypatch):
@@ -274,9 +274,9 @@ def test_encoding_chunks_reuse_only_exact_projected_values(monkeypatch):
     overlays = {'65', '149'}
 
     def check(current):
-        raw, spans = replay.encode_rows(current, overlays)
+        entry = replay.encode_rows(current, overlays)
+        raw = entry[0]
         assert raw == json.dumps(current).encode()
-        entry = replay.compressed_entry(raw, spans)
         encoded = replay.compress_replay(entry, current)
         assert zlib.decompress(encoded + b'\x03\x00', -15) == raw
         return entry
@@ -310,9 +310,9 @@ def test_encoding_reuses_unchanged_runs_after_membership_changes(monkeypatch, ch
     overlays = {'session-500'}
 
     def check(current):
-        raw, spans = replay.encode_rows(current, overlays)
+        entry = replay.encode_rows(current, overlays)
+        raw, spans, _ = entry
         assert raw == json.dumps(current).encode()
-        entry = replay.compressed_entry(raw, spans)
         assert zlib.decompress(replay.compress_replay(entry, current) + b'\x03\x00', -15) == raw
         assert [current[index]['session_id'] for index, _, _ in spans] == [
             row['session_id'] for row in current if row['session_id'] in overlays]
@@ -341,7 +341,7 @@ def test_encoding_caps_runs_without_identity_boundaries(monkeypatch):
     encode = replay._encoded_run
     monkeypatch.setattr(replay, '_encoded_run', lambda rows: (lengths.append(len(rows)), encode(rows))[1])
     rows = [{'title': str(i)} for i in range(1000)]
-    raw, _ = replay.encode_rows(rows, set())
+    raw, _, _ = replay.encode_rows(rows, set())
     assert raw == json.dumps(rows).encode()
     assert len(lengths) > 1 and max(lengths) <= 256
 
@@ -351,9 +351,10 @@ def test_encoding_chunk_budget_and_custom_json_values(monkeypatch):
     monkeypatch.setattr(replay, '_RUN_CACHE', cache)
     rows = [{'id': 'archive', 'state': {'values': (1, 2), 'keys': {1: 'one'}}}]
     for _ in range(2):
-        raw, spans = replay.encode_rows(rows, set())
+        entry = replay.encode_rows(rows, set())
+        raw = entry[0]
         assert raw == json.dumps(rows).encode()
-        assert replay.replay_rows(replay.compressed_entry(raw, spans), {}) == json.loads(raw)
+        assert replay.replay_rows(entry, {}) == json.loads(raw)
     assert len(cache) == 0 and cache.bytes == 0
 
     class CustomDict(dict):
@@ -362,9 +363,9 @@ def test_encoding_chunk_budget_and_custom_json_values(monkeypatch):
 
     monkeypatch.setattr(replay, '_RUN_CACHE', server.ByteBudgetCache(1 << 20, 10))
     rows[0]['state'] = CustomDict(value=1)
-    first, _ = replay.encode_rows(rows, set())
+    first, _, _ = replay.encode_rows(rows, set())
     rows[0]['state']['value'] = 2
-    second, _ = replay.encode_rows(rows, set())
+    second, _, _ = replay.encode_rows(rows, set())
     assert first != second and second == json.dumps(rows).encode()
     assert len(replay._RUN_CACHE) == 0
 
@@ -373,8 +374,7 @@ def test_compressed_runs_preserve_json_and_fresh_overlay_and_envelope():
     for rows in ([], [{'id': 'a'}], [{'id': 'live'}],
                  [{'id': 'a'}, {'id': 'live', 'title': 'שלום'},
                   {'id': 'b'}, {'id': 'other'}, {'id': 'c'}]):
-        raw, spans = replay.encode_rows(rows, {'live', 'other'})
-        entry = replay.compressed_entry(raw, spans)
+        entry = replay.encode_rows(rows, {'live', 'other'})
         changed = copy.deepcopy(rows)
         for row in changed:
             if row['id'] in {'live', 'other'}:

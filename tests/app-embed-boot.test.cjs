@@ -5,6 +5,7 @@ const vm = require('node:vm');
 const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 const boot = fs.readFileSync(path.join(root, 'static/app-embed-boot.js'), 'utf8');
+const entry = fs.readFileSync(path.join(root, 'static/conversation-entry.js'), 'utf8');
 const {functionSource} = require('./conversation-source.cjs');
 const timedRead = functionSource('_fetchConvJsonTimed');
 
@@ -113,4 +114,36 @@ test('readiness requires the actual selected composer and sends only one painted
   assert.equal(h.messages[0].cached, true);
   assert.equal(h.messages[0].conv, 'session-1');
   assert.deepEqual(drawn, ['ccc:conversation-drawn']);
+});
+
+test('conversation entry initializes once the pane is parsed, while extensions are still loading', async () => {
+  const calls = [];
+  const document = new EventTarget();
+  document.readyState = 'loading';
+  const window = {
+    CCCConversationHost: {
+      createHost({documentReady}) {
+        documentReady(() => calls.push('initialize'));
+        return {
+          bindConversationInteractions: () => calls.push('interactions'),
+          bindConversationControls: () => calls.push('controls'),
+          bindConversationViews: () => calls.push('views'),
+          wireEmbedHostMessages: () => calls.push('messages'),
+          bootConversationPopoutDirect: () => calls.push('conversation'),
+        };
+      },
+    },
+  };
+  const initialized = vm.runInNewContext(entry, {window, document, console});
+  assert.deepEqual(calls, [], 'wait until the parser has built the pane');
+  document.readyState = 'interactive';
+  document.dispatchEvent(new Event('readystatechange'));
+  await new Promise(setImmediate);
+  const expected = ['interactions', 'controls', 'views', 'initialize', 'messages', 'conversation'];
+  assert.deepEqual(calls, expected);
+  document.dispatchEvent(new Event('DOMContentLoaded'));
+  document.readyState = 'complete';
+  document.dispatchEvent(new Event('readystatechange'));
+  await initialized;
+  assert.deepEqual(calls, expected, 'later lifecycle events must not start the pane again');
 });

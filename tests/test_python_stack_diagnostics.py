@@ -1,6 +1,7 @@
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -93,6 +94,40 @@ def test_debug_stacks_endpoint_returns_samples(monkeypatch):
     assert body["pid"] == os.getpid()
     assert len(body["samples"]) == 2
     assert any("serve_forever" in t["stack"] for t in body["samples"][0]["threads"])
+
+
+def test_debug_stacks_stops_after_client_disconnect(monkeypatch, tmp_path):
+    entered = threading.Event()
+    disconnected = threading.Event()
+    snapshot = server._python_stack_snapshot
+
+    def coordinated_snapshot():
+        entered.set()
+        assert disconnected.wait(10)
+        return snapshot()
+
+    monkeypatch.setattr(server, "_python_stack_snapshot", coordinated_snapshot)
+    log_path = tmp_path / "stacks.log"
+    with log_path.open("w") as log:
+        monkeypatch.setattr(server, "_PYTHON_STACK_DUMP_FILE", log)
+        httpd = server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), server.CommandCenterHandler)
+        httpd.daemon_threads = False
+        serving = threading.Thread(target=httpd.serve_forever)
+        serving.start()
+        try:
+            with socket.create_connection(httpd.server_address, timeout=10) as conn:
+                conn.sendall(b"GET /api/debug/stacks?samples=40&interval=0 HTTP/1.0\r\n\r\n")
+                assert entered.wait(10)
+                conn.shutdown(socket.SHUT_WR)
+        finally:
+            disconnected.set()
+            httpd.shutdown()
+            httpd.server_close()
+            serving.join()
+
+    contents = log_path.read_text()
+    assert "sample 1/40" in contents
+    assert "sample 2/40" not in contents
 
 
 @pytest.mark.skipif(not hasattr(signal, "SIGUSR2"), reason="SIGUSR2 is unavailable")

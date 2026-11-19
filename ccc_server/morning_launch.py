@@ -111,6 +111,13 @@ def _scan_session_id_in_log(log_path, max_lines=20):
     return None
 
 
+_SPAWN_LOG_IDS_CACHE = ByteBudgetCache(max_bytes=2 << 20, max_entries=4096)
+
+
+def _spawn_log_signature(info):
+    return (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns, info.st_size)
+
+
 def _log_session_ids(log_path, max_lines=30):
     """Return the set of session_ids that appear in a log's first N lines.
 
@@ -121,6 +128,11 @@ def _log_session_ids(log_path, max_lines=30):
     """
     sids = set()
     try:
+        key = (os.fspath(log_path), max_lines)
+        before = _spawn_log_signature(os.stat(log_path))
+        cached = _SPAWN_LOG_IDS_CACHE.get(key)
+        if cached is not None and cached[0] == before:
+            return set(cached[1])
         with open(log_path, "r") as f:
             for i, line in enumerate(f):
                 if i >= max_lines:
@@ -135,6 +147,13 @@ def _log_session_ids(log_path, max_lines=30):
                 s = ev.get("session_id")
                 if s:
                     sids.add(s)
+            after = _spawn_log_signature(os.fstat(f.fileno()))
+        # Several live streams can resolve the same retained log. Cache only
+        # IDs from a stable read so appends and replacements are seen at once.
+        if before == after:
+            chars = len(key[0]) + sum(len(str(sid)) for sid in sids)
+            weight = 512 + 4 * chars + 96 * len(sids)
+            _SPAWN_LOG_IDS_CACHE.put(key, (before, frozenset(sids)), weight)
     except OSError:
         return sids
     return sids

@@ -1,0 +1,1 @@
+- Reuse session IDs from unchanged spawn logs so live sidebar updates do less repeated work.

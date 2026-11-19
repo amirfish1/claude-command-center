@@ -14,8 +14,10 @@
   window.CCCToolResultImagesCardHtml = conversation._toolResultImagesCardHtml;
   window.CCCKimiTidyToolGroups = conversation._kimiTidyToolGroups;
   window.openFolderViewer = conversation.openFolderViewer;
+  // The parser has built the pane at "interactive". DOMContentLoaded also
+  // waits for deferred extensions, which can load independently of the pane.
   if (document.readyState === 'loading') await new Promise(resolve => {
-    document.addEventListener('DOMContentLoaded', resolve, { once: true });
+    document.addEventListener('readystatechange', resolve, { once: true });
   });
   conversation.bindConversationInteractions();
   conversation.bindConversationControls();
