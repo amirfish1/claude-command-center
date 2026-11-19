@@ -8214,10 +8214,16 @@
     if (!t || !t.ref || !ideaTicketsOn()) return '';
     const n = Number(t.sessions || 0);
     const label = t.ref + (n > 1 ? ' \u00b7 ' + n + ' sessions' : '');
+    const parts = String(t.ref).match(/^([A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*)-(\d+)(?::.*|-[a-z].*)?$/);
+    const compact = parts
+      ? ({ IDEAS: 'I', 'SMALL-BUGS': 'SB' }[parts[1]] || parts[1]) + '-' + parts[2]
+      : t.ref;
     return '<span class="ccc-idea-ticket" role="button" tabindex="0" data-role="idea-ticket"'
       + ' data-idea-ref="' + escapeAttr(t.ref) + '"'
+      + ' aria-label="' + escapeAttr('Open ticket ' + label) + '"'
       + ' title="' + escapeAttr('Ticket ' + t.ref + (n > 1 ? ' (' + n + ' sessions)' : '') + ' - click to open') + '">'
-      + escapeHtml(label) + '</span>';
+      + '<span class="ticket-label-full">' + escapeHtml(label) + '</span>'
+      + '<span class="ticket-label-compact" aria-hidden="true">' + escapeHtml(compact) + '</span></span>';
   }
 
   // Shared conversation-core.js: workerOriginBadgeHtml.

@@ -32417,6 +32417,16 @@ body.has-mobile-bottom-nav .jobs-add-actions button { min-height: 40px; padding:
   line-height: 1.5;
 }
 .conv-idea-line .ccc-idea-ticket { margin: 0; }
+.ccc-idea-ticket .ticket-label-compact { display: none; }
+/* Follow the resizable sidebar, including a narrow pane on a wide screen. */
+@container sidebar (max-width: 460px) {
+  .conv-item .ccc-idea-ticket .ticket-label-full { display: none; }
+  .conv-item .ccc-idea-ticket .ticket-label-compact { display: inline; }
+}
+@media (max-width: 600px) {
+  .conv-item .ccc-idea-ticket .ticket-label-full { display: none; }
+  .conv-item .ccc-idea-ticket .ticket-label-compact { display: inline; }
+}
 
 /* Ordered model routing controls in Settings > Engines. */
 .model-routing-card { display: block; padding: 16px 14px; }
