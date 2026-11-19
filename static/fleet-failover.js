@@ -19,7 +19,6 @@
   var banner;
   var panel;
   var section;
-  var recall;
   var details = Object.create(null);
   var detailsAt = Object.create(null);
   var detailErrors = Object.create(null);
@@ -254,11 +253,6 @@
       banner.hidden = true;
       banner.replaceChildren();
     }
-    if (recall) {
-      var count = groups.reduce(function (n, g) { return n + g.sessions.length; }, 0);
-      recall.hidden = !count || !popupAllowed();
-      recall.textContent = 'Session limits · ' + count;
-    }
     document.dispatchEvent(new Event('cccFleetRendered'));
   }
 
@@ -446,18 +440,6 @@
     banner.hidden = true;
     banner.setAttribute('aria-live', 'polite');
     document.body.appendChild(banner);
-    recall = document.createElement('button');
-    recall.type = 'button';
-    recall.id = 'cccFleetLimitsRecall';
-    recall.className = 'ccc-fleet-btn ccc-fleet-recall';
-    recall.hidden = true;
-    recall.addEventListener('click', function () {
-      var settings = document.getElementById('settingsBtn') || document.getElementById('settingsHubBtn');
-      if (settings) settings.click();
-      tab.click();
-      poll(true);
-    });
-    document.body.appendChild(recall);
     [banner, panel].forEach(function (host) { host.addEventListener('click', click); host.addEventListener('change', change); });
     var observer = new MutationObserver(function () { if (panelVisible()) poll(true); });
     observer.observe(section, { attributes: true, attributeFilter: ['class'] });
