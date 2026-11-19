@@ -18153,9 +18153,10 @@ def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=
     extra_sids = {_archive_row_sid(r) for r in state["extra"] if isinstance(r, dict)}
     # Use the same anchored window as the full response, so a later delta
     # cannot remove an unchanged older parent from the client's ordered ids.
+    ancestor_ids = set()
     visible = _archive_list_window_rows(
         list(state["base"]) + list(state["extra"]), cutoff,
-        idea_tickets_by_sid, _session_graph.parent_snapshot(),
+        idea_tickets_by_sid, _session_graph.parent_snapshot(), ancestor_ids=ancestor_ids,
     )
     seen = set()
     for r in visible:
@@ -18166,7 +18167,7 @@ def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=
         ids.append(sid)
         if (row_rev.get(sid, track_since) > since_ver or sid in ctx_sids
                 or sid in extra_sids
-                or not _archive_list_window_allows_row(r, cutoff, idea_tickets_by_sid)):
+                or id(r) in ancestor_ids):
             changed.append(r)
     projected = _archive_list_project_rows(changed, window="all", now=now)
     payload = {
@@ -18772,7 +18773,7 @@ def _archive_list_parent_ids(row, parents):
     ) if isinstance(value, str) and value}
 
 
-def _archive_list_window_rows(rows, cutoff, idea_tickets_by_sid, parents):
+def _archive_list_window_rows(rows, cutoff, idea_tickets_by_sid, parents, *, ancestor_ids=None):
     """Window activity together with its loaded parent-topic context."""
     source_rows = [row for row in (rows or []) if isinstance(row, dict)]
     window_rows = [row for row in source_rows
@@ -18797,6 +18798,11 @@ def _archive_list_window_rows(rows, cutoff, idea_tickets_by_sid, parents):
                         or parent.get("explicitly_archived", ticket.get("explicitly_archived"))):
                     continue
                 included.add(parent_sid)
+                # Delta responses resend these older ancestors even when
+                # unchanged. Record membership during selection so they do
+                # not recheck timestamps for every visible row afterward.
+                if ancestor_ids is not None:
+                    ancestor_ids.add(id(parent))
                 window_rows.append(parent)
     return window_rows
 
