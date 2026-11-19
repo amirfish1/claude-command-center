@@ -69,11 +69,11 @@ def test_write_spawn_marker_records_typed_metadata(monkeypatch, tmp_path):
 
 
 def test_infer_session_spawned_via_rules():
-    assert server._infer_session_spawned_via({}) == "terminal"
-    assert server._infer_session_spawned_via({"spawned_via": ""}) == "terminal"
-    assert server._infer_session_spawned_via({"spawned_via": "-"}) == "terminal"
-    assert server._infer_session_spawned_via({"spawned_via": "not available"}) == "terminal"
-    assert server._infer_session_spawned_via(None) == "terminal"
+    assert server._infer_session_spawned_via({}) == "unknown"
+    assert server._infer_session_spawned_via({"spawned_via": ""}) == "unknown"
+    assert server._infer_session_spawned_via({"spawned_via": "-"}) == "unknown"
+    assert server._infer_session_spawned_via({"spawned_via": "not available"}) == "unknown"
+    assert server._infer_session_spawned_via(None) == "unknown"
 
     assert server._infer_session_spawned_via({"spawned_via": "api"}) == "api"
     assert server._infer_session_spawned_via({"spawned_via": "ui"}) == "ui"
@@ -325,3 +325,22 @@ def test_concurrent_marker_rescan_is_single_flight(monkeypatch, tmp_path):
         assert server._load_spawn_markers() == first
     finally:
         server._SPAWN_MARKER_SCAN_LOCK.release()
+
+
+def test_origin_replaces_legacy_terminal_with_helper_evidence():
+    rows = [
+        {"id": "helper", "session_cwd": "/tmp/te-side-example", "spawned_via": "terminal"},
+        {"id": "model", "slug": "-tmp-wt-model-example", "spawned_via": "terminal"},
+        {"id": "missing", "spawned_via": "terminal"},
+        {"id": "real", "spawn_caller": "Terminal"},
+        {"id": "named", "display_name": "te-side-example", "session_cwd": "/projects/app"},
+    ]
+    server._apply_spawn_markers(rows, markers={})
+    assert [r["spawned_via"] for r in rows] == [
+        "tokeneconomizer", "watchtower-model", "unknown", "terminal", "unknown"]
+    # Recorded launch provenance wins over directory conventions and old defaults.
+    assert server._infer_session_spawned_via(
+        {"id": "helper", "cwd": "/tmp/te-side-example", "spawned_via": "terminal"},
+        markers={"helper": {"spawned_via": "api"}}) == "api"
+    assert server._infer_session_spawned_via(
+        {"id": "real"}, markers={"real": {"spawned_via": "terminal"}}) == "terminal"

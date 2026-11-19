@@ -1,0 +1,1 @@
+Sessions with missing launch attribution now show Unknown instead of claiming Terminal. TokenEconomizer and WatchTower model helpers are identified from their working-directory conventions, including older cached sessions; their origin tooltips explain the inference and missing parent evidence.

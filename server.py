@@ -6219,8 +6219,6 @@ def _apply_spawn_markers(rows, markers=None):
             markers = _load_spawn_markers()
         except Exception:
             markers = {}
-    if not markers:
-        return rows
     for row in rows or []:
         if not isinstance(row, dict):
             continue
@@ -6242,6 +6240,10 @@ def _apply_spawn_markers(rows, markers=None):
             mparent = marker.get("parent_session_id")
             if mparent and mparent != str(sid) and not row.get("parent_session_id"):
                 row["parent_session_id"] = mparent
+            # Re-resolve legacy defaults after the complete row (cwd, caller,
+            # parent) is available, including cached archive projections.
+            if str(row.get("spawned_via") or "").lower() in ("", "terminal", "unknown"):
+                row["spawned_via"] = _infer_session_spawned_via(row, sid=sid, markers=markers)
             mruntime = marker.get("runtime")
             if mruntime and not row.get("runtime"):
                 row["runtime"] = mruntime
@@ -6327,22 +6329,16 @@ def _merge_spawn_marker(session_id, *, lane="", kind="", spawned_via="",
 
 
 def _infer_session_spawned_via(row_or_entry, sid=None, markers=None, spawn_registry_by_sid=None):
-    """Guarantees a concrete, non-empty spawned_via attribution for any session.
+    """Resolve launch attribution without treating missing evidence as Terminal.
 
-    Never returns null, empty, or 'not available'. Priority:
-    1. Explicit spawned_via already present and valid on the row/entry.
-    2. Explicit spawned_via in spawn registry.
-    3. Explicit spawned_via in spawn markers (~/.claude/command-center/spawn-markers/<sid>.json).
-    4. Subagent if parent_session_id is present.
-    5. WatchTower if lane-w*, lane-e*, [watchtower], or [wt].
-    6. Resumed if continued_from_session_id or resume- prefix.
-    7. UI if recorded in spawn registry but missing via.
-    8. Terminal for all sessions started outside CCC (interactive CLI in terminal).
+    Markers and registry records are durable launch evidence. Legacy row-level
+    ``terminal`` values may be an old default, so only retain those when backed
+    by a marker, a registry record, or an observed terminal caller.
     """
     if not isinstance(row_or_entry, dict):
-        return "terminal"
+        return "unknown"
     via = str(row_or_entry.get("spawned_via") or "").strip().lower()
-    if via and via not in ("none", "null", "-", "not-available", "not available", "unknown"):
+    if via and via not in ("none", "null", "-", "not-available", "not available", "unknown", "terminal"):
         return via
     sid_clean = str(sid or row_or_entry.get("session_id") or row_or_entry.get("id") or "").strip()
     if spawn_registry_by_sid is not None and sid_clean and sid_clean in spawn_registry_by_sid:
@@ -6360,6 +6356,18 @@ def _infer_session_spawned_via(row_or_entry, sid=None, markers=None, spawn_regis
         marker_via = str(markers[sid_clean].get("spawned_via") or "").strip().lower()
         if marker_via:
             return marker_via
+    # Disposable helper directories are also recognized by the lane resolver.
+    # This is a directory convention, not evidence of a particular parent.
+    cwd = str(row_or_entry.get("session_cwd") or row_or_entry.get("folder_path")
+              or row_or_entry.get("cwd") or "")
+    helper_name = Path(cwd).name if cwd else str(row_or_entry.get("slug") or "")
+    for prefix, origin in (("te-side", "tokeneconomizer"), ("wt-model", "watchtower-model")):
+        pattern = (r"^" if cwd else r"(?:^|-)") + prefix + r"-[A-Za-z0-9_-]+$"
+        if re.search(pattern, helper_name):
+            return origin
+    caller = str(row_or_entry.get("spawn_caller") or "").strip().lower()
+    if caller in ("terminal", "iterm", "iterm2", "kitty", "alacritty", "wezterm"):
+        return "terminal"
     parent = row_or_entry.get("parent_session_id")
     if parent and str(parent).strip():
         return "subagent"
@@ -6377,7 +6385,7 @@ def _infer_session_spawned_via(row_or_entry, sid=None, markers=None, spawn_regis
         return "resumed"
     if spawn_registry_by_sid is not None and sid_clean and sid_clean in spawn_registry_by_sid:
         return "ui"
-    return "terminal"
+    return "unknown"
 
 
 def _tag_spawned_via_in_registry(pid=None, session_id=None, via=""):

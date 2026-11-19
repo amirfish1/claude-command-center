@@ -5250,7 +5250,7 @@
         el.title = 'Launched by ' + row.spawn_caller + ' (recorded at session start).';
         return;
       } else {
-        via = 'terminal';
+        via = 'unknown';
       }
     }
     const info = sharedState.RAIL_SPAWNED_VIA_LABELS[via];
