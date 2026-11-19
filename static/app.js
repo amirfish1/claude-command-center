@@ -24336,6 +24336,7 @@
       // important to hide in the hover row or bury in the branch slot. (CCC-294)
       const branchSlotHtml = worktreeBadgeHtml + branch;
       const sessionIdChipHtml = sidebarSessionIdChipHtml(c);
+      const helperOriginHtml = window.CCCSessionOrigin ? CCCSessionOrigin.sidebarHtml(c) : '';
       // The session this one continued from folds into this row; its
       // meta-row ⤴ from: chip is the way back to it. A nested cluster child
       // skips the ↳ spawned-by chip — its parent is the row directly above.
@@ -24661,6 +24662,7 @@
         +     (_waEngine === 'claude' || ideaAvatarHtml ? '' : '<span class="wa-engine" title="' + escapeAttr(_waEngine) + '">' + getEngineSvg(_waEngine) + '</span>') + '</span></div>'
         // Ticket identity stays inside the avatar.
         +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + (ideaAvatarHtml ? '' : ideaTicketChipHtml(c)) + (_waPreview ? '<span class="wa-explanation-label" data-status="' + escapeAttr(_waExplanationLabel.toLowerCase()) + '">' + escapeHtml(_waExplanationLabel) + (_waExplanationLabel === '✓' ? '' : ':') + '</span> ' : '') + escapeHtml(_waPreview) + '</span>' + _waStatus + waDecisionContextHtml + '</div>'
+        + helperOriginHtml
         + '<div class="wa-row-footer">' + sessionIdChipHtml + waParentHtml + sessionDriverHtml(c) + '</div>'
         + (window.CCCSessionRecaps ? window.CCCSessionRecaps.render(c, _outView) : '')
         + '</div>'
@@ -24746,6 +24748,7 @@
           + '</div>'
           + evergreenMetaRowHtml
         + '</div>'
+        + helperOriginHtml
         + (_childLaneRow || _ideaStack ? '' : (_ideaRowRef ? _ideaRowLine(c) : _uxFixesWorkerHistoryHtml(c, _wkFacts ? _wkFacts.ticketRef : '')))
         + mobileDetailsHtml
         + (window.CCCSessionRecaps ? window.CCCSessionRecaps.render(c, _outView) : '')

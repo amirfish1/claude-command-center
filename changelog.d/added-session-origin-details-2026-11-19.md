@@ -1,0 +1,1 @@
+Session origin now expands beneath the title in the Metadata rail to show launcher, helper purpose, parent navigation, and the evidence behind recorded or inferred attribution. Helper sessions also show their tool and purpose in search and sidebar rows. Missing parent links are explained separately from missing launcher attribution.

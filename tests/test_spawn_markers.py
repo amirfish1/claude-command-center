@@ -344,3 +344,12 @@ def test_origin_replaces_legacy_terminal_with_helper_evidence():
         markers={"helper": {"spawned_via": "api"}}) == "api"
     assert server._infer_session_spawned_via(
         {"id": "real"}, markers={"real": {"spawned_via": "terminal"}}) == "terminal"
+
+
+def test_archive_list_keeps_origin_purpose_metadata():
+    projected = server._archive_list_project_row({
+        "id": "helper", "spawned_via": "tokeneconomizer",
+        "spawned_kind": "loop-check", "spawn_caller": "helper-launcher",
+    })
+    assert projected["spawned_kind"] == "loop-check"
+    assert projected["spawn_caller"] == "helper-launcher"

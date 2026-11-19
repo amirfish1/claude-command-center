@@ -1,0 +1,43 @@
+/* Origin lives in Metadata, immediately below the active session title. */
+.session-origin {
+  margin-top: 8px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.session-origin[hidden] { display: none; }
+.session-origin > summary {
+  display: list-item;
+  width: fit-content;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.session-origin > summary:hover { background: var(--surface-2); }
+.session-origin > summary:focus-visible,
+.session-origin-parent:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.session-origin-label { color: var(--text); }
+.session-origin-basis { margin-left: 6px; color: var(--text-muted); font-size: 11px; }
+.session-origin-body { margin-top: 10px; }
+.session-origin-body dl { display: grid; grid-template-columns: 66px minmax(0, 1fr); gap: 8px; margin: 0; }
+.session-origin-body dt { color: var(--text-muted); }
+.session-origin-body dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.session-origin-body p { margin: 10px 0 0; color: var(--text-muted); font-size: 11px; }
+.session-origin-missing { color: var(--text-muted); }
+.session-origin-parent {
+  padding: 0; border: 0; background: transparent;
+  font: inherit; color: var(--accent); text-align: left;
+  text-decoration: underline; text-underline-offset: 3px;
+  cursor: pointer; overflow-wrap: anywhere;
+}
+.conv-session-origin-summary {
+  margin: 3px 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}

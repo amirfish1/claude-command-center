@@ -5261,6 +5261,12 @@
     if (window.CCCFreeRuntime && typeof CCCFreeRuntime.renderRailRuntime === 'function') {
       CCCFreeRuntime.renderRailRuntime(row);
     }
+    if (window.CCCSessionOrigin && CCCSessionOrigin.render(row, {
+      document,
+      findSession: sid => (sharedState.conversationsData || []).find(c => c && (c.session_id === sid || c.id === sid))
+        || (Array.isArray(sharedState.archiveData) ? sharedState.archiveData : []).find(c => c && (c.session_id === sid || c.id === sid)),
+      openSession: sid => (0, sharedState.selectConversation)(sid),
+    })) return;
     if (!el) return;
     if (!row) { el.hidden = true; el.textContent = ''; el.removeAttribute('title'); return; }
     let via = String(row.spawned_via || '').trim().toLowerCase();

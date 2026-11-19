@@ -82,6 +82,7 @@
 <link rel="stylesheet" media="print" onload="this.media='all'" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@600;700&display=swap">
 <title>Command Center for Claude, Codex, Cursor, and Anti-Gravity</title>
 <link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/session-origin.css">
 <link rel="stylesheet" href="/static/jobs-tab.css">
 <link rel="stylesheet" href="/static/savings.css">
 <link rel="stylesheet" href="/static/headroom-bars.css">
@@ -1682,6 +1683,10 @@
                        context is hard-capped at 60 chars); show whatever got
                        cut off here, unbold, instead of losing it. -->
                   <div class="status-rail-title-rest" id="statusRailTitleRest" hidden></div>
+                  <details id="railSessionOrigin" class="session-origin" hidden>
+                    <summary id="railSpawnedVia" data-role="rail-spawned-via"></summary>
+                    <div id="railSessionOriginBody" class="session-origin-body"></div>
+                  </details>
                   <!-- Transcript size (CCC-475) — moved out of the pane
                        titlebar; filled by updatePaneHeader for the active pane. -->
                   <div class="status-rail-size" id="statusRailSize" hidden></div>
@@ -1697,7 +1702,7 @@
                    (updateConvProcessIndicator). Placed as the first chip in
                    this row (not a separate label elsewhere) so it reads as
                    one of "the chips" alongside Vercel/Screen/dev-server. -->
-              <div class="rail-actions" id="railActions" data-role="rail-actions"><span class="conv-pane-proc ccc-breadcrumb-proc status-rail-conn-proc" data-role="rail-proc" title="How CCC is connected to this session"></span><span id="railSpawnedVia" data-role="rail-spawned-via" hidden></span></div>
+              <div class="rail-actions" id="railActions" data-role="rail-actions"><span class="conv-pane-proc ccc-breadcrumb-proc status-rail-conn-proc" data-role="rail-proc" title="How CCC is connected to this session"></span></div>
               <!-- Subagents panel — surfaces Claude Code Task tool spawns for
                    the currently selected session. Populated by
                    updateSubagentsPanel() in app.js whenever the active
@@ -4369,6 +4374,7 @@
 <script src="/static/conversation-content.js"></script>
 <script src="/static/conversation-panes.js"></script>
 <script src="/static/conversation-input.js"></script>
+<script src="/static/session-origin.js"></script>
 <script src="/static/conversation-core.js"></script>
 <script src="/static/conversation-defaults.js"></script>
 <script src="/static/conversation-preferences.js"></script>
