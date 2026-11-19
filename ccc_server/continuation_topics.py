@@ -622,6 +622,7 @@ def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnos
         return
     conn = _connection(conn)
     names = _core._load_session_name_overrides() if names is None else names
+    read_version = (conn.total_changes, conn.execute('PRAGMA data_version').fetchone()[0])
     batch = _Batch(conn, rows, names)
     batch.capture_root_titles = wait_for_writer
     # Native title reads may perform I/O. Never do them while holding the
@@ -634,13 +635,19 @@ def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnos
     flushed = False
     try:
         with _transaction(conn, wait=wait_for_writer):
-            # Re-read after acquiring the lock so a concurrent explicit rename
-            # wins over the earlier snapshot. Reuse only external title reads.
-            current = _Batch(conn, rows, names)
-            current.allow_native_lookup = False
-            current.titles = batch.titles
-            current.cached_titles = batch.cached_titles
-            _project_topics(current, rows)
+            # Check after acquiring the writer lock: data_version catches peer
+            # commits and total_changes catches writes on this connection.
+            # An unchanged database needs neither another bulk read nor a
+            # second resolution pass. A concurrent rename still wins through
+            # the fresh batch, reusing only the earlier external title reads.
+            if read_version == (conn.total_changes, conn.execute('PRAGMA data_version').fetchone()[0]):
+                current = batch
+            else:
+                current = _Batch(conn, rows, names)
+                current.allow_native_lookup = False
+                current.titles = batch.titles
+                current.cached_titles = batch.cached_titles
+                _project_topics(current, rows)
             current.flush()
             flushed = True
     except sqlite3.OperationalError as exc:
