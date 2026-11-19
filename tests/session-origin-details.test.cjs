@@ -23,6 +23,20 @@ test('missing parent is not treated as missing launcher', () => {
   assert.match(o.note, /Direct launches may have no parent/);
 });
 
+test('native creating client is recorded without guessing the launch interface', () => {
+  const ccc = describe({id:'one', launch_originator:'claude-command-center'});
+  assert.equal(ccc.launcher, 'CCC');
+  assert.equal(ccc.status, 'Recorded');
+  assert.doesNotMatch(ccc.launcher, /dashboard|Terminal/);
+  const worker = describe({id:'two', spawned_via:'watchtower', launch_originator:'watchtower_app_worker'});
+  assert.equal(worker.status, 'Recorded');
+  assert.match(worker.evidence, /Transcript records/);
+  const exec = describe({id:'three', launch_originator:'codex_exec'});
+  assert.equal(exec.launcher, 'Codex exec');
+  assert.match(exec.evidence, /calling tool is not identified/);
+  assert.equal(exec.parentId, '');
+});
+
 test('unknown, explicit caller, parent and continuation evidence stay distinct', () => {
   assert.equal(describe({id:'one', thread_source:'user', source:'codex'}).status, 'Unknown');
   assert.equal(describe({id:'one', spawn_caller:'helper.py'}).launcher, 'helper.py');

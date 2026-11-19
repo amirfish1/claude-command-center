@@ -6,7 +6,7 @@ from pathlib import Path
 _MAX_BYTES = 262144
 
 
-def launch_metadata(session_id, markers, transcript_path=None, registry=None):
+def launch_metadata(session_id, markers, transcript_path=None, registry=None, worker_origin=None):
     sid = str(session_id or "")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}", sid):
         raise ValueError("invalid session id")
@@ -16,6 +16,12 @@ def launch_metadata(session_id, markers, transcript_path=None, registry=None):
         value = (registry or {}).get(key)
         if isinstance(value, str) and value:
             result[key] = value
+    if worker_origin:
+        result["worker_origin"] = worker_origin
+        result.setdefault("spawned_via", "watchtower")
+        parent = worker_origin.get("parent_session_id")
+        if isinstance(parent, str) and parent and parent != sid:
+            result.setdefault("parent_session_id", parent)
     for source, target in (("spawned_via", "spawned_via"), ("caller", "spawn_caller"),
                            ("kind", "spawned_kind"), ("parent_session_id", "parent_session_id")):
         if isinstance(marker.get(source), str) and marker[source]:
