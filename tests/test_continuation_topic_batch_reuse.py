@@ -88,3 +88,50 @@ def test_peer_ancestry_correction_before_lock_changes_the_resolved_root(store, m
                              ('child',)).fetchone() == ('other',)
     finally:
         peer.close()
+
+
+def test_new_session_prefetches_only_unknown_database_records(store, monkeypatch):
+    store.execute('CREATE TABLE session_meta (sid TEXT PRIMARY KEY, continuation_origin TEXT)')
+    store.commit()
+    established = [{'session_id': f'old-{i}', 'display_name': f'Topic {i}'}
+                   for i in range(600)]
+    topics.attach_topics(established, conn=store, names={})
+    fetch = topics._sqlite_fetch_rows
+    reads = []
+
+    def observed(conn, sql, params, columns):
+        if 'WITH wanted(sid)' in sql:
+            reads.extend(params)
+        return fetch(conn, sql, params, columns)
+
+    monkeypatch.setattr(topics, '_sqlite_fetch_rows', observed)
+    rows = established + [{'session_id': 'new', 'continued_from_session_id': 'old-599'}]
+    topics.attach_topics(rows, conn=store, names={})
+    assert reads == ['new']
+    assert rows[-1]['continuation_topic_title'] == 'Topic 599'
+    assert store.execute('SELECT root_sid FROM continuation_topics WHERE sid=?',
+                         ('new',)).fetchone() == ('old-599',)
+
+
+def test_cached_records_do_not_hide_peer_rename_on_new_session(store):
+    peer = sqlite3.connect(store.execute('PRAGMA database_list').fetchone()[2])
+    try:
+        peer.execute("UPDATE continuation_topics SET topic_title='Renamed' WHERE sid='root'")
+        peer.commit()
+        rows = [{'session_id': 'new', 'continued_from_session_id': 'root'}]
+        topics.attach_topics(rows, conn=store, names={})
+        assert rows[0]['continuation_topic_title'] == 'Renamed'
+    finally:
+        peer.close()
+
+
+def test_cached_records_re_resolve_existing_children_when_root_edge_appears(store):
+    topics.attach_topics([{'session_id': 'older', 'display_name': 'Older topic'},
+                          {'session_id': 'child', 'continued_from_session_id': 'root'}],
+                         conn=store, names={})
+    rows = [{'session_id': 'root', 'continued_from_session_id': 'older'},
+            {'session_id': 'child', 'continued_from_session_id': 'root'},
+            {'session_id': 'new'}]
+    topics.attach_topics(rows, conn=store, names={})
+    assert rows[1]['continuation_topic_root_session_id'] == 'older'
+    assert rows[1]['continuation_topic_title'] == 'Older topic'

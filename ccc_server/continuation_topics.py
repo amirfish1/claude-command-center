@@ -284,7 +284,7 @@ def _origin(row):
 
 
 class _Batch:
-    def __init__(self, conn, rows, names):
+    def __init__(self, conn, rows, names, *, reuse_cached=False):
         self.conn = conn
         self.rows = {_sid(row): row for row in rows if _sid(row)}
         self.names = names
@@ -297,7 +297,18 @@ class _Batch:
         self.allow_native_lookup = True
         self.capture_root_titles = False
         self.ancestors = set()
-        self._prefetch(list(self.rows))
+        if reuse_cached:
+            token = _db_state_token(conn)
+            with _CACHE_LOCK:
+                previous = _TOPIC_CACHE.get('token')
+                if token is not None and previous is not None and previous[:-1] == token[:-1]:
+                    # A new row misses the projected cache without changing
+                    # established database records. Resolve the whole batch
+                    # normally, but fetch only records not already read under
+                    # this database token. External titles remain live inputs.
+                    self.records = dict(_TOPIC_CACHE.get('records') or {})
+                    self.indexed_origins = dict(_TOPIC_CACHE.get('indexed_origins') or {})
+        self._prefetch([sid for sid in self.rows if sid not in self.records])
 
     def _prefetch(self, sids, chunk=500):
         # Read both indexed inputs in one bounded result. Separate reads of
@@ -595,6 +606,8 @@ def _store_cache(conn, batch, rows):
         if _TOPIC_CACHE.get('token') != token:
             _TOPIC_CACHE['token'] = token
             _TOPIC_CACHE['entries'] = {}
+        _TOPIC_CACHE['records'] = dict(batch.records)
+        _TOPIC_CACHE['indexed_origins'] = dict(batch.indexed_origins)
         entries = _TOPIC_CACHE['entries']
         for item in rows:
             sid = _sid(item)
@@ -635,7 +648,7 @@ def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnos
     conn = _connection(conn)
     names = _core._load_session_name_overrides() if names is None else names
     read_version = (conn.total_changes, conn.execute('PRAGMA data_version').fetchone()[0])
-    batch = _Batch(conn, rows, names)
+    batch = _Batch(conn, rows, names, reuse_cached=not wait_for_writer)
     batch.capture_root_titles = wait_for_writer
     # Native title reads may perform I/O. Never do them while holding the
     # shared index's writer lock, including on a cold archive projection.

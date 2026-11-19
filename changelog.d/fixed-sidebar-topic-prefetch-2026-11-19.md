@@ -1,0 +1,1 @@
+- Reuse unchanged topic records when new sessions arrive, avoiding repeated archive-wide database reads while preserving continuation and title corrections.
