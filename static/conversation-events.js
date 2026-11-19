@@ -1051,6 +1051,13 @@
         // the same wording in the "Earlier ask" sticky — reading textContent
         // back would lose any pasted-image path that's been replaced with <img>.
         const _isPinned = div.classList.contains('is-pinned-in-sticky');
+        // Queue launch instructions are machine boilerplate, often several
+        // screens long. Keep the complete prompt available without making
+        // the reader scroll through it before reaching the actual work.
+        const workerQueue = !ev.peer && !ev.skill
+          && /^\s*Drain the ([A-Za-z0-9_-]+) WatchTower queue\b/i.exec(cleanedText);
+        const workerInstructions = workerQueue
+          && /\bYour worker id is [A-Za-z0-9_-]+\b/i.test(cleanedText);
         let textHtml;
         if (notification) {
           textHtml = renderTaskNotificationBlock(notification, cleanedText, true);
@@ -1061,6 +1068,14 @@
           textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">' + bridgeSenderHtml + renderDevinHandoffCard(ev) + '</div>';
         } else if (compactCardHtml) {
           textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">' + bridgeSenderHtml + compactCardHtml + '</div>';
+        } else if (workerInstructions) {
+          div.classList.add('worker-instructions-event');
+          textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">'
+            + '<details class="worker-instructions-card"><summary>'
+            + escapeHtml(workerQueue[1]) + ' worker instructions</summary>'
+            + '<div class="worker-instructions-body">'
+            + (_codexPane ? renderCodexUserText(cleanedText) : linkifyPastedImages(escapeHtml(cleanedText)))
+            + '</div></details>' + (_isPinned ? imagesHtml : '') + '</div>';
         } else if (cleanedText) {
           if (_isPinned) {
             // For the pinned original-ask bubble: split into first sentence + rest so

@@ -4612,6 +4612,31 @@
     padding-left: 0; border-left: 0; font-size: 11.5px;
   }
   .event.user_text.task-notification-event .task-notification-card .tn-event::before { content: "· "; }
+  .conversations-view .event.user_text.worker-instructions-event {
+    width: fit-content !important; max-width: 100% !important; box-sizing: border-box;
+    margin-left: 0 !important; padding: 6px 12px !important;
+    border: 1px solid var(--border) !important; border-radius: 6px;
+    background: var(--surface) !important; box-shadow: none !important;
+  }
+  .conversations-view .event.user_text.worker-instructions-event .user-msg {
+    max-height: none !important; overflow: visible !important; font-weight: 400;
+    max-width: none !important; margin: 0; padding: 0 !important;
+    background: none !important; border: 0 !important; align-self: stretch;
+  }
+  .worker-instructions-card { white-space: normal; font-size: 13px; }
+  .worker-instructions-card > summary {
+    cursor: pointer; min-height: 32px; line-height: 1.5; padding: 6px 0;
+    box-sizing: border-box; color: var(--text-muted);
+    overflow-wrap: anywhere;
+  }
+  .worker-instructions-card > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .worker-instructions-body {
+    white-space: pre-wrap; overflow-wrap: anywhere; max-height: min(420px, 60dvh);
+    overflow: auto; padding-top: 8px; line-height: 1.55; color: var(--text);
+  }
+  @media (pointer: coarse) {
+    .worker-instructions-card > summary { min-height: 44px; padding: 12px 0; }
+  }
   /* Task id is noise for a one-line ping — keep it in the data-raw-text/title,
      not on screen. The "↗ agent transcript" button surfaces on row hover so
      the subagent's full transcript stays one click away (CCC-112). */
