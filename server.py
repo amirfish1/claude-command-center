@@ -47234,26 +47234,24 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         return self._send_archive_list_body(raw, gzip_body, etag_val)
 
     def _send_archive_list_body(self, raw, gzip_body, etag_val, extra_headers=()):
-        accept_gzip = "gzip" in (self.headers.get("Accept-Encoding", "") or "").lower()
+        from ccc_server.list_encoding import representation
         if self.headers.get("If-None-Match") == etag_val:
             self.send_response(304)
             self.send_header("ETag", etag_val)
+            self.send_header("Vary", "Accept-Encoding")
             self._send_list_server_timing()
             self.end_headers()
             return 304
-        if accept_gzip and gzip_body is not None:
-            body, enc = gzip_body, "gzip"
-        else:
-            body, enc = raw, None
+        body, enc = representation(raw, gzip_body, self.headers.get("Accept-Encoding", ""))
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("ETag", etag_val)
+        self.send_header("Vary", "Accept-Encoding")
         for hk, hv in extra_headers:
             self.send_header(hk, hv)
         if enc:
             self.send_header("Content-Encoding", enc)
-            self.send_header("Vary", "Accept-Encoding")
         self._send_list_server_timing()
         self.end_headers()
         try:
