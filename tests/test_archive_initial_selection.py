@@ -154,3 +154,12 @@ def test_http_uses_version_only_for_stale_allowed_sources(monkeypatch, stale_ok,
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=5)
+
+
+def test_initial_recent_topic_retains_old_children_beyond_recent_500():
+    rows = [{'session_id': str(i), 'mtime': i} for i in range(600)]
+    rows[0]['parent_session_id'] = '599'
+    rows[1]['parent_session_id'] = '0'
+    result = select(rows)
+    assert {'599', '0', '1'} <= set(ids(result))
+    assert len(result[0]) == 502

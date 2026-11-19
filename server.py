@@ -18809,37 +18809,48 @@ def _archive_list_parent_ids(row, parents):
     ) if isinstance(value, str) and value}
 
 
+def _archive_list_family_rows(rows, selected, idea_tickets_by_sid, parents, *, context_ids=None):
+    """Keep loaded family context together without making unrelated rows recent."""
+    by_sid = {_archive_row_sid(row): row for row in rows}
+    children = {}
+    for row in rows:
+        for pid in _archive_list_parent_ids(row, parents):
+            children.setdefault(pid, []).append(row)
+    result = list(selected)
+    included = {_archive_row_sid(row) for row in result}
+    index = 0
+    while index < len(result):
+        row = result[index]
+        index += 1
+        sid = _archive_row_sid(row)
+        related = [by_sid.get(pid) for pid in _archive_list_parent_ids(row, parents)]
+        related.extend(children.get(sid, ()))
+        for member in related:
+            if member is None:
+                continue
+            mid = _archive_row_sid(member)
+            ticket = idea_tickets_by_sid.get(mid) or member.get("idea_ticket") or {}
+            if (mid in included or member.get("trashed")
+                    or member.get("explicitly_archived", ticket.get("explicitly_archived"))):
+                continue
+            included.add(mid)
+            if context_ids is not None:
+                context_ids.add(id(member))
+            result.append(member)
+    return result
+
+
 def _archive_list_window_rows(rows, cutoff, idea_tickets_by_sid, parents, *, ancestor_ids=None):
-    """Window activity together with its loaded parent-topic context."""
+    """Window activity together with its loaded ancestors and child lanes."""
     source_rows = [row for row in (rows or []) if isinstance(row, dict)]
     window_rows = [row for row in source_rows
                    if _archive_list_window_allows_row(row, cutoff, idea_tickets_by_sid)]
     if cutoff is not None:
-        # A recent lane must not arrive without its older topic. Preserve
-        # loaded ancestor rows before projection; the client cannot restore
-        # parents that the API's time window has already discarded.
-        by_sid = {str(row.get("session_id") or row.get("id") or ""): row
-                  for row in source_rows}
-        included = {str(row.get("session_id") or row.get("id") or "")
-                    for row in window_rows}
-        index = 0
-        while index < len(window_rows):
-            row = window_rows[index]
-            index += 1
-            sid = str(row.get("session_id") or row.get("id") or "")
-            for parent_sid in _archive_list_parent_ids(row, parents):
-                parent = by_sid.get(parent_sid)
-                ticket = idea_tickets_by_sid.get(parent_sid) or (parent or {}).get("idea_ticket") or {}
-                if (not parent or parent_sid in included or parent.get("trashed")
-                        or parent.get("explicitly_archived", ticket.get("explicitly_archived"))):
-                    continue
-                included.add(parent_sid)
-                # Delta responses resend these older ancestors even when
-                # unchanged. Record membership during selection so they do
-                # not recheck timestamps for every visible row afterward.
-                if ancestor_ids is not None:
-                    ancestor_ids.add(id(parent))
-                window_rows.append(parent)
+        # Both directions matter: a visible topic retains its old lanes and
+        # earlier continuation legs, just as a recent lane retains its topic.
+        # Delta responses must resend unchanged context members as well.
+        window_rows = _archive_list_family_rows(
+            source_rows, window_rows, idea_tickets_by_sid, parents, context_ids=ancestor_ids)
     return window_rows
 
 
@@ -19773,19 +19784,8 @@ def _archive_list_initial_selection(rows, window, now, parents, ideas, version):
     recent = sorted(selected, key=_archive_list_row_ts, reverse=True)[:500]
     wanted = {id(row) for row in recent}
     wanted.update(id(row) for row in selected if row.get("pinned"))
-    by_sid = {_archive_row_sid(row): row for row in selected}
-    initial = [row for row in selected if id(row) in wanted]
-    index = 0
-    while index < len(initial):
-        row = initial[index]
-        index += 1
-        for parent_sid in _archive_list_parent_ids(row, parents):
-            parent = by_sid.get(parent_sid)
-            ticket = ideas.get(parent_sid) or (parent or {}).get("idea_ticket") or {}
-            if (parent is not None and id(parent) not in wanted and not parent.get("trashed")
-                    and not parent.get("explicitly_archived", ticket.get("explicitly_archived"))):
-                wanted.add(id(parent))
-                initial.append(parent)
+    initial = _archive_list_family_rows(
+        selected, [row for row in selected if id(row) in wanted], ideas, parents)
 
     if key is not None:
         seconds = {"8h": 28800, "1d": 86400, "7d": 604800}.get(_archive_list_window(window))

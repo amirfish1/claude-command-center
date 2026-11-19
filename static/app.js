@@ -7294,6 +7294,42 @@
     }
     return result;
   }
+  // Time windows choose roots by recency, then retain their loaded family.
+  // Keep this separate from lane/search anchors: those filters still choose
+  // which unrelated topics belong in the view.
+  function sidebarRowsWithWindowFamilies(rows, pool) {
+    const result = sidebarRowsWithParentAnchors(rows, pool);
+    const idOf = row => String(row && (row.session_id || row.id) || '').trim();
+    const byId = new Map((pool || []).map(row => [idOf(row), row]));
+    const included = new Set(result.map(idOf));
+    if (Array.from(byId.keys()).every(id => included.has(id))) return result;
+    const children = new Map();
+    const parentsOf = row => [...new Set([
+      row.parent_session_id, row.hermes_parent_session_id,
+      row.hermes_continued_from, continuationParentId(row),
+    ].filter(Boolean).map(String))];
+    for (const row of byId.values()) {
+      if (_isOtherUtilityRow(row)) continue;
+      for (const pid of parentsOf(row)) {
+        if (!children.has(pid)) children.set(pid, []);
+        children.get(pid).push(row);
+      }
+    }
+    for (let i = 0; i < result.length; i++) {
+      const row = result[i];
+      if (_isOtherUtilityRow(row)) continue;
+      const related = parentsOf(row).map(pid => byId.get(pid))
+        .concat(children.get(idOf(row)) || []);
+      for (const member of related) {
+        if (!member || included.has(idOf(member)) || member.trashed
+            || (member.explicitly_archived ?? member.idea_ticket?.explicitly_archived)
+            || _isOtherUtilityRow(member)) continue;
+        included.add(idOf(member));
+        result.push(member);
+      }
+    }
+    return result;
+  }
   let _f2ContinuationEdgesCache = conversationInitializers._f2ContinuationEdgesCache();
 
   // Shared conversation-core.js: _f2ContinuationEdges.
@@ -23253,10 +23289,7 @@
     ).trim();
     // Index child sessions once so each row can list its own lanes and those
     // of its continuation ancestors without rescanning every session.
-    // Built from whatever rows are loaded
-    // in this render (active + archived), so an orchestrator with children
-    // outside the current archive window will undercount until that window
-    // is widened — same limitation the chip above already has.
+    // Window selection retains old family members before this index is built.
     const _sessionChildrenById = new Map();
     _sessionProvenanceById.forEach((row) => {
       if (_isOtherUtilityRow(row)) return;
@@ -25079,7 +25112,8 @@
     // window above) so a first-class Hermes conversation never gets windowed
     // out of the active list regardless of age.
     const _visibleSessionConvs = _hasFolderChips
-      ? (_ipWindowCutoff ? _sessionConvs.filter(c => _archiveWindowAllowsRow(c, _ipWindowCutoff)) : _sessionConvs)
+      ? (_ipWindowCutoff ? sidebarRowsWithWindowFamilies(
+        _sessionConvs.filter(c => _archiveWindowAllowsRow(c, _ipWindowCutoff)), _sessionConvs) : _sessionConvs)
       : _sessionConvs;
     const _groupChatWindowTs = (chat) => {
       const raw = chat && (chat.last_activity || chat.last_mtime || chat.started_at || 0);
@@ -43126,7 +43160,7 @@
       ? archiveRows.filter(c => _archiveWindowAllowsRow(c, _arcWindowCutoff)
         || isRecentOpenAskRow(c) || _rowHasApprovalAsk(c))
       : archiveRows;
-    const _windowed = q ? _windowCandidates : sidebarRowsWithParentAnchors(_windowCandidates, archiveRows);
+    const _windowed = q ? _windowCandidates : sidebarRowsWithWindowFamilies(_windowCandidates, archiveRows);
     // Never filter by folder — the folder picker controls grouping and the
     // active-chip highlight only. Hiding sessions from other repos breaks
     // worktree sessions and "by time" cross-repo views.
