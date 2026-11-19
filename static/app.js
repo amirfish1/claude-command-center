@@ -45078,22 +45078,18 @@
   }
 
   function updRenderPromo() {
-    // Show the two newest curated feature promos (WHATS_NEW_FEATURES is
-    // newest-first) so the update sells itself; "see all" opens the full
-    // What's New modal with mockups.
     const $promo = document.getElementById('updPromo');
     const $list = document.getElementById('updPromoList');
-    if (!$promo || !$list || typeof WHATS_NEW_FEATURES === 'undefined') return;
-    const features = WHATS_NEW_FEATURES.slice(0, 2);
-    if (!features.length) return;
-    $list.innerHTML = features.map((f) =>
+    if (!$promo || !$list) return;
+    // Only advertise changes in this update, never the general feature catalog.
+    const commits = (updCheckData && updCheckData.incoming_commits) || [];
+    $promo.hidden = !commits.length;
+    $list.innerHTML = commits.map((c) =>
       '<div class="upd-promo-item">' +
-        '<span class="promo-tag">' + f.tag + '</span>' +
-        '<span class="promo-title">' + f.title + '</span>' +
-        '<span class="promo-date">' + f.date + '</span>' +
+        '<span class="promo-title">' + escapeHtml(c.subject || '') + '</span>' +
+        '<span class="promo-date">' + escapeHtml(c.date || '') + '</span>' +
       '</div>'
     ).join('');
-    $promo.hidden = false;
   }
 
   function updOpenModal() {
@@ -45187,8 +45183,8 @@
         if (data.paths && data.paths.length) {
           msg += '\n\nUncommitted paths:\n  ' + data.paths.slice(0, 8).join('\n  ');
         }
-        if ((data.error || '').indexOf('local changes') !== -1) {
-          msg += '\n\nCommit or stash the changes in the install directory and try again.';
+        if (data.paths && data.paths.length) {
+          msg += '\n\nLocal work was preserved. Finish or move the conflicting edits before retrying.';
         } else if ((data.error || '').indexOf('not main') !== -1) {
           msg += '\n\nSwitch the install clone to the main branch and try again.';
         } else if ((data.error || '').indexOf('not a git clone') !== -1) {

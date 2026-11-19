@@ -328,7 +328,7 @@ def test_a_nonzero_wt_stop_alone_is_tolerated(harness):
 
 # --- the pre-flight guards stay in front of all of it ------------------------
 
-def test_dirty_tree_refuses_before_touching_watchtower(tmp_path, monkeypatch):
+def test_conflicting_dirty_tree_refuses_before_touching_watchtower(tmp_path, monkeypatch):
     log = []
     sub = _SubprocessShim(lambda cmd, kw: _completed(cmd, 0), log)
     _install_tree(tmp_path)
@@ -337,6 +337,10 @@ def test_dirty_tree_refuses_before_touching_watchtower(tmp_path, monkeypatch):
         log.append(("git", list(args)))
         if args[0] == "status":
             return 0, " M server.py\n", ""
+        if args[:2] == ["rev-parse", "--abbrev-ref"]:
+            return 0, "main\n", ""
+        if args[0] == "merge":
+            return 1, "", "local changes would be overwritten"
         return 0, "", ""
 
     monkeypatch.setattr(server, "_install_dir", lambda: tmp_path)
@@ -347,7 +351,7 @@ def test_dirty_tree_refuses_before_touching_watchtower(tmp_path, monkeypatch):
     res = server._self_update()
 
     assert res["ok"] is False
-    assert res["error"] == "local changes present"
+    assert "local changes would be overwritten" in res["error"]
     assert res["paths"] == ["server.py"]
     # Nothing external ran: no installer, no daemon bounce, no worker probe.
     assert sub.calls == []

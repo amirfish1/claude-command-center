@@ -22290,7 +22290,8 @@ def _git_commits_behind(force=False):
             and (now - _GIT_BEHIND_CACHE["ts"]) < _GIT_BEHIND_TTL):
         return _GIT_BEHIND_CACHE["data"]
     d = _install_dir()
-    data = {"behind": None, "error": None, "sha": None, "compare_url": None}
+    data = {"behind": None, "error": None, "sha": None, "compare_url": None,
+            "commits": []}
     if not (d / ".git").exists():
         data["error"] = "not a git clone"
     else:
@@ -22307,6 +22308,14 @@ def _git_commits_behind(force=False):
                     data["behind"] = int((out or "").strip() or "0")
                 except ValueError:
                     data["error"] = "unparsable rev-list output"
+            rc, log, _ = _git(
+                ["log", "-8", "--format=%H%x09%cs%x09%s", "HEAD..origin/main"],
+                d, timeout=10)
+            if rc == 0:
+                for line in (log or "").splitlines():
+                    parts = line.split("\t", 2)
+                    if len(parts) == 3:
+                        data["commits"].append(dict(zip(("sha", "date", "subject"), parts)))
             rc, sha, _ = _git(["rev-parse", "HEAD"], d, timeout=10)
             if rc == 0 and (sha or "").strip():
                 data["sha"] = sha.strip()
@@ -22592,9 +22601,7 @@ def _self_update():
     rc, out, err = _git(["status", "--porcelain"], d)
     if rc != 0:
         return {"ok": False, "error": f"git status failed: {err or 'rc={}'.format(rc)}"}
-    if out.strip():
-        paths = [ln[3:] for ln in out.splitlines() if len(ln) > 3]
-        return {"ok": False, "error": "local changes present", "paths": paths}
+    paths = [ln[3:] for ln in out.splitlines() if len(ln) > 3]
     rc, branch, err = _git(["rev-parse", "--abbrev-ref", "HEAD"], d)
     if rc != 0:
         return {"ok": False, "error": f"git rev-parse failed: {err or 'rc={}'.format(rc)}"}
@@ -22608,10 +22615,13 @@ def _self_update():
     # symlink to a developer's working clone, where a reset would silently
     # drop local commits that have not been pushed yet. On the release
     # channel the target is a tag, so an older tag is a no-op (no downgrade).
-    rc, _, err = _git(["merge", "--ff-only", "--quiet", tgt["target"]], d)
+    # Git preserves unrelated edits and refuses overlapping tracked/untracked
+    # files. Disable the user's autostash setting: updating must never hide or
+    # replay unfinished work, even if their normal merge workflow does so.
+    rc, _, err = _git(["merge", "--ff-only", "--no-autostash", "--no-overwrite-ignore", "--quiet", tgt["target"]], d)
     if rc != 0:
         return {"ok": False, "error": f"git merge --ff-only failed: {err or 'rc={}'.format(rc)}",
-                "channel": tgt["channel"], "target": tgt["target"]}
+                "paths": paths, "channel": tgt["channel"], "target": tgt["target"]}
     rc, sha, _ = _git(["rev-parse", "HEAD"], d)
     # Bust the 6h cache so the post-restart UI reads fresh latest/current.
     _VERSION_CHECK_CACHE["ts"] = 0.0
@@ -36375,6 +36385,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             gb = _git_commits_behind(force=force)
             if gb is not None:
                 data["commits_behind"] = gb.get("behind")
+                data["incoming_commits"] = gb.get("commits", [])
                 if gb.get("compare_url"):
                     data["commits_compare_url"] = gb["compare_url"]
                 if gb.get("sha"):

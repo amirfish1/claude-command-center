@@ -2254,8 +2254,8 @@
 
 
   <!-- In-app update modal. Opened from #updPill when the local install is
-       behind the latest GitHub release. Runs `git reset --hard origin/main`
-       in the install dir and restarts the server in-place. -->
+       behind the update target. Fast-forwards the install directory and
+       restarts the server in-place, preserving unrelated local edits. -->
   <div id="updModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="updTitle">
     <div class="upd-backdrop" id="updBackdrop"></div>
     <div class="upd-dialog">
@@ -2265,15 +2265,16 @@
       <div class="upd-promo" id="updPromo" hidden>
         <div class="upd-promo-heading">What&rsquo;s in this update</div>
         <div id="updPromoList"></div>
-        <button type="button" class="upd-promo-more" id="updPromoMore">See all new features &rarr;</button>
       </div>
       <div class="upd-warning">
         Click <strong>Update now</strong> and CCC does the rest. There are no
-        commands to run. It first checks the update is safe (this install is a clean
-        git checkout on <code>main</code>), downloads the latest code, then
+        commands to run. It checks that this install is on <code>main</code> and
+        can fast-forward safely, downloads the latest code, then
         <strong>restarts itself</strong>: the dashboard and the execution
         worker come back on the new code automatically. If the check fails,
-        nothing is changed and the reason appears here. After the worker
+        your local work is preserved and the reason appears here. Unrelated
+        local edits can stay in place; conflicting edits stop the update.
+        After the worker
         restarts, queued work may show as <em>needs reconciliation</em> &mdash;
         one click on <strong>Reconcile</strong> in Settings &rarr; Maintenance.
         To restart the dashboard without updating, use <strong>Restart

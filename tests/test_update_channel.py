@@ -117,7 +117,7 @@ def test_self_update_fast_forwards_to_newest_tag(managed, monkeypatch):
     monkeypatch.setattr(server, "_restart_wt_daemon", lambda: {"ok": True})
     res = server._self_update()
     assert res["ok"] is True and res["target"] == "v1.10.0"
-    assert ["merge", "--ff-only", "--quiet", "v1.10.0"] in log
+    assert ["merge", "--ff-only", "--no-autostash", "--no-overwrite-ignore", "--quiet", "v1.10.0"] in log
 
 
 def test_release_channel_without_tags_does_not_merge(managed, monkeypatch):
