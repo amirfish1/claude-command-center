@@ -91,9 +91,13 @@ def test_formal_needs_approval_is_guaranteed():
 # an ended process cannot be parked in an LLM call waiting on the human, so a
 # trailing-question last turn on a dead session is a false positive.
 
-def test_ended_session_with_trailing_question_not_flagged():
+def test_ended_session_with_trailing_question_not_flagged(monkeypatch):
     """The core regression: an ended (is_live False) session whose last turn
     ends on a prose question must NOT be classified needs-you."""
+    def unexpected_score(_text):
+        pytest.fail("Attention feed scored prose from an ended session")
+
+    monkeypatch.setattr(server, "_score_soft_block", unexpected_score)
     item = server._classify_attention(_row("Want me to proceed?"))
     assert item is None or item.get("kind") not in (
         "question_blocked", "soft_block", "sidecar_waiting"), (

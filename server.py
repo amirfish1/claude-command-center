@@ -47967,7 +47967,7 @@ def _classify_attention(c):
         # last turn merely happened to end on a question. So both the guaranteed
         # hit and the prose soft-block require is_live; otherwise an ended session
         # is a false positive ("Needs you · awaiting your reply" on a corpse).
-        sb = _detect_soft_block(c)
+        sb = _detect_soft_block(c) if live else None
         if live and sb and sb.get("guaranteed"):
             _qt = sb.get("question_text") or ""
             return {
