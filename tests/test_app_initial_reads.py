@@ -59,6 +59,29 @@ def test_linked_app_outside_apps_root_is_ineligible(app,tmp_path):
     assert initial.read('linked',base) == {}
 
 
+def test_local_app_alias_and_local_file_link_keep_current_values(app):
+    base, folder = app
+    configure(folder, ['items.json'])
+    target = folder / 'current.json'
+    target.write_text('{"count":1}')
+    (folder / 'items.json').symlink_to(target)
+    (base / 'alias').symlink_to(folder, target_is_directory=True)
+    assert initial.read('alias', base) == {'/app-static/alias/items.json':'{"count":1}'}
+    target.write_text('{"count":2}')
+    assert initial.read('alias', base) == {'/app-static/alias/items.json':'{"count":2}'}
+
+
+def test_declared_nonregular_files_are_not_opened(app):
+    import os
+    base, folder = app
+    configure(folder, ['directory.json', 'pipe.json', 'valid.json'])
+    (folder / 'directory.json').mkdir()
+    if hasattr(os, 'mkfifo'):
+        os.mkfifo(folder / 'pipe.json')
+    (folder / 'valid.json').write_text('{}')
+    assert initial.read('demo', base) == {'/app-static/demo/valid.json':'{}'}
+
+
 def test_manifest_and_combined_size_are_bounded(app,monkeypatch):
     base,folder=app
     names=[f'item-{i}.json' for i in range(20)]

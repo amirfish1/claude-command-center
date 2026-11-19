@@ -19,8 +19,10 @@ def _small_file(path, root):
     # must not turn the HTML bootstrap into a new file-reading surface.
     try:
         resolved = path.resolve(strict=True)
-        resolved.relative_to(root.resolve())
-        if not resolved.is_file() or resolved.stat().st_size > MAX_FILE_BYTES:
+        # read() has already canonicalized and checked this app's root.
+        # Re-resolving it for every declared value repeats filesystem work.
+        resolved.relative_to(root)
+        if not resolved.is_file():
             return None
         with resolved.open('rb') as handle:
             body = handle.read(MAX_FILE_BYTES + 1)
@@ -38,7 +40,8 @@ def read(app_id, apps_dir):
     if folder is None:
         return {}
     try:
-        folder.resolve().relative_to(Path(apps_dir).resolve())
+        folder = folder.resolve(strict=True)
+        folder.relative_to(Path(apps_dir).resolve())
     except (OSError, ValueError, RuntimeError):
         return {}
     config = _small_file(folder / 'app.json', folder)
