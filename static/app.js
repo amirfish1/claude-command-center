@@ -45232,6 +45232,24 @@
     });
   }
 
+  function updRenderSyncLine(d) {
+    // Persistent sync status in the "…" menu, shown even when up to date
+    // so the behind state is always visible somewhere. Main-channel only;
+    // release installs hide the line.
+    const $line = document.getElementById('cccSyncLine');
+    const $status = document.getElementById('cccSyncStatus');
+    if (!$line || !$status || !d) return;
+    if (d.commits_behind === null || d.commits_behind === undefined) {
+      $line.hidden = true;
+      return;
+    }
+    const n = d.commits_behind;
+    $status.textContent = n > 0
+      ? 'origin/main: ' + n + ' commit' + (n === 1 ? '' : 's') + ' behind'
+      : (d.commits_behind_error ? 'origin/main: sync check failed' : 'origin/main: up to date');
+    $line.hidden = false;
+  }
+
   function updShowPillFor(d) {
     // Render the pill from a /api/version/check payload. Returns true when
     // an update (release or commits) is available.
@@ -45257,6 +45275,7 @@
       try {
         const r = await fetch('/api/version/check', { cache: 'no-store' });
         const d = await r.json();
+        updRenderSyncLine(d);
         if (d && ((d.ok && d.behind) || (d.commits_behind || 0) > 0)) {
           updShowPillFor(d);
           // Let the page settle before the modal takes focus.
@@ -45319,6 +45338,7 @@
       try {
         const r = await fetch('/api/version/check?force=1', { cache: 'no-store' });
         const d = await r.json();
+        updRenderSyncLine(d);
         if (d && ((d.ok && d.behind) || (d.commits_behind || 0) > 0)) {
           updShowPillFor(d);
           updOpenModal();
@@ -55893,6 +55913,8 @@
       groups.get(key).push(item);
     }
     for (const host of document.querySelectorAll('[data-local-ci-host]')) {
+      const statusLine = host.closest('.mobile-home-status');
+      const prevScrollLeft = statusLine ? statusLine.scrollLeft : 0;
       const focusedToggle = host.contains(document.activeElement) && document.activeElement.matches('.local-ci-mobile-toggle');
       const focused = host.contains(document.activeElement) ? document.activeElement.dataset.ciDismiss : null;
       const focusedGroup = host.contains(document.activeElement) && document.activeElement.matches('.local-ci-summary')
@@ -56123,6 +56145,7 @@
       }
       if (focused) [...host.querySelectorAll('[data-ci-dismiss]')].find(button => button.dataset.ciDismiss === focused)?.focus({preventScroll:true});
       if (focusedGroup) [...host.querySelectorAll('[data-ci-group]')].find(group => group.dataset.ciGroup === focusedGroup)?.querySelector('summary').focus({preventScroll:true});
+      if (statusLine && prevScrollLeft > 0) statusLine.scrollLeft = prevScrollLeft;
     }
     updateTimers();
   }
