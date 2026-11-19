@@ -9227,8 +9227,8 @@
 
   function _ideaAvatarHtml(c, mobile = false, childLane = false) {
     const ref = ideaTicketsOn() && c && c.idea_ticket && String(c.idea_ticket.ref || '');
-    // CCC-139: Small bugs rows get the same numbered avatar as Ideas.
-    const match = ref && ref.match(/^(IDEAS|SMALL-BUGS)-(\d+)$/);
+    // Named refs retain the same ticket number and avatar as bare refs.
+    const match = ref && ref.match(/^(IDEAS|SMALL-BUGS)-(\d+)(?:[:-][a-z0-9-]+)?$/);
     if (!match) {
       if (!childLane) return '';
       // Unticketed lanes use the same compact engine mark as ticketed lanes.

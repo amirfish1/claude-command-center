@@ -71,3 +71,24 @@ test('ticket numbers and ticket action stay above the repo background', () => {
   assert.match(markup, /conv-avatar-model/);
   assert.doesNotMatch(markup, /session-tier-cost/);
 });
+
+test('named ticket refs keep numbered avatars and suppress the redundant ticket line', () => {
+  const lineStart = source.indexOf('  function _ideaRowLine(');
+  const lineEnd = source.indexOf('\n  // A session row names its tickets', lineStart);
+  vm.runInContext(source.slice(lineStart, lineEnd), context);
+  for (const [ref, number] of [['IDEAS-42:render-session-list', '42'], ['SMALL-BUGS-7-fix-focus', '7']]) {
+    const row = {cwd: '/workspace/project', idea_ticket: {ref}};
+    for (const mobile of [false, true]) {
+      const markup = context._ideaAvatarHtml(row, mobile);
+      assert.ok(markup, ref);
+      assert.ok(markup.includes('conv-avatar-number">' + number + '</span>'));
+      assert.ok(markup.includes('data-idea-ref="' + ref + '"'));
+      assert.ok(markup.includes('aria-label="Open '));
+      assert.match(context._ideaAvatarHtml(row, mobile, true), /is-child-mini/);
+    }
+    assert.equal(context._ideaRowLine(row), '', 'the number replaces the chip on both row layouts');
+  }
+  for (const ref of ['IDEAS-not-a-number', 'IDEAS-42:', 'OTHER-42:render-session-list']) {
+    assert.equal(context._ideaAvatarHtml({idea_ticket: {ref}}), '');
+  }
+});
