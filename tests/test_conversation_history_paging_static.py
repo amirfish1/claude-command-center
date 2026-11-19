@@ -20,28 +20,6 @@ class TestConversationHistoryPagingStatic(unittest.TestCase):
         )
         self.assertIn("_takePrefetchedConversationTail(id)", fetch_js)
 
-    def test_archive_boot_shapes_saved_row_and_restores_before_full_render(self):
-        """Metadata-safe one-row shaping should precede the expensive full archive render."""
-        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
-        mode_start = app_js.index("async function setArchiveMode()")
-        mode_js = app_js[mode_start:app_js.index("(function wireArchiveMode()", mode_start)]
-
-        narrow = mode_js.index("renderArchiveList(savedConversationId, { force: true, skipRestore: true });")
-        restore = mode_js.index("await selectConversation(savedConversationId, savedPane.id);")
-        paint = mode_js.index("await new Promise(resolve => setTimeout(resolve, 0));")
-        full = mode_js.rindex("renderArchiveList(")
-        self.assertLess(narrow, restore)
-        self.assertLess(restore, paint)
-        self.assertLess(paint, full)
-        self.assertIn("!(opts && opts.skipRestore)", app_js)
-        render_start = app_js.index("function renderArchiveList(filter, opts)")
-        render_head = app_js[render_start:app_js.index("const scrollState =", render_start)]
-        self.assertIn(
-            "if (q && !(opts && opts.skipRestore) && archiveDataWindow && archiveDataWindow !== 'all' && !_archiveRefreshPromise)",
-            render_head,
-        )
-        self.assertIn("savedLastView.type === 'gc'", mode_js)
-
     def test_restore_finds_saved_conversation_outside_the_visible_all_lane(self):
         """A saved Coding session must restore while the All sidebar shows Workers."""
         app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))

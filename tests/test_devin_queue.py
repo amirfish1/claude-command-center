@@ -1383,7 +1383,7 @@ class DevinSpawnIdentityTests(unittest.TestCase):
 
 
     def test_devin_inject_always_enqueues(self):
-        """Devin CLI follow-ups are persisted to the durable queue first."""
+        """An inconclusive ACP delivery falls back to the durable CLI queue."""
         server = importlib.import_module("server")
         sid = "devincli-queue-test"
         with mock.patch.object(server, "_is_devin_cli_session", return_value=True), \
@@ -1395,6 +1395,7 @@ class DevinSpawnIdentityTests(unittest.TestCase):
              mock.patch.object(server, "_is_hermes_session", return_value=False), \
              mock.patch.object(server, "_is_opencode_session", return_value=False), \
              mock.patch.object(server, "_is_aider_session", return_value=False), \
+             mock.patch.object(server, "_devin_acp_try_steer", return_value=None), \
              mock.patch.object(server, "session_live_status", return_value={
                  "live": False, "status": None, "kind": None,
                  "tty": None, "terminal_app": None,
@@ -1618,6 +1619,7 @@ class DevinSpawnIdentityTests(unittest.TestCase):
              mock.patch.object(server, "_pending_resume_retry_after", {}), \
              mock.patch.object(server, "_save_pending_inputs") as save, \
              mock.patch.object(server, "_resume_queue_engine_busy", return_value=False), \
+             mock.patch.object(server, "_devin_acp_try_steer", return_value=None), \
              mock.patch.object(server, "resume_session_devin", return_value={
                  "ok": True, "pid": 12345, "via": "devin-resume",
              }) as resume:

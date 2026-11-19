@@ -10496,6 +10496,8 @@ class TestRepoContextHelpers(unittest.TestCase):
             },
         ), mock.patch.object(
             self.server, "_git_toplevel_for_existing_dir", return_value=None
+        ), mock.patch.object(
+            self.server, "_nearest_marked_repo_dir", return_value=None
         ), mock.patch.object(self.server.subprocess, "Popen") as popen:
             result = self.server.spawn_session(
                 "do the thing",
@@ -10562,7 +10564,8 @@ class TestRepoContextHelpers(unittest.TestCase):
             "message": {"role": "user", "content": "hello"},
         }) + "\n", encoding="utf-8")
 
-        with mock.patch.object(self.server, "_known_repo_paths", return_value=[]):
+        with mock.patch.object(self.server, "_known_repo_paths", return_value=[]), \
+             mock.patch.object(self.server, "_nearest_marked_repo_dir", return_value=None):
             # Caller-supplied paths still pass through the strict repo gate.
             with self.assertRaises(self.server.RepoContextError) as ctx:
                 self.server.require_repo_context({"cwd": str(scratch)})

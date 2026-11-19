@@ -330,7 +330,9 @@ http.server.HTTPServer(("0.0.0.0", 8090), Handler).serve_forever()
         backend_name = f"test-caddy-backend-{int(time.time())}"
         caddy_name = f"test-caddy-proxy-{int(time.time())}"
         secret = "caddy-e2e-secret-xyz-777"
-        caddy_port = 18443
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            caddy_port = listener.getsockname()[1]
 
         d = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(d, ignore_errors=True))
@@ -425,9 +427,20 @@ http.server.HTTPServer(("0.0.0.0", 8090), Handler).serve_forever()
 
         # 2. Proxy request without basic auth -> 401
         req_proxy_unauth = urllib.request.Request(f"http://127.0.0.1:{caddy_port}/api/sessions")
-        with self.assertRaises(urllib.error.HTTPError) as ctx:
-            urllib.request.urlopen(req_proxy_unauth, timeout=5)
-        self.assertEqual(ctx.exception.code, 401, "Proxy request without basic auth must be rejected")
+        # Docker can accept TCP before Caddy is ready to serve HTTP. Wait
+        # only for transport readiness; any HTTP response must enforce auth.
+        deadline = time.monotonic() + 15
+        while True:
+            try:
+                with urllib.request.urlopen(req_proxy_unauth, timeout=5):
+                    self.fail("Proxy request without basic auth was accepted")
+            except urllib.error.HTTPError as exc:
+                self.assertEqual(exc.code, 401, "Proxy request without basic auth must be rejected")
+                break
+            except (ConnectionError, urllib.error.URLError):
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.05)
 
         # 3. Proxy request with valid basic auth -> 200
         import base64

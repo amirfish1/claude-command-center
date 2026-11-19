@@ -29,6 +29,7 @@ test('explicit collapse wins over attention and all parents have disclosure', ()
   const context = vm.createContext({
     _subagentClusterPresentation: c => ({rootItem:c.rows[0],total:c.rows.length-1,attention:1,active:1}),
     _subagentRowId: c => c.id,
+    _ultraFreshCurrent: c => c,
     _subagentExpandedParents: new Set(), _subagentCollapsedParents: new Set(['parent']),
     _renderRow: (c, opts) => opts.subagentClusterMeta ? JSON.stringify(opts.subagentClusterMeta) : c.id,
     escapeAttr: s => s,
@@ -38,5 +39,7 @@ test('explicit collapse wins over attention and all parents have disclosure', ()
     const html = context.render({rows:[{card:{id:'parent'}},...Array.from({length:total},(_,i)=>({card:{id:'child'+i},depth:1}))]});
     assert(!html.includes('is-expanded'), 'attention must not reopen a collapsed parent');
     assert(html.includes('"collapsible":true'), 'even one child gets a chevron');
+    assert(html.includes('data-lanes-deferred="true"'), 'collapsed lanes defer row rendering');
+    for (let i = 0; i < total; i++) assert(html.includes('child'+i), 'deferred children remain available');
   }
 });

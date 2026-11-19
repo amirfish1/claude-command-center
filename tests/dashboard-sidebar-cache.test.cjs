@@ -133,6 +133,40 @@ test('boot paints cache before waiting on the list request and always revalidate
   assert.equal(c.state().archiveData[0].session_id, 'cached');
 });
 
+test('boot restores a saved transcript before the full list and leaves group chats alone', async () => {
+  for (const groupChat of [false, true]) {
+    const {context: c, storage} = harness();
+    const calls = [];
+    storage.set('ccc-last-view', JSON.stringify({type: groupChat ? 'gc' : 'conversation'}));
+    Object.assign(c, {
+      document: {getElementById: () => null},
+      kanbanView: false, isFlowView: () => false,
+      _ARCHIVE_MODE_KEY: 'ccc-archive-mode', _renderQueuePanel() {},
+      refreshArchiveData: async () => calls.push('refresh'),
+      splitState: {activeIndex: 0, panes: [{id: 'p1', conversationId: 'saved'}]},
+      conversationRowsContainId: (rows, id) => rows.some(row => row.session_id === id),
+      renderArchiveList: (query, opts) => calls.push(opts?.skipRestore ? 'shape-saved' : 'full-list'),
+      selectConversation: async (id, pane) => {
+        assert.equal(id, 'saved');
+        assert.equal(pane, 'p1');
+        assert.equal(c._qfBootRestoreDepth, 1);
+        calls.push('transcript');
+      },
+      setTimeout: callback => {calls.push('yield'); callback();},
+      _qfBootRestoreDepth: 0,
+      _archiveRecoveryRenderCovers: () => false,
+    });
+    vm.runInContext('archiveData = [{session_id: "saved"}];', c);
+    const start = app.indexOf('  async function setArchiveMode()');
+    const end = app.indexOf('  (function wireArchiveMode()', start);
+    vm.runInContext(app.slice(start, end), c);
+    await c.setArchiveMode();
+    assert.deepEqual(calls, groupChat ? ['refresh', 'full-list']
+      : ['refresh', 'shape-saved', 'transcript', 'yield', 'full-list']);
+    assert.equal(c._qfBootRestoreDepth, 0);
+  }
+});
+
 test('a ready complete response skips only the matching unsearched preview', () => {
   const fullUrl = '/api/conversations/list?window=7d&stale_ok=1';
   for (const [snapshot, query, skip] of [
