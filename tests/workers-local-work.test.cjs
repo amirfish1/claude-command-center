@@ -127,6 +127,18 @@ test('desktop and phone render only locally attributed work and retain ticket/se
       assert.deepEqual(await page.$$eval('[data-workers-pending-id]',nodes=>nodes.map(n=>n.dataset.workersPendingId)),
         ['starting-worker','local-worker','third-worker'], 'every live worker has a row, including the ticket claimant');
       assert.match(await page.$eval('[data-workers-pending-id=local-worker]',el=>el.innerText), /EXAMPLE-1/);
+      assert.equal(await page.$eval('[data-workers-pending-id=local-worker] .workers-pending-session',el=>el.textContent), 'Local fix');
+      assert.equal(await page.$eval('[data-workers-pending-id=local-worker] .workers-pending-state',el=>el.textContent), 'Active');
+      for (const size of await page.$$eval('[data-workers-pending-id]',nodes=>nodes.map(el=>({
+        height:el.getBoundingClientRect().height,
+        right:el.querySelector('.workers-pending-state').getBoundingClientRect().right,
+        heading:el.querySelector('.workers-pending-heading').getBoundingClientRect().height,
+        meta:el.querySelector('.workers-pending-meta').getBoundingClientRect().height
+      })))) {
+        assert.ok(size.right <= width, 'activity state stays visible: '+JSON.stringify(size));
+        assert.ok(size.height <= 48, 'a live worker fits the same two-line budget at desktop and phone widths: '+JSON.stringify(size));
+        assert.ok(size.heading <= 19 && size.meta <= 17, 'both lines stay single-line');
+      }
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
       if (process.env.WORKERS_LOCAL_SCREENSHOT) await page.screenshot({path:process.env.WORKERS_LOCAL_SCREENSHOT+'-roster-'+width+'.png'});
     }

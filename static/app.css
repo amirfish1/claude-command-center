@@ -35439,17 +35439,16 @@ a.local-ci-job:hover { color: var(--accent); }
 .workers-awaiting-chip { flex: 0 0 auto; min-height: 32px; padding: 4px 8px; font: inherit; font-size: 11px; color: var(--accent); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
 .workers-awaiting-chip:hover { background: var(--surface-2); }
 .workers-awaiting-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.workers-pending-list { margin-top: 12px; }
-.workers-pending-entry { padding: 10px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
-.workers-pending-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
-.workers-pending-state, .workers-pending-meta, .workers-pending-entry p { font-size: 11px; line-height: 1.5; }
+.workers-pending-list { margin-top: 12px; min-width: 0; }
+.workers-pending-entry { padding: 6px 0; min-width: 0; border-bottom: 1px solid var(--border); }
+.workers-pending-heading { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: 12px; line-height: 1.5; }
+.workers-pending-heading > .workers-ticket-title { flex: 1 1 auto; }
+.workers-pending-state { flex: 0 0 auto; font-size: 11px; }
 .workers-pending-state, .workers-pending-meta { color: var(--text-secondary, var(--text)); }
-.workers-pending-entry p { margin: 4px 0; color: var(--text-secondary, var(--text)); }
+.workers-pending-meta { font-size: 11px; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .workers-pending-state.is-active { color: var(--green); }
 .workers-pending-state.is-delayed { color: var(--orange); }
-.workers-pending-session { padding: 4px 8px; min-height: 32px; font: inherit; font-size: 11px; color: var(--accent); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
-.workers-pending-session:hover { background: var(--surface-2); }
-.workers-pending-session:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.workers-pending-session:hover { text-decoration: underline; }
 
 /* Blocked tickets explain the next action; completed workers stay quiet. */
 .workers-ticket-context { margin: 0 0 8px; min-width: 0; }

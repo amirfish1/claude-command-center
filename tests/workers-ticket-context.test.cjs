@@ -173,3 +173,17 @@ test('pending Devin workers retire when their prefixed session card appears', ()
   assert.equal(ctx._workersPendingWorkers([{item}]).length,0);
   assert.equal(ctx._workersPendingWorkers([{item:{...item,status:'closed'}}]).length,1);
 });
+
+
+test('live worker task title follows its newest active claim, including note-only reports', () => {
+  const worker = {worker_id:'worker-1',session_id:'session-1',queue:'TEST',alive:true,idle_seconds:2};
+  const ctx = setup({_uxqHealthCache:{wt_workers:[worker]},workerSectionHeaderHtml:()=>'',_uxqRelTime:()=> '1m'});
+  const older = {ref:'TEST-1',status:'in_progress',claimed_by:'worker-1',title:'Earlier task',claimed_at:'2026-01-01T09:00:00Z'};
+  const newer = {...older,ref:'TEST-2',title:'',note:'Repair the latest report',claimed_at:'2026-01-01T10:00:00Z'};
+  const roster = ctx._workersPendingWorkers([{item:older},{item:newer}], true);
+  assert.equal(roster[0].ticket_items[0].ref, 'TEST-2');
+  const html = ctx._workersPendingHtml(roster);
+  assert.match(html, /Repair the latest report/);
+  assert.doesNotMatch(html, />Earlier task</);
+  assert.match(html, /data-workers-pending-session="session-1"/);
+});

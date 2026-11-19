@@ -34248,6 +34248,7 @@
     const health = (typeof _uxqHealthCache === 'undefined' ? null : _uxqHealthCache) || {};
     const represented = new Set();
     const tickets = new Map();
+    const items = new Map(rows.map(row => [_uxqItemRef(row.item), row.item]));
     const record = (id, ref) => {
       if (!id) return;
       represented.add(id);
@@ -34268,8 +34269,13 @@
       .map(w => ({...w, session_id:w.session_id || (health.worker_session_map || {})[w.worker_id] || ''}))
       .filter(w => includeRepresented || (!represented.has(w.worker_id) && !(w.session_id && represented.has(w.session_id))
         && !represented.has('devincli-' + w.session_id)))
-      .map(w => ({...w, ticket_refs:[...new Set([w.worker_id, w.session_id, 'devincli-' + w.session_id]
-        .flatMap(id => [...(tickets.get(id) || [])]))]}));
+      .map(w => {
+        const refs = [...new Set([w.worker_id, w.session_id, 'devincli-' + w.session_id]
+          .flatMap(id => [...(tickets.get(id) || [])]))];
+        const assigned = refs.map(ref => items.get(ref)).filter(Boolean)
+          .sort((a, b) => (Date.parse(b.claimed_at || '') || 0) - (Date.parse(a.claimed_at || '') || 0));
+        return {...w, ticket_refs:refs, ticket_items:assigned};
+      });
   }
   function _workersPendingState(worker, now = Date.now()) {
     const started = Date.parse(worker.started_at || '');
@@ -34282,7 +34288,7 @@
     }
     const idle = worker.idle_seconds == null ? NaN : Number(worker.idle_seconds);
     if (Number.isFinite(idle) && idle >= 0) return idle < 60
-      ? {label:'Active', css:'is-active', text:'Recent worker activity. Its session is not attached to a ticket in this list.'}
+      ? {label:'Active', css:'is-active', text:'Recent worker activity.'}
       : {label:'Standing by', css:'', text:'The worker process is running with no recent activity.'};
     return {label:'Session not listed', css:'', text:'The worker session is registered; activity details are unavailable.'};
   }
@@ -34296,14 +34302,18 @@
         const age = Number.isFinite(started) ? ' · started ' + _uxqRelTime(w.started_at) : '';
         const activity = w.idle_seconds != null && Number.isFinite(Number(w.idle_seconds))
           ? ' · last activity ' + Math.max(0, Math.floor(Number(w.idle_seconds))) + 's ago' : '';
+        const item = w.ticket_items?.[0];
+        const task = String(item && (item.title || item.note || item.text) || '').split('\n')[0]
+          .replace(/(?:file:\/\/)?\/[^\s]*\/(?:pasted-images|attachments)\/[^\s]+/g, '').trim();
+        const title = task || (w.queue || 'Worker') + ' · ' + (w.ticket_refs?.length ? w.ticket_refs.join(' · ') : 'no listed ticket');
+        const meta = (w.worker_id || 'Worker') + (w.ticket_refs?.length ? ' · ' + w.ticket_refs.join(' · ') : ' · ' + state.text);
+        const open = w.session_id ? '<button type="button" class="workers-ticket-title workers-pending-session" data-workers-pending-session="'
+          + escapeAttr(w.session_id) + '" aria-label="' + escapeAttr('Open session: ' + title) + '">'
+          + escapeHtml(title) + '</button>' : '<span class="workers-ticket-title">' + escapeHtml(title) + '</span>';
         return '<div class="workers-pending-entry" data-workers-pending-id="' + escapeAttr(w.worker_id || '') + '">'
-          + '<div class="workers-pending-heading"><strong>' + escapeHtml(w.queue || 'Worker') + '</strong>'
-          + '<span class="workers-pending-state ' + state.css + '" title="' + escapeAttr(w.ticket_refs?.length ? 'Session activity; see its tickets below.' : state.text) + '">' + escapeHtml(state.label) + '</span></div>'
-          + '<div class="workers-pending-meta" title="' + escapeAttr(age + activity) + '">' + escapeHtml((w.worker_id || 'Worker')
-            + (w.ticket_refs?.length ? ' · ' + w.ticket_refs.join(' · ') : ' · no listed ticket')) + '</div>'
-          + (!w.session_id ? '<p>' + escapeHtml(state.text) + '</p>' : '')
-          + (w.session_id ? '<button type="button" class="workers-pending-session" data-workers-pending-session="'
-            + escapeAttr(w.session_id) + '" title="' + escapeAttr('Open session ' + w.session_id) + '">Open session</button>' : '')
+          + '<div class="workers-pending-heading" title="' + escapeAttr(title) + '">' + open
+          + '<span class="workers-pending-state ' + state.css + '" title="' + escapeAttr(state.text) + '">' + escapeHtml(state.label) + '</span></div>'
+          + '<div class="workers-pending-meta" title="' + escapeAttr(meta + age + activity) + '">' + escapeHtml(meta) + '</div>'
           + '</div>';
       }).join('') + '</section>';
   }
