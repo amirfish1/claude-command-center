@@ -1,17 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const vm = require('node:vm');
-const source = fs.readFileSync('static/conversation-core.js', 'utf8');
-function extract(name) {
-  const at = source.indexOf('function ' + name + '(');
-  let i = source.indexOf('{', source.indexOf(') {', at)), depth = 0;
-  for (; i < source.length; i++) {
-    if (source[i] === '{') depth++;
-    if (source[i] === '}' && --depth === 0) return source.slice(at, i + 1);
-  }
-  throw Error('missing ' + name);
-}
+const {functionSource} = require('./conversation-source.cjs');
 function setup({manualFrames = false, initial = [{session_id: 'recent'}]} = {}) {
   let resolveFull;
   const full = new Promise(resolve => { resolveFull = resolve; });
@@ -39,9 +29,9 @@ function setup({manualFrames = false, initial = [{session_id: 'recent'}]} = {}) 
     queueMicrotask: fn => deferred.push(fn),
   };
   vm.createContext(context);
-  vm.runInContext(extract('_markArchiveFirstLoaded'), context);
-  vm.runInContext(extract('_setArchiveCompleteness'), context);
-  vm.runInContext('async ' + extract('refreshArchiveData'), context);
+  vm.runInContext(functionSource('_markArchiveFirstLoaded'), context);
+  vm.runInContext(functionSource('_setArchiveCompleteness'), context);
+  vm.runInContext(functionSource('refreshArchiveData'), context);
   return { context, state, notice, paints, calls, deferred, events, releases, ready, frames, resolveFull };
 }
 async function initialPaint(f) {

@@ -6,11 +6,8 @@ const vm = require('node:vm');
 const puppeteer = require('../require-puppeteer.js');
 const {findChromePath} = require('../puppeteer-browser-config.js');
 const boot = fs.readFileSync('static/archive-boot.js', 'utf8');
-const core = fs.readFileSync('static/conversation-core.js', 'utf8');
-const start = core.indexOf('  async function loadArchiveAll(');
-const loader = core.slice(start, core.indexOf('\n  }\n', start) + 4);
-const mergeStart = core.indexOf('  function _mergeArchiveListDelta(');
-const merger = core.slice(mergeStart, core.indexOf('\n  }\n', mergeStart) + 4);
+const {functions} = require('./conversation-source.cjs');
+const archive = functions(['_mergeArchiveListDelta', 'loadArchiveAll']);
 const fullUrl = '/api/conversations/list?window=7d&stale_ok=1';
 const rows = [{session_id:'recent', nested:{items:[1]}}, {session_id:'older'}];
 
@@ -24,7 +21,7 @@ function setup({snapshot, response, early} = {}) {
     performance, URLSearchParams, AbortController, setTimeout:()=>0, clearTimeout(){},
     _archiveWindow:()=> '7d', _clientLog(){}, _scheduleArchiveSidebarCache(){},
     backgroundApiFetch:async(url, init) => { reads.push({url, init}); return response; }};
-  vm.createContext(context); vm.runInContext(merger + loader, context);
+  vm.createContext(context); vm.runInContext(archive, context);
   return {context, state, reads, saves};
 }
 function reply(body, status=200) {

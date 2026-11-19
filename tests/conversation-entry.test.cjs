@@ -47,6 +47,9 @@ test('embedded entry binds real controls before readiness and keeps drafts live'
     } else if (url.pathname === '/api/ux-fixes/item') {
       response.setHeader('Content-Type','application/json');
       response.end(JSON.stringify({ok:true,item:{ref:'TEST-1',id:'fixture-ticket',title:'A complete ticket',status:'open',description:'Full fixture ticket details'}}));
+    } else if (url.pathname === '/api/conversations/list') {
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({conversations:[{id:'fixture-archive',display_name:'Archive fixture'}]}));
     } else if (url.pathname === '/api/inject-input') {
       let body = '';
       request.on('data', chunk => {body += chunk;});
@@ -114,7 +117,15 @@ test('embedded entry binds real controls before readiness and keeps drafts live'
       assert.equal(await agent.evaluate(() => window._ccCacheMissLog[0].tokens_uncached), 50000);
       assert.equal(await agent.$eval('#convInput', input => input.disabled), false);
       assert.match(await agent.$eval('#conversationsView', view => view.textContent), /A test response/);
-    } finally { await coldContext.close(); entrySource = 'codex'; }
+      assert.equal(detailsRequests, 0, 'archive code does not load before readiness');
+      const archive = await agent.evaluate(() => Promise.all([
+        cccConversation.loadArchiveAll({window:'1d'}),
+        cccConversation.loadArchiveAll({window:'1d'}),
+      ]));
+      assert.deepEqual(archive.map(rows => rows.map(row => row.id)), [['fixture-archive'], ['fixture-archive']]);
+      assert.equal(detailsRequests, 1, 'concurrent archive reads share the details download');
+      assert.equal(await agent.$eval('#convInput', input => input.disabled), false);
+    } finally { await coldContext.close(); entrySource = 'codex'; detailsRequests = 0; }
     await page.goto(base, {waitUntil:'domcontentloaded'});
     await page.waitForFunction(() => window.receipts.some(item => item.type === 'ccc:embed-ready'), {timeout:20000});
     const frame = page.frames().find(item => item.url().includes('embed=app'));
