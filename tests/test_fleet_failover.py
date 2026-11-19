@@ -371,3 +371,45 @@ class FleetPerfBudgetTests(_FleetBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class FleetDetailsTests(_FleetBase):
+    def test_native_details_resolve_without_a_sidebar_row(self):
+        sid = 'aaaaaaaa-0000-0000-0000-000000000099'
+        project = Path(self.tmp_dir) / 'projects' / 'example'
+        project.mkdir(parents=True)
+        transcript = project / (sid + '.jsonl')
+        transcript.write_text(json.dumps({'type': 'custom-title', 'customTitle': 'Review notification delivery'}) + '\n'
+                              + json.dumps({'type': 'assistant', 'timestamp': '2026-11-19T12:00:00Z',
+                                  'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': 'Weekly usage limit reached'}]}}) + '\n')
+        self._track(sid)
+        self.server._save_usage_limit_resume_entry(sid, {'engine': 'claude', 'transcript_path': str(transcript)})
+        with mock.patch.object(self.server, 'PROJECTS_ROOT', project.parent), \
+             mock.patch.object(self.server, '_usage_limit_row_for_session', return_value=None), \
+             mock.patch.object(self.server, '_load_session_name_overrides', return_value={}), \
+             mock.patch.object(self.server, 'find_all_conversations', side_effect=AssertionError('global scan')):
+            result = self.server.free_failover_fleet_details([sid])
+            self.assertTrue(result['ok'], result)
+            row = result['sessions'][sid]
+            self.assertEqual(row['display_name'], 'Review notification delivery')
+            self.assertEqual(row['last_assistant_text'], 'Weekly usage limit reached')
+            self.assertGreater(row['modified'], 0)
+            with mock.patch('builtins.open', side_effect=AssertionError('unchanged transcript reparsed')):
+                again = self.server.free_failover_fleet_details([sid])
+            self.assertEqual(again, result)
+            transcript.write_text(transcript.read_text() + json.dumps({'type': 'assistant',
+                'timestamp': '2026-11-19T12:01:00Z', 'message': {'content': [{'type': 'text', 'text': 'Recovered and finished'}]}}) + '\n')
+            updated = self.server.free_failover_fleet_details([sid])
+            self.assertEqual(updated['sessions'][sid]['last_assistant_text'], 'Recovered and finished')
+
+    def test_details_reject_untracked_ids_and_unrelated_paths(self):
+        self.assertFalse(self.server.free_failover_fleet_details(['untracked'])['ok'])
+        self.assertFalse(self.server.free_failover_fleet_details([])['ok'])
+        self.assertFalse(self.server.free_failover_fleet_details(['x'] * 129)['ok'])
+        sid = 'bbbbbbbb-0000-0000-0000-000000000099'
+        self._track(sid)
+        self.server._save_usage_limit_resume_entry(sid, {'transcript_path': str(Path(self.tmp_dir) / 'private.jsonl')})
+        with mock.patch.object(self.server, '_usage_limit_row_for_session', return_value=None), \
+             mock.patch.object(self.server, '_extract_tail_meta', side_effect=AssertionError('read unrelated path')):
+            result = self.server.free_failover_fleet_details([sid])
+        self.assertIn(sid, result['errors'])
+        self.assertNotIn(sid, result['sessions'])

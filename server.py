@@ -33582,6 +33582,10 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             # ccc_server/fleet_failover.py — the same state grouped into one
             # banner per engine limit wall, for the fleet limit view.
             self.send_json(free_failover_fleet())
+        elif path == "/api/free-failover/fleet-details":
+            qs = urllib.parse.parse_qs(parsed.query)
+            result = free_failover_fleet_details(qs.get("session_id", []))
+            self.send_json(result, 200 if "sessions" in result else 400)
         elif re.match(r"^/api/sessions/continuation-decision/.+$", path):
             # ccc_server/continuation.py — "resume in place, or spawn a fresh
             # session that continues it?" for one session, from cached

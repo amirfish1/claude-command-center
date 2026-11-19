@@ -144,7 +144,7 @@ test('hiding an armed notice preserves the schedule through polls and reloads', 
   loaded.api.click({ target: { closest: () => control } });
   loaded.api.receive(data);
   assert.equal(loaded.api.groupHtml(group, true), '');
-  assert.equal(loaded.requests.length, 0);
+  assert.equal(loaded.requests.filter(r => r.init.method === 'POST').length, 0);
   assert.equal(group.sessions[0].state, 'armed');
   assert.match(loaded.api.groupHtml(group, false), /Will resume/);
   assert.match(loaded.api.groupHtml(group, false), /Cancel/);
@@ -170,7 +170,7 @@ test('notice dismissal works when browser storage is unavailable', () => {
     getAttribute: (name) => name === 'data-act' ? 'hide-notice' : null };
   loaded.api.click({ target: { closest: () => control } });
   assert.equal(loaded.api.groupHtml(group, true), '');
-  assert.equal(loaded.requests.length, 0);
+  assert.equal(loaded.requests.filter(r => r.init.method === 'POST').length, 0);
   group.sessions.push({ session_id: 'new-session', state: 'armed', resume_at: Date.now() / 1000 + 60 });
   loaded.api.receive(data);
   assert.match(loaded.api.groupHtml(group, true), /Hide notice/);
@@ -187,7 +187,7 @@ test('hidden limited notices remain recoverable without a dismiss request', () =
   loaded.api.click({ target: { closest: () => control } });
   assert.equal(loaded.api.groupHtml(group, true), '');
   assert.match(loaded.api.groupHtml(group, false), /Resume all at reset/);
-  assert.equal(loaded.requests.length, 0);
+  assert.equal(loaded.requests.filter(r => r.init.method === 'POST').length, 0);
   const reloaded = load({ allowed: true, storage });
   reloaded.api.receive(data);
   assert.equal(reloaded.api.groupHtml(group, true), '');
@@ -222,6 +222,30 @@ test('choosing a route opens the picker without a fleet mutation and preserves f
   loaded.api.click({ target: { closest: () => control } });
   await settle();
   assert.deepEqual(calls, [['session-0', 'claude'], ['session-0', 'claude']]);
-  assert.equal(loaded.requests.length, 0);
+  assert.equal(loaded.requests.filter(r => r.init.method === 'POST').length, 0);
   assert.equal(loaded.api.groupHtml(group, true), '');
+});
+
+
+test('automatically fetches native details for sessions absent from the sidebar', async () => {
+  const loaded = load({ allowed: true, response: (url) => ({ ok: true, json: async () => ({
+    ok: true, sessions: { 'session-0': { display_name: 'Native review session',
+      last_assistant_text: 'Stopped at weekly limit', modified: 1795089600 } }, errors: {},
+  }) }) });
+  loaded.window.cccFleetSessionInfo = (_sid, row) => row ? {
+    title: row.display_name, status: 'Update', detail: row.last_assistant_text, modified: row.modified,
+  } : null;
+  const data = fixture(1);
+  delete data.groups[0].sessions[0].display_name;
+  loaded.api.receive(data);
+  await settle();
+  const html = loaded.api.groupHtml(data.groups[0], true);
+  assert.match(html, /Native review session/);
+  assert.match(html, /Stopped at weekly limit/);
+  assert.match(html, /Last activity:/);
+  assert.doesNotMatch(html, /not loaded|Open session to load/);
+  assert.equal(loaded.requests.filter(r => r.url.startsWith('/api/free-failover/fleet-details?')).length, 1);
+  loaded.api.receive(data);
+  await settle();
+  assert.equal(loaded.requests.length, 1, 'unchanged details are reused across fleet polls');
 });

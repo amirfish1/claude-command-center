@@ -18,6 +18,10 @@
   var panel;
   var section;
   var recall;
+  var details = Object.create(null);
+  var detailsAt = Object.create(null);
+  var detailErrors = Object.create(null);
+  var fetchingDetails = false;
 
   function esc(value) {
     return String(value == null ? '' : value).replace(/&/g, '&amp;')
@@ -41,8 +45,9 @@
   }
 
   function sessionInfo(member) {
-    try { return window.cccFleetSessionInfo && window.cccFleetSessionInfo(member.session_id) || {}; }
-    catch (_) { return {}; }
+    try { return window.cccFleetSessionInfo && window.cccFleetSessionInfo(member.session_id, details[member.session_id]) || {}; }
+    catch (_) {}
+    return {};
   }
 
   function sessionDetails(member) {
@@ -54,8 +59,9 @@
     return '<div class="ccc-fleet-details">'
       + '<div>' + esc(spec) + ' · <span title="Session ID">' + esc(member.session_id) + '</span></div>'
       + (info.repo ? '<div>' + esc(info.repo) + '</div>' : '')
-      + (stamp ? '<div>Last activity: ' + esc(stamp) + '</div>' : '<div>Last activity not loaded</div>')
-      + (info.status || info.detail ? '<div class="ccc-fleet-last-status">' + esc([info.status, info.detail].filter(Boolean).join(': ')) + '</div>' : '<div>Open session to load its latest status.</div>')
+      + (stamp ? '<div>Last activity: ' + esc(stamp) + '</div>' : '')
+      + (info.status || info.detail ? '<div class="ccc-fleet-last-status">' + esc([info.status, info.detail].filter(Boolean).join(': ')) + '</div>' : '')
+      + (detailErrors[member.session_id] ? '<div class="ccc-fleet-error" role="alert">' + esc(detailErrors[member.session_id]) + '</div>' : '')
       + '</div>';
   }
 
@@ -242,6 +248,37 @@
     document.dispatchEvent(new Event('cccFleetRendered'));
   }
 
+  function fetchDetails() {
+    if (fetchingDetails || !data || (!popupAllowed() && !panelVisible())) return;
+    var now = Date.now();
+    var ids = [];
+    data.groups.forEach(function (g) { g.sessions.forEach(function (m) {
+      if (!detailsAt[m.session_id] || now - detailsAt[m.session_id] > 30000) ids.push(m.session_id);
+    }); });
+    ids = ids.slice(0, 128);
+    if (!ids.length) return;
+    fetchingDetails = true;
+    fetch('/api/free-failover/fleet-details?' + ids.map(function (sid) {
+      return 'session_id=' + encodeURIComponent(sid);
+    }).join('&'), { cache: 'no-store', cccPriority: 'user' }).then(function (res) {
+      if (!res.ok) throw new Error('details unavailable');
+      return res.json();
+    }).then(function (res) {
+      ids.forEach(function (sid) {
+        detailsAt[sid] = Date.now();
+        if (res.sessions && res.sessions[sid]) {
+          details[sid] = res.sessions[sid];
+          delete detailErrors[sid];
+        } else detailErrors[sid] = res.errors && res.errors[sid] || 'Could not retrieve session details. Retrying automatically.';
+      });
+    }).catch(function () {
+      ids.forEach(function (sid) {
+        detailsAt[sid] = Date.now() - 20000;
+        detailErrors[sid] = 'Could not retrieve session details. Retrying automatically.';
+      });
+    }).finally(function () { fetchingDetails = false; render(); });
+  }
+
   function receive(payload) {
     data = payload;
     var owned = Object.create(null);
@@ -251,9 +288,11 @@
         if (m.state === 'limited' && (!selections[m.session_id] || selections[m.session_id].stop !== m.detected_at)) {
           selections[m.session_id] = { stop: m.detected_at, checked: true };
           delete rowErrors[m.session_id];
+          delete detailsAt[m.session_id];
         }
       });
     });
+    fetchDetails();
     covered = owned;
     Object.keys(selections).forEach(function (sid) { if (!owned[sid]) delete selections[sid]; });
   }

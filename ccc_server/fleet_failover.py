@@ -7,6 +7,7 @@ import fcntl
 import hashlib
 import math
 import sys
+from pathlib import Path
 
 from ccc_server import core as _core
 
@@ -64,6 +65,65 @@ def free_failover_fleet():
     return {key: status.get(key) for key in (
         "ok", "now", "free_ready", "free_model", "free_via", "auto_resume_max_per_minute",
     )} | {"groups": sorted(groups.values(), key=lambda g: (-(g["limited_count"] + g["armed_count"]), g["key"]))}
+
+
+def free_failover_fleet_details(session_ids):
+    """Resolve only requested, tracked sessions, independently of sidebar paging.
+
+    This explicit detail read is separate from the five-second fleet poll.
+    Native Claude metadata already has a file-version cache; unchanged files
+    are not reparsed and no archive discovery/build is performed here.
+    """
+    if (not isinstance(session_ids, list) or not session_ids
+            or len(session_ids) > FLEET_ACTION_MAX_SESSIONS
+            or any(not isinstance(sid, str) or not sid.strip() for sid in session_ids)):
+        return {"ok": False, "error": "Choose between 1 and 128 session IDs."}
+    tracked = _core._load_usage_limit_resumes() or {}
+    failovers = _core._load_free_failovers() or {}
+    overrides = _core._load_session_name_overrides()
+    sessions, errors = {}, {}
+    for sid in dict.fromkeys(_core._normalize_sid(sid) for sid in session_ids):
+        entry = tracked.get(sid) or failovers.get(sid)
+        if not isinstance(entry, dict):
+            errors[sid] = "This session no longer has a limit notice."
+            continue
+        row = _core._usage_limit_row_for_session(sid, engine=entry.get("engine")) or {}
+        row = dict(row)
+        try:
+            if entry.get("engine") == "claude" and entry.get("transcript_path"):
+                transcript = Path(entry["transcript_path"]).resolve()
+                # Stored paths are not a general file-read API. A tracked
+                # native transcript must belong to this exact session.
+                transcript.relative_to(_core.PROJECTS_ROOT.resolve())
+                if transcript.stem != sid or transcript.suffix != ".jsonl":
+                    raise ValueError("Mismatched session transcript")
+                meta = _core._extract_tail_meta(transcript)
+                stat = transcript.stat()
+                row.update({key: meta.get(key) for key in (
+                    "last_assistant_text", "last_event_type", "pending_tool", "pending_file", "model")})
+                row.update(display_name=(overrides.get(sid) or meta.get("custom_title")
+                           or meta.get("ai_title") or meta.get("agent_name")
+                           or row.get("display_name") or entry.get("display_name")
+                           or str(meta.get("last_prompt") or "").split("\n", 1)[0][:160]),
+                           modified=meta.get("last_meaningful_ts") or stat.st_mtime,
+                           mtime=stat.st_mtime,
+                           session_state=_core._session_state_from_tail_meta(meta))
+            row.update(session_id=sid, engine=entry.get("engine"),
+                       display_name=overrides.get(sid) or row.get("display_name") or entry.get("display_name"),
+                       model=(row.get("model") if row.get("model") != "<synthetic>" else None) or entry.get("model"),
+                       reasoning_effort=row.get("reasoning_effort") or entry.get("effort"),
+                       session_cwd=row.get("session_cwd") or row.get("cwd") or entry.get("cwd"))
+            if not row.get("display_name"):
+                raise ValueError("Session name could not be resolved")
+            row["last_assistant_text"] = _core._archive_bound_assistant_text(row.get("last_assistant_text"))
+            sessions[sid] = {key: row.get(key) for key in (
+                "session_id", "engine", "display_name", "model", "reasoning_effort",
+                "session_cwd", "modified", "mtime", "session_state", "last_assistant_text",
+                "last_event_type", "pending_tool", "pending_file", "needs_approval",
+                "question_waiting", "question_text", "state", "is_live")}
+        except (OSError, ValueError):
+            errors[sid] = "Could not retrieve this session's details. Retrying automatically."
+    return {"ok": not errors, "sessions": sessions, "errors": errors}
 
 
 def _fleet_apply_one(action, sid, offer, always):

@@ -3178,9 +3178,9 @@
   window.cccOpenSession = function (sid) {
     try { if (sid) selectConversation(sid); } catch (_) {}
   };
-  // Reuse the sidebar's loaded facts; limit notices must not scan transcripts.
-  window.cccFleetSessionInfo = function (sid) {
-    const row = conversationsData.find(c => (c.session_id || c.id) === sid)
+  // Resolve notice details independently, using sidebar presentation rules.
+  window.cccFleetSessionInfo = function (sid, resolved) {
+    const row = resolved || conversationsData.find(c => (c.session_id || c.id) === sid)
       || archiveData.find(c => (c.session_id || c.id) === sid);
     if (!row) return null;
     const outcome = rowOutcomeView(row);
@@ -3189,7 +3189,7 @@
       status: outcome.label, detail: outcome.text,
       modified: row.modified || row.mtime,
       model: row.model, effort: rowReasoningEffort(row),
-      repo: row.repo_path || row.cwd || row.folder_path,
+      repo: row.session_cwd || row.repo_path || row.cwd || row.folder_path,
     };
   };
   // Open the ordinary continuation picker, with the saved fallback as a
