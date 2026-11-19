@@ -1248,6 +1248,7 @@ EOF
     if [ "${worker_compatible:-0}" != "1" ] \
       && [ "${existing_worker_idle:-0}" = "1" ] \
       && [ "${existing_worker_pid:-0}" -gt 1 ] 2>/dev/null \
+      && [ "${CCC_WORKER_AUTO_RESTART:-1}" != "0" ] \
       && codex_restart_freeze_ok commit; then
       # A pre-engine-control worker owns no live work. Retire that exact PID;
       # launchd/systemd may replace it, otherwise the detached start below
@@ -1276,7 +1277,7 @@ raise SystemExit(0 if "engine-execution-v1" in caps else 1)
     fi
     if [ "${worker_compatible:-0}" != "1" ] \
       && "$PYTHON" "$HERE/ccc_worker.py" --health >/dev/null 2>&1; then
-      echo "⚠ Older persistent worker still has unresolved work; using compatibility execution." >&2
+      echo "⚠ Older persistent worker is still running; using compatibility execution." >&2
     elif [ "${worker_compatible:-0}" != "1" ] && worker_systemd_managed; then
       # Never start a second worker beside the unit's own: (re)start the unit.
       if [ "${existing_worker_pid:-0}" -gt 1 ] 2>/dev/null && ! worker_stop_safe; then

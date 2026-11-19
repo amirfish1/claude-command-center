@@ -440,6 +440,35 @@ class RestartWorkerProcessTests(unittest.TestCase):
         self.assertEqual(out["reason"], "stale_needs_approval")
         restart.assert_not_called()
 
+    def test_reexeced_systemd_dashboard_honors_the_installed_worker_opt_out(self):
+        server = self.server
+        env = {key: value for key, value in os.environ.items()
+               if key != "CCC_WORKER_AUTO_RESTART"}
+        health = {
+            "ok": True, "active": 0, "queued": 0, "uncertain": 0, "codex_live_turns": 0,
+            "worker": {"pid": 42, "server_version": "1.0.0"},
+        }
+        with mock.patch.dict(os.environ, env, clear=True), \
+             mock.patch.object(pathlib.Path, "read_text", autospec=True,
+                               return_value="0::/user.slice/user@1000.service/app.slice/ccc.service\n"), \
+             mock.patch.object(server.subprocess, "run", return_value=mock.Mock(
+                 returncode=0, stdout='OTHER=x CCC_WORKER_AUTO_RESTART=0\n',
+             )) as systemctl, \
+             mock.patch.object(server, "_control_plane_request", return_value=health), \
+             mock.patch.object(server, "_repo_version_on_disk", return_value="2.0.0"), \
+             mock.patch.object(server, "_codex_restart_freeze",
+                               return_value=(False, {"code": "test_refusal"})) as freeze, \
+             mock.patch.object(server, "_worker_compat_self_heal_restart") as retire:
+            out = server._restart_stale_worker()
+            server._worker_compat_maintenance_check()
+        self.assertEqual(out["reason"], "stale_needs_approval")
+        systemctl.assert_any_call(
+            ["systemctl", "--user", "show", "--property=Environment", "--value", "ccc.service"],
+            capture_output=True, text=True, timeout=3,
+        )
+        freeze.assert_not_called()
+        retire.assert_not_called()
+
     def test_run_sh_restarts_stale_worker_unless_opted_out(self):
         src = (pathlib.Path(__file__).resolve().parent.parent / "run.sh").read_text()
         gate = src.index('CCC_WORKER_AUTO_RESTART:-1}" = "0"')

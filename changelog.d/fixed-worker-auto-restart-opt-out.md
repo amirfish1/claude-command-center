@@ -1,0 +1,1 @@
+- Honor the configured systemd worker restart opt-out after a dashboard-only restart.

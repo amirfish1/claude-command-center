@@ -21499,7 +21499,8 @@ def _restart_stale_worker():
     # launched survive its restart and the new worker reattaches them. An
     # owner can still opt out of automatic rolls with CCC_WORKER_AUTO_RESTART=0
     # and restart from Settings -> Maintenance instead.
-    if os.environ.get("CCC_WORKER_AUTO_RESTART", "1") == "0":
+    if not _worker_auto_restart_enabled():
+        print("  [maintenance] worker stale, automatic restart disabled")
         return {"restarted": False, "reason": "stale_needs_approval",
                 "server_version": loaded}
     # Never roll a worker that owns unresolved work: the code on disk changes
@@ -21534,6 +21535,37 @@ def _restart_stale_worker():
 _WORKER_SYSTEMD_UNIT = "ccc-worker.service"
 
 
+def _systemd_scope_for_process_unit(pid, unit):
+    try:
+        cgroups = Path(f"/proc/{int(pid)}/cgroup").read_text()
+    except (OSError, TypeError, ValueError):
+        return None
+    for line in cgroups.splitlines():
+        path = line.rsplit(":", 1)[-1].rstrip("/")
+        if path.endswith("/" + unit):
+            return "user" if "/user@" in path else "system"
+    return None
+
+
+def _worker_auto_restart_enabled():
+    if os.environ.get("CCC_WORKER_AUTO_RESTART") == "0":
+        return False
+    # A dashboard-only restart re-execs in the same invocation. Its process
+    # environment can predate a reloaded systemd opt-out drop-in.
+    unit = "ccc.service"
+    scope = _systemd_scope_for_process_unit(os.getpid(), unit)
+    if scope is None:
+        return True
+    try:
+        proc = subprocess.run(
+            ["systemctl", f"--{scope}", "show", "--property=Environment", "--value", unit],
+            capture_output=True, text=True, timeout=3,
+        )
+        return proc.returncode == 0 and "CCC_WORKER_AUTO_RESTART=0" not in shlex.split(proc.stdout)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return False
+
+
 def _worker_systemd_scope(pid):
     """Return (scope, pid_in_unit) when systemd supervises the worker.
 
@@ -21542,15 +21574,9 @@ def _worker_systemd_scope(pid):
     `pid` runs outside it (a stray worker). (None, False) when systemd does
     not manage the worker at all (macOS, Docker, a bare ./run.sh).
     """
-    if pid:
-        try:
-            cgroups = Path(f"/proc/{int(pid)}/cgroup").read_text()
-        except (OSError, ValueError):
-            cgroups = ""
-        for line in cgroups.splitlines():
-            path = line.rsplit(":", 1)[-1].strip().rstrip("/")
-            if path.endswith("/" + _WORKER_SYSTEMD_UNIT):
-                return ("user" if "/user@" in path else "system"), True
+    scope = _systemd_scope_for_process_unit(pid, _WORKER_SYSTEMD_UNIT)
+    if scope is not None:
+        return scope, True
     if not shutil.which("systemctl"):
         return None, False
     try:
@@ -22161,6 +22187,8 @@ def _worker_compat_maintenance_check():
     except (TypeError, ValueError):
         pid = 0
     if pid <= 1:
+        return snapshot
+    if not _worker_auto_restart_enabled():
         return snapshot
     result = _worker_compat_self_heal_restart()
     print(
