@@ -1,4 +1,4 @@
-// Only measured model usage belongs in this rollup; idle processes do not.
+// Live workers and measured model usage are separate counts.
 (function initWorkerActivity() {
   'use strict';
   const sidebar = document.querySelector('.sidebar');
@@ -6,7 +6,7 @@
   if (!header) return;
   const line = document.createElement('div');
   line.className = 'worker-activity-line';
-  line.setAttribute('aria-label', 'Worker token activity');
+  line.setAttribute('aria-label', 'Live workers and token activity');
   line.tabIndex = 0;
   const icon = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M1 8h3l2-5 4 10 2-5h3"/></svg>';
   let snapshot = null, busy = false, failed = false;
@@ -38,13 +38,15 @@
       return;
     }
     const now = Date.now() / 1000;
-    const rows = (snapshot.workers || []).filter(w => Number.isFinite(w.last_token_at)
+    const workers = snapshot.workers || [];
+    parts.push(span('worker-activity-live', workers.length + ' live', 'Live workers on this machine, including workers without measured token usage'));
+    const rows = workers.filter(w => Number.isFinite(w.last_token_at)
       && w.last_token_at <= now + 5 && w.last_token_at >= now - 300);
     const active = rows.filter(w => w.last_token_at >= now - 60).length;
-    parts.push(span('worker-activity-now', active + ' now', 'Workers with a token receipt in the last 60 seconds'));
+    parts.push(span('worker-activity-now', 'Tokens: ' + active + ' now', 'Workers with a token receipt in the last 60 seconds'));
     parts.push(span('worker-activity-recent', '+ ' + (rows.length - active) + ' recent', 'Additional workers with a token receipt 1–5 minutes ago'));
     const groups = new Map();
-    for (const worker of rows) {
+    for (const worker of workers) {
       const key = worker.queue || worker.repo_path || 'Unknown queue';
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(worker);
@@ -56,7 +58,7 @@
       const done = plans.reduce((n, p) => n + p.done, 0);
       const total = plans.reduce((n, p) => n + p.total, 0);
       const progress = total ? ' · plan ' + Math.round(100 * done / total) + '%' : '';
-      const title = [repo, workers.length + ' workers with usage in 5m across this queue or working folder',
+      const title = [repo, workers.length + ' live workers across this queue or working folder',
         total ? done + '/' + total + ' reported plan steps complete (' + plans.length + '/' + workers.length + ' workers report a plan). This measures checklist steps, not time remaining or ticket completion.'
           : 'Task progress unavailable: these workers have no reported checklist in their recent transcript.',
         ...workers.map(w => [w.queue, w.engine, w.worker_id].filter(Boolean).join(' · '))].join('\n');
@@ -65,8 +67,8 @@
     if (!rows.length) parts.push(span('worker-activity-muted', 'No measured usage in 5m'));
     line.replaceChildren(...parts);
     const unmeasured = (snapshot.workers || []).filter(w => !Number.isFinite(w.last_token_at)).length;
-    line.title = 'All queues on this machine. The Workers tab lists every live worker, including those without recent token usage; ticket rows are not a worker count. Measured token receipts: now = last 60s; recent = 1–5m. Refreshed every 10s. Tool output and process uptime do not count.'
-      + (unmeasured ? '\n' + unmeasured + ' live workers have no measurable usage in the bounded transcript tail; excluded from counts.' : '');
+    line.title = 'All queues on this machine. Live counts include every worker in the Workers tab, including those without recent token usage; ticket rows are not a worker count. Measured token receipts: now = last 60s; recent = 1–5m. Refreshed every 10s. Tool output and process uptime do not count.'
+      + (unmeasured ? '\n' + unmeasured + ' live workers have no measurable usage in the bounded transcript tail; included in live counts, excluded from token counts.' : '');
   }
   async function refresh() {
     if (document.hidden || busy) return;

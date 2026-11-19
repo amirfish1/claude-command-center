@@ -30,11 +30,11 @@ test('worker header counts receipts, groups repos, labels plan coverage and ages
     let result = await page.evaluate(() => ({text:document.querySelector('.worker-activity-line').textContent,
       groups:[...document.querySelectorAll('.worker-activity-repo')].map(e=>({text:e.textContent,title:e.title})),
       title:document.querySelector('.worker-activity-line').title}));
-    assert.match(result.text,/Workers \(all queues\):.*1 now.*2 recent/);
+    assert.match(result.text,/Workers \(all queues\):.*6 live.*Tokens: 1 now.*2 recent/);
     assert.match(result.title,/ticket rows are not a worker count/);
-    assert.deepEqual(result.groups.map(g=>g.text),['BUILD 2 · plan 50%','tools 1']);
-    assert.match(result.groups[0].title,/1\/2 workers report a plan/);
-    assert.match(result.groups[1].title,/progress unavailable/);
+    assert.deepEqual(result.groups.map(g=>g.text),['app 3','BUILD 2 · plan 50%','tools 1']);
+    assert.match(result.groups[1].title,/1\/2 workers report a plan/);
+    assert.match(result.groups[2].title,/progress unavailable/);
     assert.match(result.title,/1 live workers have no measurable usage/);
     await page.setViewport({width:390,height:800});
     await page.evaluate(() => document.body.classList.add('ccc-simple-mode'));
@@ -46,7 +46,15 @@ test('worker header counts receipts, groups repos, labels plan coverage and ages
     assert.match(await page.$eval('.worker-activity-line',e=>e.textContent),/Activity unavailable/);
     assert.equal(await page.$('.worker-activity-now'),null);
     await page.evaluate(async () => {window.data={sampled_at:Date.now()/1000,pending:false,workers:[]};await window.ticks[0]();});
-    assert.match(await page.$eval('.worker-activity-line',e=>e.textContent),/0 now.*0 recent.*No measured usage in 5m/);
+    assert.match(await page.$eval('.worker-activity-line',e=>e.textContent),/0 live.*Tokens: 0 now.*0 recent.*No measured usage in 5m/);
+    await page.evaluate(async () => {
+      window.data={sampled_at:Date.now()/1000,pending:false,workers:[
+        {worker_id:'measured',queue:'BUILD',last_token_at:Date.now()/1000},
+        {worker_id:'unmeasured',queue:'DESIGN',last_token_at:null}
+      ]};
+      await window.ticks[0]();
+    });
+    assert.match(await page.$eval('.worker-activity-line',e=>e.textContent),/2 live.*Tokens: 1 now.*BUILD 1.*DESIGN 1/);
     await page.evaluate(async () => {
       window.data={sampled_at:Date.now()/1000,pending:false,workers:[{repo_path:'/example/<img src=x>',last_token_at:Date.now()/1000}]};
       await window.ticks[0]();
