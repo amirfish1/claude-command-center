@@ -4,8 +4,11 @@ import gzip
 import os
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
+
 from ccc_server.static_encoding_cache import StaticEncodingCache
 from tests.test_static_asset_caching import _get, _server, _static_dir
+from tests.test_static_encoding import decode
 
 
 def test_new_instance_reuses_only_matching_identity(tmp_path):
@@ -78,6 +81,57 @@ def test_agent_bundle_survives_static_churn_and_expires_on_edit(tmp_path):
     assert restarted.get((key, "br")) is None
     assert restarted.get((edited_key, "br")) == b"edited pane"
     assert len(list((tmp_path / "cache").glob("*.cache"))) == 2
+
+
+def test_app_warmup_uses_the_http_cache_key_and_skips_current_entries(tmp_path, monkeypatch):
+    from ccc_server import static_encoding
+    from ccc_server.conversation_assets import BUNDLES, ConversationScript, warm_brotli_cache
+
+    if static_encoding._encoder() is None:
+        pytest.skip("optional system Brotli encoder unavailable")
+    server = _server()
+    for source in {source for sources in BUNDLES.values() for source in sources}:
+        line = ".pane { color: black; }" if source.endswith(".css") else "canonical();"
+        (tmp_path / source).write_text((line + "\n") * 100)
+    cache = StaticEncodingCache(tmp_path / "encoded")
+    monkeypatch.setattr(server, "STATIC_DIR", tmp_path)
+    monkeypatch.setattr(server, "_STATIC_ENCODING_DISK_CACHE", cache)
+    server._STATIC_GZIP_CACHE.clear()
+    warm_brotli_cache(tmp_path, cache)
+
+    def unexpected_encode(*args, **kwargs):
+        raise AssertionError("a prepared app bundle was re-encoded")
+
+    monkeypatch.setattr(static_encoding, "brotli", unexpected_encode)
+    warm_brotli_cache(tmp_path, cache)
+    for name in BUNDLES:
+        status, headers, body = _get(server, "/static/" + name, {"Accept-Encoding": "br"})
+        assert status == 200 and headers["content-encoding"] == "br"
+        assert 'cache;desc="hit"' in headers["server-timing"]
+        raw = ConversationScript(tmp_path, name).read_bytes()
+        assert decode(body, len(raw)) == raw
+
+
+def test_app_warmup_does_not_publish_under_an_old_source_key(tmp_path, monkeypatch):
+    from ccc_server import static_encoding
+    from ccc_server.conversation_assets import BUNDLES, ConversationScript, SCRIPT_NAME, warm_brotli_cache
+
+    for source in BUNDLES[SCRIPT_NAME]:
+        (tmp_path / source).write_text("original();")
+    cache = StaticEncodingCache(tmp_path / "encoded")
+    bundle = ConversationScript(tmp_path)
+    key = bundle.metadata()[1]
+    edited = tmp_path / BUNDLES[SCRIPT_NAME][0]
+
+    def edit_during_encoding(raw):
+        assert b"original();" in raw
+        edited.write_text("changed source length")
+        return b"encoded"
+
+    monkeypatch.setattr(static_encoding, "brotli", edit_during_encoding)
+    warm_brotli_cache(tmp_path, cache)
+    assert bundle.metadata()[1] != key
+    assert cache.get((key, "br")) is None
 
 
 def test_concurrent_writes_publish_complete_packets(tmp_path):

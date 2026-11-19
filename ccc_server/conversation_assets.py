@@ -87,3 +87,23 @@ def encoding_cache_keys(static_dir):
             continue
         yield key
         yield (key, "br")
+
+
+def warm_brotli_cache(static_dir, cache):
+    """Prepare the current app pane's bounded immutable responses off-request."""
+    from .static_encoding import brotli
+
+    for name in BUNDLES:
+        bundle = ConversationScript(static_dir, name)
+        try:
+            _, key, _ = bundle.metadata()
+            encoding_key = (key, "br")
+            if cache.get(encoding_key) is not None:
+                continue
+            body = brotli(bundle.read_bytes())
+            # A checkout update while encoding must not publish its bytes
+            # under the preceding version's key.
+            if body is not None and bundle.metadata()[1] == key:
+                cache.put(encoding_key, body)
+        except OSError:
+            continue

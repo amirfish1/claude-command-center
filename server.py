@@ -49984,6 +49984,14 @@ def main():
     _raise_open_file_limit()
     _memory_release.start()
     migrate_state_dir()
+    if USER_APPS_DIR.is_dir():
+        from ccc_server.conversation_assets import warm_brotli_cache
+        # Prepare the bounded app bundles while the dashboard starts its
+        # readers and loads saved state. Requests can still encode on demand.
+        threading.Thread(
+            target=warm_brotli_cache, args=(STATIC_DIR, _STATIC_ENCODING_DISK_CACHE),
+            name="ccc-app-asset-warmup", daemon=True,
+        ).start()
     _seed_model_policy_once()
     _install_python_stack_dump_handler()
     # Conversation opens get their own process (and GIL) so background work
