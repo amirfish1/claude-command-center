@@ -710,6 +710,21 @@ def _codex_skill_reads(text):
     return out
 
 
+def _codex_is_message_event(ev):
+    """Records the sidebar consumes, before formatting discarded tool details."""
+    if ev.get("type") != "event_msg":
+        return False
+    payload = ev.get("payload")
+    if not isinstance(payload, dict):
+        return False
+    kind = payload.get("type")
+    if kind in ("user_message", "agent_message"):
+        return True
+    item = payload.get("item")
+    return (kind == "item_completed" and isinstance(item, dict)
+            and item.get("type") in ("UserMessage", "AgentMessage"))
+
+
 def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
     import sender_envelope as attribution
     return attribution.decorate_event(_parse_codex_event_unattributed(ev, line_num, token_usage, codex_turn_meta))

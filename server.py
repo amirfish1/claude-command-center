@@ -28824,7 +28824,8 @@ def _out_of_order_head_lines(filepath, tail_lines):
     return out[-_TS_RUN_EXTRA_CAP:]
 
 
-def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser=None):
+def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser=None,
+                                 *, messages_only=False):
     """Parse only a window of a conversation JSONL instead of the whole file.
 
     Two modes:
@@ -28952,6 +28953,11 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
             if usage:
                 codex_token_usage = usage
                 _attach_codex_token_usage(events, usage)
+                continue
+            # The sidebar uses only user barriers and assistant text. Keep
+            # window selection/cursors identical while avoiding shell/tool
+            # formatting for records that this consumer will discard.
+            if messages_only and not _codex_is_message_event(ev):
                 continue
             parsed = parser(ev, ln, codex_token_usage, codex_turn_meta=codex_turn_meta)
         else:
@@ -29084,7 +29090,7 @@ def _finish_full_parse_conversation(conversation_id, result, tail=None, before=N
 
 
 def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=True,
-                       tail=None, before=None):
+                       tail=None, before=None, *, messages_only=False):
     """Parse a conversation JSONL file into structured events.
 
     `use_cache=True` (default) checks the in-memory parse cache keyed on the
@@ -29095,6 +29101,9 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
     a line) instead of the whole file — see _parse_conversation_windowed.
     Engines whose source formats require a full parse apply the same window to
     their resulting structured event stream before returning it.
+
+    `messages_only` is a sidebar optimization hint for native Codex windows;
+    other readers retain their normal output for the caller to filter.
     """
     windowed = bool(tail) or (before is not None)
     if _detect_session_engine(conversation_id) == "codex":
@@ -29222,7 +29231,8 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
     # whole-file parsers above and fall through to the full parse below.
     if windowed and parser in (_parse_conversation_event, _parse_codex_event) \
             and Path(filepath).is_file():
-        return _parse_conversation_windowed(conversation_id, filepath, tail, before, parser)
+        return _parse_conversation_windowed(conversation_id, filepath, tail, before, parser,
+                                            messages_only=messages_only)
     events = []
     line_num = 0
     is_codex = parser is _parse_codex_event
