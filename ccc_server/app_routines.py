@@ -47,7 +47,7 @@ import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from ccc_server.paths import COMMAND_CENTER_STATE_DIR
+from ccc_server.paths import COMMAND_CENTER_STATE_DIR, SPAWN_DEFAULTS_FILE
 
 try:  # zoneinfo data can be missing on minimal installs
     from zoneinfo import ZoneInfo
@@ -419,8 +419,29 @@ def agent_prompt(app_id, label, routine, port):
     )
 
 
+def _agent_spawn_options():
+    """Read worker defaults at launch; app metadata never pins a model."""
+    defaults = _read_json(SPAWN_DEFAULTS_FILE, {})
+    if not isinstance(defaults, dict):
+        return {}
+    inherit = defaults.get("worker_inherit_session") is True
+    engine = ("" if inherit else str(defaults.get("worker_engine") or "").strip())
+    options = {}
+    if engine:
+        options["engine"] = engine
+        model = str(defaults.get("worker_model") or "").strip()
+        if model:
+            options["model"] = model
+        # Blank means the engine's own effort, not the session default.
+        options["reasoning_effort"] = defaults.get("worker_reasoning_effort") or ""
+        if "worker_auto_compact_k" in defaults:
+            options["auto_compact_k"] = defaults["worker_auto_compact_k"]
+    return options
+
+
 def _run_agent(folder, app_id, label, routine, port, started):
     res = _post_json(port, "/api/sessions/spawn", {
+        **_agent_spawn_options(),
         "prompt": agent_prompt(app_id, label, routine, port),
         "cwd": str(folder), "name": f"{app_id}-{routine['id']}"[:60],
     })
@@ -576,6 +597,7 @@ def ensure_agent(app_id, port, fresh=False, apps_dir=None, docs_path=""):
     if (folder / "CLAUDE.md").is_file() or (folder / "AGENTS.md").is_file():
         docs += " This app came with its own instructions (CLAUDE.md or AGENTS.md in this folder); follow them."
     res = _post_json(port, "/api/sessions/spawn", {
+        **_agent_spawn_options(),
         "cwd": str(folder), "name": f"{label} agent"[:60],
         "prompt": (
             f'You are the builder agent for the CCC app "{label}", which lives in this folder. '

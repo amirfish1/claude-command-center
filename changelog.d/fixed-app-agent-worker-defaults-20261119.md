@@ -1,0 +1,1 @@
+App agent sidebars and agent routines now follow the default worker engine, model, effort and context window instead of the separate new-session defaults. New agents read the latest settings; existing conversations are preserved.

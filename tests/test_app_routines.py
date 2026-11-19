@@ -6,6 +6,7 @@ import time
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 from ccc_server import app_routines as ar
 
@@ -162,6 +163,62 @@ class RoutineTests(unittest.TestCase):
         self.assertEqual([r["id"] for r in ar.describe("demo", self.base)["routines"]], ["hello"])
         self.assertNotIn("two", ar.load_state(d)["routines"])
         self.assertEqual(ar.delete_routine("demo", "two", self.base)[1], 404)
+
+
+class AgentDefaultsTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.defaults = self.base / "spawn-defaults.json"
+        self.folder = make_app(self.base, [])
+        self.patch = patch.object(ar, "SPAWN_DEFAULTS_FILE", self.defaults)
+        self.patch.start()
+        self.addCleanup(self.patch.stop)
+
+    def save(self, **values):
+        self.defaults.write_text(json.dumps(values))
+
+    def test_builder_uses_worker_settings_and_rereads_for_new_agent(self):
+        self.save(engine="claude", models={"claude": "session-model"},
+                  worker_engine="codex", worker_model="worker-model",
+                  worker_reasoning_effort="high", worker_auto_compact_k=300)
+        with patch.object(ar, "_post_json", return_value={"session_id": "first"}) as post:
+            self.assertEqual(ar.ensure_agent("demo", 0, apps_dir=self.base)[1], 200)
+            payload = post.call_args.args[2]
+            self.assertEqual({k: payload[k] for k in
+                              ("engine", "model", "reasoning_effort", "auto_compact_k")},
+                             {"engine": "codex", "model": "worker-model",
+                              "reasoning_effort": "high", "auto_compact_k": 300})
+            self.save(worker_engine="claude", worker_model="changed-model",
+                      worker_reasoning_effort="medium")
+            # An existing conversation is reused, not silently replaced.
+            ar.ensure_agent("demo", 0, apps_dir=self.base)
+            self.assertEqual(post.call_count, 1)
+            ar.ensure_agent("demo", 0, fresh=True, apps_dir=self.base)
+            self.assertEqual(post.call_args.args[2]["model"], "changed-model")
+            self.assertEqual(post.call_args.args[2]["engine"], "claude")
+
+    def test_agent_routine_uses_same_worker_defaults(self):
+        self.save(worker_engine="codex", worker_model="routine-model",
+                  worker_reasoning_effort="medium")
+        routine = {"id": "watch", "name": "Watch", "prompt": "check", "kind": "agent"}
+        with patch.object(ar, "_post_json", return_value={"session_id": "run"}) as post:
+            ar._run_agent(self.folder, "demo", "Demo", routine, 0, 1)
+            self.assertEqual(post.call_args.args[2]["model"], "routine-model")
+            self.assertEqual(post.call_args.args[2]["engine"], "codex")
+
+    def test_blank_worker_values_do_not_inherit_another_engines_model_or_effort(self):
+        self.save(engine="claude", reasoning_effort="high",
+                  models={"claude": "session-model"}, worker_engine="codex",
+                  worker_model="", worker_reasoning_effort="")
+        self.assertEqual(ar._agent_spawn_options(), {"engine": "codex", "reasoning_effort": ""})
+
+    def test_unconfigured_or_inherited_worker_uses_session_defaults(self):
+        self.assertEqual(ar._agent_spawn_options(), {})
+        self.save(engine="codex", worker_engine="claude", worker_model="old-model",
+                  worker_inherit_session=True)
+        self.assertEqual(ar._agent_spawn_options(), {})
 
 
 if __name__ == "__main__":

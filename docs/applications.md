@@ -105,6 +105,12 @@ The kit adds two things:
   schedule or delete it. Put `data-ccc-routines` on the element that should hold the cards;
   otherwise they go at the end of the page.
 
+The agent sidebar needs only the script include above. App agents and agent
+routines use the engine, model, effort and context window from the default
+worker settings; apps do not need their own model configuration. If workers
+inherit the new-session settings, app agents do too. An existing conversation
+keeps its session; **New agent** reads the current worker settings again.
+
 A routine is a named, scheduled job declared in `app.json`:
 
 ```json
