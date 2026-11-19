@@ -945,7 +945,7 @@ class CodexLiveTurnsCountTests(unittest.TestCase):
 class RestartMergedBodyTests(unittest.TestCase):
     """The real POST routes retain holds, strict override and audit identity."""
 
-    def _request(self, endpoint, payload, hold=None):
+    def _request(self, endpoint, payload, hold=None, *, pull_changed=False):
         import io
         from contextlib import ExitStack
         server = importlib.import_module("server")
@@ -967,7 +967,7 @@ class RestartMergedBodyTests(unittest.TestCase):
             patch(server, "_log_activity")
             precheck = patch(server, "_safe_worker_restart_precheck",
                              return_value=(True, None, {}, protected))
-            patch(server, "_pull_before_restart", return_value={"changed": False})
+            patch(server, "_pull_before_restart", return_value={"changed": pull_changed})
             kick = patch(server, "_restart_worker_process", return_value={"restarted": True})
             schedule = patch(server, "_schedule_restart")
             caller = patch(restart_audit, "request_caller", return_value={"source": "fixture"})
@@ -1006,8 +1006,18 @@ class RestartMergedBodyTests(unittest.TestCase):
                 kick.assert_called_once_with(codex_final_check=True)
 
     def test_dashboard_only_does_not_freeze_or_kill_worker(self):
-        _, precheck, kick, schedule, _, _ = self._request("/api/restart", {})
-        self.assertFalse(precheck.call_args.kwargs["restarts_worker"])
-        kick.assert_not_called()
-        schedule.assert_called_once()
-        self.assertTrue(schedule.call_args.kwargs["force"])
+        server = importlib.import_module("server")
+        for routine in (True, False):
+            with self.subTest(routine=routine), \
+                    mock.patch.object(server, "_restart_stale_worker") as roll_stale:
+                handler, precheck, kick, schedule, _, _ = self._request(
+                    "/api/restart", {"routine": routine}, pull_changed=True)
+                self.assertFalse(precheck.call_args.kwargs["restarts_worker"])
+                kick.assert_not_called()
+                roll_stale.assert_not_called()
+                schedule.assert_called_once()
+                self.assertEqual(schedule.call_args.kwargs["force"], not routine)
+                result = handler.send_json.call_args.args[0]
+                self.assertTrue(result["pull"]["changed"])
+                self.assertTrue(result["worker_preserved"])
+                self.assertFalse(result["worker_restarted"])

@@ -38708,8 +38708,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             if not ok:
                 self.send_json(precheck_err, 409)
                 return
-            # Pull before anything restarts, so both processes come back on
-            # the new code rather than re-running what is already on disk.
+            # Pull before restarting so the requested processes load new code.
             pull = _pull_before_restart()
             # Worker first, then this process: the dashboard's own restart is
             # scheduled after the response flushes, so kicking the worker here
@@ -38720,11 +38719,9 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 )
                 if not worker_outcome.get("restarted"):
                     _codex_restart_release("restart/all worker kick did not happen")
-            elif pull.get("changed"):
-                # execvp bypasses run.sh's stale-worker gate, and the worker
-                # imports server.py, so a pull that changed code needs this.
-                worker_outcome = _restart_stale_worker()
             else:
+                # The dashboard-only handoff leaves the worker and its turns live,
+                # even when the pull advanced code shared with the worker.
                 worker_outcome = None
             self.send_json({
                 "ok": True,
