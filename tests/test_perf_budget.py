@@ -554,21 +554,30 @@ def test_process_comm_native_path_does_not_touch_filesystem(monkeypatch):
 
 
 def test_session_registry_reuses_shared_process_snapshot(monkeypatch, tmp_path):
-    """Registry validation and engine discovery share one cached ps snapshot."""
+    """Validate only registered PIDs using the shared ps snapshot."""
     sid = "00000000-0000-4000-8000-000000000001"
-    (tmp_path / "123.json").write_text(
+    (tmp_path / "legacy.json").write_text(
         json.dumps({"pid": 123, "sessionId": sid}),
         encoding="utf-8",
     )
     native = Path.home() / ".local" / "share" / "claude" / "versions" / "2.1.144"
     subprocess_calls = []
+    checked_names = []
+    classify = server._process_comm_is_claude
 
     monkeypatch.setattr(server, "SESSIONS_REGISTRY", tmp_path)
     monkeypatch.setattr(
         server,
         "_scan_engine_processes",
-        lambda: [("123", "??", str(native), str(native))],
+        lambda: [
+            ("123", "??", str(native), str(native)),
+            ("456", "??", "other", "/bin/other"),
+        ],
     )
+
+    def track_classification(name):
+        checked_names.append(name)
+        return classify(name)
 
     def fake_run(args, **kwargs):
         subprocess_calls.append(args)
@@ -579,10 +588,12 @@ def test_session_registry_reuses_shared_process_snapshot(monkeypatch, tmp_path):
             stderr="",
         )
 
+    monkeypatch.setattr(server, "_process_comm_is_claude", track_classification)
     monkeypatch.setattr(server.subprocess, "run", fake_run)
     server._load_session_registry.cache_clear()
 
     assert sid in server._load_session_registry()
+    assert checked_names == [str(native)]
     assert subprocess_calls == [], "registry forked a second ps instead of sharing the snapshot"
 
 

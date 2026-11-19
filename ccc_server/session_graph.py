@@ -3859,33 +3859,16 @@ def _load_session_registry():
     if not _core.SESSIONS_REGISTRY.is_dir():
         return registry
     # Reuse the same cached process snapshot as the other engine scanners.
-    # A live-activity build needs both, so a dedicated ps fork here doubled
-    # process enumeration and classified every system process twice.
-    live_claude_pids = set()
     try:
-        for pid_s, _tty, comm, args in _core._scan_engine_processes():
-            # `ps -o comm=` TRUNCATES to the column width (16 chars on macOS),
-            # so a process started by absolute path — every CCC-spawned
-            # headless, `/Users/<me>/.local/bin/claude` — reports comm as
-            # `/Users/<me>/` and fails the basename check. Only sessions
-            # launched as bare `claude` from PATH survived it, which is why
-            # every spawned session read "not live": no live pid, so
-            # session_live_status returned live=False for a process that was
-            # answering fine. argv[0] is not truncated — check it too (same
-            # comm-or-argv0 idiom as _live_claude_terminal_pids_by_session).
-            cmd_first = (args.split(None, 1)[0] if args else "")
-            if _core._process_comm_is_claude(comm) or _core._process_comm_is_claude(cmd_first):
-                try:
-                    live_claude_pids.add(int(pid_s))
-                except ValueError:
-                    pass
+        processes = _core._scan_engine_processes()
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        pass
-
+        return registry
     try:
         session_files = list(_core.SESSIONS_REGISTRY.iterdir())
     except OSError:
         return registry
+    candidates = []
+    candidate_pids = set()
     for f in session_files:
         if not f.name.endswith(".json") or not f.is_file():
             continue
@@ -3898,11 +3881,30 @@ def _load_session_registry():
             pid = int(data.get("pid"))
         except (TypeError, ValueError):
             continue
-        if not sid:
+        if sid:
+            candidates.append((sid, pid, data))
+            candidate_pids.add(pid)
+    if not candidates:
+        return registry
+
+    # Only registry PIDs need Claude identity checks.
+    live_claude_pids = set()
+    for pid_s, _tty, comm, args in processes:
+        try:
+            pid = int(pid_s)
+        except ValueError:
             continue
-        if pid not in live_claude_pids:
-            continue  # stale: pid dead or reassigned to a non-claude
-        registry[sid] = data
+        if pid not in candidate_pids:
+            continue
+        # macOS ps can truncate comm for absolute paths. Its args column
+        # retains argv[0], so check both before rejecting a registry entry.
+        cmd_first = args.split(None, 1)[0] if args else ""
+        if _core._process_comm_is_claude(comm) or _core._process_comm_is_claude(cmd_first):
+            live_claude_pids.add(pid)
+
+    for sid, pid, data in candidates:
+        if pid in live_claude_pids:
+            registry[sid] = data
     return registry
 
 
