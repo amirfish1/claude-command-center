@@ -198,6 +198,20 @@ def test_carried_forward_snapshot_does_not_fabricate_idle_burn(sources):
     assert account(sources, 'codex')['burn_rate_pct_per_hour'] is None
 
 
+def test_history_retains_last_valid_duplicate_and_independent_window_cutoffs():
+    old = NOW - 2 * 86400
+    first = snapshot(old, 50, codex_pct=30)
+    boundary = snapshot(NOW - 86400, 60)
+    newest = snapshot(NOW, 65)
+    duplicate = snapshot(NOW, 70)
+    invalid = snapshot(NOW, 'invalid', codex_pct='invalid')
+    history = hr._normalize([newest, boundary, first, duplicate, invalid], {})
+    assert [(p['ts'], p['pct']) for p in history['claude:weekly']] == [
+        (NOW - 86400, 60), (NOW, 70),
+    ]
+    assert [(p['ts'], p['pct']) for p in history['codex:weekly']] == [(old, 30)]
+
+
 @pytest.mark.parametrize('change', ['reset', 'decrease', 'plan', 'gap', 'short', 'old'])
 def test_insufficient_or_discontinuous_burn_is_unknown(sources, change):
     first = snapshot(NOW - 3600, 40, codex_pct=40)

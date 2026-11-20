@@ -113,13 +113,25 @@ def _point(block, observed, *, engine, plan='', stale=False):
 def _normalize(snapshots, legacy):
     """The persisted provider windows used by ccc quota, without pace scans."""
     points = {}
+    newest = {}
+    horizon = HISTORY_HOURS * 3600
 
     def add(engine, window, block, observed, **kwargs):
+        key = engine + ':' + window
+        latest = newest.get(key)
+        if observed is None or (latest is not None and
+                                (observed < latest - horizon or observed in points[key])):
+            return
         point = _point(block, observed, engine=engine, **kwargs)
         if point is not None:
-            points.setdefault(engine + ':' + window, {})[observed] = point
+            points.setdefault(key, {})[observed] = point
+            if latest is None or observed > latest:
+                newest[key] = observed
 
-    for snapshot in snapshots:
+    # Last valid observations win at duplicate timestamps. Scan from the
+    # end to skip superseded and expired points before normalizing them.
+    # Expiry uses valid timestamps per window, even for out-of-order input.
+    for snapshot in reversed(snapshots):
         snapshot = _mapping(snapshot)
         observed = _epoch(snapshot.get('ts'))
         for window, key in (('weekly', 'seven_day'), ('session', 'five_hour')):
@@ -135,14 +147,14 @@ def _normalize(snapshots, legacy):
     legacy = _mapping(legacy)
     observed = _epoch(legacy.get('fetched_at'))
     for window, key in (('weekly', 'seven_day'), ('session', 'five_hour')):
-        existing = points.get('claude:' + window, {})
-        if observed is not None and (not existing or max(existing) < observed):
+        latest = newest.get('claude:' + window)
+        if observed is not None and (latest is None or latest < observed):
             add('claude', window, _mapping(legacy.get('usage')).get(key), observed)
     result = {}
     for key, by_time in points.items():
-        newest = max(by_time)
+        cutoff = newest[key] - horizon
         result[key] = sorted((p for ts, p in by_time.items()
-                              if ts >= newest - HISTORY_HOURS * 3600), key=lambda p: p['ts'])
+                              if ts >= cutoff), key=lambda p: p['ts'])
     return result
 
 
