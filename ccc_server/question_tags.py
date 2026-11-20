@@ -556,3 +556,25 @@ def payload(tickets: list | None = None) -> dict:
     out["scanning"] = not _ready
     out["refreshing"] = scanning_now
     return out
+
+
+_response_lock = threading.Lock()
+_response_memo = (None, None)
+
+
+def response(tickets: list) -> tuple[dict, dict]:
+    """Return the current payload and its HTTP representation cache.
+
+    The payload already includes ticket decisions and scanner status, so an
+    exact match can safely reuse the same gzip and identity bytes. Keep only
+    the latest payload. In-flight requests retain their own encoding cache
+    when the index changes.
+    """
+    global _response_memo
+    data = payload(tickets=tickets)
+    with _response_lock:
+        previous, encoded = _response_memo
+        if data != previous:
+            encoded = {}
+            _response_memo = (data, encoded)
+    return data, encoded

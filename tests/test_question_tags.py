@@ -349,3 +349,33 @@ class ConcurrencyAndMemoTest(unittest.TestCase):
         self.assertTrue(updated["questions"][0]["answered"])
         self.assertEqual(updated["questions"][0]["answered_by"], "owner")
 
+
+
+    def test_response_reuses_encodings_until_ticket_or_scanner_changes(self):
+        from unittest import mock
+
+        qt._files["a"] = {"ev": [ev("assistant", "2026-01-01T00:00:01Z",
+                                  "[Q7:publish] OK?", "ask")]}
+        items = [ticket()]
+        with mock.patch.object(qt, "_ready", True), mock.patch.object(qt, "_scanning", False):
+            first, first_cache = qt.response(items)
+            first_cache[True] = (b"compressed", "gzip")
+            first_cache[False] = (b"identity", None)
+            repeated, repeat_cache = qt.response([ticket()])
+            self.assertEqual(repeated, first)
+            self.assertIs(repeat_cache, first_cache)
+            self.assertIsNot(repeated, first)
+            self.assertTrue(repeated["questions"][0]["ticket"]["open"])
+
+            closed = ticket(needs_input=False, block_question="", history=[
+                {"event": "block", "question": "[Q7:publish] OK?"}])
+            updated, update_cache = qt.response([closed])
+            self.assertFalse(updated["questions"][0]["ticket"]["open"])
+            self.assertEqual(update_cache, {})
+            self.assertIsNot(update_cache, first_cache)
+
+            with mock.patch.object(qt, "_scanning", True):
+                refreshing, refresh_cache = qt.response([closed])
+            self.assertTrue(refreshing["refreshing"])
+            self.assertIsNot(refresh_cache, update_cache)
+            self.assertEqual(first_cache[True], (b"compressed", "gzip"))
