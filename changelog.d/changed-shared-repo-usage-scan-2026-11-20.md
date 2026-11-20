@@ -1,0 +1,1 @@
+- Share repository usage scans across tabs that open the dashboard at the same time.

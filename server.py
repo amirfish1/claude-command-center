@@ -65,7 +65,7 @@ import urllib.parse
 import urllib.error
 import urllib.request
 import weakref
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone, time as datetime_time
 from pathlib import Path
 
@@ -8198,6 +8198,8 @@ def _known_repo_paths_uncached():
 
 _REPO_SIGNALS_CACHE = {"paths": (), "data": None, "ts": 0.0}
 _REPO_SIGNALS_TTL = 30  # seconds
+_REPO_SIGNALS_LOCK = threading.Lock()
+_REPO_SIGNALS_FLIGHTS = {}
 
 # The per-transcript stats aggregates (_STATS_FILE_CACHE) are rebuilt by the
 # repo-list signal walk every _REPO_SIGNALS_TTL, but only /api/stats (an
@@ -8286,10 +8288,34 @@ def _compute_repo_usage_signals(repo_paths):
     """
     key = tuple(sorted(repo_paths))
     now = time.time()
-    cached = _REPO_SIGNALS_CACHE
-    if cached["paths"] == key and (now - cached["ts"]) < _REPO_SIGNALS_TTL:
-        return cached["data"]
+    with _REPO_SIGNALS_LOCK:
+        cached = _REPO_SIGNALS_CACHE
+        if cached["paths"] == key and (now - cached["ts"]) < _REPO_SIGNALS_TTL:
+            return cached["data"]
+        flight = _REPO_SIGNALS_FLIGHTS.get(key)
+        owner = flight is None
+        if owner:
+            flight = _REPO_SIGNALS_FLIGHTS[key] = Future()
+    if not owner:
+        return flight.result()
 
+    # Several tabs can miss together. In the old path they waited for the
+    # stats lock and then repeated the whole scan, even for the same repos.
+    try:
+        signals = _build_repo_usage_signals(repo_paths, now)
+        with _REPO_SIGNALS_LOCK:
+            _REPO_SIGNALS_CACHE.update(paths=key, data=signals, ts=now)
+        flight.set_result(signals)
+        return signals
+    except BaseException as exc:
+        flight.set_exception(exc)
+        raise
+    finally:
+        with _REPO_SIGNALS_LOCK:
+            _REPO_SIGNALS_FLIGHTS.pop(key, None)
+
+
+def _build_repo_usage_signals(repo_paths, now):
     today = datetime.now().astimezone().date()
     cutoff_7 = today - timedelta(days=6)   # inclusive: last 7 days
     cutoff_30 = today - timedelta(days=29)  # inclusive: last 30 days
@@ -8325,9 +8351,6 @@ def _compute_repo_usage_signals(repo_paths):
                 + s["d30"]["turns"] * 1.0
                 + s["d30"]["tokens"] * 0.001
             )
-        _REPO_SIGNALS_CACHE["paths"] = key
-        _REPO_SIGNALS_CACHE["data"] = signals
-        _REPO_SIGNALS_CACHE["ts"] = now
         return signals
 
     if not repo_paths or not PROJECTS_ROOT.is_dir():
