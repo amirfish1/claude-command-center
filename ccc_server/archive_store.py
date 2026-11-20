@@ -523,6 +523,27 @@ def load_head(cache_file, key, limit, *, schema_version, build_id, deleted_codex
         con.close()
 
 
+def _decode_full_bodies(cursor):
+    """Decode ordered archive bodies in bounded batches."""
+    rows = []
+    while batch := cursor.fetchmany(192):
+        bodies = [body for (body,) in batch]
+        if (sum(map(len, bodies)) <= 2 * 1024 * 1024
+                and all(isinstance(body, str) and body.startswith('{') and body.endswith('}')
+                        for body in bodies)):
+            try:
+                decoded = json.loads('[' + ','.join(bodies) + ']')
+                if len(decoded) == len(bodies):
+                    rows.extend(decoded)
+                    continue
+            except (ValueError, RecursionError):
+                pass
+        # Retain per-record decoding for oversized, legacy or malformed
+        # bodies so corrupt records still take the normal fallback path.
+        rows.extend(json.loads(body) for body in bodies)
+    return rows
+
+
 def load(cache_file, *, hot=False, key=None, now=None):
     """Read all metadata but only requested row bodies, with ancestor context."""
     if not database_path(cache_file).exists():
@@ -559,9 +580,11 @@ def load(cache_file, *, hot=False, key=None, now=None):
                 ) SELECT r.body FROM selected s CROSS JOIN rows r
                   WHERE r.variant=? AND r.identity=s.identity ORDER BY r.position'''
                 bodies = con.execute(query, (variant, cutoff, variant, variant))
+                rows = [json.loads(body) for (body,) in bodies]
             else:
                 bodies = con.execute('SELECT body FROM rows WHERE variant=? ORDER BY position', (variant,))
-            result['entries'][variant] = dict(entry, conversations=[json.loads(row[0]) for row in bodies])
+                rows = _decode_full_bodies(bodies)
+            result['entries'][variant] = dict(entry, conversations=rows)
         return result
     finally:
         con.close()

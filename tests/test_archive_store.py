@@ -37,6 +37,24 @@ def test_hot_read_decodes_only_hot_bodies_and_preserves_old_parent(tmp_path, mon
     assert store.load(target) == original
 
 
+def test_full_read_preserves_batch_boundaries_and_legacy_bodies(tmp_path):
+    target = tmp_path / 'archive.json'
+    original = data()
+    original['entries']['base']['conversations'].extend(
+        {'session_id': f'archive-{i}', 'first_message': f'Note {i}: \u2603 [{{}}]'}
+        for i in range(400)
+    )
+    store.save(target, original, complete=True)
+    with sqlite3.connect(store.database_path(target)) as conn:
+        conn.execute("UPDATE rows SET body = CAST(body AS BLOB) WHERE sid = 'archive-201'")
+    assert store.load(target) == original
+
+    with sqlite3.connect(store.database_path(target)) as conn:
+        conn.execute("UPDATE rows SET body = '{} , {}' WHERE sid = 'archive-392'")
+    with pytest.raises(json.JSONDecodeError):
+        store.load(target)
+
+
 def test_unchanged_cold_rows_are_not_rewritten(tmp_path):
     target = tmp_path / 'archive.json'
     store.save(target, data(), complete=True)
