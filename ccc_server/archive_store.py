@@ -523,25 +523,69 @@ def load_head(cache_file, key, limit, *, schema_version, build_id, deleted_codex
         con.close()
 
 
+def _decode_full_batch(bodies):
+    if (bodies and sum(map(len, bodies)) <= 2 * 1024 * 1024
+            and all(isinstance(body, str) and body.startswith('{') and body.endswith('}')
+                    for body in bodies)):
+        try:
+            decoded = json.loads('[' + ','.join(bodies) + ']')
+            if len(decoded) == len(bodies):
+                return decoded
+        except (ValueError, RecursionError):
+            pass
+    # Retain per-record decoding for oversized, legacy or malformed
+    # bodies so corrupt records still take the normal fallback path.
+    return [json.loads(body) for body in bodies]
+
+
 def _decode_full_bodies(cursor):
     """Decode ordered archive bodies in bounded batches."""
     rows = []
     while batch := cursor.fetchmany(192):
-        bodies = [body for (body,) in batch]
-        if (sum(map(len, bodies)) <= 2 * 1024 * 1024
-                and all(isinstance(body, str) and body.startswith('{') and body.endswith('}')
-                        for body in bodies)):
-            try:
-                decoded = json.loads('[' + ','.join(bodies) + ']')
-                if len(decoded) == len(bodies):
-                    rows.extend(decoded)
-                    continue
-            except (ValueError, RecursionError):
-                pass
-        # Retain per-record decoding for oversized, legacy or malformed
-        # bodies so corrupt records still take the normal fallback path.
-        rows.extend(json.loads(body) for body in bodies)
+        rows.extend(_decode_full_batch([body for (body,) in batch]))
     return rows
+
+
+def load_with_overrides(cache_file, key, current_rows, *, schema_version, build_id, min_cached_at):
+    """Merge current rows at their stored positions without decoding superseded bodies.
+
+    Older schemas and identities derived from a row's position still use the
+    caller's ordinary full load and merge.
+    """
+    current = {}
+    for row in current_rows:
+        sid = row.get('session_id') or row.get('id')
+        if not isinstance(sid, str) or not sid or sid.startswith('#'):
+            return None
+        current[identity(row)] = row
+    if not database_path(cache_file).exists():
+        return None
+    con = _connect(cache_file)
+    try:
+        con.execute('BEGIN')
+        header = con.execute('SELECT metadata FROM variants WHERE key=?', (key,)).fetchone()
+        if not header:
+            return None
+        metadata = json.loads(header[0])
+        entry = metadata['entry']
+        if not (metadata.get('schema_version') == schema_version and metadata.get('build_id') == build_id
+                and float(entry.get('cached_at') or 0) >= min_cached_at):
+            return None
+
+        # The body and identity are published together. A NULL here marks an
+        # override, since stored bodies are non-null. Keep the database's
+        # ordering even when the live snapshot ranks those rows differently.
+        records = con.execute('''SELECT identity,
+            CASE WHEN identity IN (SELECT value FROM json_each(?)) THEN NULL ELSE body END
+            FROM rows WHERE variant=? ORDER BY position''', (json.dumps(list(current)), key))
+        rows = []
+        while batch := records.fetchmany(192):
+            decoded = iter(_decode_full_batch([body for _, body in batch if body is not None]))
+            rows.extend(current.pop(rid) if body is None else next(decoded) for rid, body in batch)
+        rows.extend(current.values())
+        return dict(entry, conversations=rows)
+    finally:
+        con.close()
 
 
 def load(cache_file, *, hot=False, key=None, now=None):

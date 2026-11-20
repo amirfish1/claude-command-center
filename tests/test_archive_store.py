@@ -55,6 +55,32 @@ def test_full_read_preserves_batch_boundaries_and_legacy_bodies(tmp_path):
         store.load(target)
 
 
+def test_history_read_merges_live_rows_at_stored_positions(tmp_path, monkeypatch):
+    target = tmp_path / 'archive.json'
+    original = data()
+    rows = original['entries']['base']['conversations']
+    rows[1].update(first_message='superseded text', engine='claude')
+    rows.append({'session_id': 'recent', 'engine': 'codex'})
+    rows.append({'first_message': 'row without a session ID'})
+    store.save(target, original, complete=True)
+    appended = {'session_id': 'new'}
+    live = dict(rows[1], first_message='live text')
+    decoded = []
+    loads = json.loads
+    monkeypatch.setattr(store.json, 'loads', lambda body: decoded.append(body) or loads(body))
+    options = dict(schema_version=original['schema_version'], build_id=original['build_id'],
+                   min_cached_at=10)
+
+    result = store.load_with_overrides(target, 'base', [appended, live], **options)
+
+    assert result['conversations'] == [rows[0], live, *rows[2:], appended]
+    assert result['conversations'][1] is live
+    assert not any('superseded text' in body for body in decoded)
+    assert store.load_with_overrides(target, 'base', [{}], **options) is None
+    assert store.load_with_overrides(target, 'base', [live], **dict(options, min_cached_at=11)) is None
+    assert store.load_with_overrides(target, 'base', [live], **dict(options, build_id='older')) is None
+
+
 def test_unchanged_cold_rows_are_not_rewritten(tmp_path):
     target = tmp_path / 'archive.json'
     store.save(target, data(), complete=True)

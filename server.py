@@ -17273,24 +17273,42 @@ def _archive_response_cache_put(key, conversations, signature=None):
             current["conversations"] = archive_store.hot_rows(rows)
 
 
-def _archive_response_cache_build_get(key):
-    """Materialize cold bodies only for a builder or explicit history read."""
+def _archive_response_cache_build_get(key, *, overlay_rows=None):
+    """Materialize cold bodies, preserving live replacements for a history read."""
     entry = _archive_response_cache_get(key)
     from ccc_server import archive_store, archive_snapshot
     import sqlite3
+    if overlay_rows:
+        try:
+            merged = archive_store.load_with_overrides(
+                _ARCHIVE_RESPONSE_CACHE_FILE, key, overlay_rows,
+                schema_version=_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
+                build_id=_ARCHIVE_RESPONSE_CACHE_BUILD_ID,
+                min_cached_at=float((entry or {}).get("cached_at") or 0),
+            )
+            if merged is not None:
+                return merged
+        except (OSError, ValueError, sqlite3.Error):
+            # Older SQLite builds can lack JSON1. The ordinary read does not
+            # need it and also retains the legacy/corrupt-store fallback.
+            pass
     try:
         data = archive_store.load(_ARCHIVE_RESPONSE_CACHE_FILE, key=key)
         if data:
             data = archive_snapshot.upgrade_driver_metadata(
                 data, _ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION, _ARCHIVE_RESPONSE_CACHE_BUILD_ID)
-            if (data.get("schema_version") != _ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION
-                    or data.get("build_id") != _ARCHIVE_RESPONSE_CACHE_BUILD_ID):
-                return entry
-            stored = data.get("entries", {}).get(key)
-            if stored and (not entry or float(stored.get("cached_at") or 0) >= float(entry.get("cached_at") or 0)):
-                return stored
+            if (data.get("schema_version") == _ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION
+                    and data.get("build_id") == _ARCHIVE_RESPONSE_CACHE_BUILD_ID):
+                stored = data.get("entries", {}).get(key)
+                if stored and (not entry or float(stored.get("cached_at") or 0) >= float(entry.get("cached_at") or 0)):
+                    entry = stored
     except (OSError, ValueError, sqlite3.Error) as exc:
         print(f"  [archive-cache] cold read unavailable: {exc}")
+    if entry and overlay_rows:
+        current = {archive_store.identity(row): row for row in overlay_rows}
+        rows = [current.pop(archive_store.identity(row), row) for row in entry.get("conversations") or []]
+        rows.extend(current.values())
+        return dict(entry, conversations=rows)
     return entry
 
 
@@ -20782,12 +20800,8 @@ def _archive_serve_rows_versioned(key, cache_options, *, copy_rows=True, force_r
     if window == "all":
         from ccc_server import archive_store
         if archive_store.database_path(_ARCHIVE_RESPONSE_CACHE_FILE).exists():
-            entry = _archive_response_cache_build_get(key)
+            entry = _archive_response_cache_build_get(key, overlay_rows=rows)
             if entry:
-                current = {archive_store.identity(row): row for row in rows}
-                cold = entry.get("conversations") or []
-                combined = [current.pop(archive_store.identity(row), row) for row in cold]
-                combined.extend(current.values())
                 # Full-history bodies can still replay against the hot snapshot
                 # version. A new disk publication invalidates its cached body.
                 with _archive_serve_lock:
@@ -20799,7 +20813,7 @@ def _archive_serve_rows_versioned(key, cache_options, *, copy_rows=True, force_r
                             for field in ("body_raw", "body_gzip", "etag"):
                                 sc.pop(field, None)
                         version = sc.get("ver", 0)
-                return _overlay_conversation_lifecycle_flags(combined), cached, version
+                return _overlay_conversation_lifecycle_flags(entry["conversations"]), cached, version
     if window != "all":
         from ccc_server import archive_store
         if archive_store.database_path(_ARCHIVE_RESPONSE_CACHE_FILE).exists():
