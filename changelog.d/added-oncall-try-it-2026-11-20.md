@@ -1,0 +1,1 @@
+- Added a local On-call illustration where visitors can answer a sample message and follow a ticket through a scripted fix.

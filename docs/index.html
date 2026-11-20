@@ -643,6 +643,27 @@
   .feature-timeline-figure figcaption { color: var(--fg-dim); font-size: 15px; margin-top: 18px; max-width: 75ch; }
   .feature-timeline-links { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 20px 0 0; }
   .feature-timeline-figure a:focus-visible, .feature-timeline-links a:focus-visible { outline: 2px solid var(--orange); outline-offset: 5px; }
+
+  /* Local illustration. No network or saved replies. */
+  #try-oncall .try-layout { display: grid; grid-template-columns: minmax(0, 390px) minmax(0, 1fr); gap: 64px; align-items: center; margin-top: 36px; }
+  #try-oncall .try-phone { border: 2px solid var(--line-strong); border-radius: 32px; padding: 28px 20px; background: var(--bg-2); }
+  #try-oncall .try-phone h3 { margin: 0 0 20px; font-size: 16px; color: var(--fg-dim); }
+  #try-oncall .try-message { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 15px; background: var(--bg-4); border-radius: 12px; padding: 16px; margin: 0 0 20px; }
+  #try-oncall label { display: block; font-size: 14px; margin-bottom: 8px; }
+  #try-oncall input { width: 100%; min-height: 48px; padding: 12px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--fg); background: var(--bg); font: inherit; caret-color: var(--orange); }
+  #try-oncall button { min-height: 44px; padding: 10px 16px; border: 1px solid var(--line-strong); border-radius: 8px; font: inherit; color: var(--fg); background: var(--bg-3); cursor: pointer; }
+  #try-oncall button:hover { border-color: var(--orange); }
+  #try-oncall button:focus-visible, #try-oncall input:focus-visible { outline: 3px solid var(--orange); outline-offset: 3px; }
+  #try-oncall button:disabled, #try-oncall input:disabled { opacity: .6; cursor: default; }
+  #try-oncall .try-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  #try-oncall button[type=submit] { background: var(--orange); color: var(--bg); border-color: var(--orange); font-weight: 600; }
+  #try-oncall .try-ticket { margin: 0; padding: 0; list-style: none; }
+  #try-oncall .try-ticket li { padding: 16px 0; border-bottom: 1px solid var(--line); color: var(--fg-dim); }
+  #try-oncall .try-ticket li[aria-current=step] { color: var(--orange); font-weight: 600; }
+  #try-oncall .try-ticket li[data-done=true] { color: var(--green); }
+  #try-oncall .try-status { min-height: 4.5em; overflow-wrap: anywhere; }
+  #try-oncall .try-note { color: var(--fg-dim); font-size: 14px; }
+  @media (max-width: 700px) { #try-oncall .try-layout { grid-template-columns: minmax(0, 1fr); gap: 28px; } #try-oncall .try-phone { max-width: 390px; width: 100%; margin: auto; } }
 </style>
 <noscript><style>.fade-target, .boot-target { opacity: 1; transform: none; }</style></noscript>
 <script src="/analytics.js" defer></script>
@@ -998,6 +1019,51 @@ Reply yes to tell Dana it is fixed, or no to skip.</div>
         <div class="score-item calm"><b>0</b><span>browser tabs you had to open</span></div>
       </div>
       <p class="score-note fade-target">Counted from the example above. Your bugs will differ.</p>
+    </div>
+  </section>
+
+  <section id="try-oncall" aria-labelledby="try-title">
+    <div class="wrap">
+      <div class="section-eyebrow">Interactive example</div>
+      <h2 id="try-title">Try answering <span class="orange">one message</span>.</h2>
+      <p class="section-lede">An illustration. The message text is what CCC sends. Example data.</p>
+      <p class="try-note">This example runs in your browser. Nothing is sent or saved. The fix and its timing are scripted.</p>
+      <div class="try-layout">
+        <div class="try-phone">
+          <h3>Your phone · On-call</h3>
+          <pre class="try-message" id="try-message">SHOP-12 — Checkout button does nothing on Safari needs a decision (#4)
+
+Keep the old redirect as a fallback for one release, or remove it now?
+Agent recommends: keep it for one release.
+
+Reply with your answer.</pre>
+          <form id="try-form">
+            <label for="try-reply">Your reply</label>
+            <input id="try-reply" name="reply" maxlength="160" required autocomplete="off" placeholder="Keep it for one release" aria-describedby="try-help">
+            <div class="try-actions">
+              <button type="submit">Send reply</button>
+              <button type="button" id="try-suggest">Use “keep it”</button>
+            </div>
+            <p class="try-note" id="try-help">Type an answer, or tap the suggested reply.</p>
+          </form>
+          <noscript><p>This illustration needs JavaScript. In CCC, your reply becomes the agent’s next turn.</p></noscript>
+        </div>
+        <div>
+          <h3>SHOP-12 · Checkout button</h3>
+          <ol class="try-ticket" aria-label="Example ticket progress">
+            <li data-done="true">Reported · The bug reached the queue.</li>
+            <li aria-current="step">Waiting · The agent needs your decision.</li>
+            <li>Working · Your reply becomes its next turn.</li>
+            <li>Fixed · You decide whether to tell the reporter.</li>
+          </ol>
+          <p id="try-status" class="try-status" role="status" aria-live="polite" aria-atomic="true">The example ticket is waiting for your reply.</p>
+          <div id="try-notice" hidden>
+            <p>Send the example fixed notice to the reporter?</p>
+            <div class="try-actions"><button type="button" id="try-yes">Yes, tell them</button><button type="button" id="try-no">No, skip it</button></div>
+          </div>
+          <div class="try-actions"><button type="button" id="try-reset">Start again</button></div>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -1425,6 +1491,71 @@ ccc ask queue-drain "what's your status?"   <span class="comment"># blocks for t
 
     targets.forEach(el => observer.observe(el));
   });
+</script>
+
+<script>
+(() => {
+  const root = document.getElementById('try-oncall');
+  if (!root) return;
+  const form = root.querySelector('form');
+  const input = root.querySelector('input');
+  const status = root.querySelector('#try-status');
+  const notice = root.querySelector('#try-notice');
+  const steps = [...root.querySelectorAll('.try-ticket li')];
+  let timer;
+  let stage = 'waiting';
+  function move(index) {
+    steps.forEach((step, i) => {
+      step.removeAttribute('aria-current');
+      step.dataset.done = String(i < index);
+      if (i === index) step.setAttribute('aria-current', 'step');
+    });
+  }
+  function reset() {
+    clearTimeout(timer);
+    stage = 'waiting';
+    form.reset();
+    form.querySelectorAll('button,input').forEach(el => { el.disabled = false; });
+    notice.hidden = true;
+    move(1);
+    status.textContent = 'The example ticket is waiting for your reply.';
+  }
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    if (stage !== 'waiting') return;
+    const reply = input.value.trim();
+    if (!reply) { input.setCustomValidity('Write a reply first.'); input.reportValidity(); return; }
+    stage = 'working';
+    form.querySelectorAll('button,input').forEach(el => { el.disabled = true; });
+    move(2);
+    status.textContent = 'Agent’s next turn: “' + reply + '” The example agent continues with your answer.';
+    root.querySelector('#try-reset').focus({preventScroll:true});
+    timer = setTimeout(() => {
+      stage = 'fixed';
+      move(3);
+      status.textContent = 'The example fix passed its test. The ticket is closed. The reporter has not been told yet.';
+      notice.hidden = false;
+    }, window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 2400);
+  });
+  input.addEventListener('input', () => input.setCustomValidity(''));
+  root.querySelector('#try-suggest').addEventListener('click', () => {
+    input.value = 'keep it'; input.setCustomValidity(''); form.requestSubmit();
+  });
+  root.querySelector('#try-reset').addEventListener('click', () => {
+    reset(); input.setCustomValidity(''); input.focus({preventScroll:true});
+  });
+  for (const choice of ['yes', 'no']) {
+    root.querySelector('#try-' + choice).addEventListener('click', () => {
+      if (stage !== 'fixed') return;
+      stage = 'done';
+      notice.hidden = true;
+      status.textContent = choice === 'yes'
+        ? 'Example notice: The problem you reported is fixed: Checkout button does nothing on Safari. Reply to this message if you still see it.'
+        : 'Notice skipped. The example ticket stays fixed. The reporter receives nothing.';
+      root.querySelector('#try-reset').focus({preventScroll:true});
+    });
+  }
+})();
 </script>
 </body>
 </html>
