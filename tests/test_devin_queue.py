@@ -1,5 +1,6 @@
 """Regression coverage for Devin CLI message queue drain."""
 
+import contextlib
 import importlib
 import json
 import os
@@ -328,6 +329,33 @@ class DevinQueueTests(unittest.TestCase):
             self.assertFalse(server._devin_cli_session_live("stale-lock"))
             self.assertTrue(server._devin_cli_session_live("live-lock"))
             self.assertFalse(server._devin_cli_session_live("missing"))
+
+    def test_devin_list_reuses_lock_pid_and_checks_liveness_again(self):
+        from ccc_server import devin
+
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            lock = directory / "session.lock"
+            lock.write_text("1234\n", encoding="utf-8")
+            version = lock.stat()
+            cached_read = devin._devin_cli_read_unchanged_lock_pid
+            self.addCleanup(cached_read.cache_clear)
+            with mock.patch.object(devin, "_devin_cli_locks_dirs", return_value=[directory]), \
+                 mock.patch.object(devin, "_DEVIN_CLI_LIVE_CACHE", {}), \
+                 mock.patch.object(devin, "_DEVIN_CLI_LIVE_CACHE_TTL_S", 0), \
+                 mock.patch.object(devin, "_devin_cli_pid_alive", side_effect=[True, False, True]) as alive, \
+                 mock.patch.object(devin, "_devin_cli_read_lock_pid", wraps=devin._devin_cli_read_lock_pid) as read:
+                self.assertTrue(devin._devin_cli_session_live("session", reuse_lock_file=True))
+                self.assertFalse(devin._devin_cli_session_live("session", reuse_lock_file=True))
+                read.assert_called_once_with(lock)
+
+                replacement = directory / "replacement"
+                replacement.write_text("5678\n", encoding="utf-8")
+                os.utime(replacement, ns=(version.st_atime_ns, version.st_mtime_ns))
+                replacement.replace(lock)
+                self.assertTrue(devin._devin_cli_session_live("session", reuse_lock_file=True))
+                self.assertEqual(read.call_count, 2)
+                self.assertEqual(alive.call_args_list, [mock.call(1234), mock.call(1234), mock.call(5678)])
 
     def test_devin_cli_pid_alive_rejects_own_zombie(self):
         """An exited, unreaped child (zombie) must not count as a live owner."""
@@ -874,6 +902,28 @@ class DevinListPerfTests(unittest.TestCase):
                 self.assertEqual(row["session_cwd"], str(cwd))
                 self.assertTrue(row["session_cwd_exists"])
                 self.assertEqual((row["folder_path"], row["folder_label"], row["worktree_label"]), expected)
+
+    def test_devin_session_rows_preserve_order_and_legacy_values(self):
+        from ccc_server import devin
+
+        with contextlib.closing(sqlite3.connect(":memory:")) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("CREATE TABLE sessions (id, working_directory, backend_type, model, "
+                         "agent_mode, created_at, last_activity_at, title, main_chain_id)")
+            conn.executemany(
+                "INSERT INTO sessions (id, last_activity_at, title) VALUES (?, ?, ?)",
+                [("new", 42, "New"), ("tie", 42, "Same time"), ("old", 10, None)],
+            )
+
+            def expected_rows():
+                return [dict(row) for row in conn.execute("SELECT * FROM sessions ORDER BY last_activity_at DESC")]
+
+            self.assertEqual(list(devin._devin_cli_session_rows(conn)), expected_rows())
+            conn.execute("UPDATE sessions SET created_at=? WHERE id='old'", (0.12345678901234567,))
+            self.assertEqual(list(devin._devin_cli_session_rows(conn)), expected_rows())
+            conn.executemany("INSERT INTO sessions (id, last_activity_at) VALUES (?, ?)",
+                             [(str(index), index) for index in range(515)])
+            self.assertEqual([dict(row) for row in devin._devin_cli_session_rows(conn)], expected_rows())
 
     def test_devin_list_memoizes_per_session_fields(self):
         server, devin_mod, db_path, now = self._setup()

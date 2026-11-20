@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import collections
+from functools import lru_cache
 import json
 import os
 import re
@@ -906,7 +907,20 @@ def _devin_cli_raw_id(session_id):
     return str(session_id or "")
 
 
-def _devin_cli_lock_pid(raw_id):
+def _devin_cli_read_lock_pid(lock):
+    tokens = lock.read_text(encoding="utf-8").split(maxsplit=1)
+    try:
+        return int(tokens[0]) if tokens else 0
+    except ValueError:
+        return 0
+
+
+@lru_cache(maxsize=2048)
+def _devin_cli_read_unchanged_lock_pid(lock, _file_version):
+    return _devin_cli_read_lock_pid(lock)
+
+
+def _devin_cli_lock_pid(raw_id, *, reuse_lock_file=False):
     """PID recorded in ``session_locks/<id>.lock``, or None.
 
     Checks every home's locks dir (original `cli/` first, then the desktop
@@ -917,15 +931,16 @@ def _devin_cli_lock_pid(raw_id):
     for locks_dir in _devin_cli_locks_dirs():
         lock = locks_dir / f"{raw_id}.lock"
         try:
-            text = lock.read_text(encoding="utf-8").strip()
+            if reuse_lock_file:
+                # Display rebuilds can reuse the parsed PID of an unchanged
+                # lock file. Check liveness separately, since the process can
+                # exit without changing the file.
+                stat = lock.stat()
+                version = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+                pid = _devin_cli_read_unchanged_lock_pid(lock, version)
+            else:
+                pid = _devin_cli_read_lock_pid(lock)
         except OSError:
-            continue
-        if not text:
-            continue
-        token = text.split()[0]
-        try:
-            pid = int(token)
-        except ValueError:
             continue
         if pid > 0:
             return pid
@@ -957,7 +972,7 @@ _DEVIN_CLI_LIVE_CACHE = {}
 _DEVIN_CLI_LIVE_CACHE_TTL_S = 5.0
 
 
-def _devin_cli_session_live(raw_id):
+def _devin_cli_session_live(raw_id, *, reuse_lock_file=False):
     """True when the session lock's recorded pid is still alive.
 
     A leftover lock file after the CLI exits is not liveness — every Devin
@@ -967,7 +982,8 @@ def _devin_cli_session_live(raw_id):
     hit = _DEVIN_CLI_LIVE_CACHE.get(raw_id)
     if hit and hit[0] > now:
         return hit[1]
-    pid = _devin_cli_lock_pid(raw_id)
+    pid = (_devin_cli_lock_pid(raw_id, reuse_lock_file=True)
+           if reuse_lock_file else _devin_cli_lock_pid(raw_id))
     live = _devin_cli_pid_alive(pid) if pid else False
     _DEVIN_CLI_LIVE_CACHE[raw_id] = (now + _DEVIN_CLI_LIVE_CACHE_TTL_S, live)
     if len(_DEVIN_CLI_LIVE_CACHE) > 2000:
@@ -2240,6 +2256,19 @@ def _devin_cli_folder_fields(session_cwd):
     return folder_path, folder_label, worktree_label, wd_exists
 
 
+def _devin_cli_session_rows(con):
+    columns = ("id", "working_directory", "backend_type", "model", "agent_mode",
+               "created_at", "last_activity_at", "title", "main_chain_id")
+    query = f"SELECT {', '.join(columns)} FROM sessions ORDER BY last_activity_at DESC"
+    # Read small native histories together to avoid a SQLite/GIL handoff per
+    # row. Keep streaming for larger histories to bound temporary allocations.
+    batch_size = 512
+    rows = fetch_rows(con, query + " LIMIT ?", (batch_size + 1,), columns)
+    if len(rows) > batch_size:
+        return con.execute(query)
+    return (dict(zip(columns, row)) for row in rows)
+
+
 def _find_devin_cli_conversations_locked(
     repo_path=None,
     include_old=False,
@@ -2356,15 +2385,10 @@ def _find_devin_cli_conversations_locked(
         devin_steer_capable = False
     try:
         spawn_by_sid = _devin_spawn_pid_by_session_id()
-        query = (
-            "SELECT id, working_directory, backend_type, model, agent_mode, "
-            "created_at, last_activity_at, title, main_chain_id "
-            "FROM sessions ORDER BY last_activity_at DESC"
-        )
         qstart = time.perf_counter()
         total_sessions_scanned = 0
         for con in cons:
-          for row in con.execute(query):
+          for row in _devin_cli_session_rows(con):
             total_sessions_scanned += 1
             raw_id = str(row["id"] or "").strip()
             if not raw_id:
@@ -2406,7 +2430,8 @@ def _find_devin_cli_conversations_locked(
             first_message = ""
             display_name = ""
             spawn_info = spawn_by_sid.get(sid) or {}
-            is_live = _devin_cli_session_live(raw_id) or bool(spawn_info.get("alive"))
+            is_live = (_devin_cli_session_live(raw_id, reuse_lock_file=True)
+                       or bool(spawn_info.get("alive")))
 
             # Resolve the session's folder the same way other CLI engines do:
             # honor a repo pin, walk up to the git root for the label, and split
