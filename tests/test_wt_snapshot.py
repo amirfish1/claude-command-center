@@ -62,6 +62,29 @@ def test_truncated_or_inconsistent_protocol_is_rejected(tmp_path, monkeypatch, o
         wt_snapshot.fetch(queue)
 
 
+def test_refresh_reuses_only_complete_matching_tickets_in_current_order(tmp_path, monkeypatch):
+    queue = package(tmp_path, "")
+    alpha = {"ref": "TEST-1", "history": [{"event": "claim"}]}
+    beta = {"ref": "TEST-2", "resolution": {"summary": "Old"}}
+    changed = {"ref": "TEST-2", "resolution": {"summary": "Current"}}
+    batches = iter([[alpha, beta], [alpha, beta], [changed, alpha, alpha], [changed, alpha]])
+
+    def run(args, *, stdout, **kwargs):
+        rows = next(batches)
+        for row in rows:
+            wt_snapshot._write_row(stdout, row)
+        stdout.write(json.dumps({"items_total": len(rows)}) + "\n")
+
+    monkeypatch.setattr(wt_snapshot.subprocess, "run", run)
+    initial = wt_snapshot.fetch(queue)
+    assert wt_snapshot.fetch(queue, previous=initial) is initial
+    refresh = wt_snapshot.fetch(queue, previous=initial)
+    assert refresh == [changed, alpha, alpha]
+    assert refresh[0] is not initial[1]
+    assert refresh[1] is initial[0] and refresh[1] is not refresh[2]
+    assert wt_snapshot.fetch(queue, previous=refresh) == [changed, alpha]
+
+
 def test_dashboard_retains_previous_snapshot_on_child_failure(tmp_path, monkeypatch):
     import server
     previous = [{"ref": "TEST-1", "title": "Existing title"}]

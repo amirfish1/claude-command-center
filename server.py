@@ -3900,7 +3900,9 @@ def _wt_list_items_refresh(max_age):
         return snapshot_items
     try:
         from ccc_server.wt_snapshot import fetch
-        items = fetch(_q, snapshot_path=_WT_ITEMS_SNAPSHOT_FILE)
+        with _wt_items_memo_lock:
+            previous = _wt_items_memo["items"]
+        items = fetch(_q, snapshot_path=_WT_ITEMS_SNAPSHOT_FILE, previous=previous)
     except Exception:
         # Fall back to whatever we last saw, however old — a failed `gh` must
         # not blank out every worker row's title.

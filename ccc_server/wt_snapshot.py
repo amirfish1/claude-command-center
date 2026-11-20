@@ -1,6 +1,7 @@
 """Keep remote ticket-list reconstruction outside the HTTP interpreter."""
 
 import contextlib
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,12 +10,21 @@ import sys
 import tempfile
 
 
-def fetch(queue_module, timeout=90, *, snapshot_path=None):
+class _Snapshot(list):
+    """Read-only display rows and their last child-output fingerprints."""
+
+    def __init__(self):
+        super().__init__()
+        self.fingerprints = {}
+
+
+def fetch(queue_module, timeout=90, *, snapshot_path=None, previous=None):
     """Read the same queue data in a disposable interpreter, without server boot.
 
     A temporary stream avoids pipe backpressure and a single giant JSON decode
     under the dashboard's GIL. One record per ticket preserves all fields,
-    including history used by question links and queue charts.
+    including history used by question links and queue charts. A refresh can
+    reuse already-decoded rows from its previous read-only display snapshot.
     """
     package_root = Path(queue_module.__file__).resolve().parent.parent
     with contextlib.ExitStack() as stack:
@@ -34,12 +44,23 @@ def fetch(queue_module, timeout=90, *, snapshot_path=None):
                        stdout=output, stderr=subprocess.DEVNULL, check=True,
                        timeout=timeout)
         output.seek(0)
-        items = []
+        items = _Snapshot()
+        prior = previous.fingerprints if isinstance(previous, _Snapshot) else {}
         for line in output:
-            record = json.loads(line)
+            # The trusted local child hashes the complete encoded row,
+            # including its history and resolution. Keep hashing off the
+            # dashboard thread even on the first refresh.
+            framed = line[64:65] == "\t"
+            fingerprint = line[:64] if framed else None
+            if framed and fingerprint in prior and fingerprint not in items.fingerprints:
+                item = prior[fingerprint]
+                items.fingerprints[fingerprint] = item
+                items.append(item)
+                continue
+            record = json.loads(line[65:] if framed else line)
             if not isinstance(record, dict):
                 raise ValueError("invalid ticket snapshot record")
-            if "items_total" in record:
+            if not framed and "items_total" in record:
                 if record != {"items_total": len(items)} or output.read():
                     raise ValueError("incomplete ticket snapshot")
                 # The child does the expensive encoding; only this parent
@@ -47,10 +68,16 @@ def fetch(queue_module, timeout=90, *, snapshot_path=None):
                 if staged is not None:
                     with contextlib.suppress(OSError):
                         os.replace(staged, destination)
+                if isinstance(previous, _Snapshot) and len(previous) == len(items) and all(
+                    old is new for old, new in zip(previous, items)
+                ):
+                    return previous
                 return items
-            if set(record) != {"item"} or not isinstance(record["item"], dict):
+            if not framed or set(record) != {"item"} or not isinstance(record["item"], dict):
                 raise ValueError("invalid ticket snapshot item")
-            items.append(record["item"])
+            item = record["item"]
+            items.fingerprints.setdefault(fingerprint, item)
+            items.append(item)
         raise ValueError("ticket snapshot completion missing")
 
 
@@ -78,6 +105,12 @@ def _persist(items, destination):
                 os.unlink(temporary)
 
 
+def _write_row(output, item):
+    encoded = json.dumps({"item": item}, separators=(",", ":"))
+    fingerprint = hashlib.sha256(encoded.encode()).hexdigest()
+    output.write(f"{fingerprint}\t{encoded}\n")
+
+
 def _main():
     # Resolve the exact package already imported by the parent, including an
     # editable install not on the child's default import path.
@@ -88,11 +121,12 @@ def _main():
     with contextlib.redirect_stdout(sys.stderr):
         from watchtower import queue
         items = queue.list_items() or []
+    output = sys.stdout
     for item in items:
-        print(json.dumps({"item": item}, separators=(",", ":")))
+        _write_row(output, item)
     if len(sys.argv) > 2:
         _persist(items, sys.argv[2])
-    print(json.dumps({"items_total": len(items)}))
+    output.write(json.dumps({"items_total": len(items)}) + "\n")
 
 
 if __name__ == "__main__":
