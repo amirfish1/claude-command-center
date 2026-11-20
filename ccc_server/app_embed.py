@@ -23,6 +23,7 @@ _PANEL_ASSETS = (
     "service-connections", "mobile-ticket-record",
     "leftover", "runaway", "scheduled-jobs", "jobs-tab", "decision-tab",
     "first-task", "issue-flow", "star-ask", "oncall", "share-run", "app-rail", "app-shell-",
+    "archive-boot.js",
 )
 _SCRIPT = re.compile(
     r'^\s*<script src="/static/([^"?]+)(?:\?[^"\n]*)?"[^>]*></script>', re.M)

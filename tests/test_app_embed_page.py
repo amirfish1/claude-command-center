@@ -45,6 +45,7 @@ def test_embed_preserves_all_shared_controls_and_conversation_extensions():
                  "free-runtime", "free-router", "queue-ticket-submit", "limit-failover"):
         assert f"{name}.js" in delivered
     assert "/static/app.js" not in after.scripts
+    assert "archive-boot.js" not in delivered
     assert "cccLoadingOverlay" not in after.ids
     assert len(after.scripts) < len(before.scripts) / 2
     assert not any("settings-" in url or "onboarding/" in url for url in after.scripts)
