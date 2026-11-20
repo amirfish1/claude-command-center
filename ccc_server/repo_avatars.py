@@ -53,7 +53,12 @@ def _discover(root):
     for name in _NAMES:
         for directory in _DIRS:
             for ext in TYPES:
-                hit = _image(root / directory / (name + ext), root)
+                candidate = root / directory / (name + ext)
+                # Most conventional locations are absent. Avoid resolving
+                # every path component until there is an entry to inspect.
+                if not os.path.lexists(candidate):
+                    continue
+                hit = _image(candidate, root)
                 if hit:
                     return hit
     # Branded filenames (logo-light.svg etc.) are common too.

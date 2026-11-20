@@ -38,6 +38,15 @@ def test_initials_are_stable_and_escaped(tmp_path):
     assert b'>SP</text>' in first[0]
 
 
+def test_conventional_logo_links_still_resolve_inside_the_repo(tmp_path):
+    (tmp_path / 'logo.svg').symlink_to('missing.svg')
+    (tmp_path / 'brand.svg').write_bytes(b'<svg>brand</svg>')
+    (tmp_path / 'logo.png').symlink_to('brand.svg')
+
+    assert avatars.avatar(tmp_path, tmp_path / 'state') == (
+        b'<svg>brand</svg>', 'image/svg+xml', 'automatic', 'brand.svg')
+
+
 def test_custom_avatar_persists_per_repo_and_reset_detects_again(tmp_path):
     repo = tmp_path / 'sample-project'
     repo.mkdir()
