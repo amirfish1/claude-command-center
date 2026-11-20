@@ -33,8 +33,8 @@ Perf (CLAUDE.md gates): candidacy is stat-only (transcript mtime within
 ACTIVE_WINDOW_S); only candidates are read, and only the bytes appended since
 the last scan, with the parse state persisted to disk keyed by (inode, size).
 A cold candidate is read from its last INITIAL_TAIL_BYTES at most. The API
-answers from the last result and refreshes it on a background thread at most
-every SCAN_TTL_S, so a request never waits on a scan. No subprocesses.
+answers from the last result and refreshes it at most every SCAN_TTL_S
+through the supervised background helper, with a local background fallback.
 
 Engines: Claude (~/.claude/projects), Codex ($CODEX_HOME/sessions), Kimi
 ($KIMI_CODE_HOME/sessions/*/session_*/agents/main/wire.jsonl), and the
@@ -48,6 +48,7 @@ Stdlib-only.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import hashlib
 import os
@@ -1012,16 +1013,32 @@ _FEEDERS = {"claude": feed_claude, "codex": feed_codex, "kimi": feed_kimi}
 def scan(now=None, projects_root=None, codex_root=None, state_file=None, debug=False,
          kimi_root=None, devin_dbs=None, hermes_dbs=None, flag_log=None):
     """Incrementally re-read active transcripts; return flagged entries."""
+    if flag_log is None:
+        flag_log = FLAG_LOG_FILE if state_file is None else Path(state_file).with_name("runaway-flags.jsonl")
+    state_file = Path(SCAN_STATE_FILE if state_file is None else state_file)
+    args = (now, projects_root, codex_root, state_file, debug, kimi_root,
+            devin_dbs, hermes_dbs, flag_log)
+    lock_file = state_file.with_suffix(state_file.suffix + ".lock")
+    try:
+        lock_file.parent.mkdir(parents=True, exist_ok=True)
+        lock = lock_file.open("a")
+    except OSError:
+        return _scan(*args)
+    # The previous scan can still be running after a helper timeout. Take
+    # the same lock for helper, fallback, and explicit debug scans.
+    with lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _scan(*args)
+
+
+def _scan(now, projects_root, codex_root, state_file, debug, kimi_root,
+          devin_dbs, hermes_dbs, flag_log):
     now = time.time() if now is None else now
     projects_root = PROJECTS_ROOT if projects_root is None else projects_root
     codex_root = CODEX_ROOT if codex_root is None else codex_root
     kimi_root = KIMI_ROOT if kimi_root is None else kimi_root
     devin_dbs = _default_devin_dbs() if devin_dbs is None else devin_dbs
     hermes_dbs = _default_hermes_dbs() if hermes_dbs is None else hermes_dbs
-    if flag_log is None:
-        flag_log = (FLAG_LOG_FILE if state_file is None
-                    else Path(state_file).with_name("runaway-flags.jsonl"))
-    state_file = SCAN_STATE_FILE if state_file is None else state_file
     states = _read_json(state_file, {})
     if not isinstance(states, dict):
         states = {}
@@ -1088,10 +1105,15 @@ def set_lease(session_id, hours, kind="lease", now=None, leases_file=None):
 
 def _refresh_memo():
     try:
-        from ccc_server import background_work
-        with background_work.slot():
-            flagged, watch = scan()
-        _MEMO.update(at=time.time(), result=(flagged, watch))
+        from ccc_server import background_work, bg_helper
+        reply = None
+        if bg_helper.enabled() and not bg_helper.is_child():
+            reply = bg_helper.call("runaway_scan")
+        flagged = (reply or {}).get("sessions")
+        if not isinstance(flagged, list):
+            with background_work.slot():
+                flagged, _ = scan()
+        _MEMO.update(at=time.time(), result=(flagged, []))
     finally:
         with _LOCK:
             _MEMO["running"] = False

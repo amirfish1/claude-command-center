@@ -470,3 +470,25 @@ def test_productivity_snapshot_loads_metadata_once_before_building_over_wire(hel
     for _ in range(2):
         assert bg_helper.call('productivity_snapshot') == {'ok': True, 'data': expected}
     assert calls == ['load', 'build', 'build']
+
+
+def test_runaway_refresh_uses_helper_result_and_applies_current_leases(helper, monkeypatch):
+    from ccc_server import runaway
+
+    monkeypatch.setenv("CCC_BG_HELPER", "1")
+    monkeypatch.setattr(runaway, "_MEMO", {"at": 0, "result": None, "running": True})
+    calls = []
+    findings = [{"session_id": "leased"}, {"session_id": "active"}]
+
+    def scan():
+        calls.append(threading.get_ident())
+        return findings, []
+
+    monkeypatch.setattr(runaway, "scan", scan)
+    monkeypatch.setattr(runaway, "_leases", lambda *_: {"leased": {"until": time.time() + 60}})
+    runaway._refresh_memo()
+
+    assert len(calls) == 1
+    assert calls[0] != threading.get_ident()
+    assert runaway.state()["sessions"] == [{"session_id": "active"}]
+    assert not runaway._MEMO["running"]

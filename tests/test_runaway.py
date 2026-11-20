@@ -38,6 +38,29 @@ def test_compact_scan_cache_roundtrip_and_atomic_replace(tmp_path, monkeypatch):
     assert target.read_bytes() == before
 
 
+def test_scan_locks_state_through_publication(tmp_path, monkeypatch):
+    from ccc_server import bg_helper
+
+    state_file = tmp_path / "scan.json"
+    monkeypatch.setenv("CCC_BG_HELPER", "1")
+    monkeypatch.delenv(bg_helper.CHILD_ENV, raising=False)
+    monkeypatch.setattr(bg_helper, "call", lambda op: None)
+    monkeypatch.setattr(runaway, "_MEMO", {"at": 0, "result": None, "running": True})
+    monkeypatch.setattr(runaway, "SCAN_STATE_FILE", state_file)
+    findings = [{"session_id": "local"}]
+
+    def scan(*args):
+        with state_file.with_suffix(".json.lock").open("a") as peer:
+            with pytest.raises(BlockingIOError):
+                runaway.fcntl.flock(peer, runaway.fcntl.LOCK_EX | runaway.fcntl.LOCK_NB)
+        return findings, []
+
+    monkeypatch.setattr(runaway, "_scan", scan)
+    runaway._refresh_memo()
+    assert runaway._MEMO["result"] == (findings, [])
+    assert not runaway._MEMO["running"]
+
+
 def iso(ts):
     return datetime.fromtimestamp(ts, timezone.utc).isoformat().replace("+00:00", "Z")
 

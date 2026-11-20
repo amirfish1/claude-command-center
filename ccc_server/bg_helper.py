@@ -25,6 +25,8 @@ the child exits when its parent goes away.
   queues here, returning just the four count fields to the dashboard.
 * productivity: ``productivity_snapshot`` builds the 16-week datasets here;
   the dashboard retains refresh state, publication and live sampler health.
+* runaway detection: ``runaway_scan`` scans active transcripts and returns
+  the flagged sessions; the dashboard applies its current leases.
 * worker fingerprint: ``worker_closure`` walks imports for the diagnostic
   staleness comparison without occupying the dashboard's GIL.
 
@@ -346,6 +348,12 @@ class _Child:
         from ccc_server.import_closure import compute_closure
         return {"ok": True, "hash": compute_closure(self.server._install_dir())["hash"]}
 
+    def runaway_scan(self, req):
+        from ccc_server import background_work, runaway
+        with background_work.slot():
+            flagged, _ = runaway.scan()
+        return {"ok": True, "sessions": flagged}
+
     # ship-graph-warm -----------------------------------------------------
     def ship_sync(self, req):
         from ccc_server import ship_graph
@@ -370,6 +378,7 @@ class _Child:
                   "throughput_ticket_counts": self.throughput_ticket_counts,
                   "worker_closure": self.worker_closure,
                   "productivity_snapshot": self.productivity_snapshot,
+                  "runaway_scan": self.runaway_scan,
                   "ping": lambda r: {"ok": True}}.get(op)
             try:
                 reply = fn(req) if fn else {"ok": False, "error": "unknown op"}
