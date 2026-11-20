@@ -944,7 +944,12 @@ def emit_due(now=None, publish=None, os_notify=True, base_url=None):
             savings_today = _savings_snapshot(base_url, "today")
         if milestone_due:
             state["last_milestone_check"] = now
-            if totals is None:
+            # Only the API-value ladder consumes the all-time usage DB total.
+            # After its last rung, free-model milestones still use savings.
+            milestones = state.get("milestones") or ()
+            if totals is None and any(
+                f"value-{int(rung)}" not in milestones for rung in _VALUE_MILESTONES
+            ):
                 totals = _usage_db_totals(now)
             if totals or base_url:
                 savings_all = _savings_snapshot(base_url, "all")

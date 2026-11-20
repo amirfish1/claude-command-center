@@ -289,6 +289,28 @@ def test_milestone_uses_savings_snapshot(monkeypatch):
     assert "$10" in bodies and "$5" in bodies and "$25" in bodies
 
 
+def test_completed_value_milestones_skip_usage_scan_but_keep_free_milestones(monkeypatch):
+    state = {"milestones": [f"value-{int(rung)}" for rung in notify._VALUE_MILESTONES]}
+    notify._save_state(state)
+
+    def usage_totals(*args, **kwargs):
+        pytest.fail("Completed value milestones do not need the usage total")
+
+    monkeypatch.setattr(notify, "_usage_db_totals", usage_totals)
+    monkeypatch.setattr(notify, "_savings_snapshot",
+                        lambda base_url, rng: {"free_saved_usd": 6, "free_tokens": 1_000_000_000})
+
+    now = _at(10)
+    emitted = notify.emit_due(now=now, os_notify=False, base_url="http://127.0.0.1:8090")
+
+    assert [item["title"] for item in emitted] == [
+        "$5.00 saved on free models", "1 billion tokens on free models",
+    ]
+    saved = notify._load_state()
+    assert saved["milestones"] == state["milestones"] + ["free-saved-5", "free-tokens-1000000000"]
+    assert saved["last_milestone_check"] == now
+
+
 # ── formatting ──────────────────────────────────────────────────────────
 
 

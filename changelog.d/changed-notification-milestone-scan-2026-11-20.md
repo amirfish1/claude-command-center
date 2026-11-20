@@ -1,0 +1,1 @@
+- Reduce dashboard CPU use by skipping the full usage scan once all API-value milestones have been awarded.
