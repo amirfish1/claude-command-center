@@ -112,3 +112,23 @@ def test_cache_key_tracks_sources_even_with_cached_transcript(reader_files, monk
               "wal": db.with_name(db.name + "-wal")}[source]
     target.write_text("New CLI activity")
     assert server._conv_parse_jsonl_mtime("example") != before
+
+
+def test_stream_stops_probing_cli_logs_after_native_transcript(reader_files, monkeypatch):
+    transcript, *_ = reader_files
+    with transcript.open("a") as f:
+        f.write(json.dumps({"type": "PLANNER_RESPONSE", "content": "Completed."}) + "\n")
+    for source in ("hermes", "devin", "devin_cli", "grok", "gemini"):
+        monkeypatch.setattr(server, f"_is_{source}_session", lambda sid: False)
+    monkeypatch.setattr(server, "_session_acp_harness", lambda sid: None)
+    monkeypatch.setattr(server, "_is_antigravity_session", lambda sid: True)
+    reader_key = Mock(return_value=(1, ()))
+    monkeypatch.setattr(server, "_antigravity_reader_cache_key", reader_key)
+    monkeypatch.setattr(server.time, "sleep", Mock(side_effect=[None, None, OSError()]))
+
+    handler = Mock()
+    server.CommandCenterHandler._stream_conversation(handler, "example", 1)
+
+    reader_key.assert_called_once_with("example")
+    handler.wfile.write.assert_called_once()
+    assert b"Completed." in handler.wfile.write.call_args.args[0]

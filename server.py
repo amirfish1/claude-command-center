@@ -47339,12 +47339,15 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             # mtime guard — same rationale as the claude path below: skip the
             # full re-parse when the backing file hasn't changed so an idle
             # session doesn't re-read its transcript a couple times a second.
+            agy_provisional = True if antigravity_provisional else None
+
             def _stream_mtime():
                 try:
-                    if is_ag:
+                    if is_ag and agy_provisional is not False:
                         return _antigravity_reader_cache_key(conversation_id)
-                    p = _resolve_gemini_chat_path(conversation_id)
-                    return p.stat().st_mtime if p else None
+                    p = (_antigravity_transcript_path(conversation_id) if is_ag
+                         else _resolve_gemini_chat_path(conversation_id))
+                    return p.stat().st_mtime_ns if p else None
                 except OSError:
                     return None
             last_mtime = -1.0
@@ -47365,20 +47368,20 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     result = parse_fn(conversation_id, after_line=after_line)
                     if is_ag:
                         provisional = bool(result.get("antigravity_provisional"))
-                        if antigravity_provisional and not provisional:
+                        if agy_provisional and not provisional:
                             # The live DB/log preview and brain transcript use
                             # different cursors. Replace the preview on handoff.
                             self.wfile.write(b"event: source_reset\ndata: {}\n\n")
                             self.wfile.flush()
                             return
-                        antigravity_provisional = provisional
+                        agy_provisional = provisional
                     events = result.get("events") or []
                     if events:
                         after_line = result.get("last_line") or after_line
                         payload = {"events": events, "last_line": after_line}
                         if is_ag:
                             _record_antigravity_output_marks(conversation_id, events)
-                            if antigravity_provisional:
+                            if agy_provisional:
                                 payload["antigravity_provisional"] = True
                         self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
                         self.wfile.flush()
