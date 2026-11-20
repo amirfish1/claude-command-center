@@ -8793,20 +8793,12 @@ _ENGINE_CURATED_MODELS = {
         {"id": "Gemini 4 Carbon (High)", "label": "Gemini 4 Carbon (High)"},
         {"id": "Gemini 4 Carbon (Medium)", "label": "Gemini 4 Carbon (Medium)"},
         {"id": "Gemini 4 Carbon (Low)", "label": "Gemini 4 Carbon (Low)"},
-        {"id": "Gemini 4 Argon (High)", "label": "Gemini 4 Argon (High)"},
-        {"id": "Gemini 4 Argon (Medium)", "label": "Gemini 4 Argon (Medium)"},
-        {"id": "Gemini 4 Argon (Low)", "label": "Gemini 4 Argon (Low)"},
-        {"id": "Gemini 3.8 Flash (High)", "label": "Gemini 3.8 Flash (High)"},
-        {"id": "Gemini 3.8 Flash (Medium)", "label": "Gemini 3.8 Flash (Medium)"},
-        {"id": "Gemini 3.8 Flash (Low)", "label": "Gemini 3.8 Flash (Low)"},
         {"id": "Gemini 3.7 Flash (High)", "label": "Gemini 3.7 Flash (High)"},
         {"id": "Gemini 3.7 Flash (Medium)", "label": "Gemini 3.7 Flash (Medium)"},
         {"id": "Gemini 3.7 Flash (Low)", "label": "Gemini 3.7 Flash (Low)"},
         {"id": "Gemini 3.6 Flash (High)", "label": "Gemini 3.6 Flash (High)"},
         {"id": "Gemini 3.6 Flash (Medium)", "label": "Gemini 3.6 Flash (Medium)"},
         {"id": "Gemini 3.6 Flash (Low)", "label": "Gemini 3.6 Flash (Low)"},
-        {"id": "Gemini 3.1 Pro (High)", "label": "Gemini 3.1 Pro (High)"},
-        {"id": "Gemini 3.1 Pro (Low)", "label": "Gemini 3.1 Pro (Low)"},
         {"id": "Claude Sonnet 4.6 (Thinking)", "label": "Claude Sonnet 4.6 (Thinking)"},
         {"id": "Claude Opus 4.6 (Thinking)", "label": "Claude Opus 4.6 (Thinking)"},
         {"id": "GPT-OSS 120B (Medium)", "label": "GPT-OSS 120B (Medium)"},
@@ -8871,7 +8863,6 @@ _ENGINE_CURATED_MODELS = {
     "gemini": (
         {"id": "gemini-3.5-pro", "label": "Gemini 3.5 Pro"},
         {"id": "gemini-3.5-flash", "label": "Gemini 3.5 Flash"},
-        {"id": "gemini-3.1-pro", "label": "Gemini 3.1 Pro"},
         {"id": "gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
         {"id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash"},
     ),
@@ -9024,6 +9015,17 @@ _CODEX_MODEL_ALIASES = {
 
 def _model_catalog_key(model):
     return _clean_spawn_default_model(model).lower()
+
+
+# Discovery and recent picks can still report retired models from old sessions.
+_RETIRED_PICKER_MODEL_RE = re.compile(
+    r"(?:gpt-6[.-]1-sol|gemini[ -](?:4[ -]argon|3[.-]8[ -]flash|3[.-]1[ -]pro)"
+    r"(?:-preview)?(?:[ -](?:low|medium|high|xhigh)| \((?:low|medium|high|xhigh)\))?)"
+)
+
+
+def _retired_picker_model(model):
+    return bool(_RETIRED_PICKER_MODEL_RE.fullmatch(_model_catalog_key(model)))
 
 
 # Model policy: a machine-wide deny-list that every spawn/resume/switch path
@@ -9337,7 +9339,7 @@ def _model_catalog_add(catalog, engine, model, *, label=None, source="observed",
     if engine not in _ORCHESTRATION_SPAWN_ENGINES:
         return
     model = _clean_spawn_default_model(model)
-    if not model:
+    if not model or _retired_picker_model(model):
         return
     if engine == "claude":
         # CCC's Claude picker uses short, exact aliases. Observed sessions can
@@ -10137,7 +10139,15 @@ def _read_engine_model_catalog():
                 snapshot = json.loads(_MODEL_CATALOG_SNAPSHOT_FILE.read_text())
                 if not all(isinstance(snapshot.get(key), dict) for key in ('catalog', 'engines')):
                     raise ValueError("Invalid catalog snapshot")
-            except (OSError, ValueError, AttributeError):
+                if any(
+                    _retired_picker_model(model)
+                    for ids in snapshot["engines"].values() for model in ids
+                ) or any(
+                    _retired_picker_model(bucket.get("default"))
+                    for bucket in snapshot["catalog"].values()
+                ):
+                    raise ValueError("Catalog snapshot contains retired models")
+            except (OSError, ValueError, AttributeError, TypeError):
                 snapshot = {"catalog": {}, "engines": {}, "enforced": [],
                             "efforts_by_engine": {}, "kimi_thinking": {}}
             _MODEL_CATALOG_BOOT_CACHE = snapshot
@@ -10476,6 +10486,12 @@ def _build_engine_model_catalog_impl(force_refresh=False):
             entry for entry in bucket.get("models", [])
             if entry.get("id")
         ]
+        if _retired_picker_model(bucket.get("default")):
+            bucket["default"] = next(
+                (entry["id"] for entry in bucket["models"]
+                 if entry.get("available") is not False and not entry.get("policy_blocked")),
+                "",
+            )
 
     payload = {
         "catalog": catalog,
@@ -32880,7 +32896,10 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         elif path == "/api/control-plane/status":
             self.send_json(_control_plane_request("health"))
         elif path == "/api/model-picker/picks":
-            self.send_json({"ok": True, "picks": get_model_picker_picks()})
+            self.send_json({"ok": True, "picks": [
+                pick for pick in get_model_picker_picks()
+                if not _retired_picker_model(pick.get("model"))
+            ]})
         elif path == "/api/session/spawn-timeline":
             # Debug stats for "why did this session take so long to appear".
             # Marks are ms since CCC accepted the spawn request.

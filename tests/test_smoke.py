@@ -3683,6 +3683,11 @@ class TestServerImports(unittest.TestCase):
                         "display_name": "Hidden",
                         "visibility": "hide",
                     },
+                    {
+                        "slug": "gpt-6.1-sol",
+                        "display_name": "GPT-6.1-Sol",
+                        "visibility": "list",
+                    },
                 ],
             }), encoding="utf-8")
 
@@ -3708,6 +3713,7 @@ class TestServerImports(unittest.TestCase):
         self.assertEqual(len(codex_ids), len(set(codex_ids)))
         self.assertNotIn("gpt-5.4", codex_ids)
         self.assertNotIn("codex-hidden-test", codex_ids)
+        self.assertNotIn("gpt-6.1-sol", codex_ids)
         self.assertEqual(payload["enforced"], [])
         self.assertFalse(payload["catalog"]["codex"]["supports_custom"])
         self.assertEqual(
