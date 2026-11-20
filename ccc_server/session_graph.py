@@ -3704,6 +3704,8 @@ def find_live_cursor_processes():
 @_ttl_memo(3.0)
 def find_live_antigravity_processes():
     """Return running Antigravity CLI processes with pid, tty, cwd, terminal app, command."""
+    from ccc_server.antigravity_compact import is_hidden_pid
+
     procs = []
     for pid_s, tty, comm, args in _core._scan_engine_processes():
         arg_parts = args.split()
@@ -3714,6 +3716,8 @@ def find_live_antigravity_processes():
         try:
             pid = int(pid_s)
         except ValueError:
+            continue
+        if is_hidden_pid(pid):
             continue
         cwd = _core._proc_cwd(pid)
         term_app, _term_pid = _core._proc_ancestor_terminal(pid)
@@ -4441,6 +4445,11 @@ def session_live_status(session_id, session_cwd):
         return result
 
     if _core._is_antigravity_session(session_id):
+        from ccc_server.antigravity_compact import is_active
+
+        if is_active(session_id):
+            result.update(live=True, status="running", match_count=1)
+            return result
         path = _core._antigravity_transcript_path(session_id)
         if path:
             try:

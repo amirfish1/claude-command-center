@@ -4950,6 +4950,13 @@ def _antigravity_auth_relay(proc, master, log_path, session_id="", account_id="p
 
 
 def resume_session_antigravity(session_id, text, mode="send"):
+    if not session_id or not text:
+        return {"ok": False, "error": "missing session_id or text"}
+    with _core._codex_queue_pump_lock(session_id):
+        return _resume_session_antigravity(session_id, text, mode)
+
+
+def _resume_session_antigravity(session_id, text, mode):
     """Resume an Antigravity conversation through AGY CLI or the running app.
 
     Routing:
@@ -4974,6 +4981,7 @@ def resume_session_antigravity(session_id, text, mode="send"):
     the click quietly reverting with no explanation (CCC-1030).
     """
     pending_input = text
+    pending_action = "insert_front" if getattr(pending_input, "pending_id", None) else "append_tail"
     text = _core._strip_ccc_session_state_instruction(text)
     if not session_id or not text:
         return {"ok": False, "error": "missing session_id or text"}
@@ -4981,7 +4989,7 @@ def resume_session_antigravity(session_id, text, mode="send"):
         from ccc_server.antigravity_compact import compact_session
         return compact_session(session_id)
     from ccc_server import antigravity_compact
-    compact_queue = antigravity_compact.queue_if_active(session_id, pending_input)
+    compact_queue = antigravity_compact.queue_if_waiting(session_id, pending_input, mode)
     if compact_queue is not None:
         return compact_queue
     account_id = _antigravity_accounts.session_account(session_id)
@@ -5017,7 +5025,7 @@ def resume_session_antigravity(session_id, text, mode="send"):
                     "error": "Antigravity can't be interrupted mid-turn — stays queued and sends automatically when this turn ends.",
                 }
             queued = _core._apply_pending_input_operations(session_id, [{
-                "field": "resume", "action": "append_tail", "value": text,
+                "field": "resume", "action": pending_action, "value": pending_input,
             }])
             if not queued.get("ok"):
                 return {"ok": False, "error": "failed to persist queued Antigravity input"}
@@ -5081,7 +5089,7 @@ def resume_session_antigravity(session_id, text, mode="send"):
                             "error": "Antigravity can't be interrupted mid-turn — stays queued and sends automatically when this turn ends.",
                         }
                     queued = _core._apply_pending_input_operations(session_id, [{
-                        "field": "resume", "action": "append_tail", "value": text,
+                        "field": "resume", "action": pending_action, "value": pending_input,
                     }])
                     if not queued.get("ok"):
                         return {"ok": False, "error": "failed to persist queued Antigravity input"}
@@ -5137,7 +5145,7 @@ def resume_session_antigravity(session_id, text, mode="send"):
                 "error": "Antigravity can't be interrupted mid-turn — stays queued and sends automatically when this turn ends.",
             }
         queued = _core._apply_pending_input_operations(session_id, [{
-            "field": "resume", "action": "append_tail", "value": text,
+            "field": "resume", "action": pending_action, "value": pending_input,
         }])
         if not queued.get("ok"):
             return {"ok": False, "error": "failed to persist queued Antigravity input"}

@@ -1,0 +1,1 @@
+- Release queued Antigravity messages promptly when workspace trust blocks automatic compaction, and keep follow-ups in order on the Antigravity queue.

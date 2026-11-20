@@ -6095,55 +6095,70 @@ def _start_resume_queue_watcher() -> None:
                 if _core._is_devin_cli_session(sid):
                     _core._pump_devin_resume_queue(sid)
                     continue
-                if not _core._pending_resume_retry_due(sid):
+                # Share the delivery boundary with Antigravity's direct
+                # sends so a new message cannot overtake a popped queue head.
+                ownership = (_core._codex_queue_pump_lock(sid)
+                             if _core._is_antigravity_session(sid) else None)
+                if ownership is not None and not ownership.acquire(blocking=False):
                     continue
-                if _core._resume_queue_engine_busy(sid):
-                    continue
-                transaction = _core._apply_pending_input_operations(sid, [{
-                    "field": "resume", "action": "pop_head",
-                }])
-                text = ((transaction.get("value") or [None])[0])
-                if text is None:
-                    continue
-                result = None
                 try:
-                    def _deliver_resume_queue_text():
-                        if _core._is_codex_session(sid):
-                            return _core.resume_session_codex(sid, text)
-                        # Same ordered table as the inject router's tail
-                        # (ccc_server/delivery.py); the hand-written copy
-                        # that lived here had silently lost `aider`.
-                        from ccc_server import delivery as _delivery
-                        routed = _delivery.resume_via_transport(sid, text)
-                        if routed is not None:
-                            return routed
-                        if _core._is_devin_cli_session(sid):
-                            return _core._pump_devin_resume_queue(sid)
-                        return {"ok": False}
-
-                    result = _core._deliver_with_auto_resume_barrier(
-                        sid, text, _deliver_resume_queue_text,
-                    )
-                except Exception:
-                    result = {"ok": False}
-                if result and result.get("blocked"):
-                    # Circuit-breaker trip: drop, never requeue (see the
-                    # terminal-queue watcher below for the same rule).
-                    _core._pending_resume_retry_after.pop(sid, None)
-                elif not result or not result.get("ok"):
-                    restored = _core._apply_pending_input_operations(sid, [{
-                        "field": "resume", "action": "insert_front", "value": text,
-                        "dedupe": True,
+                    if not _core._pending_resume_retry_due(sid):
+                        continue
+                    if _core._resume_queue_engine_busy(sid):
+                        continue
+                    transaction = _core._apply_pending_input_operations(sid, [{
+                        "field": "resume", "action": "pop_head",
                     }])
-                    if restored.get("ok"):
+                    text = ((transaction.get("value") or [None])[0])
+                    if text is None:
+                        continue
+                    result = None
+                    try:
+                        def _deliver_resume_queue_text():
+                            if _core._is_codex_session(sid):
+                                return _core.resume_session_codex(sid, text)
+                            # Same ordered table as the inject router's tail
+                            # (ccc_server/delivery.py); the hand-written copy
+                            # that lived here had silently lost `aider`.
+                            from ccc_server import delivery as _delivery
+                            routed = _delivery.resume_via_transport(sid, text)
+                            if routed is not None:
+                                return routed
+                            if _core._is_devin_cli_session(sid):
+                                return _core._pump_devin_resume_queue(sid)
+                            return {"ok": False}
+
+                        result = _core._deliver_with_auto_resume_barrier(
+                            sid, text, _deliver_resume_queue_text,
+                        )
+                    except Exception:
+                        result = {"ok": False}
+                    if result and result.get("blocked"):
+                        # Circuit-breaker trip: drop, never requeue (see the
+                        # terminal-queue watcher below for the same rule).
+                        _core._pending_resume_retry_after.pop(sid, None)
+                    elif not result or not result.get("ok"):
+                        restored = _core._apply_pending_input_operations(sid, [{
+                            "field": "resume", "action": "insert_front", "value": text,
+                            "dedupe": True,
+                        }])
+                        if restored.get("ok"):
+                            _core._mark_pending_resume_retry(sid)
+                    elif result.get("auto_compacting"):
+                        # Native compaction owns the queue until it exits.
+                        # A trust refusal can finish immediately, so a generic
+                        # 60s retry delay would still stall delivery.
+                        _core._pending_resume_retry_after.pop(sid, None)
+                    elif result.get("queued") or result.get("started"):
+                        # "queued" means the engine already queued it internally.
+                        # "started" (Devin) means the process launched but the
+                        # durable queue is kept until prompt_history proves delivery.
                         _core._mark_pending_resume_retry(sid)
-                elif result.get("queued") or result.get("started"):
-                    # "queued" means the engine already queued it internally.
-                    # "started" (Devin) means the process launched but the
-                    # durable queue is kept until prompt_history proves delivery.
-                    _core._mark_pending_resume_retry(sid)
-                else:
-                    _core._pending_resume_retry_after.pop(sid, None)
+                    else:
+                        _core._pending_resume_retry_after.pop(sid, None)
+                finally:
+                    if ownership is not None:
+                        ownership.release()
             with _core._pending_terminal_input_lock:
                 terminal_sids = list(_core._pending_terminal_input_queue.keys())
             for sid in terminal_sids:

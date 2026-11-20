@@ -23,6 +23,7 @@ from ccc_server import antigravity_stream as stream
 
 _LOCK = threading.Lock()
 _ACTIVE = set()
+_HIDDEN_PIDS = set()
 _AUTO_ATTEMPTED = {}  # session -> latest usage sample already compacted or attempted
 
 
@@ -124,9 +125,11 @@ def run_terminal(cmd, cwd, env, transcript, timeout=180, *, context_only=False):
         bootstrap = ('import fcntl,os,sys,termios; '
                      'fcntl.ioctl(0,termios.TIOCSCTTY,0); '
                      'os.execvpe(sys.argv[1],sys.argv[1:],os.environ)')
-        proc = subprocess.Popen([sys.executable, '-c', bootstrap, *cmd],
-                                stdin=slave, stdout=slave, stderr=slave,
-                                cwd=cwd, env=env, start_new_session=True)
+        with _LOCK:
+            proc = subprocess.Popen([sys.executable, '-c', bootstrap, *cmd],
+                                    stdin=slave, stdout=slave, stderr=slave,
+                                    cwd=cwd, env=env, start_new_session=True)
+            _HIDDEN_PIDS.add(proc.pid)
         os.close(slave)
         slave = None
         tail = b''
@@ -164,9 +167,9 @@ def run_terminal(cmd, cwd, env, transcript, timeout=180, *, context_only=False):
                             'via': 'antigravity-hidden-pty'}
                 if checkpoint_seen and time.monotonic() - checkpoint_seen >= 3:
                     return {'ok': True, 'status': 'completed', 'via': 'antigravity-hidden-pty'}
-            if not sent and drafted_at and time.monotonic() - drafted_at > 15:
+            if not context_only and not sent and time.monotonic() - started > 15:
                 return {'ok': False, 'via': 'antigravity-hidden-pty',
-                        'error': 'Could not verify /compact in the Antigravity input.'}
+                        'error': 'Antigravity did not become ready to submit /compact.'}
             if proc.poll() is not None:
                 break
             ready, _, _ = select.select([master], [], [], .2)
@@ -210,6 +213,11 @@ def run_terminal(cmd, cwd, env, transcript, timeout=180, *, context_only=False):
             # Do not mistake echoed history such as "> /compact" for input.
             clean = re.sub(rb'[\x00-\x08\x0e-\x1f\x7f]', b'', clean)
             recent = clean[-5000:]
+            if (not sent and b'Do you trust the contents of this project?' in recent
+                    and b'Yes, I trust this folder' in recent and b'No, exit' in recent):
+                return {'ok': False, 'via': 'antigravity-hidden-pty',
+                        'code': 'compact_workspace_trust_required',
+                        'error': 'Antigravity needs you to confirm workspace trust in its terminal before compacting.'}
             if (not sent and dismissed_intros < 6 and b'Introducing Gemini' in recent
                     and b'esc to dismiss' in recent.lower()):
                 # The CLI can cover its input with a model announcement on
@@ -264,6 +272,9 @@ def run_terminal(cmd, cwd, env, transcript, timeout=180, *, context_only=False):
                         # verified checkpoint or leak our terminal FDs.
                         threading.Thread(target=proc.wait, daemon=True).start()
         finally:
+            if proc is not None:
+                with _LOCK:
+                    _HIDDEN_PIDS.discard(proc.pid)
             os.close(master)
             if slave is not None:
                 os.close(slave)
@@ -284,13 +295,27 @@ def is_active(sid):
         return sid in _ACTIVE
 
 
-def queue_if_active(sid, text):
-    """Keep normal sends from opening a competing writer during compaction."""
+def is_hidden_pid(pid):
     with _LOCK:
-        active = sid in _ACTIVE
-    if not active:
+        return pid in _HIDDEN_PIDS
+
+
+def queue_if_waiting(sid, text, mode):
+    """Keep sends in order while the compactor or its durable queue owns delivery."""
+    if is_active(sid):
+        reason = 'Waiting for native Antigravity compaction to finish.'
+    elif mode != 'steer' and not getattr(text, 'pending_id', None):
+        _core._refresh_queued_view_if_file_changed(sid)
+        with _core._pending_resume_lock:
+            if not _core._pending_resume_queue.get(sid):
+                return None
+        reason = 'Waiting behind an earlier queued message for this session.'
+    else:
         return None
-    return _defer_input(sid, text, 'Waiting for native Antigravity compaction to finish.')
+    if mode == 'steer':
+        return {'ok': True, 'queued_preserved': True, 'via': 'antigravity-resume-queued',
+                'error': reason}
+    return _defer_input(sid, text, reason)
 
 
 def _defer_input(sid, text, reason):
@@ -399,6 +424,7 @@ def compact_session(sid, *, automatic=None):
             queued = _defer_input(sid, text, 'Antigravity reached the auto-compact threshold.')
             if not queued['ok']:
                 return queued
+            queued['auto_compacting'] = True
             # A failed compact must let this send through. Retry only after
             # another model response produces a fresh usage sample.
             with _LOCK:

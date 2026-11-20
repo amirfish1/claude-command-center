@@ -2,6 +2,7 @@
 import json
 import sys
 import threading
+import time
 
 import pytest
 import server
@@ -132,6 +133,42 @@ def test_hidden_terminal_waits_for_prompt_and_real_checkpoint(tmp_path, prompt):
     assert native.checkpoint_count(transcript) == 1
 
 
+def test_hidden_terminal_yields_at_workspace_trust_prompt(tmp_path):
+    transcript = tmp_path / 'transcript.jsonl'
+    transcript.touch()
+    attempted_input = tmp_path / 'unexpected-input'
+    script = (
+        'import os; '
+        'print("Do you trust the contents of this project?\\r\\n'
+        '> Yes, I trust this folder\\r\\n  No, exit", flush=True); '
+        f'os.read(0, 4096); open({str(attempted_input)!r}, "w").close()'
+    )
+    started = time.monotonic()
+    result = native.run_terminal([sys.executable, '-u', '-c', script],
+                                 str(tmp_path), None, transcript, timeout=10)
+
+    assert result['ok'] is False
+    assert result['code'] == 'compact_workspace_trust_required'
+    assert time.monotonic() - started < 5
+    assert not attempted_input.exists()
+    assert native.checkpoint_count(transcript) == 0
+
+
+def test_send_joins_resume_queue_after_compaction_releases_it(monkeypatch):
+    sid = 'auto-compact-example'
+    earlier = server._PendingInputEntry('earlier', 'first-id')
+    monkeypatch.setattr(server, '_pending_resume_queue', {sid: [earlier]})
+    monkeypatch.setattr(server, '_refresh_queued_view_if_file_changed', lambda sid: None)
+    writes = []
+    monkeypatch.setattr(server, '_apply_pending_input_operations',
+                        lambda sid, ops: writes.extend(ops) or {'ok': True})
+    monkeypatch.setattr(server, '_resolve_antigravity_bin',
+                        lambda: pytest.fail('new send overtook the queue'))
+
+    assert engines.resume_session_antigravity(sid, 'follow-up')['queued'] is True
+    assert writes == [{'field': 'resume', 'action': 'append_tail', 'value': 'follow-up'}]
+
+
 def test_other_input_cannot_race_hidden_compaction(monkeypatch):
     native._ACTIVE.add('test-session')
     writes = []
@@ -140,7 +177,9 @@ def test_other_input_cannot_race_hidden_compaction(monkeypatch):
                             lambda sid, ops: writes.append(ops) or {'ok': True})
         result = engines.resume_session_antigravity('test-session', 'next request')
         assert result['queued'] is True
-        assert writes[0][0]['value'] == 'next request'
+        result = engines.resume_session_antigravity('test-session', 'next request', mode='steer')
+        assert result['queued_preserved'] is True
+        assert writes == [[{'field': 'resume', 'action': 'append_tail', 'value': 'next request'}]]
     finally:
         native._ACTIVE.discard('test-session')
 

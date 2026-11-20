@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 import server
-from ccc_server import antigravity
+from ccc_server import antigravity, antigravity_compact
 
 
 SID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -42,6 +42,24 @@ def test_resume_without_readable_log_still_discovered():
         ('125', 'pts/3', 'bash', f'bash -c "agy --conversation {OTHER}"'),
     ]), mock.patch.object(antigravity, '_cli_process_logs', return_value=set()):
         assert antigravity.live_cli_session_ids() == {SID}
+
+
+def test_compaction_pty_is_not_a_user_terminal(monkeypatch):
+    monkeypatch.setattr(server, '_scan_engine_processes', lambda: [
+        ('123', 'pts/1', 'agy', f'agy --conversation {SID}'),
+        ('124', 'pts/2', 'agy', f'agy --conversation {OTHER}'),
+    ])
+    monkeypatch.setattr(antigravity_compact, '_HIDDEN_PIDS', {123})
+    monkeypatch.setattr(antigravity_compact, '_ACTIVE', {SID})
+    monkeypatch.setattr(server, '_proc_cwd', lambda pid: '/test')
+    monkeypatch.setattr(server, '_proc_ancestor_terminal', lambda pid: (None, None))
+    for name in ('hermes', 'kimi', 'grok', 'devin_cli', 'codex', 'gemini', 'cursor'):
+        monkeypatch.setattr(server, f'_is_{name}_session', lambda sid: False)
+    monkeypatch.setattr(server, '_is_antigravity_session', lambda sid: True)
+
+    assert [proc['pid'] for proc in server.find_live_antigravity_processes()] == [124]
+    status = server.session_live_status(SID, '/test')
+    assert status['live'] and status['status'] == 'running' and status['tty'] is None
 
 
 def test_unrelated_prompts_do_not_enter_shared_command_token_cache(monkeypatch):
