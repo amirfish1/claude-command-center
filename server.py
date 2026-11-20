@@ -32565,6 +32565,42 @@ _STATIC_ENCODING_DISK_CACHE = StaticEncodingCache(
 )
 
 
+def _static_file_encoding_key(resolved, st):
+    return (str(resolved), st.st_mtime_ns, st.st_ctime_ns, st.st_size)
+
+
+def _warm_dashboard_controller():
+    """Move encoding of the boot-blocking dashboard script off its first GET."""
+    from ccc_server.static_encoding import brotli
+
+    try:
+        base = STATIC_DIR.resolve()
+        asset = (base / "app.js").resolve()
+        if not asset.is_relative_to(base):
+            return
+        st = asset.stat()
+        if not stat.S_ISREG(st.st_mode) or st.st_size < CommandCenterHandler._GZIP_MIN_BYTES:
+            return
+        key = (_static_file_encoding_key(asset, st), "br")
+        body = _STATIC_ENCODING_DISK_CACHE.get(key)
+        if body is None:
+            body = brotli(asset.read_bytes())
+            if body is None or _static_file_encoding_key(asset, asset.stat()) != key[0]:
+                return
+            _STATIC_ENCODING_DISK_CACHE.put(key, body)
+        _STATIC_GZIP_CACHE.put(key, body, len(body))
+    except (OSError, RuntimeError):
+        # Missing assets and failed optional preparation fall back to the GET.
+        return
+
+
+def _warm_browser_assets():
+    if USER_APPS_DIR.is_dir():
+        from ccc_server.conversation_assets import warm_brotli_cache
+        warm_brotli_cache(STATIC_DIR, _STATIC_ENCODING_DISK_CACHE)
+    _warm_dashboard_controller()
+
+
 def _annotate_engine_not_installed(data, path):
     """Stable machine-readable marker for "the engine CLI is not installed".
 
@@ -47323,7 +47359,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             else:
                 st = resolved.stat()
                 stamp, size = str(int(st.st_mtime)), st.st_size
-                key = (str(resolved), st.st_mtime_ns, st.st_ctime_ns, st.st_size)
+                key = _static_file_encoding_key(resolved, st)
         except OSError as e:
             self.send_json({"error": str(e)}, 500)
             return
@@ -50061,14 +50097,9 @@ def main():
     _raise_open_file_limit()
     _memory_release.start()
     migrate_state_dir()
-    if USER_APPS_DIR.is_dir():
-        from ccc_server.conversation_assets import warm_brotli_cache
-        # Prepare the bounded app bundles while the dashboard starts its
-        # readers and loads saved state. Requests can still encode on demand.
-        threading.Thread(
-            target=warm_brotli_cache, args=(STATIC_DIR, _STATIC_ENCODING_DISK_CACHE),
-            name="ccc-app-asset-warmup", daemon=True,
-        ).start()
+    # Prepare the critical script and optional app bundles while the dashboard
+    # starts its readers. Requests can still encode on demand.
+    threading.Thread(target=_warm_browser_assets, name="ccc-app-asset-warmup", daemon=True).start()
     _seed_model_policy_once()
     _install_python_stack_dump_handler()
     # Conversation opens get their own process (and GIL) so background work

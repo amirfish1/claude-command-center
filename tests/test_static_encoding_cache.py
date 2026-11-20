@@ -134,6 +134,32 @@ def test_app_warmup_does_not_publish_under_an_old_source_key(tmp_path, monkeypat
     assert cache.get((key, "br")) is None
 
 
+def test_dashboard_warmup_prepares_the_controller_without_installed_apps(tmp_path, monkeypatch):
+    from ccc_server import static_encoding
+
+    if static_encoding._encoder() is None:
+        pytest.skip("optional system Brotli encoder unavailable")
+    server = _server()
+    asset = tmp_path / "app.js"
+    asset.write_bytes(b"dashboard();\n" * 500)
+    monkeypatch.setattr(server, "STATIC_DIR", tmp_path)
+    monkeypatch.setattr(server, "USER_APPS_DIR", tmp_path / "no-apps")
+    monkeypatch.setattr(server, "_STATIC_ENCODING_DISK_CACHE", StaticEncodingCache(tmp_path / "encoded"))
+    server._STATIC_GZIP_CACHE.clear()
+    server._warm_browser_assets()
+    server._STATIC_GZIP_CACHE.clear()
+
+    def unexpected_encode(*args, **kwargs):
+        raise AssertionError("the dashboard controller was re-encoded")
+
+    monkeypatch.setattr(static_encoding, "brotli", unexpected_encode)
+    server._warm_browser_assets()
+    status, headers, body = _get(server, "/static/app.js", {"Accept-Encoding": "br"})
+    assert status == 200 and headers["content-encoding"] == "br"
+    assert 'cache;desc="hit"' in headers["server-timing"]
+    assert decode(body, asset.stat().st_size) == asset.read_bytes()
+
+
 def test_concurrent_writes_publish_complete_packets(tmp_path):
     cache = StaticEncodingCache(tmp_path)
     bodies = [bytes([index]) * 8192 for index in range(20)]
