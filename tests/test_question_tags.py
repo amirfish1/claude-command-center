@@ -410,3 +410,35 @@ class ConcurrencyAndMemoTest(unittest.TestCase):
             self.assertTrue(refreshing["refreshing"])
             self.assertIsNot(refresh_cache, update_cache)
             self.assertEqual(first_cache[True], (b"compressed", "gzip"))
+
+    def test_gzip_question_prefix_follows_current_flags_and_ticket_decision(self):
+        import gzip
+        import json
+        from unittest import mock
+
+        text = "[Q7:publish] Ready? " + "é" * 1500
+        qt._files["a"] = {"ev": [ev("assistant", "2026-01-01T00:00:01Z", text, "ask")]}
+        with mock.patch.object(qt, "_ready", True), mock.patch.object(qt, "_scanning", False):
+            first, identity_cache = qt.response([ticket()])
+            self.assertNotIn(True, identity_cache)
+            _, gzip_cache = qt.response([ticket()], gzip_min_bytes=1024)
+            self.assertEqual(gzip.decompress(gzip_cache[True][0]), json.dumps(first).encode())
+
+            with mock.patch.object(qt, "_scanning", True), mock.patch.object(
+                qt.zlib, "compressobj", wraps=qt.zlib.compressobj
+            ) as compress:
+                refreshing, refresh_cache = qt.response([ticket()], gzip_min_bytes=1024)
+                compress.assert_not_called()
+                self.assertTrue(refreshing["refreshing"])
+                self.assertEqual(gzip.decompress(refresh_cache[True][0]), json.dumps(refreshing).encode())
+
+                closed = ticket(needs_input=False, block_question="", history=[
+                    {"event": "block", "question": "[Q7:publish] Ready?"}])
+                updated, update_cache = qt.response([closed], gzip_min_bytes=1024)
+                compress.assert_called_once()
+                self.assertFalse(updated["questions"][0]["ticket"]["open"])
+                self.assertEqual(gzip.decompress(update_cache[True][0]), json.dumps(updated).encode())
+
+            qt._files.clear()
+            _, small_cache = qt.response([], gzip_min_bytes=1024)
+            self.assertNotIn(True, small_cache)

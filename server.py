@@ -33814,7 +33814,11 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 fresh_s=10.0, max_stale_s=300.0))
         elif path == "/api/question-tags":
             from ccc_server import question_tags as _question_tags
-            data, encoded = _question_tags.response(_wt_list_items_for_requests())
+            accepts_gzip = "gzip" in (self.headers.get("Accept-Encoding", "") or "").lower()
+            data, encoded = _question_tags.response(
+                _wt_list_items_for_requests(),
+                gzip_min_bytes=self._GZIP_MIN_BYTES if accepts_gzip else None,
+            )
             self.send_json(data, encoded=encoded)
         elif path in ("/api/sessions/spawned", "/api/spawned"):
             qs = urllib.parse.parse_qs(parsed.query)

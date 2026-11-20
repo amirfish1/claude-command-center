@@ -34,6 +34,7 @@ import sqlite3
 import tempfile
 import threading
 import time
+import zlib
 from datetime import datetime, timezone
 from itertools import islice
 from pathlib import Path
@@ -582,9 +583,34 @@ def payload(tickets: list | None = None) -> dict:
 
 _response_lock = threading.Lock()
 _response_memo = (None, None)
+_response_gzip_prefix = None
+_GZIP_PREFIX_MAX_BYTES = 4 << 20
 
 
-def response(tickets: list) -> tuple[dict, dict]:
+def _encode_response_gzip(data, minimum_bytes):
+    global _response_gzip_prefix
+    # The question list dominates the response. Finish a copy of the gzip
+    # stream with the current flags, so a scanner transition does not have
+    # to serialize or compress the question list again.
+    suffix = b", " + json.dumps({k: v for k, v in data.items() if k != "questions"}).encode()[1:]
+    if _response_gzip_prefix is None:
+        prefix = b'{"questions": ' + json.dumps(data["questions"]).encode()
+        prefix_size = len(prefix)
+        if prefix_size + len(suffix) < minimum_bytes:
+            return None
+        compressor = zlib.compressobj(level=5, wbits=31)
+        compressed = compressor.compress(prefix)
+        if len(compressed) <= _GZIP_PREFIX_MAX_BYTES:
+            _response_gzip_prefix = (prefix_size, compressed, compressor)
+    else:
+        prefix_size, compressed, compressor = _response_gzip_prefix
+        if prefix_size + len(suffix) < minimum_bytes:
+            return None
+    tail = compressor.copy()
+    return compressed + tail.compress(suffix) + tail.flush(), "gzip"
+
+
+def response(tickets: list, *, gzip_min_bytes=None) -> tuple[dict, dict]:
     """Return the current payload and its HTTP representation cache.
 
     The payload already includes ticket decisions and scanner status, so an
@@ -592,11 +618,20 @@ def response(tickets: list) -> tuple[dict, dict]:
     the latest payload. In-flight requests retain their own encoding cache
     when the index changes.
     """
-    global _response_memo
+    global _response_memo, _response_gzip_prefix
     data = payload(tickets=tickets)
     with _response_lock:
         previous, encoded = _response_memo
         if data != previous:
+            if previous is None or data["questions"] != previous["questions"]:
+                _response_gzip_prefix = None
             encoded = {}
             _response_memo = (data, encoded)
+        if gzip_min_bytes is not None and True not in encoded:
+            try:
+                body = _encode_response_gzip(data, gzip_min_bytes)
+            except zlib.error:
+                body = None
+            if body is not None:
+                encoded[True] = body
     return data, encoded
