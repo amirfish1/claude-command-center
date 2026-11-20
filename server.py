@@ -8380,13 +8380,13 @@ def _build_repo_usage_signals(repo_paths, now):
             if not repo_path:
                 continue
             try:
-                jsonl_files = list(project_dir.iterdir())
+                with os.scandir(project_dir) as entries:
+                    transcripts = [entry.path for entry in entries if entry.name.endswith(".jsonl")]
             except OSError:
                 continue
-            for jsonl in jsonl_files:
-                if not jsonl.name.endswith(".jsonl") or not jsonl.is_file():
-                    continue
-                agg = _stats_get_file_agg(jsonl)
+            for transcript in transcripts:
+                # Use the same stat for the file type and cache freshness.
+                agg = _stats_get_file_agg(transcript, regular_only=True)
                 if not agg:
                     continue
                 session_id = agg.get("session_id")

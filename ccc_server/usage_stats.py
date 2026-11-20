@@ -207,11 +207,13 @@ def _stats_aggregate_file(path):
     return agg
 
 
-def _stats_get_file_agg(path):
+def _stats_get_file_agg(path, *, regular_only=False):
     """Return cached aggregate for `path`, recomputing if mtime/size changed."""
     try:
         st = os.stat(path)
     except OSError:
+        return None
+    if regular_only and not stat.S_ISREG(st.st_mode):
         return None
     key = str(path)
     cached = _core._STATS_FILE_CACHE.get(key)

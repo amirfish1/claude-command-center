@@ -52,8 +52,8 @@ def test_repo_signal_dates_keep_window_boundaries_and_skip_invalid_days(monkeypa
     monkeypatch.setattr(server, "datetime", LocalDateTime)
     monkeypatch.setattr(server, "PROJECTS_ROOT", tmp_path)
     monkeypatch.setattr(server, "_candidate_conversation_dirs", lambda _: [project])
-    monkeypatch.setattr(server, "_stats_get_file_agg", lambda transcript: {
-        "session_id": transcript.stem, "by_date": by_date,
+    monkeypatch.setattr(server, "_stats_get_file_agg", lambda transcript, **_: {
+        "session_id": Path(transcript).stem, "by_date": by_date,
     })
     monkeypatch.setattr(server, "_maybe_persist_stats_cache", lambda _: False)
 
@@ -62,6 +62,32 @@ def test_repo_signal_dates_keep_window_boundaries_and_skip_invalid_days(monkeypa
         "d30": {"sessions": 2, "turns": 6, "tokens": 30},
         "all": {"sessions": 2, "turns": 8, "tokens": 40},
     }
+
+
+def test_repo_signals_scan_regular_transcripts_and_follow_symlinks(monkeypatch, tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    transcript = project / "live.jsonl"
+    transcript.touch()
+    (project / "alias.jsonl").symlink_to(transcript)
+    (project / "missing.jsonl").symlink_to(project / "absent")
+    (project / "folder.jsonl").mkdir()
+    (project / "skip.txt").touch()
+    reads = []
+
+    def aggregate(filename):
+        reads.append(Path(filename).name)
+        return {"session_id": "same-session", "by_date": {}}
+
+    monkeypatch.setattr(server, "PROJECTS_ROOT", tmp_path)
+    monkeypatch.setattr(server, "_candidate_conversation_dirs", lambda _: [project])
+    monkeypatch.setattr(server, "_STATS_FILE_CACHE", {})
+    monkeypatch.setattr(server, "_stats_aggregate_file", aggregate)
+    monkeypatch.setattr(server, "_maybe_persist_stats_cache", lambda _: False)
+
+    server._build_repo_usage_signals(["/demo/repo"], 0)
+
+    assert sorted(reads) == ["alias.jsonl", "live.jsonl"]
 
 
 @pytest.mark.parametrize("fails", [False, True])
