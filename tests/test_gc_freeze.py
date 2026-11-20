@@ -1,6 +1,7 @@
 """Full GC passes stopped every dashboard request for ~1.2s (CCC-142)."""
 
 import gc
+import json
 import weakref
 
 import pytest
@@ -49,6 +50,59 @@ def test_full_pass_reclaims_frozen_cycles():
     assert ref() is None
     assert next_pass == 100.0 + server._GC_FULL_PASS_EVERY_S
     assert gc.get_freeze_count() > 0
+
+
+def test_pending_restart_keeps_sweep_due_until_it_is_cancelled(monkeypatch):
+    due = True
+    monkeypatch.setattr(server, "_gc_dashboard_restart_due", lambda: due)
+    ref = _cycle()
+    server._gc_freeze_tick(10.0, 100.0)
+
+    assert server._gc_freeze_tick(100.0, 100.0) == 100.0
+    assert ref() is not None
+
+    due = False
+    assert server._gc_freeze_tick(115.0, 100.0) == 115.0 + server._GC_FULL_PASS_EVERY_S
+    assert ref() is None
+
+
+def test_restart_cannot_postpone_cycle_reclamation_past_grace(monkeypatch):
+    monkeypatch.setattr(server, "_gc_dashboard_restart_due", lambda: True)
+    ref = _cycle()
+    server._gc_freeze_tick(10.0, 100.0)
+    end = 100.0 + server._GC_RESTART_GRACE_S
+
+    assert server._gc_freeze_tick(end - 1, 100.0) == 100.0
+    assert ref() is not None
+    assert server._gc_freeze_tick(end, 100.0) == end + server._GC_FULL_PASS_EVERY_S
+    assert ref() is None
+
+
+def test_restart_hint_is_for_an_imminent_replacement_of_this_boot(tmp_path, monkeypatch):
+    monkeypatch.setattr(server.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(server, "_SERVER_START_TS", 1700.5)
+    monkeypatch.setattr(server.time, "time", lambda: 3500.0)
+    state = tmp_path / ".claude" / "command-center" / "restart-debounce.json"
+    state.parent.mkdir(parents=True)
+
+    assert server._gc_dashboard_restart_due() is False
+    state.write_text("[]")
+    assert server._gc_dashboard_restart_due() is False
+
+    pending = {"target": "all", "dashboard_started_at": 1700.5, "due": 3510.0}
+    for change in ({"target": "worker"}, {"dashboard_started_at": 1700.0},
+                   {"due": 3560.0}, {"due": 3400.0}, {"due": "3510.0"}):
+        state.write_text(json.dumps({"pending": dict(pending, **change)}))
+        assert server._gc_dashboard_restart_due() is False
+
+    state.write_text(json.dumps({"pending": pending}))
+    assert server._gc_dashboard_restart_due() is True
+
+    state.write_text(json.dumps({
+        "last_target": "dashboard",
+        "reservation": {"dashboard_started_at": 1700.5, "at": 3499.0},
+    }))
+    assert server._gc_dashboard_restart_due() is True
 
 
 def test_start_raises_the_youngest_threshold(monkeypatch):

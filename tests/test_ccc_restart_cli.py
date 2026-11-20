@@ -244,6 +244,23 @@ class RestartReservationTests(unittest.TestCase):
             self.assertIn("reservation", self.m._reserve_restart("base", "dashboard", force=True))
             self.assertEqual(self.m._get_json.call_count, 1)
 
+    def test_gc_hint_tracks_the_runner_generation_across_merge_and_reservation(self):
+        with mock.patch("time.time", return_value=10000) as clock:
+            self.m._get_json.return_value = {"started_at": 9900}
+            slot = self.m._reserve_restart("base", "dashboard")
+            self.assertEqual(slot["pending"]["dashboard_started_at"], 9900)
+
+            self.m._get_json.return_value = {"started_at": 9800}
+            slot = self.m._reserve_restart("peer", "worker")
+            self.assertEqual(slot["pending"]["dashboard_started_at"], 9900)
+
+            self.m._get_json.return_value = {"started_at": 9900}
+            clock.return_value = 11700
+            slot = self.m._reserve_restart("base", runner=True)
+            self.assertEqual(slot["target"], "all")
+            self.assertEqual(slot["reservation"]["dashboard_started_at"], 9900)
+            self.assertNotIn("pending", self.state())
+
     def test_missing_invalid_or_offline_generation_keeps_local_policy(self):
         for value in (None, True, "9000", -1, float("nan"), float("inf"), 10001):
             with self.subTest(value=value), mock.patch("time.time", return_value=10000):

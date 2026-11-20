@@ -20289,15 +20289,49 @@ def _install_gc_pause_diag():
 # refcount. Only frozen cycles need a real pass, which runs on a slow timer.
 _GC_FREEZE_EVERY_S = 15.0
 _GC_FULL_PASS_EVERY_S = 1800.0
+_GC_RESTART_GRACE_S = 60.0
 # With the old heap frozen, the default threshold still ran a ~170ms oldest
 # generation pass every 8s over the newest objects. Most of them die by
 # refcount, so counting 10000 allocations before a pass loses little.
 _GC_GEN0_THRESHOLD = 10000
 
 
+def _gc_dashboard_restart_due():
+    if _RESTART_OUTCOME.get("state") == "draining":
+        return True
+
+    # The CLI replaces this file atomically. Match the exact dashboard boot
+    # timestamp so a queued restart for another instance or a previous boot
+    # does not postpone collection here.
+    state_file = Path.home() / ".claude" / "command-center" / "restart-debounce.json"
+    try:
+        state = json.loads(state_file.read_bytes())
+    except (OSError, ValueError):
+        return False
+    if not isinstance(state, dict):
+        return False
+    now = time.time()
+    pending = state.get("pending")
+    for target, request, when in (
+        (state.get("last_target"), state.get("reservation"), "at"),
+        (pending.get("target") if isinstance(pending, dict) else None, pending, "due"),
+    ):
+        if target not in ("dashboard", "all") or not isinstance(request, dict):
+            continue
+        if request.get("dashboard_started_at") != _SERVER_START_TS:
+            continue
+        timestamp = request.get(when)
+        if isinstance(timestamp, (int, float)) and abs(timestamp - now) <= _GC_FREEZE_EVERY_S:
+            return True
+    return False
+
+
 def _gc_freeze_tick(now, next_full_pass):
     """Returns when the next full pass is due."""
-    if now < next_full_pass:
+    if (now < next_full_pass
+            or (now < next_full_pass + _GC_RESTART_GRACE_S and _gc_dashboard_restart_due())):
+        # An imminent restart reclaims the whole heap. Keep the old deadline
+        # so a failed or delayed restart can only postpone the full pass briefly.
         gc.freeze()
         return next_full_pass
     gc.unfreeze()
