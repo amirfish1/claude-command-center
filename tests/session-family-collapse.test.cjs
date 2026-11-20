@@ -8,7 +8,10 @@ function helpers() {
   const start = source.indexOf('  const _sidebarFamilyParents = new Map();');
   const end = source.indexOf('  // CCC-763:', start);
   assert(start >= 0 && end > start, 'family lineage helpers exist');
-  const context = vm.createContext({ manualSubsessionParentId: () => '', _f2ContinuationEdges: () => ({}), conversationsData: [] });
+  const context = vm.createContext({
+    manualSubsessionParentId: () => '', _manualSubsessionEdges: () => ({}),
+    _f2ContinuationEdges: () => ({}), conversationsData: [],
+  });
   vm.runInContext(source.slice(start, end), context);
   return context;
 }

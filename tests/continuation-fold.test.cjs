@@ -72,6 +72,7 @@ test('the successor is the effective parent of the session it continued from', (
     ],
     localStorage: { getItem() { return null; } },
     manualSubsessionParentId() { return ''; },
+    _manualSubsessionEdges() { return {}; },
     _sidebarFamilyParents: new Map(),
   };
   vm.createContext(ctx);
@@ -80,12 +81,58 @@ test('the successor is the effective parent of the session it continued from', (
       + 'let _f2OriginIndexCache = { rows: null, len: -1, byId: null, successors: null };'
       + extractFunction('_f2ContinuationEdges')
       + extractFunction('_f2OriginIndex')
+      + extractFunction('f2LocalParents')
       + extractFunction('f2EffectiveParentSessionId')
       + '; this.eff = f2EffectiveParentSessionId;',
     ctx,
   );
   assert.equal(ctx.eff('origin-session-01', ''), 'successor-sess-01');
   assert.equal(ctx.eff('successor-sess-01', 'origin-session-01'), '');
+});
+
+test('render parent lookups share storage reads and the next render observes edits', () => {
+  const manualKey = 'test-manual-subsessions';
+  const localKey = 'ccc-f2-continuation-edges';
+  const storage = new Map([
+    [manualKey, JSON.stringify({child: {parent: 'attached'}})],
+    [localKey, JSON.stringify({
+      older: {continued_from: 'origin', ts: 1},
+      earlier: {continued_from: 'origin', ts: 2},
+      later: {continued_from: 'origin', ts: 2},
+    })],
+  ]);
+  let reads = 0;
+  const ctx = vm.createContext({
+    MANUAL_SUBSESSION_KEY: manualKey,
+    conversationsData: [],
+    _sidebarFamilyParents: new Map(),
+    localStorage: {getItem(key) { reads++; return storage.get(key); }},
+  });
+  vm.runInContext(
+    'let _manualSubsessionEdgesCache = { raw: null, edges: {} };'
+      + 'let _f2ContinuationEdgesCache = { raw: null, edges: {} };'
+      + 'let _f2OriginIndexCache = { rows: null, len: -1, byId: null, successors: null };'
+      + extractFunction('_manualSubsessionEdges')
+      + extractFunction('manualSubsessionParentId')
+      + extractFunction('_f2ContinuationEdges')
+      + extractFunction('_f2OriginIndex')
+      + extractFunction('f2LocalParents')
+      + extractFunction('f2EffectiveParentSessionId'),
+    ctx,
+  );
+  const first = ctx.f2LocalParents();
+  assert.equal(ctx.f2EffectiveParentSessionId('child', 'recorded', first), 'attached');
+  assert.equal(ctx.f2EffectiveParentSessionId('origin', '', first), 'later');
+  assert.equal(ctx.f2EffectiveParentSessionId('later', 'origin', first), '');
+  assert.equal(reads, 2);
+
+  storage.set(manualKey, '{}');
+  storage.set(localKey, JSON.stringify({next: {continued_from: 'origin', ts: 3}}));
+  const next = ctx.f2LocalParents();
+  assert.equal(ctx.f2EffectiveParentSessionId('child', 'recorded', next), 'recorded');
+  assert.equal(ctx.f2EffectiveParentSessionId('origin', '', next), 'next');
+  assert.equal(ctx.f2EffectiveParentSessionId('origin', '', first), 'later');
+  assert.equal(reads, 4);
 });
 
 test('continuations replace the from chip with an expandable earlier-session list', () => {
@@ -129,6 +176,7 @@ test('effective-parent lookups index origin markers once per snapshot, not once 
     conversationsData: rows,
     localStorage: { getItem() { return null; } },
     manualSubsessionParentId() { return ''; },
+    _manualSubsessionEdges() { return {}; },
     _sidebarFamilyParents: new Map(),
   };
   vm.createContext(ctx);
@@ -137,6 +185,7 @@ test('effective-parent lookups index origin markers once per snapshot, not once 
       + 'let _f2OriginIndexCache = { rows: null, len: -1, byId: null, successors: null };'
       + extractFunction('_f2ContinuationEdges')
       + extractFunction('_f2OriginIndex')
+      + extractFunction('f2LocalParents')
       + extractFunction('f2EffectiveParentSessionId')
       + '; this.eff = f2EffectiveParentSessionId;',
     ctx,
