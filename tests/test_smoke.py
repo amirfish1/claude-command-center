@@ -17242,6 +17242,14 @@ class TestCodexCompactionRecovery(unittest.TestCase):
         )
         self.control_plane_patch.start()
         self.addCleanup(self.control_plane_patch.stop)
+        # Simulated completions can wake both workers. Keep those threads
+        # from outliving this fixture and racing the next server reimport.
+        queue_pump_patch = mock.patch.object(self.server, "_schedule_codex_queue_pump")
+        self.schedule_queue_pump = queue_pump_patch.start()
+        self.addCleanup(queue_pump_patch.stop)
+        idle_unsubscribe_patch = mock.patch.object(self.server, "_schedule_codex_idle_unsubscribe")
+        idle_unsubscribe_patch.start()
+        self.addCleanup(idle_unsubscribe_patch.stop)
         self.tmp_dir = tempfile.mkdtemp(prefix="ccc-codex-recovery-")
         self.server.CODEX_APP_SERVER_STATE_FILE = (
             pathlib.Path(self.tmp_dir) / "codex-app-server-state.json"
@@ -17881,15 +17889,13 @@ class TestCodexCompactionRecovery(unittest.TestCase):
                  server,
                  "_codex_interrupt_via_app_server",
                  return_value={"ok": True, "turn_id": "turn-stalled"},
-             ) as interrupt, mock.patch.object(
-                 server, "_schedule_codex_queue_pump"
-             ) as schedule, mock.patch.object(server, "resume_session_codex") as resume:
+             ) as interrupt, mock.patch.object(server, "resume_session_codex") as resume:
             result = server._run_codex_recovery_watchdog_once(now=1001.0)
 
         self.assertTrue(result[0][1]["interrupted"])
         self.assertTrue(result[0][1]["queue_handoff"])
         interrupt.assert_called_once_with(sid)
-        schedule.assert_called_once_with(sid)
+        self.schedule_queue_pump.assert_called_once_with(sid)
         resume.assert_not_called()
         recovery = server._codex_app_server_thread_state(sid)["compaction_recovery"]
         self.assertEqual(recovery["status"], "suppressed")

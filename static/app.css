@@ -22951,7 +22951,7 @@ body.status-pos-right #convToolbar {
 }
 .whats-new-menu-item .menu-item-date {
   font-size: 10px;
-  color: rgba(255, 255, 255, 0.35);
+  color: var(--text-muted);
   font-family: var(--mono, monospace);
 }
 

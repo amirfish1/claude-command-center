@@ -1,6 +1,8 @@
 """Hot memory/cold disk parity and transactional archive publication."""
+from concurrent.futures import Future, ThreadPoolExecutor
 import json
 import sqlite3
+import threading
 
 import pytest
 
@@ -360,3 +362,58 @@ def test_inventory_old_or_incomplete_store_requires_compatibility_read(tmp_path)
     original['entries']['base']['cached_at'] += 1
     assert store.save(target, original, complete=True) == 0
     assert len(store.load_inventory(target, 'base', schema_version=version)['conversations']) == 4
+
+
+def test_concurrent_cold_inventory_reads_share_decode_and_keep_their_filters(tmp_path, monkeypatch):
+    target = tmp_path / 'archive.json'
+    original = data()
+    store.save(target, original, complete=True)
+    waiting = threading.Event()
+    entered = threading.Event()
+    calls = []
+    read_inventory = store._read_inventory_generation
+
+    class ObservableFuture(Future):
+        def result(self, timeout=None):
+            waiting.set()
+            return super().result(timeout)
+
+    def paused_read(*args):
+        calls.append(1)
+        entered.set()
+        assert waiting.wait(timeout=5)
+        return read_inventory(*args)
+
+    monkeypatch.setattr(store, 'Future', ObservableFuture)
+    monkeypatch.setattr(store, '_read_inventory_generation', paused_read)
+
+    def load(**filters):
+        return store.load_inventory(target, 'base', schema_version=original['schema_version'],
+                                    **filters)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(load, limit=1)
+        assert entered.wait(timeout=5)
+        second = pool.submit(load, limit=2, skip_identities={store.identity(
+            original['entries']['base']['conversations'][0])})
+        assert [r['session_id'] for r in first.result(timeout=5)['conversations']] == ['old']
+        assert [r['session_id'] for r in second.result(timeout=5)['conversations']] == [
+            'recent', 'parent']
+    assert calls == [1]
+
+
+def test_inventory_generation_can_retry_failed_read(tmp_path, monkeypatch):
+    target = tmp_path / 'archive.json'
+    original = data()
+    store.save(target, original, complete=True)
+
+    def unavailable(*args):
+        raise sqlite3.OperationalError('temporarily unavailable')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(store, '_read_inventory_generation', unavailable)
+        with pytest.raises(sqlite3.OperationalError, match='temporarily unavailable'):
+            store.load_inventory(target, 'base', schema_version=original['schema_version'])
+
+    result = store.load_inventory(target, 'base', schema_version=original['schema_version'])
+    assert result['conversations'][0]['session_id'] == 'old'

@@ -6,6 +6,7 @@ The database format is independent of the transcript row-shaping version.
 Transactions retain newer variants and update only changed row bodies. The
 small JSON snapshot remains a fallback, not the canonical historical store.
 """
+from concurrent.futures import Future
 import hashlib
 import copy
 import json
@@ -33,6 +34,8 @@ INVENTORY_FIELDS = (
 )
 INVENTORY_VERSION = '1:'
 _INVENTORY_CACHE = ByteBudgetCache(max_bytes=64 << 20, max_entries=2)
+_INVENTORY_FLIGHT_LOCK = threading.Lock()
+_INVENTORY_FLIGHTS = {}
 
 # The attention poll needs classification inputs, not parser/tool histories.
 # Keep the projection transactionally paired with the canonical row digest.
@@ -348,6 +351,51 @@ def load_attention(cache_file, key, *, schema_version, build_id):
     return {'cached_at': timestamp, 'rows': decoded}
 
 
+def _read_inventory_generation(con, key, cache_key, activity_key):
+    missing = con.execute('''SELECT 1 FROM rows r LEFT JOIN session_inventory i
+        ON i.variant=r.variant AND i.identity=r.identity
+        WHERE r.variant=? AND (i.digest IS NULL OR i.digest!=?||r.digest) LIMIT 1''',
+                          (key, INVENTORY_VERSION)).fetchone()
+    if missing:
+        return None
+    bodies = con.execute('''SELECT i.identity,i.body FROM rows r JOIN session_inventory i
+        ON i.variant=r.variant AND i.identity=r.identity
+        WHERE r.variant=? ORDER BY r.position''', (key,)).fetchall()
+    decoded = [(rid, json.loads(body)) for rid, body in bodies]
+    positions = {rid: index for index, (rid, _) in enumerate(decoded)}
+    if activity_key is not None:
+        decoded.sort(key=lambda item: activity_key(item[1]), reverse=True)
+    cached = (tuple(decoded), positions)
+    _INVENTORY_CACHE.put(cache_key, cached, sum(len(rid) + len(body) for rid, body in bodies) * 4)
+    return cached
+
+
+def _inventory_generation(con, key, cache_key, activity_key):
+    # Each caller has already identified the generation in its read
+    # transaction. Share only that projection, before applying caller filters.
+    with _INVENTORY_FLIGHT_LOCK:
+        cached = _INVENTORY_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+        flight = _INVENTORY_FLIGHTS.get(cache_key)
+        owner = flight is None
+        if owner:
+            flight = _INVENTORY_FLIGHTS[cache_key] = Future()
+    if not owner:
+        return flight.result()
+    try:
+        cached = _read_inventory_generation(con, key, cache_key, activity_key)
+    except BaseException as exc:
+        flight.set_exception(exc)
+        raise
+    else:
+        flight.set_result(cached)
+        return cached
+    finally:
+        with _INVENTORY_FLIGHT_LOCK:
+            del _INVENTORY_FLIGHTS[cache_key]
+
+
 def load_inventory(cache_file, key, *, schema_version, build_id=None,
                    limit=None, activity_key=None, skip_identities=(), deleted_codex=()):
     """A complete, transactionally current peer projection, or None.
@@ -373,24 +421,9 @@ def load_inventory(cache_file, key, *, schema_version, build_id=None,
         stat = database_path(cache_file).stat()
         cache_key = (str(database_path(cache_file)), stat.st_dev, stat.st_ino,
                      key, metadata[0], schema_version, build_id, INVENTORY_VERSION, activity_key)
-        cached = _INVENTORY_CACHE.get(cache_key)
+        cached = _inventory_generation(con, key, cache_key, activity_key)
         if cached is None:
-            missing = con.execute('''SELECT 1 FROM rows r LEFT JOIN session_inventory i
-                ON i.variant=r.variant AND i.identity=r.identity
-                WHERE r.variant=? AND (i.digest IS NULL OR i.digest!=?||r.digest) LIMIT 1''',
-                                  (key, INVENTORY_VERSION)).fetchone()
-            if missing:
-                return None
-            bodies = con.execute('''SELECT i.identity,i.body FROM rows r JOIN session_inventory i
-            ON i.variant=r.variant AND i.identity=r.identity
-            WHERE r.variant=? ORDER BY r.position''', (key,)).fetchall()
-            decoded = [(rid, json.loads(body)) for rid, body in bodies]
-            positions = {rid: index for index, (rid, _) in enumerate(decoded)}
-            if activity_key is not None:
-                decoded.sort(key=lambda item: activity_key(item[1]), reverse=True)
-            cached = (tuple(decoded), positions)
-            _INVENTORY_CACHE.put(cache_key, cached,
-                                 sum(len(rid) + len(body) for rid, body in bodies) * 4)
+            return None
         # Callers may enrich rows; no mutable cache member escapes. Ordinary
         # inventory fields are scalar, but preserve unusual nested model data.
         import copy

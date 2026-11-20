@@ -17,7 +17,7 @@ const exposed=app.replace(marker, `
  updateInputBar();
  }, stage(){return _compactRun&&_compactRun.stage;}, boundary(){renderConversationEvents([{type:'system',subtype:'compact_boundary',line:100,compact:{trigger:'Antigravity'}}],activePaneId());}};
 `+marker);
-test('Antigravity Compact button sends native compact and waits for checkpoint',async()=>{
+async function verifyCompact(entryPoint) {
  const browser=await puppeteer.launch({executablePath:findChromePath(),args:['--no-sandbox']});
  try{
  const page=await browser.newPage(); await page.setViewport({width:1440,height:1000});
@@ -29,6 +29,8 @@ test('Antigravity Compact button sends native compact and waits for checkpoint',
  if(r.isNavigationRequest())return r.respond({status:200,contentType:'text/html',body:fs.readFileSync(require.resolve('../static/index.html'),'utf8')});
  if(respondConversationAsset(r))return;
  if(url.pathname==='/static/app.js')return r.respond({status:200,contentType:'application/javascript',body:exposed});
+ // A peer-owned Antigravity session can be unknown to the local server.
+ if(url.pathname==='/api/session/compact-test/slash-commands')return r.respond({status:200,contentType:'application/json',body:JSON.stringify({engine:'claude',commands:[{name:'/clear'}]})});
  if(url.pathname==='/api/session/compact'){sent=JSON.parse(r.postData() || await r.fetchPostData());return r.respond({status:200,contentType:'application/json',body:JSON.stringify({ok:true,compact:true,engine:'antigravity',via:'antigravity-stream'})});}
  if(url.pathname.startsWith('/static/')){const file=path.join(__dirname,'..',url.pathname);if(fs.existsSync(file))return r.respond({status:200,contentType:url.pathname.endsWith('.css')?'text/css':'application/javascript',body:fs.readFileSync(file,'utf8')});}
  return r.respond({status:200,contentType:'application/json',body:'[]'});
@@ -36,11 +38,26 @@ test('Antigravity Compact button sends native compact and waits for checkpoint',
  await page.goto('http://ccc-compact.test/',{waitUntil:'load'});await page.waitForFunction(()=>!!window.compactTest);await page.waitForNetworkIdle({idleTime:200});
  await page.evaluate(()=>compactTest.seed());
  assert.equal(await page.$eval('#convCompactBtn',el=>el.checkVisibility()&&!el.disabled),true);
- await page.click('#convCompactBtn');
+ if (entryPoint === 'slash menu') {
+   await page.type('#convInput', '/');
+   const command = '.slash-command-item';
+   await page.waitForSelector(command, {visible:true});
+   assert.deepEqual(await page.$$eval(command, items => items.map(item => item.querySelector('.slash-command-name').textContent)), ['/compact']);
+   if (process.env.CCC_SLASH_SCREENSHOT) await page.screenshot({path:process.env.CCC_SLASH_SCREENSHOT});
+   await page.keyboard.press('Enter');
+   assert.equal(await page.$eval('#convInput', el => el.value), '/compact ');
+   assert.equal(sent, undefined);
+   await page.keyboard.press('Enter');
+ } else {
+   await page.click('#convCompactBtn');
+ }
  await page.waitForFunction(()=>compactTest.stage()==='working');
  assert.equal(sent.session_id,'compact-test');
  await page.evaluate(()=>compactTest.boundary());
  await page.waitForFunction(()=>compactTest.stage()==='done');
  if(process.env.CCC_COMPACT_SCREENSHOT)await page.screenshot({path:process.env.CCC_COMPACT_SCREENSHOT});
  }finally{await browser.close();}
-});
+}
+
+test('Antigravity Compact button sends native compact and waits for checkpoint', () => verifyCompact('button'));
+test('Antigravity slash menu sends native compact and waits for checkpoint', () => verifyCompact('slash menu'));
