@@ -1928,7 +1928,9 @@
     // just appended would otherwise push past it.
     if (typeof updateLiveToolStrip === 'function') updateLiveToolStrip();
     if (typeof updateCodexStateBadge === 'function') updateCodexStateBadge();
-    const compactBoundary = events.find(e => e && e.type === 'system' && e.subtype === 'compact_boundary');
+    const foregroundRun = state._compactRun?.sid === state.currentSession?.id ? state._compactRun : null;
+    const compactBoundary = events.find(e => e && e.type === 'system' && e.subtype === 'compact_boundary'
+      && (foregroundRun?.source !== 'codex' || Date.parse(e.ts) >= foregroundRun.requestedAt));
     if (compactBoundary) {
       // The compact boundary proves the pending compact turn is over.
       clearOptimisticAgentIndicator($view);

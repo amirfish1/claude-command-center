@@ -44,6 +44,7 @@ test('steering echoes stay above Generating across transcript refreshes and stat
     window.currentSession = { id: 'session', source: 'devin-cli' };
     window._liveStripLastKeyTs = window._liveStripLastLiveTime = 0;
     window._liveStripShown = false;
+    window._compactRunFor = () => null;
     window._streamingBubble = null;
     window.codexActiveItemLabel = () => ({ label: '', detail: '' });
     window.codexTokenUsageText = () => '';

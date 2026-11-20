@@ -1980,6 +1980,12 @@ def _inject_text_into_session_router(
     # resume and fail with an unrelated ``repo_required`` error.
     session_id = _core._canonical_kimi_session_id(session_id)
     is_codex = _core._is_codex_session(session_id)
+    codex_send_options = {"idempotency_key": idempotency_key} if idempotency_key else {}
+    if (is_codex and source == "composer" and not wt_origin and not peer_sender_sid
+            and _core._is_unattended_auto_continue(text)):
+        # The HTTP handler has already verified the dashboard composer.
+        # Preserve that evidence through the worker even with envelopes off.
+        codex_send_options["composer_attr"] = attr or attribution.dashboard_human(session_id, text)
     compact_command = bool(_core._COMPACT_TRIGGER_RE.match(text))
     clear_command = bool(_core._CLEAR_TRIGGER_RE.match(text))
     slash_command = bool(_core._SLASH_COMMAND_TRIGGER_RE.match(text))
@@ -2288,11 +2294,7 @@ def _inject_text_into_session_router(
             # Codex/Cursor keep their own busy-turn delivery (resume/steer) —
             # their TUIs aren't driven by raw keystrokes the way Claude's is.
             if busy_or_pending and is_codex:
-                if idempotency_key:
-                    return _core.resume_session_codex(
-                        session_id, text, idempotency_key=idempotency_key,
-                    )
-                return _core.resume_session_codex(session_id, text)
+                return _core.resume_session_codex(session_id, text, **codex_send_options)
             if busy_or_pending and is_cursor:
                 return _core.resume_session_cursor(session_id, text)
             # Claude TTY: only queue to preserve ORDER when input is already
@@ -2336,11 +2338,7 @@ def _inject_text_into_session_router(
         if (isinstance(keystroke_result, dict) and not keystroke_result.get("ok")
                 and not answering_tty_question):
             if is_codex:
-                if idempotency_key:
-                    return _core.resume_session_codex(
-                        session_id, text, idempotency_key=idempotency_key,
-                    )
-                return _core.resume_session_codex(session_id, text)
+                return _core.resume_session_codex(session_id, text, **codex_send_options)
             if is_cursor:
                 return _core.resume_session_cursor(session_id, text)
         # If the AppleScript can't find the terminal tab (user switched
@@ -2391,11 +2389,7 @@ def _inject_text_into_session_router(
             return queued
         return result
     if is_codex:
-        if idempotency_key:
-            return _core.resume_session_codex(
-                session_id, text, idempotency_key=idempotency_key,
-            )
-        return _core.resume_session_codex(session_id, text)
+        return _core.resume_session_codex(session_id, text, **codex_send_options)
     acp_harness = "kimi" if is_kimi else ("grok" if is_grok else None)
     if acp_harness:
         if (

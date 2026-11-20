@@ -1806,7 +1806,12 @@ def build_ux_fixes_health_payload(force=False, *, cached_only=False):
         return copy.deepcopy(data)
 
 
-def _queue_codex_resume(session_id, text, pid=None, reason=None, *, only_if_pending=False):
+def _queue_codex_resume(session_id, text, pid=None, reason=None, *, only_if_pending=False, composer_attr=None):
+    from ccc_server.pending_inputs import _is_typed_dashboard_continue
+
+    typed_continue = _is_typed_dashboard_continue(text, composer_attr)
+    unattended = not typed_continue and _core._is_unattended_auto_continue(text)
+
     def enqueue():
         with _core._pending_resume_lock:
             if only_if_pending and not _core._pending_resume_queue.get(session_id):
@@ -1816,7 +1821,7 @@ def _queue_codex_resume(session_id, text, pid=None, reason=None, *, only_if_pend
         # leaked stale process burn a weekly quota unattended). Real user
         # text is never gated here.
             if (
-                _core._is_unattended_auto_continue(text)
+                unattended
                 and not _core._is_auto_resume_opted_in(session_id)
             ):
                 return {
@@ -1829,8 +1834,11 @@ def _queue_codex_resume(session_id, text, pid=None, reason=None, *, only_if_pend
         # Deduplicate identical text so a slow-to-confirm delivery (e.g. a
         # verifier report landing on a finished Codex thread) cannot pile up
         # duplicate queued copies that get re-injected repeatedly.
-            if text not in queue:
-                queue.append(_core._new_pending_entry(text))
+            if not any(
+                item == text and _core._is_unattended_auto_continue(item) == unattended
+                for item in queue
+            ):
+                queue.append(_core._new_pending_entry(text, attr=composer_attr))
                 _core._pending_resume_queue[session_id] = queue
             return True
 
@@ -2789,7 +2797,7 @@ def resume_session_codex(
     queued_steer_transaction_protocol=None,
     queued_delivery_transaction_protocol=0,
     replace_queued_id=None,
-    _steer_fallback=False,
+    _steer_fallback=False, composer_attr=None,
 ):
     """Resume a dormant Codex thread with a new prompt through the app-server.
 
@@ -2830,6 +2838,7 @@ def resume_session_codex(
                 **({"replace_queued_id": str(replace_queued_id)}
                    if replace_queued_id else {}),
                 **({"steer_fallback": True} if _steer_fallback else {}),
+                **({"composer_attr": composer_attr} if composer_attr else {}),
             },
             idempotency_key=idempotency_key,
         )
@@ -2853,6 +2862,7 @@ def resume_session_codex(
         )
     if not text:
         return {"ok": False, "error": "missing text"}
+    queue_options = {"composer_attr": composer_attr} if composer_attr else {}
     if steer:
         refusal = _core._codex_headless_exec_refusal(session_id, "steered")
         if refusal is not None:
@@ -2878,6 +2888,7 @@ def resume_session_codex(
             text,
             reason="Waiting behind an earlier queued Codex message",
             only_if_pending=True,
+            **queue_options,
         )
         if queued_behind_earlier is not None:
             return queued_behind_earlier
@@ -3058,6 +3069,7 @@ def resume_session_codex(
             text,
             pid=(active_resume_entry or {}).get("pid"),
             reason=app_result.get("error"),
+            **queue_options,
         )
         if app_result.get("writer"):
             queued["writer"] = app_result["writer"]
@@ -3072,7 +3084,10 @@ def resume_session_codex(
                 "via": "codex-resume-queued",
                 "pid": active_resume_entry.get("pid"),
             }
-        return _core._queue_codex_resume(session_id, text, pid=active_resume_entry.get("pid"))
+        return _core._queue_codex_resume(
+            session_id, text, pid=active_resume_entry.get("pid"),
+            **queue_options,
+        )
     if cwd_error is not None:
         return cwd_error.as_payload()
     # No one-shot `codex exec resume` fallback: park the message in the
@@ -3092,7 +3107,10 @@ def resume_session_codex(
             "queued_reason": reason,
             "error": reason,
         }
-    return _core._queue_codex_resume(session_id, text, reason=reason)
+    return _core._queue_codex_resume(
+        session_id, text, reason=reason,
+        **queue_options,
+    )
 
 
 def _extract_codex_usage(session_id):

@@ -150,7 +150,7 @@ def _queued_origin(value):
     }
 
 
-def _new_pending_entry(text):
+def _new_pending_entry(text, *, attr=None):
     """A queue row for a message being enqueued right now.
 
     Only enqueue sites call this; decode paths rebuild rows with the id they
@@ -161,7 +161,7 @@ def _new_pending_entry(text):
     if isinstance(text, (_PendingInputEntry, _PendingInputHandoff)):
         return text
     from ccc_server import delivery as _delivery
-    return _PendingInputEntry(text, _delivery.adopt(text))
+    return _PendingInputEntry(text, _delivery.adopt(text), attr=attr)
 
 
 class _PendingInputEntry(str):
@@ -695,7 +695,7 @@ def _repair_pending_entry_ids_for_session(session_id):
                     continue
                 entry = item if isinstance(item, _PendingInputEntry) else _PendingInputEntry(item)
                 if entry.pending_id in seen:
-                    entry = _PendingInputEntry(str(entry))
+                    entry = _PendingInputEntry(str(entry), attr=entry.attr)
                     repaired = True
                 elif entry is not item:
                     repaired = True
@@ -762,8 +762,27 @@ def _acquire_pending_inputs_watcher_lock(lock_path):
 
 
 def _is_unattended_auto_continue(text):
-    """True for the exact auto-resume poke, not a real user follow-up."""
-    return str(text or "").strip().lower() == "continue"
+    """Legacy bare markers require opt-in unless dashboard attribution proves a typed send."""
+    if str(text or "").strip().lower() != "continue":
+        return False
+    attr = getattr(text, "attr", None) or {}
+    return not _is_typed_dashboard_continue(text, attr)
+
+
+def _is_typed_dashboard_continue(text, attr):
+    import sender_envelope as attribution
+
+    if str(text or "").strip().lower() != "continue" or not isinstance(attr, dict):
+        return False
+    author = attr.get("author")
+    evidence = attr.get("evidence")
+    return (
+        isinstance(author, dict)
+        and isinstance(evidence, dict)
+        and author.get("kind") == "human"
+        and evidence.get("source") == "dashboard"
+        and evidence.get("text_digest") == attribution.prompt_digest(text)
+    )
 
 
 def _drop_unattended_auto_continues(queue):
@@ -916,6 +935,7 @@ def _write_pending_input_claim_journal(claim):
         "id": journal_id,
         **identity,
         "handoff_path": str(getattr(item, "handoff_path", "") or ""),
+        **({"attr": item.attr} if getattr(item, "attr", None) else {}),
     }
     if not payload["session_id"] or not payload["text"]:
         return "failed"
@@ -1413,7 +1433,8 @@ def _recover_pending_input_claim_journals():
                 front=bool(payload.get("handoff_front")),
             )
             if handoff_id else _PendingInputEntry(
-                text, payload.get("pending_id") or payload.get("id")
+                text, payload.get("pending_id") or payload.get("id"),
+                attr=payload.get("attr"),
             )
         )
 

@@ -207,6 +207,72 @@ def test_worker_rebinds_the_id_around_the_engine_call(queue_env, monkeypatch):
     assert delivery.bound_id() is None, "the binding does not leak past the call"
 
 
+def test_typed_continue_queues_during_codex_compaction_and_drains_once(queue_env, monkeypatch):
+    from types import SimpleNamespace
+    from unittest import mock
+
+    from worker_engines import EngineHost
+
+    host = EngineHost(SimpleNamespace(ledger=None))
+    host._module = server
+    monkeypatch.setenv("CCC_ATTRIBUTION_EMIT", "0")
+    monkeypatch.setenv("CCC_CODEX_DESKTOP_IPC", "0")
+    monkeypatch.setattr(server, "_pending_writer_compatibility_status", lambda: {"ok": True})
+    monkeypatch.setattr(server, "_is_codex_session", lambda sid: True)
+    monkeypatch.setattr(server, "_codex_wt_app_worker_delivery", lambda *args: None)
+    monkeypatch.setattr(server, "_inject_budget_check", lambda *args: None)
+    monkeypatch.setattr(server, "session_live_status", lambda *args, **kw: {
+        "live": True, "status": "working", "tty": None,
+    })
+    monkeypatch.setattr(server, "_resolve_codex_bin", lambda: {"available": True})
+    monkeypatch.setattr(server, "_codex_thread_row", lambda sid: {"cwd": str(queue_env)})
+    monkeypatch.setattr(server, "_codex_capture_thread_row", lambda sid: {})
+    monkeypatch.setattr(server, "_resolve_codex_rollout_path", lambda sid: None)
+    monkeypatch.setattr(server, "_get_session_override", lambda sid: None)
+    monkeypatch.setattr(server, "_codex_pending_approval_hint", lambda sid: None)
+    monkeypatch.setattr(server, "_resume_ledger_append", lambda *args, **kw: None)
+    monkeypatch.setattr(server, "_is_auto_resume_opted_in", lambda sid: False)
+    app_server = mock.Mock(return_value={"ok": False, "fallback": "queue", "error": "compacting"})
+    monkeypatch.setattr(server, "_codex_resume_or_steer_via_app_server", app_server)
+
+    def route(engine, operation, args, **kwargs):
+        if engine != "codex" or operation != "resume" or in_worker:
+            return None
+        in_worker.append(True)
+        try:
+            return host._call(engine, operation, dict(args, delivery_id=delivery.bound_id()))
+        finally:
+            in_worker.pop()
+
+    in_worker = []
+    monkeypatch.setattr(server, "_control_plane_engine_call", route)
+    automated = server._inject_text_into_session(SID, "continue", source="api")
+    assert not automated["ok"] and automated["auto_resume_opt_in_required"]
+
+    sent = server._inject_text_into_session(
+        SID, "continue", source="composer", idempotency_key="inject:typed-continue",
+    )
+    assert sent["ok"] and sent["queued"]
+    assert sent["queued_reason"] == "compacting"
+    server._pending_resume_queue.clear()
+    server._load_pending_inputs()
+    assert [(row["text"], row["delivery_id"]) for row in _queued_events(SID)] == [
+        ("continue", sent["delivery_id"]),
+    ]
+    monkeypatch.setattr(server, "_resume_queue_engine_busy", lambda sid: True)
+    assert server._pump_codex_resume_queue(SID, _backstop=True)["waiting"] == "busy"
+    assert len(_queued_events(SID)) == 1
+
+    monkeypatch.setattr(server, "_resume_queue_engine_busy", lambda sid: False)
+    app_server.reset_mock()
+    app_server.return_value = {"ok": True, "via": "codex-app-turn", "turn_id": "test-turn"}
+    assert server._pump_codex_resume_queue(SID)["delivered"]
+    assert server._pump_codex_resume_queue(SID)["empty"]
+    app_server.assert_called_once()
+    assert app_server.call_args.args[:2] == (SID, "continue")
+    assert _queued_events(SID) == []
+
+
 def test_account_worker_hop_keeps_the_queued_card_id(queue_env, monkeypatch):
     import contextvars
     from types import SimpleNamespace

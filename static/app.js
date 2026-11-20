@@ -29800,7 +29800,7 @@
           if (data && data.ok) {
             if (_compactToastNeeded(sid)) showOpToast(compactRequestSuccessMessage(data, source), 'success');
             touchSessionOptimistically(sid);
-            if ((source === 'codex' || (data && data.via === 'live-spawn-stdin'))
+            if ((source === 'codex' || data.via === 'codex-compact' || data.via === 'live-spawn-stdin')
                 && compactResponseIsComplete(data)) {
               // Already finished compacting server-side — no boundary left to
               // poll for; land the card on its result instead of spinning.

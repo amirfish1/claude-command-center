@@ -4592,6 +4592,32 @@
     // zero DOM work each tick until a session goes live again.
     const needsApproval = liveStatusMatchesOpenConv() && !!sharedState.liveStatus.needsApproval;
     const codexStateWorking = liveStatusMatchesOpenConv() && sharedState.liveStatus.codexState === 'working';
+    const codexItem = sharedState.liveStatus.codexAppServerActiveItem;
+    const nativeCompaction = codexItem && codexItem.type === 'contextCompaction';
+    const compactRun = _compactRunFor(sharedState.currentSession?.id);
+    const cardInFlight = compactRun && _compactRunActive() && !compactRun.queued;
+    // A poll may still describe the native item after the transcript or RPC
+    // has completed the card. Keep it from adding a second row at the tail.
+    const staleCompactionItem = nativeCompaction && compactRun?.stage === 'done'
+      && ((codexItem.id && compactRun.nativeItemId === codexItem.id)
+        || (codexItem.ts > 0 && codexItem.ts * 1000 <= compactRun.endedAt));
+    const coveredByCompactCard = staleCompactionItem || (cardInFlight
+      && (nativeCompaction || (compactRun.source === 'codex' && codexStateWorking && !codexItem)));
+    if (coveredByCompactCard) {
+      if (nativeCompaction) compactRun.nativeItemId = codexItem.id;
+      if (compactRun.source !== 'codex') {
+        compactRun.source = 'codex';
+        compactRun.engineLabel = 'Codex';
+        _compactRunPaint();
+      }
+      if (!needsApproval) {
+        getSingleLiveToolInline($view)?.remove();
+        if (sharedState._liveStripShown) updateLiveStripOffset($view, null);
+        sharedState._liveStripShown = false;
+        sharedState._liveStripLastLiveTime = 0;
+        return;
+      }
+    }
     // Webui panes (kimi/codex): the engine-reported turn state. Kimi TUI
     // turns arrive via wire-tail at whole-message granularity — no deltas,
     // no sidecar — so `status: running` (server: ACP active turn or fresh
@@ -4887,7 +4913,8 @@
       // server hasn't supplied them.
       const _liveMatches = liveStatusMatchesOpenConv();
       const _activeItem = _liveMatches ? codexActiveItemLabel(sharedState.liveStatus.codexAppServerActiveItem) : { label: '', detail: '' };
-      const _tokTxt = _liveMatches ? codexTokenUsageText(sharedState.liveStatus.codexAppServerTokenUsage) : '';
+      const _tokTxt = _liveMatches && !nativeCompaction
+        ? codexTokenUsageText(sharedState.liveStatus.codexAppServerTokenUsage) : '';
       const _isCodex = !!sharedState.currentSession && (sharedState.currentSession.source === 'codex' || sharedState.currentSession.engine === 'codex');
       // Kimi webui: the server stamps the wire tail's dangling tool
       // (Agent/Bash/...) on the status payload — surface it so a long turn
@@ -4902,7 +4929,7 @@
       _wireLiveInlineExpand(inline);
       const _detailShown = (_detailTxt && !inline.classList.contains('is-expanded')) ? (0, sharedState.truncate)(_detailTxt, 80) : _detailTxt;
       const _silenceSec = (_liveMatches && sharedState.liveStatus.staleToolAgeS) || (ageSec < 9000 ? ageSec : 0);
-      const showGeneratingWakeBtn = _silenceSec >= 60 && !hasWakeProgress;
+      const showGeneratingWakeBtn = _silenceSec >= 60 && !hasWakeProgress && !nativeCompaction;
       const _wakeBtnHtml = showGeneratingWakeBtn
         ? '<button type="button" class="cl-working-wake-btn" title="No output for ' + Math.max(1, Math.floor(_silenceSec / 60)) + 'm - click to send a status-check nudge">Nudge</button>'
         : '';
@@ -7260,6 +7287,7 @@
 
   function codexActiveItemLabel(item) {
     if (!item || typeof item !== 'object') return { label: '', detail: '' };
+    if (item.type === 'contextCompaction') return { label: 'Compacting context…', detail: '' };
     const activityLabels = { reasoning: 'Thinking…', agentMessage: 'Writing…', plan: 'Planning…' };
     const label = Object.prototype.hasOwnProperty.call(activityLabels, item.type)
       ? activityLabels[item.type] : String(item.tool || item.type || '').trim();
@@ -8037,16 +8065,25 @@
 
   function beginCompactRun(sid, source) {
     if (!sid) return null;
-    const runSource = source || (sharedState.currentSession && sharedState.currentSession.source) || '';
+    const session = sharedState.currentSession?.id === sid ? sharedState.currentSession : null;
+    const selected = session ? openConvRow() : null;
+    const row = selected && (selected.session_id || selected.id) === sid ? selected : null;
+    // A newly opened pane can still carry a generic source when /compact is
+    // submitted. Use the selected row's engine before falling back to it.
+    const codex = [source, session?.source, session?.engine, row?.source, row?.engine]
+      .some(value => value === 'codex' || value === 'openai');
+    const runSource = codex ? 'codex' : (source || session?.source || '');
     const engineLabel = (0, sharedState._compactEngineLabel)(runSource);
     if (_compactRunActive() && sharedState._compactRun.sid === sid) return sharedState._compactRun;
     if (sharedState._compactRun && sharedState._compactRun.el && sharedState._compactRun.el.parentNode) sharedState._compactRun.el.remove();
+    const startedAt = Date.now();
     sharedState._compactRun = {
       sid,
       source: runSource,
       engineLabel,
       stage: 'requested',
-      startedAt: Date.now(),
+      startedAt,
+      requestedAt: startedAt,
       endedAt: 0,
       acked: false,
       slow: false,
@@ -8096,11 +8133,16 @@
   function adoptCompactRunResult(sid, data) {
     const run = sid ? _compactRunFor(sid) : sharedState._compactRun;
     if (!run || !data) return;
+    if (data.engine === 'codex' || data.via === 'codex-compact') {
+      run.source = 'codex';
+      run.engineLabel = 'Codex';
+    }
     const pre = Number(data.pre_tokens || 0);
     const post = Number(data.post_tokens || 0);
     const limit = (run.before && run.before.limit) || 0;
     if (pre > 0 && !(run.before && run.before.tokens)) run.before = { tokens: pre, limit };
     if (post > 0) run.after = { tokens: post, limit: (run.before && run.before.limit) || limit };
+    _compactRunPaint();
   }
 
   function completeCompactRun(sid) {
@@ -8213,19 +8255,25 @@
         }
       }
     }
-    if (run.adoptedBoundary) return;
-    const rows = view.querySelectorAll('.compact-boundary-row');
-    const row = rows.length ? rows[rows.length - 1] : null;
+    const codex = run.source === 'codex';
+    const rows = Array.from(view.querySelectorAll('.compact-boundary-row'));
+    const row = codex
+      ? rows.find(node => run.boundaryEpoch
+        ? Number(node.dataset.tsEpoch) === run.boundaryEpoch
+        : Number(node.dataset.tsEpoch) >= run.requestedAt)
+      : rows.at(-1);
     if (!row) return;
     const pre = Number(row.dataset.compactPre || 0);
     const post = Number(row.dataset.compactPost || 0);
     const ms = Number(row.dataset.compactDuration || 0);
-    if (!pre && !post) return;
-    run.adoptedBoundary = true;
+    if (!codex && (run.adoptedBoundary || (!pre && !post))) return;
+    if (codex) run.boundaryEpoch = Number(row.dataset.tsEpoch);
     row.classList.add('compact-record-hidden');
+    if (run.adoptedBoundary) return;
+    run.adoptedBoundary = true;
     if (pre) run.before = { tokens: pre, limit: (run.before && run.before.limit) || 200000 };
     if (post) run.after = { tokens: post, limit: (run.before && run.before.limit) || 200000 };
-    if (ms > 0) run.startedAt = run.endedAt - ms;
+    if (ms > 0 && run.endedAt) run.startedAt = run.endedAt - ms;
     _compactRunPaint();
   }
 
@@ -10654,7 +10702,7 @@
       if (data && data.ok) {
         if (_compactToastNeeded(sid)) showOpToast(compactRequestSuccessMessage(data, source), 'success');
         touchSessionOptimistically(sid);
-        if ((source === 'codex' || (data && data.via === 'live-spawn-stdin'))
+        if ((source === 'codex' || data.via === 'codex-compact' || data.via === 'live-spawn-stdin')
             && compactResponseIsComplete(data)) {
           // These paths already FINISHED compacting server-side (Codex waits
           // out the compaction turn; the live spawn ran /compact itself and we

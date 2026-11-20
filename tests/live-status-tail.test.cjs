@@ -78,6 +78,7 @@ test('working status keeps its Thinking row while a completed sidecar name linge
       window.escapeHtml = window.escapeAttr = s => String(s);
       window._liveStripLastKeyTs = window._liveStripLastLiveTime = 0;
       window._liveStripShown = false;
+      window._compactRunFor = () => null;
       window._streamingBubble = null;
       window.codexActiveItemLabel = () => ({ label: '', detail: '' });
       window.codexTokenUsageText = () => '';
@@ -119,6 +120,7 @@ test('Codex in-flight tool card expands on click to the full command (CCC-227)',
       window.truncate = (s, n) => (s.length > n ? s.slice(0, n) + '…' : s);
       window._liveStripLastKeyTs = window._liveStripLastLiveTime = 0;
       window._liveStripShown = false;
+      window._compactRunFor = () => null;
       window._streamingBubble = null;
       window.codexActiveItemLabel = () => ({ label: 'Bash', detail: full });
       window.codexTokenUsageText = () => '';
@@ -205,4 +207,118 @@ test('compaction clock and live tail updates keep the card stationary (CCC-423)'
       progressAdvanced: true, clock: '0:34', followsNewContent: true, completed: true, finishedStaysPut: true });
     if (process.env.CCC_FLICKER_SCREENSHOT) await page.screenshot({ path: process.env.CCC_FLICKER_SCREENSHOT });
   } finally { await browser.close(); }
+});
+
+test('manual Codex compaction uses one card through stale live polls and transcript rebuilds', async () => {
+  const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<style>${css}</style><div class="conversations-view">
+      <div class="event assistant">Latest reply</div></div>`);
+    await page.addScriptTag({path: require.resolve('../static/conversation-content.js')});
+    const code = ['anchorCodexStateBadge', '_reanchorToTailUnlessOnlyTransientBetween',
+      '_compactElapsedLabel', '_compactStepIndexFor', '_compactRunStepsHtml', '_compactRunResultHtml',
+      '_compactRunActive', '_compactRunFor', '_compactRunPaint', '_compactRunMount', '_stopCompactRunTimer',
+      'beginCompactRun', 'adoptCompactRunResult', 'openConvRow', 'codexActiveItemLabel',
+      'getSingleLiveToolInline', '_wireLiveInlineExpand', 'updateLiveToolStrip', '_compactRunAdoptBoundary',
+    ].map(fn).join('\n');
+    const result = await page.evaluate(code => {
+      window.getConvView = window._compactRunView = () => document.querySelector('.conversations-view');
+      window._compactRunIsForeground = () => true;
+      window._compactContextNow = () => ({tokens: 225000});
+      window.escapeHtml = window.escapeAttr = s => String(s);
+      window.truncate = (s, length) => s.slice(0, length);
+      const content = CCCConversationContent.createHelpers({});
+      window._compactEngineLabel = content._compactEngineLabel;
+      window._compactTokenLabel = content._compactTokenLabel;
+      window._COMPACT_TYPICAL_MS = 90000;
+      window._COMPACT_STEPS = [{label: 'Handing the transcript over'}, {label: 'Writing the summary'},
+        {label: 'Rebuilding the context window'}];
+      window._compactRun = window._compactRunTimer = null;
+      window._tickCompactRun = () => {};
+      window.currentSession = {id: 'test-session', source: 'interactive'};
+      window.currentConversation = 'test-row';
+      window.conversationsData = [{id: 'test-row', session_id: currentSession.id, engine: 'codex'}];
+      window.liveStatusMatchesOpenConv = () => true;
+      window.liveStatus = {live: true, codexState: 'working', sidecarStatus: 'idle', sidecarTs: Date.now() / 1000};
+      window._liveStripLastKeyTs = window._liveStripLastLiveTime = 0;
+      window._liveStripShown = false;
+      window._streamingBubble = null;
+      window.codexTokenUsageText = () => '31k tok';
+      window.updateLiveStripOffset = () => {};
+      (0, eval)(code);
+
+      const view = getConvView();
+      const run = beginCompactRun(currentSession.id, 'interactive');
+      _stopCompactRunTimer();
+      const requested = run.el.querySelector('.compact-run-note').textContent;
+      const addBoundary = epoch => {
+        const row = document.createElement('div');
+        row.className = 'event compact-boundary-row';
+        row.dataset.tsEpoch = epoch;
+        row.dataset.compactPre = '225000';
+        row.dataset.compactPost = '0';
+        view.append(row);
+        return row;
+      };
+      const historical = addBoundary(run.startedAt - 60000);
+      _compactRunAdoptBoundary(view);
+      const historicalVisible = !historical.classList.contains('compact-record-hidden');
+
+      run.stage = 'working';
+      _compactRunMount();
+      _compactRunPaint();
+      const nativeItem = {id: 'native-1', type: 'contextCompaction', detail: '{"startedAtMs":1}',
+        ts: run.startedAt / 1000};
+      const top = run.el.getBoundingClientRect().top;
+      const height = view.scrollHeight;
+      let stable = true;
+      let duplicatePolls = 0;
+      for (let i = 0; i < 12; i++) {
+        liveStatus.codexAppServerActiveItem = i % 2 ? nativeItem : null;
+        updateLiveToolStrip();
+        duplicatePolls += view.querySelectorAll('.conv-live-tool-inline').length;
+        stable &&= run.el.getBoundingClientRect().top === top && view.scrollHeight === height;
+      }
+      const working = run.el.querySelector('.compact-run-note').textContent;
+
+      run.stage = 'done';
+      run.endedAt = run.startedAt + 92000;
+      adoptCompactRunResult(currentSession.id, {via: 'codex-compact', post_tokens: 29000});
+      _compactRunMount();
+      const boundary = addBoundary(run.endedAt - 100);
+      _compactRunAdoptBoundary(view);
+      const absorbed = boundary.classList.contains('compact-record-hidden');
+      boundary.remove();
+      const rebuilt = addBoundary(run.endedAt - 100);
+      _compactRunAdoptBoundary(view);
+      updateLiveToolStrip();
+      const replayAbsorbed = rebuilt.classList.contains('compact-record-hidden');
+      const completed = run.el.querySelector('.compact-run-note').textContent;
+      const afterStale = view.querySelectorAll('.conv-live-tool-inline').length;
+
+      liveStatus.codexAppServerActiveItem = {id: 'external-2', type: 'contextCompaction', ts: run.endedAt / 1000 + 10};
+      updateLiveToolStrip();
+      const external = view.querySelector('.conv-live-tool-inline').textContent;
+      liveStatus.codexAppServerActiveItem = {id: 'command-1', type: 'commandExecution', tool: 'Bash'};
+      updateLiveToolStrip();
+      const followUp = view.querySelector('.conv-live-tool-inline .cl-tool').textContent;
+      return {requested, working, completed, historicalVisible, stable, duplicatePolls,
+        absorbed, replayAbsorbed, afterStale, external, followUp};
+    }, code);
+    assert.match(result.requested, /Asking Codex/);
+    assert.match(result.working, /^Codex is reading/);
+    assert.match(result.completed, /^Codex replaced/);
+    assert.equal(result.historicalVisible, true);
+    assert.equal(result.stable, true);
+    assert.equal(result.duplicatePolls, 0, 'number of extra live rows across 12 polls');
+    assert.equal(result.absorbed, true);
+    assert.equal(result.replayAbsorbed, true);
+    assert.equal(result.afterStale, 0);
+    assert.equal(result.external, '▶ Compacting context…');
+    assert.equal(result.followUp, '▶ Bash');
+    if (process.env.CCC_FLICKER_SCREENSHOT) await page.screenshot({path: process.env.CCC_FLICKER_SCREENSHOT});
+  } finally {
+    await browser.close();
+  }
 });

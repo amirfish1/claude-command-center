@@ -460,7 +460,7 @@
           });
           showOpToast('Accepted by WatchTower' + (data.transport ? ' - ' + data.transport + ' transport.' : '.'));
         } else if (compactCommand) {
-          if ((state.currentSession.source === 'codex' || (data && data.via === 'live-spawn-stdin'))
+          if ((state.currentSession.source === 'codex' || data.via === 'codex-compact' || data.via === 'live-spawn-stdin')
               && compactResponseIsComplete(data)) {
             // Finished compacting server-side — nothing left to poll for, so
             // the card goes straight to its result instead of spinning.

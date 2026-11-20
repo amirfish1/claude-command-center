@@ -587,6 +587,10 @@ class EngineHost:
                     {"replace_queued_id": str(args["replace_queued_id"])}
                     if args.get("replace_queued_id") else {}
                 )
+                composer = (
+                    {"composer_attr": args["composer_attr"]}
+                    if args.get("composer_attr") else {}
+                )
                 result = legacy.resume_session_codex(
                     args.get("session_id"),
                     args.get("text") or "",
@@ -602,6 +606,7 @@ class EngineHost:
                         args.get("queued_delivery_transaction_protocol") or 0
                     ),
                     **by_id,
+                    **composer,
                 )
                 # A drain may outlive the turn being steered. Keep automatic
                 # inject's fallback here: its dashboard caller already returned
