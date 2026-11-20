@@ -63,6 +63,15 @@ class WhatsNewNoticeStaticTests(unittest.TestCase):
         features_end = app_js.index("let whatsNewActiveId", features_start)
         features = app_js[features_start:features_end]
 
+        ids = re.findall(r"id: ['\"]([^'\"]+)['\"]", features)
+        self.assertEqual(ids[0], "updates-you-can-inspect")
+        for feature_id in (
+            "antigravity-context-controls",
+            "ticket-and-worker-activity",
+            "apps-with-agents-and-routines",
+            "ci-and-deployments-together",
+        ):
+            self.assertLess(ids.index(feature_id), ids.index("simple-mode-for-the-whole-fleet"))
         self.assertIn("simple-mode-for-the-whole-fleet", features)
         self.assertIn("orchestration-that-shows-its-work", features)
         self.assertIn("every-model-in-one-place", features)

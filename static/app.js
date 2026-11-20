@@ -46081,6 +46081,46 @@
 
   const WHATS_NEW_FEATURES = [
     {
+      id: "updates-you-can-inspect",
+      title: "See Exactly What an Update Brings",
+      date: "Nov 19, 2026",
+      tag: "Updates",
+      desc: "<p>On main-channel installs, CCC now shows <strong>how many commits are available</strong> and previews the actual incoming changes before you update.</p><p>The update dialog links to the comparison and preserves unrelated local work. If an incoming change would overwrite a locally edited file, the update stops and explains the conflict.</p>",
+      mockup: "<div style=\"border:1px solid var(--border);border-radius:8px;padding:16px;color:var(--text);font-size:13px;line-height:1.8;\"><div>Update · commits behind</div><div>Preview incoming commits</div><div>Compare changes before updating</div></div>"
+    },
+    {
+      id: "antigravity-context-controls",
+      title: "More Control over Antigravity Sessions",
+      date: "Nov 19, 2026",
+      tag: "Engines",
+      desc: "<p>Use <strong>Compact</strong> in the conversation toolbar to run Antigravity’s native context compaction. CCC confirms completion from the session checkpoint.</p><p>The model picker also includes <strong>Gemini 4 Neon</strong> with High, XHigh, Medium, and Low reasoning levels.</p>",
+      mockup: "<div style=\"border:1px solid var(--border);border-radius:8px;padding:16px;color:var(--text);font-size:13px;line-height:1.8;\"><div>Antigravity · conversation toolbar</div><div>Compact → checkpoint confirmed</div><div>Gemini 4 Neon · reasoning levels</div></div>"
+    },
+    {
+      id: "ticket-and-worker-activity",
+      title: "Follow the Work behind Each Ticket",
+      date: "Nov 16, 2026",
+      tag: "Activity",
+      desc: "<p>Per-ticket session activity now shows <strong>recorded drivers, message delivery links, hourly inputs, and measured tokens</strong>, making it easier to trace how a ticket progressed.</p><p>A compact worker activity line groups recent work by repository using token receipts and reported progress.</p>",
+      mockup: "<div style=\"border:1px solid var(--border);border-radius:8px;padding:16px;color:var(--text);font-size:13px;line-height:1.8;\"><div>Ticket activity</div><div>Drivers · delivery links · measured tokens</div><div>Worker activity grouped by repository</div></div>"
+    },
+    {
+      id: "apps-with-agents-and-routines",
+      title: "Apps with Their Own Agents and Routines",
+      date: "Nov 14, 2026",
+      tag: "Apps",
+      desc: "<p>The <strong>Apps home</strong> brings your tools together with preview cards, status summaries, and a side panel. Start from a tracker, research, watch, or blank template, or describe what you need.</p><p>Apps can include an agent pane and scheduled routines. Routine cards show recent runs and let you edit the schedule; app pages redraw when their files change.</p>",
+      mockup: "<div style=\"border:1px solid var(--border);border-radius:8px;padding:16px;color:var(--text);font-size:13px;line-height:1.8;\"><div>Apps home · previews and status</div><div>Tracker · Research · Watch · Blank</div><div>Agent pane + scheduled routines</div></div>"
+    },
+    {
+      id: "ci-and-deployments-together",
+      title: "Build and Deployment Progress Together",
+      date: "Nov 14, 2026",
+      tag: "Delivery",
+      desc: "<p>Follow <strong>GitHub CI and Vercel production deployments</strong> from CCC on desktop and phone, with build phases, elapsed time, final outcomes, and deployment links.</p><p>CI activity is grouped by repository and commit. Expand a group to inspect individual runs and failures, then dismiss completed results.</p>",
+      mockup: "<div style=\"border:1px solid var(--border);border-radius:8px;padding:16px;color:var(--text);font-size:13px;line-height:1.8;\"><div>Repository · commit</div><div>CI checks · elapsed time · failures</div><div>Production deployment · phases and result</div></div>"
+    },
+    {
       id: 'simple-mode-for-the-whole-fleet',
       title: 'Simple Mode for the Whole Fleet',
       date: 'Aug 28, 2026',
