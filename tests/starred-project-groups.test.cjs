@@ -94,6 +94,41 @@ test('Today stars keep a project together while chronological mode retains its T
     assert.equal(groups[1].name.endsWith('Other Project'),true);
     assert.equal(await page.$(active+' .today-star-group'),null,'Today must not split project folders');
     const toggle=active+' .conv-folder-group-header';
+    await page.hover(toggle);
+    await page.waitForFunction(selector => {
+      const button=document.querySelector(selector+' .conv-folder-new-session-btn');
+      return button && getComputedStyle(button).opacity === '1';
+    }, {}, toggle);
+    assert.equal(await page.$eval(toggle, header =>
+      [...header.querySelectorAll('.conv-folder-new-session-btn')].every(button => {
+        const rect=button.getBoundingClientRect();
+        const target=document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2);
+        return target === button || button.contains(target);
+      })), true, 'decorative header hairlines must not intercept repository action clicks');
+    await page.mouse.move(1200, 10);
+    const sidebarStyle=await page.$eval('.sidebar', sidebar => sidebar.getAttribute('style'));
+    const statusText=await page.$eval(toggle, header => {
+      const status=header.querySelector('.conv-folder-ship-status');
+      const previous=status.textContent;
+      status.textContent='dirty';
+      const sidebar=header.closest('.sidebar');
+      Object.assign(sidebar.style, {width:'280px', minWidth:'280px', maxWidth:'280px'});
+      sidebar.classList.add('is-narrow');
+      return previous;
+    });
+    assert.equal(await page.$eval(toggle, header => {
+      const count=header.querySelector('.conv-folder-group-count').getBoundingClientRect();
+      const status=header.querySelector('.conv-folder-ship-status').getBoundingClientRect();
+      return count.right <= status.left;
+    }), true, 'visible ship status must not overlap the title or count in a narrow sidebar');
+    await page.$eval('.sidebar', (sidebar, style) => {
+      if (style === null) sidebar.removeAttribute('style');
+      else sidebar.setAttribute('style', style);
+      sidebar.classList.remove('is-narrow');
+    }, sidebarStyle);
+    await page.$eval(toggle, (header, text) => {
+      header.querySelector('.conv-folder-ship-status').textContent=text;
+    }, statusText);
     await page.click(toggle);
     assert.equal(await page.$eval(toggle,el=>el.getAttribute('aria-expanded')),'false');
     assert.equal(await page.$eval(active+' [data-session-id="regular-topic"]',el=>el.checkVisibility()),false);

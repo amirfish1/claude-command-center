@@ -44,6 +44,29 @@
 .sidebar.is-narrow #convList.session-workspace .session-lifecycle-section { margin-bottom: 8px; }
 .sidebar.is-narrow #convList.session-workspace .session-lifecycle-heading { margin: 8px 6px 2px; }
 .sidebar.is-narrow #convList.session-workspace .session-lifecycle-empty { padding: 2px 6px 8px; }
+.sidebar.is-narrow #convList .conv-folder-group-header:not([data-object-drop]) {
+  --repo-status-reserve: 88px;
+  padding: 4px 4px;
+  padding-right: var(--repo-status-padding, 4px);
+  gap: 5px;
+}
+.sidebar.is-narrow #convList .conv-folder-group-header:not([data-object-drop]) .conv-folder-group-chip {
+  font-size: 12px;
+  gap: 6px;
+}
+.sidebar.is-narrow #convList .conv-folder-group-header:not([data-object-drop]) .repo-avatar {
+  width: 16px;
+  height: 16px;
+  flex-basis: 16px;
+  border-radius: 4px;
+}
+.sidebar.is-narrow #convList .conv-folder-group-header:not([data-object-drop])::after {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.sidebar.is-narrow #convList .conv-folder-group-header:not([data-object-drop]) .conv-folder-ship-status {
+  max-width: 64px;
+}
 
 /* Rows: the title gets the width. The report button appears on hover or
    focus, beside the row menu, instead of holding a permanent 30px slot. */

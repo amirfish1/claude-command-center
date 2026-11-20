@@ -25334,10 +25334,11 @@
         ? '<button type="button" class="conv-folder-new-session-btn" data-role="folder-new-session"'
           + ' data-folder-path="' + escapeHtml(repoPath) + '"'
           + ' title="Start a new session in this repository"'
-          + ' aria-label="Start a new session in this repository">+</button>'
+          + ' aria-label="Start a new session in this repository">'
+          + '<svg class="conv-folder-action-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M8 3.25v9.5M3.25 8h9.5"></path></svg></button>'
         : '';
       const branding = repoPath && !archiveObjectId
-        ? '<button type="button" class="conv-folder-new-session-btn" data-context-repo="' + escapeHtml(repoPath) + '" aria-label="Repository appearance" title="Repository appearance">&#9881;</button>' : '';
+        ? '<button type="button" class="conv-folder-new-session-btn conv-folder-branding-btn" data-context-repo="' + escapeHtml(repoPath) + '" aria-label="Repository appearance" title="Repository appearance"><svg class="conv-folder-action-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5h7m2.5 0h1.5M2.5 8h2.5m2.5 0h6M2.5 11.5h5.5m2.5 0h3"></path><circle cx="10.75" cy="4.5" r="1.25"></circle><circle cx="6.25" cy="8" r="1.25"></circle><circle cx="9.25" cy="11.5" r="1.25"></circle></svg></button>' : '';
       const repoActions = (newSession || ship)
         ? '<span class="conv-folder-repo-actions">' + newSession + branding + ship + '</span>'
         : '';
@@ -25377,14 +25378,19 @@
       const objectTitleAttrs = archiveObjectId
         ? ' data-role="object-title" data-object-id="' + escapeHtml(archiveObjectId) + '" title="Open object"'
         : '';
-      const titleHtml = archiveObjectId ? numberedObjectTitleHtml(folder, objectOrdinal) : escapeHtml(folder);
+      const titleHtml = archiveObjectId
+        ? numberedObjectTitleHtml(folder, objectOrdinal)
+        : '<span class="conv-folder-group-name">' + escapeHtml(folder) + '</span>';
+      const arrowHtml = archiveObjectId
+        ? (collapsed ? '▸' : '▾')
+        : '<svg class="conv-folder-group-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.25 8 9.75l3.5-3.5"></path></svg>';
       return '<div class="conv-folder-group-header" style="--chip-hue:' + hue + ';"'
         + ' role="button" tabindex="0" data-role="folder-group-toggle"'
         + ' data-collapse-key="' + escapeHtml(_folderGroupStorageKey(section, collapseKey)) + '"'
         + ' aria-expanded="' + (!collapsed) + '"' + extraAttrs + '>'
         + '<button type="button" class="conv-folder-group-arrow" data-role="folder-group-collapse"'
         + ' title="Collapse or expand group" aria-label="Collapse or expand group">'
-        + (collapsed ? '▸' : '▾') + '</button>'
+        + arrowHtml + '</button>'
         + '<span class="conv-folder-group-chip' + orphan + '"' + objectTitleAttrs + '>' + (!archiveObjectId ? repoAvatarHtml(repoPath, folder) : '') + titleHtml + '</span>'
         + '<span class="conv-folder-group-count">' + count + '</span>'
         + inlineMetaHtml
@@ -29050,7 +29056,7 @@
         group.classList.toggle('sessions-collapsed', !!collapsed);
         if (header) header.setAttribute('aria-expanded', 'true');
         const arrowEl = header && header.querySelector('.conv-folder-group-arrow');
-        if (arrowEl) arrowEl.textContent = '▾';
+        if (arrowEl && !arrowEl.querySelector('svg')) arrowEl.textContent = '▾';
       });
       renderArchiveList(document.getElementById('convSearch')?.value || '');
     }
@@ -29854,7 +29860,7 @@
           try { localStorage.removeItem(_objectSessionsStorageKey(objNodeForToggle)); } catch (_) {}
         }
         const arrowEl = hdr.querySelector('.conv-folder-group-arrow');
-        if (arrowEl) arrowEl.textContent = wasCollapsed ? '▸' : '▾';
+        if (arrowEl && !arrowEl.querySelector('svg')) arrowEl.textContent = wasCollapsed ? '▸' : '▾';
         hdr.setAttribute('aria-expanded', String(!wasCollapsed));
         const section = group.closest('[data-role="archived-section"]');
         if (section) {

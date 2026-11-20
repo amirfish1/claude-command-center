@@ -15104,7 +15104,7 @@
      `!important`; moved here so it's a manual toggle that works in both
      browser and PWA contexts. */
   body.chips-muted .conv-folder-chip,
-  body.chips-muted .conv-folder-group-chip,
+  body.chips-muted .conv-folder-group-header[data-object-drop] .conv-folder-group-chip,
   body.chips-muted .conv-item .conv-signal,
   body.chips-muted .conv-item .branch-badge,
   body.chips-muted .conv-item .branch-badge.is-worktree,
@@ -15117,11 +15117,11 @@
   /* The group header's own repo/project label is the section title for
      everything under it — keep it full-brightness even in muted ("no
      colors") mode so it still reads as a heading, not another dim chip. */
-  body.chips-muted .conv-folder-group-chip {
+  body.chips-muted .conv-folder-group-header[data-object-drop] .conv-folder-group-chip {
     color: var(--text) !important;
     font-weight: 700 !important;
   }
-  body.chips-muted .conv-folder-group-header {
+  body.chips-muted .conv-folder-group-header[data-object-drop] {
     border-left-color: rgba(139,148,158,0.45) !important;
   }
   /* CCC-467: in muted ("no colors") mode the meta-row chips lose their frame
@@ -15211,8 +15211,8 @@
     background: var(--surface-2);
     color: var(--text);
   }
-  /* Muted ("no colors") mode: same hairline treatment, no hue at all. */
-  body.chips-muted .conv-folder-group-header {
+  /* Muted ("no colors") mode: object headers keep the hairline treatment. */
+  body.chips-muted .conv-folder-group-header[data-object-drop] {
     background: var(--surface) !important;
     border-bottom-color: var(--border) !important;
   }
@@ -15578,6 +15578,390 @@
     border-color: rgba(88,166,255,0.45);
   }
   .conv-folder-ship-btn:disabled { cursor: default; opacity: 0.45; }
+
+  /* ── Sidebar repo/project group headers (CCC-1319) ───────────────────────
+     Replaces the boxed monospace badge, redundant color dot, oversized icon
+     gutter, and detached count with a cohesive single-row header: geometric
+     disclosure chevron, crisp 18px repository emblem, semibold UI title,
+     integrated count pill, whisper-quiet trailing hairline, and right-edge
+     hover/focus actions. Scoped away from [data-object-drop] so by-objects
+     and project-tree headers preserve their own tree layout. */
+  .conv-folder-group:not([data-object-drop-zone]) + .conv-folder-group:not([data-object-drop-zone]) {
+    margin-top: 10px;
+    padding-top: 2px;
+  }
+  .conv-folder-group-header:not([data-object-drop]) {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    min-height: 32px;
+    margin: 4px 0 4px;
+    padding: 4px 8px 4px 5px;
+    border: 0;
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text-muted);
+    font-size: 12px;
+    transition: background-color 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
+  }
+  .conv-folder-group:first-child > .conv-folder-group-header:not([data-object-drop]) {
+    margin-top: 2px;
+  }
+  .conv-folder-group.collapsed > .conv-folder-group-header:not([data-object-drop]) {
+    background: color-mix(in srgb, var(--surface-2) 52%, var(--surface));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 50%, transparent);
+  }
+  .conv-folder-group-header:not([data-object-drop]):hover,
+  .conv-folder-group-header:not([data-object-drop]):focus-within {
+    background: color-mix(in srgb, var(--surface-2) 86%, var(--surface));
+    color: var(--text);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 62%, transparent);
+  }
+  .conv-folder-group-header:not([data-object-drop]):focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+  .conv-folder-group-header:not([data-object-drop]).drop-target {
+    background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+    box-shadow: inset 0 0 0 1.5px var(--accent);
+    border-radius: 8px;
+  }
+  /* Trailing hairline connects the header across the column without cutting
+     directly under the row into the rounded session card below. */
+  .conv-folder-group-header:not([data-object-drop])::after {
+    content: '';
+    pointer-events: none;
+    order: 4;
+    flex: 1 1 8px;
+    min-width: 0;
+    height: 1px;
+    margin-left: 4px;
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--border) 68%, transparent) 0%,
+      color-mix(in srgb, var(--border) 12%, transparent) 100%
+    );
+    transition: opacity 0.14s ease;
+  }
+  body:not(.chips-muted) .conv-folder-group-header:not([data-object-drop])::after {
+    background: linear-gradient(
+      90deg,
+      hsla(var(--chip-hue), 52%, 52%, 0.34) 0%,
+      transparent 100%
+    );
+  }
+  .conv-folder-group.collapsed > .conv-folder-group-header:not([data-object-drop])::after,
+  .conv-folder-group-header:not([data-object-drop]):hover::after,
+  .conv-folder-group-header:not([data-object-drop]):focus-within::after {
+    opacity: 0.18;
+  }
+  /* Disclosure chevron */
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-group-arrow {
+    order: 1;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    min-width: 18px;
+    height: 22px;
+    border-radius: 5px;
+    font-size: 12px;
+    color: var(--text-muted);
+    opacity: 0.72;
+    transition: opacity 0.14s ease, color 0.14s ease, background-color 0.14s ease;
+  }
+  .conv-folder-group-header:not([data-object-drop]):hover .conv-folder-group-arrow,
+  .conv-folder-group-header:not([data-object-drop]):focus-within .conv-folder-group-arrow {
+    opacity: 1;
+    color: var(--text);
+  }
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-group-arrow:hover {
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+    color: var(--text);
+  }
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-group-arrow:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  .conv-folder-group-chevron {
+    display: block;
+    width: 12px;
+    height: 12px;
+    transition: transform 0.16s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .conv-folder-group.collapsed > .conv-folder-group-header .conv-folder-group-chevron,
+  .conv-folder-group-header[aria-expanded="false"] .conv-folder-group-chevron {
+    transform: rotate(-90deg);
+  }
+  /* Project identity: borderless, UI font, single emblem (avatar OR fallback swatch) */
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-group-chip,
+  .wrap-titles .conv-folder-group-header:not([data-object-drop]) .conv-folder-group-chip {
+    order: 2;
+    flex: 0 1 auto;
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-group-chip:has(.repo-avatar)::before {
+    display: none;
+  }
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-group-chip::before {
+    width: 8px;
+    height: 8px;
+    border-radius: 3px;
+    align-self: center;
+    background: hsl(var(--chip-hue), 55%, 52%);
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+  }
+  body.chips-muted .conv-folder-group-header:not([data-object-drop]) .conv-folder-group-chip::before {
+    background: color-mix(in srgb, var(--text-muted) 55%, transparent);
+    box-shadow: none;
+  }
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-group-chip .repo-avatar {
+    width: 18px;
+    height: 18px;
+    flex: 0 0 18px;
+    margin-right: 0;
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
+    color: var(--text);
+    box-shadow:
+      inset 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent),
+      0 1px 2px rgba(0, 0, 0, 0.08);
+  }
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-group-chip .repo-avatar img {
+    background: transparent;
+  }
+  body:not(.chips-muted) .conv-folder-group-header:not([data-object-drop]) .conv-folder-group-chip .repo-avatar {
+    background: hsl(var(--chip-hue), 44%, 30%);
+    color: #ffffff;
+  }
+  :root[data-theme="light"] body:not(.chips-muted) .conv-folder-group-header:not([data-object-drop]) .conv-folder-group-chip .repo-avatar {
+    background: hsl(var(--chip-hue), 52%, 90%);
+    color: hsl(var(--chip-hue), 60%, 28%);
+  }
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-group-chip .repo-avatar-initials {
+    font: 650 9.5px/1 var(--font-ui);
+    letter-spacing: 0.01em;
+  }
+  .conv-folder-group-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* Integrated count pill right beside the project name */
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-group-count {
+    order: 3;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 19px;
+    height: 18px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text) 6.5%, transparent);
+    color: var(--text-muted);
+    font-size: 10.5px;
+    font-weight: 600;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    transition: background-color 0.14s ease, color 0.14s ease;
+  }
+  .conv-folder-group-header:not([data-object-drop]):hover .conv-folder-group-count,
+  .conv-folder-group-header:not([data-object-drop]):focus-within .conv-folder-group-count {
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+    color: var(--text);
+  }
+  body:not(.chips-muted) .conv-folder-group-header:not([data-object-drop]) .conv-folder-group-count {
+    background: hsla(var(--chip-hue), 58%, 55%, 0.16);
+    color: hsl(var(--chip-hue), 72%, 75%);
+  }
+  :root[data-theme="light"] body:not(.chips-muted) .conv-folder-group-header:not([data-object-drop]) .conv-folder-group-count {
+    background: hsla(var(--chip-hue), 58%, 45%, 0.12);
+    color: hsl(var(--chip-hue), 58%, 32%);
+  }
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-group-count:has(.conv-folder-group-live-badge) {
+    background: transparent;
+    padding: 0;
+    height: auto;
+    gap: 5px;
+  }
+  /* Right-edge repo actions: never reserve hidden width at rest so long
+     repository names stay readable, while keeping keyboard focus and ship
+     status accessible at all times. */
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-repo-actions {
+    order: 5;
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    max-width: calc(100% - 34px);
+    padding-left: 16px;
+    opacity: 1;
+    pointer-events: none;
+    background: transparent;
+    transition: background 0.14s ease;
+  }
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-new-session-btn,
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-ship-btn {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.12s ease, background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  }
+  .conv-folder-group-header:not([data-object-drop]):hover .conv-folder-repo-actions,
+  .conv-folder-group-header:not([data-object-drop]):focus-within .conv-folder-repo-actions {
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      color-mix(in srgb, var(--surface-2) 92%, var(--surface)) 14px,
+      color-mix(in srgb, var(--surface-2) 92%, var(--surface)) 100%
+    );
+  }
+  .conv-folder-group-header:not([data-object-drop]):hover .conv-folder-new-session-btn,
+  .conv-folder-group-header:not([data-object-drop]):focus-within .conv-folder-new-session-btn,
+  .conv-folder-group-header:not([data-object-drop]):hover .conv-folder-ship-btn,
+  .conv-folder-group-header:not([data-object-drop]):focus-within .conv-folder-ship-btn {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-new-session-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-new-session-btn:hover,
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-new-session-btn:focus-visible {
+    background: color-mix(in srgb, var(--text) 9%, transparent);
+    border-color: color-mix(in srgb, var(--border) 75%, transparent);
+    color: var(--text);
+  }
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-new-session-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  .conv-folder-action-icon {
+    display: block;
+    width: 13px;
+    height: 13px;
+  }
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-ship {
+    gap: 4px;
+  }
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-ship-status {
+    max-width: 96px;
+    font-size: 10.5px;
+    font-weight: 500;
+  }
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-ship-status:not(:empty) {
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--surface);
+    pointer-events: auto;
+  }
+  .conv-folder-group-header:not([data-object-drop]):hover .conv-folder-ship-status:not(:empty),
+  .conv-folder-group-header:not([data-object-drop]):focus-within .conv-folder-ship-status:not(:empty) {
+    background: transparent;
+    padding-inline: 2px;
+  }
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-ship-btn {
+    height: 22px;
+    padding: 0 7px;
+    border-radius: 6px;
+    font-size: 10.5px;
+    font-weight: 600;
+    background: color-mix(in srgb, var(--text) 6%, transparent);
+    border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+    color: var(--text-muted);
+  }
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-ship-btn:hover:not(:disabled),
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-ship-btn:focus-visible {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+    color: var(--text);
+  }
+  .conv-folder-group-header:not([data-object-drop]) .conv-folder-ship-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  @media (hover: hover) and (pointer: fine) {
+    /* Visible status needs its own space even while action buttons overlay
+       the header. Hidden buttons must not offset that status into the title. */
+    .conv-folder-group-header:not([data-object-drop]):has(.conv-folder-ship-status:not(:empty)) {
+      --repo-status-padding: var(--repo-status-reserve, 120px);
+      padding-right: var(--repo-status-padding);
+    }
+    .conv-folder-group-header:not([data-object-drop]):not(:hover):not(:focus-within) .conv-folder-ship-status:not(:empty) {
+      position: absolute;
+      right: 0;
+      top: 50%;
+      transform: translateY(-50%);
+    }
+  }
+  @media (hover: none), (pointer: coarse) {
+    .conv-folder-group-header:not([data-object-drop]) {
+      min-height: 36px;
+    }
+    .conv-folder-group-header:not([data-object-drop]) .conv-folder-repo-actions {
+      position: static;
+      transform: none;
+      margin-left: auto;
+      padding-left: 0;
+      background: none !important;
+      pointer-events: auto;
+    }
+    .conv-folder-group-header:not([data-object-drop]) .conv-folder-new-session-btn {
+      opacity: 0.78;
+      pointer-events: auto;
+      min-width: 28px;
+      min-height: 28px;
+    }
+    .conv-folder-group-header:not([data-object-drop]) .conv-folder-ship-btn {
+      opacity: 0.85;
+      pointer-events: auto;
+      min-height: 28px;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .conv-folder-group-header:not([data-object-drop]),
+    .conv-folder-group-header:not([data-object-drop])::after,
+    .conv-folder-group-header:not([data-object-drop]) .conv-folder-group-arrow,
+    .conv-folder-group-chevron,
+    .conv-folder-group-header:not([data-object-drop]) .conv-folder-group-count,
+    .conv-folder-group-header:not([data-object-drop]) .conv-folder-repo-actions,
+    .conv-folder-group-header:not([data-object-drop]) .conv-folder-new-session-btn,
+    .conv-folder-group-header:not([data-object-drop]) .conv-folder-ship-btn {
+      transition: none;
+    }
+  }
 
   /* Live "Push all" log feed — takes over the Needs-Your-Attention panel */
   .ship-log {
