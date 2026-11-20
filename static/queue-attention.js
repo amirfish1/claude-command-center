@@ -203,6 +203,17 @@
           + (it.claimed_machine ? ' on ' + str(it.claimed_machine) : '')
           + '. This dashboard has not verified that worker is alive; remote workers may be outside its local roster.');
       }
+      if (status === 'awaiting_release') {
+        // WT-82: the fix is integrated; WatchTower reopens the ticket for its
+        // live check when the target deployment reports the recorded commit.
+        var rw = it.release_wait || {};
+        var commit = String(rw.commit || '').slice(0, 7);
+        var target = String(rw.target || '').replace(/^github:[^:]*:/, '');
+        return make('release', 'neutral', 'awaiting release',
+          'The fix is integrated' + (commit ? ' (' + commit + (rw.branch ? ' on ' + rw.branch : '') + ')' : '')
+          + ' and waits for deployment' + (target ? ' to ' + target : '')
+          + '. WatchTower reopens it for a live check when that release is observed; no input is needed.');
+      }
       var q = opts.queue || {};
       var stage = it.stages && it.stages.current;
       if (stage && ['plan', 'plan_review', 'checks', 'verify'].indexOf(stage) >= 0) {

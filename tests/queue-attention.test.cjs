@@ -74,6 +74,19 @@ test('parked worker follow-up is distinct from work ready for automatic pickup',
   assert.equal(ready.blocked, false);
 });
 
+test('awaiting_release explains the release wait, not an unknown state', () => {
+  const a = QA.project({
+    status: 'awaiting_release',
+    release_wait: { commit: '462e114cf9fc84ea', branch: 'origin/next', target: 'github:acme/app:Production' },
+  }, { explain: true });
+  assert.equal(a.key, 'release');
+  assert.equal(a.label, 'awaiting release');
+  assert.equal(a.owner, false);
+  assert.match(a.title, /462e114 on origin\/next/);
+  assert.match(a.title, /to Production/);
+  assert.equal(QA.project({ status: 'awaiting_release' }, { explain: true }).label, 'awaiting release');
+});
+
 test('explicit owner wait stays red', () => {
   assert.equal(QA.project(blocked({ wait: { on: 'owner', block_at: BLOCK_AT } })).key, 'owner');
 });
