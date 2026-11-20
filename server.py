@@ -18870,7 +18870,7 @@ _ARCHIVE_LIST_TEMPLATE_ENCODER = json.JSONEncoder(default=str)
 
 
 def _archive_list_row_template(row, cached=_ARCHIVE_LIST_TEMPLATE_UNREAD, *,
-                               _fields_by_shape=None):
+                               _fields_by_shape=None, _retain=True):
     """Reuse scalar projection work while copying current containers per call.
 
     Snapshot refreshes replace row dictionaries even when their contents did
@@ -18909,6 +18909,8 @@ def _archive_list_row_template(row, cached=_ARCHIVE_LIST_TEMPLATE_UNREAD, *,
     preview = _archive_list_preview(row.get("last_assistant_text"))
     if preview:
         scalars["last_assistant_preview"] = preview
+    if not _retain:
+        return scalars, containers
     source = dict(row)
     # Estimate retained metadata with room for Python containers. Marshal's
     # builtin encoder avoids JSON escaping on every cold row. Version 2 also
@@ -18926,7 +18928,8 @@ def _archive_list_row_template(row, cached=_ARCHIVE_LIST_TEMPLATE_UNREAD, *,
 
 
 def _archive_list_project_row(row, *, resumes=None, parents=None,
-                              _template=_ARCHIVE_LIST_TEMPLATE_UNREAD, _fields_by_shape=None):
+                              _template=_ARCHIVE_LIST_TEMPLATE_UNREAD, _fields_by_shape=None,
+                              _retain_template=True):
     """Project one row for the sidebar list. Bulk callers pass `resumes` /
     `parents` snapshots so the per-row work is dict lookups, not a stat() or
     lock acquisition each (those cost a GIL hand-off apiece)."""
@@ -18939,7 +18942,7 @@ def _archive_list_project_row(row, *, resumes=None, parents=None,
     # (cost_breakdown_usd sits on nearly every row) cut this ~1.5x; deepcopy
     # runs only for the rare container that nests another container.
     scalars, containers = _archive_list_row_template(
-        row, _template, _fields_by_shape=_fields_by_shape)
+        row, _template, _fields_by_shape=_fields_by_shape, _retain=_retain_template)
     out = dict(scalars)
     for key in containers:
         v = row[key]
@@ -19034,7 +19037,8 @@ def _archive_list_window_rows(rows, cutoff, idea_tickets_by_sid, parents, *, anc
     return window_rows
 
 
-def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _inputs=None):
+def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _inputs=None,
+                               _retain_templates=True):
     # Request-local diagnostics distinguish CPU work from GIL/lock waits on
     # the real corpus, without the per-call overhead of a Python profiler.
     phase_wall = time.perf_counter() if phases is not None else 0
@@ -19074,7 +19078,7 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _in
     fields_by_shape = {}
     projected = [
         _archive_list_project_row(row, resumes=resumes, parents=parents, _template=template,
-                                  _fields_by_shape=fields_by_shape)
+                                  _fields_by_shape=fields_by_shape, _retain_template=_retain_templates)
         for row, template in zip(window_rows, templates)
     ]
     phase("rows")
@@ -20022,9 +20026,11 @@ def _archive_list_initial_payload(rows, *, window="all", now=None, cached=None, 
     return payload
 
 
-def _archive_list_payload(rows, *, window="all", now=None, cached=None, phases=None, _inputs=None):
+def _archive_list_payload(rows, *, window="all", now=None, cached=None, phases=None, _inputs=None,
+                          _retain_templates=True):
     window = _archive_list_window(window)
-    projected = _archive_list_project_rows(rows, window=window, now=now, phases=phases, _inputs=_inputs)
+    projected = _archive_list_project_rows(rows, window=window, now=now, phases=phases, _inputs=_inputs,
+                                           _retain_templates=_retain_templates)
     if window == "all":
         _trace_row_flicker(projected, now=now)
     payload = {
@@ -20070,7 +20076,10 @@ def _archive_list_projection_diag(window, key, hit):
 
 def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=None, phases=None):
     if not delta or not delta.get("extra"):
-        return _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases)
+        # Unversioned All reads sweep the cold store. Reuse matching templates
+        # without letting that sweep evict the scoped sidebar's working set.
+        return _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
+                                     _retain_templates=window != "all" or bool(delta))
     window = _archive_list_window(window)
     now = time.time() if now is None else now
     try:

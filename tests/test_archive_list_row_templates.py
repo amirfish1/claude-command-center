@@ -145,6 +145,31 @@ def test_bulk_projection_uses_one_cache_read_and_validates_current_rows(monkeypa
     assert rows[0]['question_options'] == ['a']
 
 
+def test_unversioned_full_history_keeps_scoped_templates(monkeypatch):
+    cache = server.ByteBudgetCache(1 << 20, 1)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_ROW_TEMPLATES', cache)
+    recent = {'session_id': 'recent', 'display_name': 'Recent', 'mtime': 10000}
+    old = {'session_id': 'old', 'display_name': 'Old',
+           'question_options': [{'text': 'Answer'}], 'mtime': 1}
+    rows = [recent, old]
+    expected = server._archive_list_payload(rows, now=10000)
+    server._archive_list_project_row(recent)
+    template = cache.get((None, 'recent'))
+
+    actual = server._archive_list_replay_payload(rows, None, now=10000)
+
+    assert server.json.dumps(actual) == server.json.dumps(expected)
+    assert cache.get((None, 'recent')) is template
+    assert (None, 'old') not in cache
+    actual['conversations'][1]['question_options'][0]['text'] = 'Caller edit'
+    assert old['question_options'] == [{'text': 'Answer'}]
+
+    recent['display_name'] = 'Renamed'
+    actual = server._archive_list_replay_payload(rows, None, now=10000)
+    assert actual['conversations'][0]['display_name'] == 'Renamed'
+    assert cache.get((None, 'recent')) is template
+
+
 def test_batch_field_layouts_preserve_canonical_output_and_current_value_types(monkeypatch):
     cache = server.ByteBudgetCache(1 << 20, 20)
     monkeypatch.setattr(server, '_ARCHIVE_LIST_ROW_TEMPLATES', cache)
