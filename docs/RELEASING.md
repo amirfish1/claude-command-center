@@ -259,6 +259,16 @@ key — they'll have to download a fresh DMG with a new `SUPublicEDKey`.
 - `/api/version` reports the new number: `curl -s localhost:$PORT/api/version`
 - Appcast is live: `curl -s https://amirfish1.github.io/claude-command-center/appcast.xml | grep sparkle:version`
 
+### Clean macOS install checks
+
+- [ ] **Phonon read-aloud.** Install CCC from the DMG in a clean macOS user
+  account with no CCC settings or cached voice model. Open the CCC desktop app
+  and confirm **Settings → Browser voice** is on by default. Let the voice
+  model finish downloading, then use **Read aloud** on an English assistant
+  reply. Confirm the playback voice shows **Browser: Phonon** and listen for
+  audible speech through the end of the passage. Audio from a fallback voice
+  does not pass this check. Relaunch CCC and confirm Phonon still plays.
+
 ## 8. If something goes wrong
 
 - **Wrong tag pushed:** delete locally and remotely, then redo.
