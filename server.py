@@ -33739,8 +33739,13 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         elif path == "/api/usage/current":
             self.send_json(usage_current_payload())
         elif path == "/api/headroom":
-            from ccc_server import gemini_spend as _gemini_spend
-            _gemini_spend.refresh_gemini_daily_spend_async()
+            try:
+                import ccc_server.gemini_spend as _gemini_spend
+            except ModuleNotFoundError as exc:
+                if exc.name != "ccc_server.gemini_spend":
+                    raise
+            else:
+                _gemini_spend.refresh_gemini_daily_spend_async()
             self.send_json(_swr.cached(
                 ("headroom",), _headroom.headroom_payload,
                 fresh_s=10.0, max_stale_s=300.0))

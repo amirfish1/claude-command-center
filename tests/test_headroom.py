@@ -1,9 +1,14 @@
 import concurrent.futures
 from datetime import datetime, timezone
+from functools import partial
+from http.server import ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
 import subprocess
+import sys
+from types import ModuleType
+from urllib.request import urlopen
 
 import pytest
 
@@ -41,6 +46,34 @@ def sources(tmp_path):
 
 def account(sources, engine='claude'):
     return next(row for row in hr.headroom_payload(**sources)['accounts'] if row['engine'] == engine)
+
+
+@pytest.mark.parametrize('integration_installed', [False, True])
+def test_headroom_http_with_optional_spend_integration(sources, monkeypatch, integration_installed):
+    import server
+
+    module_name = 'ccc_server.gemini_spend'
+    refresh_calls = []
+    integration = None
+    if integration_installed:
+        integration = ModuleType(module_name)
+        integration.refresh_gemini_daily_spend_async = lambda: refresh_calls.append('refresh')
+    monkeypatch.setitem(sys.modules, module_name, integration)
+    compute = partial(hr.headroom_payload, **sources)
+    expected = compute()
+    monkeypatch.setattr(hr, 'headroom_payload', compute)
+    monkeypatch.setattr(server._swr, '_ENTRIES', {})
+
+    with ThreadingHTTPServer(('127.0.0.1', 0), server.CommandCenterHandler) as httpd:
+        httpd.timeout = 5
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            request = executor.submit(httpd.handle_request)
+            with urlopen(f'http://127.0.0.1:{httpd.server_port}/api/headroom', timeout=5) as response:
+                assert response.status == 200
+                assert json.load(response) == expected
+            request.result(timeout=5)
+
+    assert refresh_calls == (['refresh'] if integration_installed else [])
 
 
 def test_contract_and_exact_expiry_math(sources, tmp_path):
