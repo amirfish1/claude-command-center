@@ -99,7 +99,8 @@ def run_terminal(cmd, cwd, env, transcript, timeout=180):
             # Do not mistake echoed history such as "> /compact" for input.
             clean = re.sub(rb'[\x00-\x08\x0e-\x1f\x7f]', b'', clean)
             prompt_ready = bool(re.search(rb'(?:^|[\r\n])>[ \t]*(?:[\r\n]|$)', clean)
-                                or b'Model:' in clean[-1000:])
+                                or b'Model:' in clean[-1000:]
+                                or b'? for shortcuts' in clean[-1000:])
         return {'ok': False, 'via': 'antigravity-hidden-pty',
                 'error': 'Antigravity did not write a new completed compaction checkpoint.'}
     finally:

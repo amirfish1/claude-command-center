@@ -2,6 +2,8 @@
 import json
 import sys
 
+import pytest
+
 import server  # noqa: F401
 from ccc_server import engines
 from ccc_server import antigravity_compact as native
@@ -40,14 +42,18 @@ def test_busy_stream_queues_without_retiring_or_running_terminal(monkeypatch):
     assert writes[0][0]['value'] == '/compact'
 
 
-def test_hidden_terminal_waits_for_prompt_and_real_checkpoint(tmp_path):
+@pytest.mark.parametrize('prompt', [
+    '> \nModel: Example',
+    '> Accept-edits mode: file edits auto-approved\n? for shortcuts   accept-edits',
+])
+def test_hidden_terminal_waits_for_prompt_and_real_checkpoint(tmp_path, prompt):
     transcript = tmp_path / 'transcript.jsonl'
     transcript.write_text('')
     # Exercise real PTY I/O and cleanup with a deterministic local child.
     script = (
-        "import sys,json,os,time,termios; print('> \\nModel: Example',flush=True); "
+        f"import sys,json,os,time,termios; print({prompt!r},flush=True); "
         "time.sleep(1.1); termios.tcflush(0,termios.TCIFLUSH); "
-        "print('> \\nModel: Example (restored)',flush=True); cmd=os.read(0,4096); "
+        f"print({prompt!r},flush=True); cmd=os.read(0,4096); "
         "assert cmd==b'\\x15\\x1b[200~/compact\\x1b[201~\\r'; "
         f"f=open({str(transcript)!r},'a'); "
         "f.write(json.dumps({'type':'CHECKPOINT','status':'DONE',"
