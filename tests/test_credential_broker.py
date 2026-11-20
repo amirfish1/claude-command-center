@@ -133,6 +133,15 @@ def test_deny_cancel_and_duplicate_answer(broker):
     assert not broker.pending()
 
 
+@pytest.mark.parametrize("note", [None, 42, "x" * 501])
+def test_deny_rejects_invalid_note_without_answering(broker, note):
+    created = request(broker)
+    with pytest.raises(cb.BrokerError, match="Denial note") as error:
+        broker.resolve({"id": created["id"], "deny": True, "note": note})
+    assert error.value.status == 400
+    assert broker.take(capability(created)) == {"status": "pending"}
+
+
 def test_expiry_purges_values_without_a_reader(vault_dir):
     instance = cb.Broker()
     try:
@@ -302,6 +311,29 @@ def test_http_lifecycle_no_caching_and_no_logs(http_broker, capfd):
     assert "/api/secrets/" not in logs.out + logs.err
 
 
+@pytest.mark.parametrize(("note", "expected"), [
+    ("  explanatory test note  ", {"note": "explanatory test note"}),
+    ("x" * 500, {"note": "x" * 500}),
+    (" \n ", {}),
+])
+def test_http_delivers_denial_note_once_to_requester(http_broker, capfd, note, expected):
+    base, _ = http_broker
+    _, created, _ = api(base, "request", {"name": "example-service", "reason": "Test"})
+    payload = {"id": created["id"], "deny": True, "note": note, "value": FAKE}
+    assert api(base, "resolve", payload, {"Origin": base})[:2] == (200, {"ok": True})
+    assert api(base, "pending")[1] == {"requests": []}
+    assert api(base, "take", capability(created), {"Origin": base})[0] == 403
+    assert api(base, "take", {**capability(created), "token": "wrong-test-token"})[0] == 403
+    status, result, headers = api(base, "take", capability(created))
+    assert (status, result) == (200, {"status": "denied", **expected})
+    assert headers["Cache-Control"] == "no-store"
+    assert api(base, "take", capability(created))[0] == 410
+    logs = capfd.readouterr()
+    if expected:
+        assert expected["note"] not in logs.out + logs.err
+    assert FAKE.strip() not in logs.out + logs.err
+
+
 def test_http_browser_remote_origin_and_pin_boundaries(http_broker, monkeypatch):
     base, server = http_broker
     _, created, _ = api(base, "request", {"name": "example-service", "reason": "Test"})
@@ -429,3 +461,32 @@ def test_cli_defaults_to_store_only_and_prints_no_value(http_broker, broker, cap
     assert output.out == "saved to Vault: example-service\n"
     assert FAKE.strip() not in output.out + output.err
     assert vault.vault_get_value("example-service") == FAKE.strip()
+
+
+@pytest.mark.parametrize(("extra", "message"), [
+    ({}, "ccc secret: request denied"),
+    ({"note": " Please clarify.\nContact support.\x1b "},
+     "ccc secret: request denied: Please clarify. Contact support."),
+])
+def test_cli_prints_denial_on_stderr(http_broker, capsys, extra, message):
+    base, _ = http_broker
+
+    def deny():
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            pending = api(base, "pending")[1]["requests"]
+            if pending:
+                api(base, "resolve", {"id": pending[0]["id"], "deny": True, **extra}, {"Origin": base})
+                return
+            time.sleep(0.02)
+
+    thread = threading.Thread(target=deny)
+    thread.start()
+    try:
+        assert load_cli().main(["--server", base, "secret", "request", "example-service",
+                                "--reason", "Test", "--return-key", "--timeout", "6"]) == 1
+    finally:
+        thread.join()
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert output.err.splitlines()[-1] == message

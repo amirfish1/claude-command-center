@@ -20,6 +20,7 @@ import urllib.parse
 MAX_VALUE_BYTES = 16 * 1024
 MAX_BODY_BYTES = 128 * 1024  # includes JSON's escaped representation
 MAX_REQUESTS = 128
+MAX_NOTE_CHARS = 500
 KINDS = ("password", "token", "ssh-passphrase", "otp")
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 
@@ -204,6 +205,12 @@ class Broker:
             if row["status"] != "pending":
                 raise BrokerError("Credential request already answered", 409)
             if data.get("deny") is True:
+                note = data.get("note", "")
+                if not isinstance(note, str) or len(note) > MAX_NOTE_CHARS:
+                    raise BrokerError(f"Denial note must be text of at most {MAX_NOTE_CHARS} characters")
+                note = note.strip()
+                if note:
+                    row["note"] = note
                 row["status"] = "denied"
                 return
             if type(data.get("remember", False)) is not bool:
@@ -236,6 +243,8 @@ class Broker:
                 result["value"] = row["value"]
             if row["status"] == "stored":
                 result["entry"] = self.store.entry_name(row["name"], row["kind"])
+            if row["status"] == "denied" and "note" in row:
+                result["note"] = row["note"]
             if row["status"] != "pending":
                 del self.requests[row["id"]]
             return result

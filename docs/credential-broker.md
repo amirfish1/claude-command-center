@@ -40,7 +40,9 @@ to dashboard users. The requesting session ID is caller-reported, not verified
 identity; local programs already share CCC's single-user trust boundary.
 
 The default wait is five minutes; `--timeout` allows 1–900 seconds. Cancellation,
-denial and timeout fail without printing a value. The CLI uses only a direct
+denial and timeout fail without printing a value. If the dashboard user adds a
+denial reason, the CLI prints `ccc secret: request denied: <note>` on stderr.
+The CLI uses only a direct
 loopback HTTP connection, disables environment proxies and refuses redirects.
 Select a local instance with `ccc --server http://127.0.0.1:PORT secret ...`.
 If the session environment is unavailable, pass `--session-id` explicitly.
@@ -49,10 +51,12 @@ If the session environment is unavailable, pass `--session-id` explicitly.
 
 A **credential requests** panel appears automatically, including the service
 alias, reason, reported session and expiry. Submit the masked value or choose
-**Deny**. Check **View hidden** to inspect the entered value; uncheck it to mask
-the value again. Requests disappear automatically after answering, cancellation or
-expiry. The browser clears typed values on submission and when the page is
-hidden, and resets **View hidden**; it does not save them in browser storage.
+**Deny**. You can enter a plain-text reason of up to 500 characters, then choose
+**Deny request**. The requester sees the reason, so keep credentials out of it.
+Check **View hidden** to inspect the entered credential and uncheck it to mask
+it again. Requests disappear after answering, cancellation or expiry. The browser
+clears the credential and resets **View hidden** when you answer or hide the page.
+It keeps the card inputs out of browser storage.
 
 Values stay in server memory by default and are delivered once. Restarting CCC
 loses unanswered requests and unconsumed ephemeral values. Choose **Remember for
@@ -93,8 +97,8 @@ values and retrieval tokens belong only in JSON bodies, never URLs.
 | --- | --- |
 | `POST /api/secrets/request` | Local program only, no Origin/proxy headers. Body: `name`, `reason`, optional `kind`, `session_id`, `timeout`, `store_only` (saves to the Vault; `take` then returns `status: stored` and `entry`, never a value). Returns `id`, private `token`, and `status`. |
 | `GET /api/secrets/pending` | Dashboard metadata only: `requests` containing `id`, `name`, `reason`, `kind`, `session_id`, `expires_at`. Never a value or retrieval token. |
-| `POST /api/secrets/resolve` | Dashboard submits `{id, value, remember: false}` or `{id, deny: true}`. Never returns the value. |
-| `POST /api/secrets/take` | Local program polls with `{id, token}`. Returns `status: pending`, `denied`, or `ready`; only `ready` includes `value` and consumes it atomically. |
+| `POST /api/secrets/resolve` | Dashboard submits `{id, value, remember: false}` or `{id, deny: true, note}`. The denial `note` is optional text of up to 500 characters. A blank note is omitted from the delivery. |
+| `POST /api/secrets/take` | Local program polls with `{id, token}`. `pending` keeps the request open. `denied` may include a `note`, `ready` includes a `value`, and `stored` includes an `entry`. Each final result consumes the request atomically. |
 | `POST /api/secrets/cancel` | Local program submits `{id, token}` to revoke and discard a request. |
 | `POST /api/secrets/forget` | Local program submits `{name}` to delete saved kinds and revoke outstanding requests for that service. |
 
