@@ -27,7 +27,7 @@ def test_exact_bytes_and_client_preferences(monkeypatch, accept, encoding):
     raw = b'{"conversations":[]}' * 200
     zipped = gzip.compress(raw)
     monkeypatch.setattr(list_encoding.static_encoding, "brotli",
-                        lambda body, *, quality: b"brotli:" + body)
+                        lambda body, *, quality, window_bits: b"brotli:" + body)
     body, actual = list_encoding.representation(raw, zipped, accept)
     assert actual == encoding
     assert (gzip.decompress(body) if actual == "gzip" else
@@ -44,7 +44,7 @@ def test_native_encoder_round_trip():
 
 @pytest.mark.parametrize("failure", [None, RuntimeError("encoder failed")])
 def test_missing_or_failed_encoder_keeps_gzip_or_identity(monkeypatch, failure):
-    def compress(raw, *, quality):
+    def compress(raw, *, quality, window_bits):
         if failure:
             raise failure
         return None
@@ -58,8 +58,8 @@ def test_missing_or_failed_encoder_keeps_gzip_or_identity(monkeypatch, failure):
 
 def test_content_cache_and_simultaneous_identical_bodies(monkeypatch):
     calls = []
-    def compress(raw, *, quality):
-        calls.append((raw, quality))
+    def compress(raw, *, quality, window_bits):
+        calls.append((raw, quality, window_bits))
         time.sleep(.02)
         return raw[:10]
     monkeypatch.setattr(list_encoding.static_encoding, "brotli", compress)
@@ -67,7 +67,7 @@ def test_content_cache_and_simultaneous_identical_bodies(monkeypatch):
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(lambda _: list_encoding.representation(raw, None, "br"), range(4)))
     assert results == [(b"a" * 10, "br")] * 4
-    assert calls == [(raw, 5)]
+    assert calls == [(raw, 5, 20)]
     assert list_encoding._FLIGHTS == {}
     list_encoding.representation(b"b" * 3000, None, "br")
     assert len(calls) == 2, "changed payloads must not reuse stale bytes"
@@ -100,7 +100,7 @@ def test_handler_validators_lengths_and_vary(monkeypatch):
 
     raw = b"a" * 3000
     monkeypatch.setattr(list_encoding.static_encoding, "brotli",
-                        lambda body, *, quality: b"encoded")
+                        lambda body, *, quality, window_bits: b"encoded")
     for accept, encoding, expected in [("br", "br", b"encoded"), ("gzip", "gzip", gzip.compress(raw)), ("", None, raw)]:
         handler = Handler(accept)
         assert handler._send_archive_list_body(raw, gzip.compress(raw), '"current"') == 200

@@ -20566,7 +20566,7 @@ def _archive_serve_refresh(key, cache_options, serve_generation, started_at):
                 _archive_serve_refreshing.pop(key, None)
 
 
-def _overlay_conversation_lifecycle_flags(rows):
+def _overlay_conversation_lifecycle_flags(rows, *, include_lanes=True):
     """Re-stamp archived/trashed from the lifecycle sidecars, in place.
 
     Lifecycle mutations (archive/trash/merge) clear the in-memory serve cache
@@ -20597,7 +20597,8 @@ def _overlay_conversation_lifecycle_flags(rows):
         if sid:
             row["archived"] = sid in archived_set
             row["trashed"] = sid in trashed_set
-    _apply_session_lane_overrides(rows)
+    if include_lanes:
+        _apply_session_lane_overrides(rows)
     return rows
 
 
@@ -32919,18 +32920,19 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             except (TypeError, ValueError):
                 limit = None
             def _attention_feed(recent_only):
-                feed = compute_attention_feed(recent_only=recent_only, limit=limit)
-                _save_conv_meta_cache()
-                return feed
+                # The feed reads cached rows and bounded transcript tails.
+                # The parsers and archive builders own metadata persistence.
+                return _swr.cached(
+                    ("attention-feed", recent_only, limit),
+                    lambda: compute_attention_feed(recent_only=recent_only, limit=limit),
+                    fresh_s=10.0, max_stale_s=300.0,
+                )
+
             if scope == "all":
-                self.send_json(_swr.cached(
-                    ("attention-feed", False, limit), lambda: _attention_feed(False),
-                    fresh_s=10.0, max_stale_s=300.0))
+                self.send_json(_attention_feed(False))
                 return
             if scope in ("live", "recent"):
-                self.send_json(_swr.cached(
-                    ("attention-feed", True, limit), lambda: _attention_feed(True),
-                    fresh_s=10.0, max_stale_s=300.0))
+                self.send_json(_attention_feed(True))
                 return
             try:
                 ctx = require_repo_context(query=qs, allow_session=False)
@@ -32938,9 +32940,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             except RepoContextError:
                 # No repo selected → the tight cross-repo live feed is the
                 # sensible default (and the bug we are killing: NYA empty).
-                self.send_json(_swr.cached(
-                    ("attention-feed", True, limit), lambda: _attention_feed(True),
-                    fresh_s=10.0, max_stale_s=300.0))
+                self.send_json(_attention_feed(True))
         elif re.match(r"^/api/session/[^/]+$", path):
             # Lightweight single-session drill-in: state + last few turns from
             # one file tail, so the COO doesn't re-pull the whole list.
@@ -48063,7 +48063,7 @@ def _session_ended_blocked(c):
     )
 
 
-def _classify_attention(c):
+def _classify_attention(c, *, check_unpushed=True):
     """For a single conv, decide whether it needs user attention and in what way.
     Returns a dict {kind, priority, where, did, insight, next_step} or None.
 
@@ -48270,7 +48270,7 @@ def _classify_attention(c):
                 "has_structured": has_structured,
             }
 
-        if c.get("has_commit") and not c.get("has_push"):
+        if check_unpushed and c.get("has_commit") and not c.get("has_push"):
             # `has_commit` is a session-tool-call flag, not a repo-state check.
             # Verify the working tree actually has unpushed commits — sessions
             # often commit duplicate work then `git pull` fast-forwards it onto
@@ -48544,7 +48544,7 @@ def _attention_archive_rows_cached(cache_options):
         current = {archive_store.identity(row): row for row in hot}
         rows = [current.pop(rid, row) for rid, row in stored['rows']]
         rows.extend(current.values())
-    return _overlay_conversation_lifecycle_flags(rows), cached
+    return _overlay_conversation_lifecycle_flags(rows, include_lanes=False), cached
 
 
 def compute_attention_feed(*, recent_only=True, recent_window_secs=None,
@@ -48586,8 +48586,9 @@ def compute_attention_feed(*, recent_only=True, recent_window_secs=None,
     now = time.time()
     by_sid = {}
     raw = []
+    check_unpushed = "committed_not_pushed" not in exclude_kinds
     for c in convs:
-        item = _classify_attention(c)
+        item = _classify_attention(c, check_unpushed=check_unpushed)
         if not item:
             continue
         kind = item.get("kind")

@@ -14,6 +14,7 @@ function setup(rows, {engine = '', cutoff = 0, f2 = {}, workerIds = [], ticketVi
     workerSelfTicketRef: row => row.selfTicket || '',
     _workerRoleFromPrompt: row => row.promptRole || '',
     workerRowFacts: row => ({isHelper: !!row.helperTicket, ticketRef: row.helperTicket}),
+    f2LocalParents: () => ({}),
     f2EffectiveParentSessionId: (id, parent) => f2[id] || parent || '',
     continuationParentId: row => row.continued_from_session_id || '',
     ideaTicketsOn: () => true,

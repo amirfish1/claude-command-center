@@ -460,11 +460,13 @@ def test_status_age_follows_helper_read_not_reply(live_helper, monkeypatch):
         snap.update(saved)
 
 
-def test_productivity_snapshot_uses_unchanged_builder_over_wire(helper):
+def test_productivity_snapshot_loads_metadata_once_before_building_over_wire(helper):
     fake, child = helper
     calls = []
     expected = {'schema': 3, 'datasets': {'6': {'turns': 17}}, 'coverage': {}}
-    fake._productivity_build_snapshot = lambda: calls.append(1) or expected
-    reply = bg_helper.call('productivity_snapshot')
-    assert reply == {'ok': True, 'data': expected}
-    assert calls == [1]
+    fake._load_conv_meta_cache = lambda: calls.append('load')
+    fake._productivity_build_snapshot = lambda: calls.append('build') or expected
+    assert calls == []
+    for _ in range(2):
+        assert bg_helper.call('productivity_snapshot') == {'ok': True, 'data': expected}
+    assert calls == ['load', 'build', 'build']

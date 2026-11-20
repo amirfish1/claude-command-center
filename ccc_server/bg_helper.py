@@ -247,6 +247,8 @@ class _Child:
         self.ux = {"ts": 0.0, "body": None, "rev": 0}
         self.live_lock = threading.Lock()
         self.live = {"ts": 0.0, "data": None, "detail": None, "ms": 0.0}
+        self.productivity_meta_lock = threading.Lock()
+        self.productivity_meta_loaded = False
 
     # gh-queue-watch ------------------------------------------------------
     def gh_tick(self, req):
@@ -332,6 +334,12 @@ class _Child:
             float(req["start_epoch"]), float(req["end_epoch"]))}
 
     def productivity_snapshot(self, req):
+        # Importing server does not run the dashboard startup loader. Seed
+        # the parser cache before the first historical scan in this process.
+        with self.productivity_meta_lock:
+            if not self.productivity_meta_loaded:
+                self.server._load_conv_meta_cache()
+                self.productivity_meta_loaded = True
         return {"ok": True, "data": self.server._productivity_build_snapshot()}
 
     def worker_closure(self, req):

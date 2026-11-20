@@ -54,6 +54,8 @@ def test_exact_feed_parity_and_no_canonical_body_decode(tmp_path, monkeypatch, r
     expected = server.compute_attention_feed(recent_only=recent)
     monkeypatch.setattr(server, '_attention_archive_rows_cached', method)
     monkeypatch.setattr(server, '_archive_all_rows_cached', lambda *a: pytest.fail('full history read'))
+    monkeypatch.setattr(server, '_apply_session_lane_overrides',
+                        lambda rows: pytest.fail('attention projected unused sidebar lanes'))
     loads = json.loads
 
     def decode(body):
@@ -64,6 +66,35 @@ def test_exact_feed_parity_and_no_canonical_body_decode(tmp_path, monkeypatch, r
     assert server.compute_attention_feed(recent_only=recent) == expected
     assert 'old-tool' in {item['session_id'] for item in expected['items']}
     assert ('history' in {item['session_id'] for item in expected['items']}) == (not recent)
+
+
+@pytest.mark.parametrize('scope,recent', [('all', False), ('live', True), ('recent', True), ('', True)])
+def test_attention_refresh_leaves_parser_metadata_to_its_writers(monkeypatch, scope, recent):
+    result = {'ok': True, 'items': []}
+    responses = []
+
+    def no_repo(**kwargs):
+        raise server.RepoContextError('repo_required', 'No selected repository')
+
+    def cached(key, compute, *, fresh_s, max_stale_s):
+        assert key == ('attention-feed', recent, 3)
+        assert (fresh_s, max_stale_s) == (10.0, 300.0)
+        return compute()
+
+    def feed(*, recent_only, limit):
+        assert (recent_only, limit) == (recent, 3)
+        return result
+
+    monkeypatch.setattr(server, 'require_repo_context', no_repo)
+    monkeypatch.setattr(server._swr, 'cached', cached)
+    monkeypatch.setattr(server, 'compute_attention_feed', feed)
+    monkeypatch.setattr(server, '_save_conv_meta_cache',
+                        lambda: pytest.fail('attention attempted to persist parser metadata'))
+    handler = server.CommandCenterHandler.__new__(server.CommandCenterHandler)
+    handler.path = f'/api/attention?scope={scope}&limit=3'
+    handler.send_json = responses.append
+    handler._do_GET()
+    assert responses == [result]
 
 
 def test_publication_reorder_delete_and_nested_mutation(tmp_path, monkeypatch):

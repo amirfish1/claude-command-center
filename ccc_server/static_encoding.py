@@ -25,7 +25,7 @@ def _encoder():
         return None
 
 
-def brotli(body, *, quality=6):
+def brotli(body, *, quality=6, window_bits=22):
     library = _encoder()
     if library is None:
         return None
@@ -35,7 +35,7 @@ def brotli(body, *, quality=6):
     output = ctypes.create_string_buffer(capacity)
     length = ctypes.c_size_t(capacity)
     # CDLL releases the GIL while the system encoder processes the input.
-    if not library.BrotliEncoderCompress(quality, 22, 0, len(body), body,
+    if not library.BrotliEncoderCompress(quality, window_bits, 0, len(body), body,
                                          ctypes.byref(length), output):
         return None
     return output[:length.value]

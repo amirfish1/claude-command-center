@@ -107,7 +107,9 @@ function lanes(rows, { ticketView = true, f2 = {} } = {}) {
   const context = { Map, Set, currentConversation: '',
     _workerRoleFromPrompt: () => '',
     workerSelfTicketRef: () => '', workerRowFacts: () => ({ isHelper: false, ticketRef: '' }),
+    f2LocalParents: () => ({}),
     f2EffectiveParentSessionId: (id, parent) => f2[id] || parent || '',
+    _ultraFreshCurrent: row => row,
     continuationParentId: row => row.continued_from_session_id || '',
     ideaTicketsOn: () => true, ticketViewOn: () => ticketView,
     // These fixture rows have no live overlay; the current row is the input.
