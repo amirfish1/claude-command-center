@@ -14902,37 +14902,54 @@ def _census_identity_map_serial():
 _CENSUS_PROBE_CACHE = {}  # sid -> ((mtime_ns, size), probe result) — keyed like _conv_head_cache
 _CENSUS_TRANSCRIPT_PATHS_CACHE = {"key": None, "ts": 0.0, "paths": {}}
 _CENSUS_TRANSCRIPT_PATHS_TTL = 5.0
+_CENSUS_PROJECT_TRANSCRIPTS = ByteBudgetCache(8 * 1024 * 1024, 2048)
+
+
+def _census_project_transcript_names(project):
+    stat = project.stat()
+    stamp = (stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns)
+    key = project.path
+    cached = _CENSUS_PROJECT_TRANSCRIPTS.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    with os.scandir(key) as entries:
+        names = frozenset(entry.name for entry in entries if entry.name.endswith(".jsonl"))
+    weight = sys.getsizeof(names) + sum(map(sys.getsizeof, names)) + sys.getsizeof(key) + 256
+    _CENSUS_PROJECT_TRANSCRIPTS.put(key, (stamp, names), weight)
+    return names
 
 
 def _census_transcript_paths(session_ids):
-    """Find transcript paths for many census rows in one project-directory pass."""
+    """Find census transcripts by reusing unchanged project directory names."""
     wanted = {str(sid or "").strip() for sid in session_ids if sid}
     if not wanted:
         return {}
     root = Path(_SYS_PROJECTS_DIR)
     key = (str(root), tuple(sorted(wanted)))
-    cached = _CENSUS_TRANSCRIPT_PATHS_CACHE
+    cached = _CENSUS_TRANSCRIPT_PATHS_CACHE.copy()
     now = time.monotonic()
     if cached["key"] == key and now - cached["ts"] < _CENSUS_TRANSCRIPT_PATHS_TTL:
         return dict(cached["paths"])
     found = {}
+    filenames = {sid + ".jsonl" for sid in wanted}
     try:
-        projects = list(root.iterdir())
+        with os.scandir(root) as entries:
+            projects = list(entries)
     except OSError:
         return found
     for project in projects:
-        if not project.is_dir():
-            continue
-        # Enumerate names once instead of stat-ing every missing sid in every
-        # project. Missing identities often belong to a different engine.
         try:
-            with os.scandir(project) as entries:
-                for entry in entries:
-                    if not entry.name.endswith(".jsonl"):
-                        continue
-                    sid = entry.name[:-6]
-                    if sid in wanted and sid not in found and entry.is_file():
-                        found[sid] = Path(entry.path)
+            if not project.is_dir():
+                continue
+            names = _census_project_transcript_names(project)
+            for filename in names.intersection(filenames):
+                sid = filename[:-6]
+                if sid not in found:
+                    # A symlink can change type or lose its target while the
+                    # containing directory's metadata stays the same.
+                    path = Path(project.path, filename)
+                    if path.is_file():
+                        found[sid] = path
         except OSError:
             continue
         if len(found) == len(wanted):

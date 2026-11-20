@@ -9,6 +9,7 @@ has_conversation_row=False, and parent/children inversion.
 
 import importlib
 import json
+import os
 import pathlib
 import tempfile
 import time
@@ -292,15 +293,15 @@ class TestCensusHelperProbe(unittest.TestCase):
         self._write_transcript("sid-a", "First task")
         (other / "sid-b.jsonl").write_text(json.dumps({"type": "user"}) + "\n")
         root = pathlib.Path(self._tmp.name)
-        original_iterdir = pathlib.Path.iterdir
+        original_scandir = os.scandir
         root_scans = []
 
-        def counting_iterdir(path):
-            if path == root:
-                root_scans.append(path)
-            return original_iterdir(path)
+        def counting_scandir(path):
+            if pathlib.Path(path) == root:
+                root_scans.append(root)
+            return original_scandir(path)
 
-        with mock.patch.object(pathlib.Path, "iterdir", counting_iterdir):
+        with mock.patch.object(os, "scandir", counting_scandir):
             found = server._census_transcript_paths(["sid-a", "sid-b"])
 
         self.assertEqual(found, {
@@ -308,6 +309,32 @@ class TestCensusHelperProbe(unittest.TestCase):
             "sid-b": other / "sid-b.jsonl",
         })
         self.assertEqual(root_scans, [root])
+
+    def test_reuses_directory_names_and_rechecks_live_files(self):
+        original_scandir = os.scandir
+        project_scans = []
+
+        def counting_scandir(path):
+            if pathlib.Path(path) == self.proj:
+                project_scans.append(path)
+            return original_scandir(path)
+
+        target = pathlib.Path(self._tmp.name) / "outside-transcript"
+        link = self.proj / "link.jsonl"
+        link.symlink_to(target)
+        with mock.patch.object(os, "scandir", counting_scandir):
+            self.assertEqual(server._census_transcript_paths(["link"]), {})
+            target.write_text("{}\n")
+            self.assertEqual(server._census_transcript_paths(["link", "missing"]), {"link": link})
+            target.unlink()
+            self.assertEqual(server._census_transcript_paths(["link", "other"]), {})
+            self.assertEqual(len(project_scans), 1)
+
+            self._write_transcript("new", "New session")
+            self.assertEqual(server._census_transcript_paths(["link", "new"]), {
+                "new": self.proj / "new.jsonl",
+            })
+            self.assertEqual(len(project_scans), 2)
 
     def test_title_bot_classified_as_helper(self):
         self._write_transcript(
