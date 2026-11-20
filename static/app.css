@@ -28840,6 +28840,16 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
     max-width: 100vw; max-height: 100vh;
     border-radius: 0; border: none;
   }
+  .settings-modal-header {
+    padding-top: calc(12px + env(safe-area-inset-top, 0px));
+    padding-left: max(14px, env(safe-area-inset-left, 0px));
+    padding-right: max(14px, env(safe-area-inset-right, 0px));
+  }
+  .settings-esc-hint { display: none; }
+  .settings-modal-close {
+    width: 44px; height: 44px;
+    background: var(--surface-2); color: var(--text);
+  }
   .settings-modal-body { flex-direction: column; }
   .settings-rail {
     flex: 0 0 auto;
