@@ -1,5 +1,6 @@
 """CCC-142: the /list body is built once per snapshot, and projected rows
 never share mutable containers with the cached snapshot."""
+import gzip
 import importlib
 import json
 import urllib.error
@@ -122,6 +123,73 @@ def test_body_cache_diagnostics_track_actual_key_and_unversioned_bypass(monkeypa
         _, unversioned = read(0)
         assert not unversioned['hit'] and unversioned['reason'] == 'unversioned'
     assert len(builds) == 4
+
+
+def test_history_encoding_reuses_bytes_after_fresh_projection(monkeypatch, tmp_path):
+    from ccc_server import list_encoding
+
+    server = importlib.import_module('server')
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_DISK_DIR', tmp_path)
+    monkeypatch.setattr(list_encoding, '_HISTORY_CACHE', server.ByteBudgetCache(1 << 20, 4))
+    row = {'session_id': 'archive-row', 'first_message': 'history ' * 200}
+    monkeypatch.setattr(server, '_archive_list_source_rows_cached',
+                        lambda *a, **kw: ([dict(row)], True, 0))
+    diagnostics = []
+    monkeypatch.setattr(server, 'record_diag',
+                        lambda kind, ms, detail: diagnostics.append(detail)
+                        if kind == 'list_server' else None)
+    httpd = server.http.server.ThreadingHTTPServer(('127.0.0.1', 0), server.CommandCenterHandler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    url = f'http://127.0.0.1:{httpd.server_address[1]}/api/conversations/list?window=all&stale_ok=1'
+
+    def read(encoding='gzip', validator=''):
+        request = urllib.request.Request(url, headers={'Accept-Encoding': encoding,
+                                                       'If-None-Match': validator})
+        try:
+            response = urllib.request.urlopen(request, timeout=5)
+        except urllib.error.HTTPError as exc:
+            response = exc
+        with response:
+            return response.status, response.headers['Content-Encoding'], response.headers['ETag'], response.read()
+
+    try:
+        first = read()
+        assert first[:2] == (200, 'gzip')
+        assert json.loads(gzip.decompress(first[3]))['conversations'][0]['first_message'] == row['first_message']
+        assert read() == first
+        assert read(validator=first[2]) == (304, None, first[2], b'')
+        row['first_message'] += 'updated'
+        changed = read(validator=first[2])
+        assert changed[:2] == (200, 'gzip') and changed[2] != first[2]
+        assert read(encoding='identity') == (200, None, changed[2], gzip.decompress(changed[3]))
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+    assert [entry['body_cache']['encoding_hit'] for entry in diagnostics] == [False, True, True, False, False]
+    assert all(entry['projection']['rows'] for entry in diagnostics)
+
+
+def test_history_encoding_builds_gzip_only_when_requested_or_needed(monkeypatch):
+    from ccc_server import list_encoding
+
+    monkeypatch.setattr(list_encoding, '_HISTORY_CACHE', list_encoding.ByteBudgetCache(1 << 20, 4))
+    payload = {'conversations': [{'first_message': 'history ' * 200}]}
+    monkeypatch.setattr(list_encoding, '_brotli', lambda raw: b'encoded br')
+    gzip_calls = []
+    compress = gzip.compress
+    monkeypatch.setattr(gzip, 'compress',
+                        lambda *a, **kw: gzip_calls.append(True) or compress(*a, **kw))
+    assert list_encoding.history_representation(payload, 'gzip, br', None)[:2] == (b'encoded br', 'br')
+    assert not gzip_calls
+    monkeypatch.setattr(list_encoding, '_brotli', lambda raw: None)
+    payload['updated'] = True
+    body, encoding, _ = list_encoding.history_representation(payload, 'gzip;q=0.8, br', None)
+    assert encoding == 'gzip' and json.loads(gzip.decompress(body)) == payload
+    assert list_encoding.history_representation(payload, 'gzip;q=0.8, br', None)[:2] == (body, 'gzip')
+    assert len(gzip_calls) == 1
 
 
 def test_projection_diagnostics_do_not_change_the_payload():

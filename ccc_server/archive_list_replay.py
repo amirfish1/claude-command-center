@@ -5,6 +5,7 @@
 Entries contain only immutable bytes and offsets. Decoding on replay gives
 ticket processing its own mutable rows without reprojecting the archive.
 """
+import hashlib
 import io
 import json
 import pickle
@@ -32,6 +33,23 @@ class _GuardPickler(pickle.Pickler):
         # Only the built-in JSON containers/scalars use pickle's fast paths.
         # Custom reducers must not hide a JSON-visible mutation in the guard.
         raise TypeError('custom values are not encoding cache guards')
+
+
+def payload_fingerprint(payload):
+    """Hash ordered JSON-compatible values without keeping the serialized copy."""
+    class DigestWriter:
+        def __init__(self):
+            self.digest = hashlib.sha256()
+
+        def write(self, data):
+            self.digest.update(data)
+
+    writer = DigestWriter()
+    try:
+        _GuardPickler(writer, protocol=pickle.HIGHEST_PROTOCOL).dump(payload)
+    except (TypeError, ValueError, pickle.PicklingError, RecursionError):
+        return None
+    return writer.digest.digest()
 
 
 def _encoded_run(rows):

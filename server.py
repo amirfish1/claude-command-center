@@ -47723,6 +47723,16 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         exactly the stored snapshot (identity), or (version, overlay content
         hash) when in-memory ACP/Devin overlay rows were appended; 0 disables
         the body cache and falls back to a fresh build."""
+        if window == "all" and not snap_ver:
+            from ccc_server.list_encoding import history_representation
+
+            if diagnostics is not None:
+                diagnostics.update(hit=False, reason="unversioned-history", version=snap_ver)
+            body, encoding, etag = history_representation(
+                build_payload(), self.headers.get("Accept-Encoding"),
+                self.headers.get("If-None-Match"), diagnostics=diagnostics)
+            return self._send_archive_list_representation(body, encoding, etag)
+
         raw, gzip_body, etag_val = _archive_list_body_get_or_build(
             cache_key, window, from_cache, build_payload, snap_ver, diagnostics=diagnostics)
         return self._send_archive_list_body(raw, gzip_body, etag_val)
@@ -47730,13 +47740,18 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
     def _send_archive_list_body(self, raw, gzip_body, etag_val, extra_headers=()):
         from ccc_server.list_encoding import representation
         if self.headers.get("If-None-Match") == etag_val:
+            return self._send_archive_list_representation(None, None, etag_val)
+        body, encoding = representation(raw, gzip_body, self.headers.get("Accept-Encoding", ""))
+        return self._send_archive_list_representation(body, encoding, etag_val, extra_headers)
+
+    def _send_archive_list_representation(self, body, encoding, etag_val, extra_headers=()):
+        if body is None:
             self.send_response(304)
             self.send_header("ETag", etag_val)
             self.send_header("Vary", "Accept-Encoding")
             self._send_list_server_timing()
             self.end_headers()
             return 304
-        body, enc = representation(raw, gzip_body, self.headers.get("Accept-Encoding", ""))
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -47744,8 +47759,8 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         self.send_header("Vary", "Accept-Encoding")
         for hk, hv in extra_headers:
             self.send_header(hk, hv)
-        if enc:
-            self.send_header("Content-Encoding", enc)
+        if encoding:
+            self.send_header("Content-Encoding", encoding)
         self._send_list_server_timing()
         self.end_headers()
         try:
