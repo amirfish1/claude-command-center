@@ -50,6 +50,9 @@
   try { if (localStorage.getItem('ccc-conv-cache') === '0') { startRecent(); return; } } catch (_) { startRecent(); return; }
   const fullUrl = url.replace('&initial=1', '');
   const maxBytes = 32 * 1024 * 1024;
+  const maxPatchBytes = 1024 * 1024;
+  const maxPatchRows = 256;
+  const rowId = row => row?.session_id || row?.id;
   let dbPromise;
   const open = () => dbPromise || (dbPromise = new Promise(resolve => {
     let done = false;
@@ -85,9 +88,13 @@
         // Both reads share one transaction. A tiny validation header can start
         // the request while IndexedDB clones the complete rows onto the page.
         const store = db.transaction('snapshot').objectStore('snapshot');
+        let savedHeader;
         const meta = store.get('header');
         meta.onerror = () => resolveHeader(null);
-        meta.onsuccess = () => resolveHeader(validHeader(meta.result) ? meta.result : null);
+        meta.onsuccess = () => {
+          savedHeader = validHeader(meta.result) ? meta.result : null;
+          resolveHeader(savedHeader);
+        };
         const request = store.get('last');
         request.onerror = () => finish(null);
         request.onsuccess = () => {
@@ -102,10 +109,32 @@
                 ? {...metadata, rows:JSON.parse(rowsJson)} : null;
             } catch (_) { value = null; }
           }
-          finish(validHeader(value) && Array.isArray(value.rows)
+          const hasPatch = typeof savedHeader?.patchJson === 'string';
+          if (hasPatch && (savedHeader.baseAt !== value?.at || savedHeader.baseDelta !== value?.delta
+              || savedHeader.baseAt > savedHeader.at || 2 * savedHeader.patchJson.length > maxPatchBytes)) {
+            finish(null); return;
+          }
+          // The latest header dates a patched snapshot. Its base may have
+          // been written much earlier, when the last full response arrived.
+          if (validHeader(hasPatch ? {...value, at: savedHeader.at} : value) && Array.isArray(value.rows)
             && value.rows.length <= 30000
             && value.rows.every(row => row && typeof row === 'object' && !Array.isArray(row)
-              && typeof (row.session_id || row.id) === 'string') ? value : null);
+              && typeof rowId(row) === 'string')) {
+            if (hasPatch) {
+              try {
+                const {patchJson, baseAt, baseDelta, ...metadata} = savedHeader;
+                const patch = JSON.parse(patchJson);
+                const byId = new Map(value.rows.map(row => [rowId(row), row]));
+                for (const row of patch.changes) byId.set(rowId(row), row);
+                const rows = patch.ids.map(id => byId.get(id));
+                value = rows.length <= 30000 && rows.every(row => typeof rowId(row) === 'string')
+                  ? {...metadata, rows} : null;
+              } catch (_) { value = null; }
+            }
+            finish(value);
+          } else {
+            finish(null);
+          }
         };
       } catch (_) { finish(null); }
     });
@@ -115,31 +144,69 @@
     if (!baseAvailable) startRecent();
   });
   let pending = null, scheduled = false;
-  const save = value => {
+  const save = (value, delta = null) => {
     try { if (localStorage.getItem('ccc-conv-cache') === '0') return; } catch (_) { return; }
     if (value.url !== fullUrl || !Array.isArray(value.rows) || value.rows.length > 30000) return;
-    pending = value;
+    pending = {value, delta};
     if (scheduled) return;
     scheduled = true;
     const run = async () => {
       scheduled = false;
-      const value = pending; pending = null;
+      const {value, delta} = pending; pending = null;
       try {
-        const rowsJson = JSON.stringify(value.rows);
-        const bytes = 2 * rowsJson.length;
-        if (bytes > maxBytes) return;
         const db = await open();
         if (!db) return;
         const tx = db.transaction('snapshot', 'readwrite');
         tx.onerror = () => {};
         const {rows, ...metadata} = value;
-        const record = {...metadata, rowsJson, bytes, at: Date.now()};
-        tx.oncomplete = () => {
-          try { localStorage.setItem(hintKey, String(record.at)); } catch (_) {}
-        };
         const store = tx.objectStore('snapshot');
-        store.put(record, 'last');
-        store.put({url:record.url, bytes, at:record.at, etag:record.etag, delta:record.delta}, 'header');
+        const at = Date.now();
+        const markSaved = () => {
+          tx.oncomplete = () => {
+            try { localStorage.setItem(hintKey, String(at)); } catch (_) {}
+          };
+        };
+        const writeFull = () => {
+          const rowsJson = JSON.stringify(rows);
+          const bytes = 2 * rowsJson.length;
+          if (bytes > maxBytes) return;
+          store.put({...metadata, rowsJson, bytes, at}, 'last');
+          store.put({...metadata, bytes, at}, 'header');
+          markSaved();
+        };
+        if (!delta?.from || !value.delta || delta.changes.length > maxPatchRows) {
+          writeFull();
+          return;
+        }
+        // Compare and update within the same write transaction. If another
+        // tab saved a different base, this delta cannot describe its rows.
+        const head = store.get('header');
+        head.onsuccess = () => {
+          const old = head.result;
+          if (validHeader(old) && old.delta === delta.from) {
+            try {
+              const previous = old.patchJson ? JSON.parse(old.patchJson) : null;
+              const changes = new Map((previous?.changes || []).map(row => [rowId(row), row]));
+              for (const row of delta.changes) changes.set(rowId(row), row);
+              const present = new Set(delta.ids);
+              const changedRows = [...changes.values()].filter(row => present.has(rowId(row)));
+              if (changedRows.length > maxPatchRows) { writeFull(); return; }
+              const patchJson = JSON.stringify({ids: delta.ids, changes: changedRows});
+              const baseBytes = old.baseBytes || old.bytes;
+              const bytes = baseBytes + 2 * patchJson.length;
+              if (bytes <= maxBytes && 2 * patchJson.length <= maxPatchBytes) {
+                const baseAt = old.baseAt ?? old.at;
+                const baseDelta = old.baseDelta ?? old.delta;
+                store.put({...metadata, patchJson, bytes, baseBytes, baseAt, baseDelta, at}, 'header');
+                markSaved();
+                return;
+              }
+            } catch (_) {}
+          }
+          // A coalesced save may skip a predecessor. Keep a complete base
+          // when the currently committed token cannot anchor the new delta.
+          try { writeFull(); } catch (_) {}
+        };
       } catch (_) {}
     };
     const arm = () => window.requestIdleCallback ? window.requestIdleCallback(run, {timeout:2000}) : setTimeout(run, 0);

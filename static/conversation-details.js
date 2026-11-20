@@ -5021,7 +5021,8 @@
         if (!opts.includePrs && !opts.initial) {
           _scheduleArchiveSidebarCache(convs, params.get('window'));
           window.__cccArchiveSnapshot?.save({url, rows:convs,
-            etag:sharedState._archiveAllEtag.get(url), delta:sharedState._archiveAllDelta.get(url)});
+            etag:sharedState._archiveAllEtag.get(url), delta:sharedState._archiveAllDelta.get(url)},
+            _merged ? {from: deltaToken, ids: d.ids, changes: d.conversations} : null);
         }
         if (typeof opts.onValidated === 'function') opts.onValidated();
         if (typeof opts.onPage === 'function') opts.onPage(d);

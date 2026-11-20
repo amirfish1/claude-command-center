@@ -12,17 +12,17 @@ const fullUrl = '/api/conversations/list?window=7d&stale_ok=1';
 const rows = [{session_id:'recent', nested:{items:[1]}}, {session_id:'older'}];
 
 function setup({snapshot, response, early} = {}) {
-  const reads = [], saves = [];
+  const reads = [], saves = [], savedDeltas = [];
   const state = {_archiveAllInflight:new Map(), _archiveAllData:new Map(),
     _archiveAllEtag:new Map(), _archiveAllDelta:new Map(), ARCHIVE_ALL_FETCH_TIMEOUT_MS:45000};
   const cache = snapshot ? {url:snapshot.url, read:Promise.resolve(snapshot),
-    fetch:early, save:value => saves.push(value)} : undefined;
+    fetch:early, save(value, delta) {saves.push(value); savedDeltas.push(delta);}} : undefined;
   const context = {sharedState:state, window:{__cccArchiveSnapshot:cache},
     performance, URLSearchParams, AbortController, setTimeout:()=>0, clearTimeout(){},
     _archiveWindow:()=> '7d', _clientLog(){}, _scheduleArchiveSidebarCache(){},
     backgroundApiFetch:async(url, init) => { reads.push({url, init}); return response; }};
   vm.createContext(context); vm.runInContext(archive, context);
-  return {context, state, reads, saves};
+  return {context, state, reads, saves, savedDeltas};
 }
 function reply(body, status=200) {
   return {ok:status===200, status, headers:{get:()=>null}, json:async()=>body};
@@ -44,6 +44,9 @@ test('a persisted base still waits for validation, then merges the current order
   assert.equal(f.reads.length,0,'the early conditional response is consumed once');
   assert.equal(f.saves[0].delta,'current');
   assert.equal(f.saves[0].rows,result,'data and token are saved as the same envelope');
+  assert.equal(f.savedDeltas[0].from,'old');
+  assert.deepEqual(f.savedDeltas[0].ids,['older','recent','new']);
+  assert.deepEqual(f.savedDeltas[0].changes,[{session_id:'recent', modified:42}, {session_id:'new'}]);
   assert.equal(f.state._archiveAllEtag.has(fullUrl),false);
   f.context.window.__cccArchiveSnapshot.fetch = Promise.reject(Error('must not reuse consumed response'));
   // No second consumer should observe this promise at all.
@@ -198,16 +201,20 @@ before(async () => {
 });
 after(async () => {await browser?.close();await new Promise(r=>server.close(r));});
 
+async function waitForSnapshot(page, delta, key = 'last') {
+  await page.waitForFunction(async (delta, key)=>{
+    const db=await new Promise(resolve=>{const r=indexedDB.open('ccc-archive-response',1);r.onsuccess=()=>resolve(r.result);});
+    try {return await new Promise(resolve=>{const r=db.transaction('snapshot').objectStore('snapshot').get(key);r.onsuccess=()=>resolve(r.result?.delta===delta && !!localStorage.getItem('ccc-archive-response-at:7d'));});}
+    finally {db.close();}
+  },{},delta,key);
+}
+
 async function seed(page,delta) {
   await page.evaluate(({url,rows,delta})=>{
     window.__cccArchiveSettled=true;
     window.__cccArchiveSnapshot.save({url,rows,delta,etag:'"example"'});
   },{url:fullUrl,rows,delta});
-  await page.waitForFunction(async delta=>{
-    const db=await new Promise(resolve=>{const r=indexedDB.open('ccc-archive-response',1);r.onsuccess=()=>resolve(r.result);});
-    try {return await new Promise(resolve=>{const r=db.transaction('snapshot').objectStore('snapshot').get('last');r.onsuccess=()=>resolve(r.result?.delta===delta && !!localStorage.getItem('ccc-archive-response-at:7d'));});}
-    finally {db.close();}
-  },{},delta);
+  await waitForSnapshot(page, delta);
 }
 
 test('an intentionally unsent preview never starts a replacement request', async () => {
@@ -428,6 +435,39 @@ test('real IndexedDB retains one scoped snapshot and a reload obtains an actual 
     await page.evaluate(()=>localStorage.setItem('ccc-conv-cache','0'));
     await page.reload({waitUntil:'load'});
     assert.equal(await page.evaluate(()=>!!window.__cccArchiveSnapshot),false,'existing cache opt-out applies');
+  } finally {await context.close();}
+});
+
+test('successive deltas preserve ordering, replacements and removals without rewriting the base', async () => {
+  const context = await browser.createBrowserContext();
+  const page = await context.newPage();
+  try {
+    await page.goto(origin);
+    await seed(page, 'original');
+    const changed = {session_id:'recent', nested:{items:[2]}};
+    const added = {id:'new'};
+    const saveDelta = (from, token, rows, changes) => page.evaluate(({url,rows,from,token,changes})=>{
+      window.__cccArchiveSettled = true;
+      const ids = rows.map(row => row.session_id || row.id);
+      window.__cccArchiveSnapshot.save({url, rows, delta:token}, {from, ids, changes});
+    }, {url:fullUrl, rows, from, token, changes});
+
+    await saveDelta('original', 'middle', [rows[1], added, changed], [added, changed]);
+    await waitForSnapshot(page, 'middle', 'header');
+    await saveDelta('middle', 'valid', [changed, added], []);
+    await waitForSnapshot(page, 'valid', 'header');
+    await waitForSnapshot(page, 'original');
+    await page.reload();
+    assert.deepEqual(await page.evaluate(async ()=>{
+      const helper = window.__cccArchiveSnapshot;
+      return {rows:(await helper.read).rows, status:(await helper.fetch).status};
+    }), {rows:[changed, added], status:304});
+
+    // A different tab's commit (or a skipped idle save) breaks the chain.
+    await saveDelta('missing-predecessor', 'replacement', [added], []);
+    await waitForSnapshot(page, 'replacement');
+    await page.reload();
+    assert.deepEqual(await page.evaluate(async ()=>(await window.__cccArchiveSnapshot.read).rows), [added]);
   } finally {await context.close();}
 });
 
