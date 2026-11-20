@@ -15,6 +15,7 @@ re-parses nothing. Totals only: session ids never leave this module.
 from __future__ import annotations
 
 import os
+import threading
 import time
 
 from ccc_server import core as _core
@@ -25,6 +26,7 @@ _HOUR = 3600
 _DAY = 86400
 _CACHE = {"ts": 0.0, "payload": None}
 _CACHE_TTL = 60
+_CACHE_REFRESH_LOCK = threading.Lock()
 _TOKEN_MEMO = {}
 
 
@@ -181,10 +183,29 @@ def _with_pressure(payload):
     return dict(payload, cpu=cpu, memory=memory_pressure())
 
 
+def _cached_payload(now):
+    if now - _CACHE["ts"] < _CACHE_TTL:
+        return _CACHE["payload"]
+    return None
+
+
 def background_runs_payload(now=None, projects_root=None, markers=None, use_cache=True):
     now = time.time() if now is None else now
-    if use_cache and _CACHE["payload"] is not None and now - _CACHE["ts"] < _CACHE_TTL:
-        return _with_pressure(_CACHE["payload"])
+    if not use_cache:
+        return _with_pressure(_build_payload(now, projects_root, markers))
+    payload = _cached_payload(now)
+    if payload is None:
+        # Concurrent dashboard tabs can arrive before a large scan finishes.
+        # Publish once and recheck the cache after waiting for the builder.
+        with _CACHE_REFRESH_LOCK:
+            payload = _cached_payload(now)
+            if payload is None:
+                payload = _build_payload(now, projects_root, markers)
+                _CACHE.update(ts=now, payload=payload)
+    return _with_pressure(payload)
+
+
+def _build_payload(now, projects_root, markers):
     root = projects_root or _core.PROJECTS_ROOT
     markers = _core._load_spawn_markers() if markers is None else markers
     groups = {}
@@ -230,6 +251,4 @@ def background_runs_payload(now=None, projects_root=None, markers=None, use_cach
         ],
     }
     _log_new_alerts(payload["alerts"])
-    if use_cache:
-        _CACHE.update(ts=now, payload=payload)
-    return _with_pressure(payload)
+    return payload

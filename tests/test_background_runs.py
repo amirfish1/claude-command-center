@@ -1,5 +1,9 @@
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
+import threading
+
+import pytest
 
 import server  # noqa: F401  (registers core names)
 from ccc_server import background_runs
@@ -63,3 +67,61 @@ def test_payload_reports_memory_pressure(tmp_path, monkeypatch):
     assert p["memory"]["used_pct"] == 95.0
     assert p["memory"]["level"] == "saturated"
     assert "swap_used_pct" not in p["memory"]
+
+
+def test_concurrent_cache_misses_share_one_scan(tmp_path, monkeypatch):
+    now = 1_800_000_000.0
+    _write(tmp_path, "-tmp-probe", "a1", now - 60, {"input_tokens": 1})
+    monkeypatch.setattr(background_runs, "_CACHE", {"ts": 0, "payload": None})
+    monkeypatch.setattr(background_runs, "_TOKEN_MEMO", {})
+    scan_started = threading.Event()
+    follower_missed = threading.Event()
+    scan_calls = []
+    scan = background_runs._temp_transcripts
+    cached_payload = background_runs._cached_payload
+
+    def observe_cache(at):
+        payload = cached_payload(at)
+        if at == now + 1 and payload is None:
+            follower_missed.set()
+        return payload
+
+    def gated_scan(root):
+        scan_calls.append(root)
+        scan_started.set()
+        assert follower_missed.wait(5)
+        return scan(root)
+
+    monkeypatch.setattr(background_runs, "_cached_payload", observe_cache)
+    monkeypatch.setattr(background_runs, "_temp_transcripts", gated_scan)
+    monkeypatch.setattr(background_runs, "cpu_pressure",
+                        lambda: {"reader": threading.get_ident()})
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(background_runs.background_runs_payload, now, tmp_path, {})
+        assert scan_started.wait(5)
+        second = pool.submit(background_runs.background_runs_payload, now + 1, tmp_path, {})
+        first_result = first.result(timeout=5)
+        second_result = second.result(timeout=5)
+
+    assert scan_calls == [tmp_path]
+    assert first_result["groups"] == second_result["groups"]
+    assert first_result["totals"]["runs"] == 1
+    assert first_result["cpu"] != second_result["cpu"]
+    assert background_runs._CACHE["ts"] == now
+
+
+def test_failed_cached_scan_is_retried(tmp_path, monkeypatch):
+    now = 1_800_000_000.0
+    monkeypatch.setattr(background_runs, "_CACHE", {"ts": 0, "payload": None})
+    scan = background_runs._temp_transcripts
+
+    def failed_scan(root):
+        raise OSError("scan failed")
+
+    monkeypatch.setattr(background_runs, "_temp_transcripts", failed_scan)
+    with pytest.raises(OSError, match="scan failed"):
+        background_runs.background_runs_payload(now, tmp_path, {})
+    assert background_runs._CACHE["payload"] is None
+
+    monkeypatch.setattr(background_runs, "_temp_transcripts", scan)
+    assert background_runs.background_runs_payload(now, tmp_path, {})["ok"]
