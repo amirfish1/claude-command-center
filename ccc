@@ -2877,6 +2877,7 @@ def cmd_run(args):
         no_session_persistence=args.no_session_persistence,
         name=args.name,
         subscription_only=args.subscription_only,
+        worker_defaults=args.worker_defaults,
         server_url=base or None,
     )
     if args.json:
@@ -3506,7 +3507,9 @@ def main(argv=None):
     )
     p.add_argument("prompt", nargs="*", help="prompt text (or pipe on stdin)")
     p.add_argument("--cwd", help="working directory (default: current directory)")
-    p.add_argument("--engine", help="override session default engine")
+    p.add_argument("--worker-defaults", action="store_true",
+                   help="use CCC worker defaults and cross-engine failure fallback")
+    p.add_argument("--engine", help="override the default engine")
     p.add_argument("--model", help="override session default model")
     p.add_argument("--effort", help="override session default reasoning effort")
     p.add_argument("--tools", default="none",

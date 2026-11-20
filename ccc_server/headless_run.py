@@ -61,8 +61,7 @@ def _discover_server_url(server_url=None):
     return cand.rstrip("/")
 
 
-def resolve_session_defaults(server_url=None, defaults_file=None):
-    """Return CCC's saved session defaults: {engine, model, effort, source}."""
+def _load_defaults(server_url=None, defaults_file=None):
     data = None
     source = "fallback"
     base = _discover_server_url(server_url)
@@ -91,6 +90,12 @@ def resolve_session_defaults(server_url=None, defaults_file=None):
         except (OSError, ValueError):
             data = {}
 
+    return data, source
+
+
+def resolve_session_defaults(server_url=None, defaults_file=None):
+    """Return CCC's saved session defaults: {engine, model, effort, source}."""
+    data, source = _load_defaults(server_url, defaults_file)
     engine = str(data.get("engine") or "claude").strip().lower()
     models = data.get("models") if isinstance(data.get("models"), dict) else {}
     model = str(models.get(engine) or "").strip()
@@ -101,6 +106,68 @@ def resolve_session_defaults(server_url=None, defaults_file=None):
         "effort": effort,
         "source": source,
     }
+
+
+def _worker_routes(data):
+    inherit = data.get("worker_inherit_session") is True
+    engine = str(data.get("engine" if inherit else "worker_engine") or "").strip().lower()
+    models = data.get("models") or {}
+    model = (None if inherit else data.get("worker_model")) or models.get(engine) or ""
+    effort = data.get("reasoning_effort" if inherit else "worker_reasoning_effort") or ""
+    fallback = data.get("worker_fallback") or {}
+    routes = [{"engine": engine, "model": model, "effort": effort}]
+    if fallback.get("enabled") is True:
+        routes.extend(fallback.get("models") or [])
+    return routes
+
+
+def _retryable_worker_failure(result):
+    if result.get("subtype") not in ("error", "api_error", "error_during_execution", "engine_unavailable"):
+        return False
+    if result.get("subtype") == "engine_unavailable":
+        return True
+    usage = [result.get("usage") or {}, *(result.get("modelUsage") or {}).values()]
+    if result.get("total_cost_usd") or any(
+        value for entry in usage for key, value in entry.items() if "token" in key.lower()
+    ):
+        return False
+    return bool(re.search(
+        r"\b(?:429|50[0234]|529|insufficient_quota|resource_exhausted|rate_limit_exceeded)\b"
+        r"|weekly limit|usage limit|out of (?:usage )?credits|rate limit|quota (?:exceeded|exhausted)|overloaded",
+        result.get("error") or "", re.I,
+    ))
+
+
+def _codex_worker_schema(schema):
+    """Encode optional fields as nullable for Codex strict structured output."""
+    strict = dict(schema)
+    if "enum" in strict and "type" not in strict and all(isinstance(x, str) for x in strict["enum"]):
+        strict["type"] = "string"
+    if strict.get("type") == "object":
+        required = set(schema.get("required", []))
+        properties = {}
+        for key, value in schema.get("properties", {}).items():
+            child = _codex_worker_schema(value)
+            properties[key] = child if key in required else {"anyOf": [child, {"type": "null"}]}
+        strict.update(properties=properties, required=list(properties), additionalProperties=False)
+    if isinstance(schema.get("items"), dict):
+        strict["items"] = _codex_worker_schema(schema["items"])
+    if "anyOf" in schema:
+        strict["anyOf"] = [_codex_worker_schema(branch) for branch in schema["anyOf"]]
+    return strict
+
+
+def _restore_worker_output(value, schema):
+    if isinstance(value, dict):
+        required = set(schema.get("required", []))
+        return {
+            key: _restore_worker_output(child, schema.get("properties", {}).get(key, {}))
+            for key, child in value.items()
+            if child is not None or key in required or key not in schema.get("properties", {})
+        }
+    if isinstance(value, list):
+        return [_restore_worker_output(child, schema.get("items", {})) for child in value]
+    return value
 
 
 def _resolve_binary(name):
@@ -417,6 +484,10 @@ def _run_codex(
         ]
         if tools_mode in ("none", "readonly") or strict_mcp_config:
             argv += ["--ignore-user-config", "--ignore-rules"]
+        if tools_mode in ("none", "readonly"):
+            argv += ["-c", 'web_search="disabled"']
+        if tools_mode == "none":
+            argv += ["--disable", "shell_tool", "--disable", "apply_patch_freeform"]
         if no_session_persistence:
             argv += ["--ephemeral"]
         if model:
@@ -484,7 +555,8 @@ def _run_codex(
 
         if rc != 0 or errors:
             detail = "; ".join(errors) if errors else (stderr.strip() or stdout.strip())[-1500:] or f"codex exited {rc}"
-            return _error_envelope("codex", model, effort, detail, subtype="error", session_id=thread_id)
+            return _error_envelope("codex", model, effort, detail, subtype="error",
+                                   session_id=thread_id, raw={"usage": usage})
 
         result_text = ""
         if out_file.is_file():
@@ -630,6 +702,7 @@ def run_headless(
     no_session_persistence=False,
     name=None,
     subscription_only=False,
+    worker_defaults=False,
     server_url=None,
     defaults_file=None,
     binary=None,
@@ -637,7 +710,15 @@ def run_headless(
     runner=_run_process_group,
 ):
     """Run one headless turn using CCC's saved session defaults (unless overridden)."""
-    defaults = resolve_session_defaults(server_url=server_url, defaults_file=defaults_file)
+    if worker_defaults:
+        data, _ = _load_defaults(server_url, defaults_file)
+        routes = _worker_routes(data)
+        defaults = routes[0]
+        if not defaults["engine"] and not engine:
+            return _error_envelope("", "", "", "CCC worker default is not configured", subtype="unsupported")
+    else:
+        defaults = resolve_session_defaults(server_url=server_url, defaults_file=defaults_file)
+        routes = []
     resolved_engine = (engine or defaults["engine"] or "claude").strip().lower()
     # Only inherit the saved model/effort when using the saved engine (or when
     # no explicit engine override was passed); if a caller overrides --engine
@@ -683,16 +764,54 @@ def run_headless(
         runner=runner,
     )
 
-    if resolved_engine == "claude":
-        return _run_claude(prompt, **kwargs)
-    if resolved_engine == "codex":
-        return _run_codex(prompt, **kwargs)
-    if resolved_engine == "devin":
-        return _run_devin(prompt, **kwargs)
+    if not worker_defaults:
+        return _dispatch(prompt, resolved_engine, kwargs)
+
+    deadline = time.monotonic() + timeout_s
+    attempts = []
+    seen = set()
+    primary = {"engine": resolved_engine, "model": resolved_model, "effort": resolved_effort}
+    result = _error_envelope(resolved_engine, resolved_model, resolved_effort,
+                             "CCC worker run timed out", subtype="timeout")
+    for route in [primary, *routes[1:]]:
+        selected = route["engine"]
+        if selected in seen:
+            continue
+        seen.add(selected)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        model_id = route.get("model") or ""
+        if selected == "claude" and model_id and not model_id.startswith("claude-"):
+            model_id = f"claude-{model_id}"
+        effort_value = route.get("effort") or ""
+        attempt_kwargs = {**kwargs, "model": model_id, "effort": effort_value, "timeout_s": remaining}
+        if selected == "codex" and schema_obj is not None:
+            attempt_kwargs["json_schema"] = _codex_worker_schema(schema_obj)
+        try:
+            result = _dispatch(prompt, selected, attempt_kwargs)
+        except FileNotFoundError:
+            result = _error_envelope(selected, model_id, effort_value, "Engine CLI unavailable",
+                                     subtype="engine_unavailable")
+        attempts.append({"engine": selected, "model": model_id, "effort": effort_value,
+                         "status": result.get("subtype")})
+        if result.get("ok"):
+            if selected == "codex" and schema_obj is not None:
+                result["structured_output"] = _restore_worker_output(result["structured_output"], schema_obj)
+            break
+        if not _retryable_worker_failure(result):
+            break
+    result["execution"] = {"engine": result["engine"], "model": result["model"],
+                           "effort": result["effort"], "attempts": attempts}
+    return result
+
+
+def _dispatch(prompt, engine, kwargs):
+    dispatch = {"claude": _run_claude, "codex": _run_codex, "devin": _run_devin}
+    if engine in dispatch:
+        return dispatch[engine](prompt, **kwargs)
     return _error_envelope(
-        resolved_engine,
-        resolved_model,
-        resolved_effort,
-        f"engine {resolved_engine!r} is not supported by headless `ccc run` (supported: claude, codex, devin)",
+        engine, kwargs["model"], kwargs["effort"],
+        f"engine {engine!r} is not supported by headless `ccc run` (supported: claude, codex, devin)",
         subtype="unsupported",
     )

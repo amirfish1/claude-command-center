@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from ccc_server import headless_run, jobs_add
 
@@ -22,6 +23,45 @@ class HeadlessRunTests(unittest.TestCase):
             self.assertEqual(got["model"], "gpt-6.1-sol")
             self.assertEqual(got["effort"], "high")
             self.assertEqual(got["source"], "file")
+
+    def test_worker_defaults_and_cross_engine_fallback(self):
+        defaults = {
+            "engine": "claude",
+            "worker_engine": "codex",
+            "worker_model": "gpt-6.2-sol",
+            "worker_reasoning_effort": "high",
+            "worker_fallback": {"enabled": True, "models": [
+                {"engine": "codex", "model": "gpt-6.1-terra", "effort": "medium"},
+                {"engine": "claude", "model": "sonnet-5-5", "effort": "high"},
+            ]},
+        }
+        schema = {"type": "object", "properties": {"note": {"type": "string"}}}
+        primary = {"ok": False, "subtype": "error", "error": "You've hit your usage limit"}
+        fallback = {"ok": True, "subtype": "success", "engine": "claude",
+                    "model": "claude-sonnet-5-5", "effort": "high"}
+        with patch.object(headless_run, "_load_defaults", return_value=(defaults, "file")), \
+                patch.object(headless_run, "_run_codex", return_value=primary) as codex, \
+                patch.object(headless_run, "_run_claude", return_value=fallback) as claude:
+            result = headless_run.run_headless("synthetic", worker_defaults=True, json_schema=schema)
+            self.assertEqual([route["engine"] for route in result["execution"]["attempts"]], ["codex", "claude"])
+            self.assertEqual(codex.call_args.kwargs["model"], "gpt-6.2-sol")
+            self.assertEqual(codex.call_args.kwargs["json_schema"]["required"], ["note"])
+            self.assertEqual(claude.call_args.kwargs["model"], "claude-sonnet-5-5")
+            self.assertEqual(claude.call_args.kwargs["json_schema"], schema)
+            self.assertLess(claude.call_args.kwargs["timeout_s"], codex.call_args.kwargs["timeout_s"])
+
+            claude.reset_mock()
+            codex.return_value = {**primary, "engine": "codex", "model": "gpt-6.2-sol",
+                                  "effort": "high", "usage": {"input_tokens": 5}}
+            self.assertFalse(headless_run.run_headless("synthetic", worker_defaults=True)["ok"])
+            claude.assert_not_called()
+
+            codex.return_value = {"ok": True, "subtype": "success", "engine": "codex",
+                                  "model": "gpt-6.2-sol", "effort": "high",
+                                  "structured_output": {"note": None}}
+            result = headless_run.run_headless("synthetic", worker_defaults=True, json_schema=schema)
+            self.assertEqual(result["structured_output"], {})
+            claude.assert_not_called()
 
     def test_claude_dispatch_flags_and_envelope(self):
         captured = {}
