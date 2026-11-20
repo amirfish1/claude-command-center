@@ -111,6 +111,34 @@ def test_publication_reorder_delete_and_nested_mutation(tmp_path, monkeypatch):
     assert server._attention_archive_rows_cached(OPTS)[0] == hot
 
 
+def test_sparse_feed_preserves_order_of_hot_overrides_and_new_cards(tmp_path, monkeypatch):
+    target, key, _, _, snapshot = setup_archive(tmp_path, monkeypatch)
+    now = server.time.time()
+    first = dict(session_id='first', modified=now)
+    second = dict(session_id='second', modified=now, is_live=True, question_waiting=True)
+    masked = dict(second, session_id='masked')
+    legacy = dict(session_id='legacy', modified=now, engine='codex', stale_tool_call=[True])
+    snapshot['entries'][key].update(cached_at=101, conversations=[first, masked, second, legacy])
+    store.save(target, snapshot, complete=True)
+    hot = [
+        dict(second, session_id='new'),
+        dict(second, session_id='first'),
+        dict(first, session_id='masked'),
+    ]
+    monkeypatch.setattr(server, '_archive_serve_hot_rows_versioned',
+                        lambda *a, **kw: (hot, True, 1))
+
+    def shown():
+        items = server.compute_attention_feed(recent_only=False)['items']
+        return [item['session_id'] for item in items]
+
+    assert shown() == ['first', 'second', 'legacy', 'new']
+    assert shown() == ['first', 'second', 'legacy', 'new']
+    snapshot['entries'][key].update(cached_at=102, conversations=[second, first])
+    store.save(target, snapshot, complete=True)
+    assert shown() == ['second', 'first', 'new']
+
+
 @pytest.mark.parametrize('damage', ['missing', 'digest', 'stamp', 'version'])
 def test_incomplete_or_older_writer_falls_back(tmp_path, monkeypatch, damage):
     target, key, _, _, _ = setup_archive(tmp_path, monkeypatch)
@@ -167,10 +195,13 @@ def test_unchanged_poll_reuses_decode_but_observes_changed_rows(tmp_path, monkey
 
 
 @pytest.mark.parametrize('damage', ['digest', 'stamp', 'version'])
-def test_warm_decode_cache_does_not_hide_invalid_projection(tmp_path, monkeypatch, damage):
+@pytest.mark.parametrize('candidates_only', [False, True])
+def test_warm_decode_cache_does_not_hide_invalid_projection(
+        tmp_path, monkeypatch, damage, candidates_only):
     target, key, _, _, snapshot = setup_archive(tmp_path, monkeypatch)
     load = lambda: store.load_attention(target, key, schema_version=snapshot['schema_version'],
-                                        build_id=snapshot['build_id'])
+                                        build_id=snapshot['build_id'],
+                                        candidates_only=candidates_only)
     assert load() is not None
     with sqlite3.connect(store.database_path(target)) as con:
         if damage == 'digest':

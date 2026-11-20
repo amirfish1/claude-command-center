@@ -48749,7 +48749,7 @@ def _attention_archive_rows_cached(cache_options):
         stored = archive_store.load_attention(
             _ARCHIVE_RESPONSE_CACHE_FILE, key,
             schema_version=_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
-            build_id=_ARCHIVE_RESPONSE_CACHE_BUILD_ID)
+            build_id=_ARCHIVE_RESPONSE_CACHE_BUILD_ID, candidates_only=True)
     except (OSError, ValueError, sqlite3.Error):
         stored = None
     if stored is None:
@@ -48761,8 +48761,17 @@ def _attention_archive_rows_cached(cache_options):
         rows = list(hot)
     else:
         current = {archive_store.identity(row): row for row in hot}
-        rows = [current.pop(rid, row) for rid, row in stored['rows']]
-        rows.extend(current.values())
+        candidates = dict(stored['rows'])
+        for rid, row in current.items():
+            if archive_store.attention_candidate(row):
+                candidates[rid] = row
+            else:
+                candidates.pop(rid, None)
+        positions = stored['positions']
+        # Preserve ties in archive order, with new identities at the end in
+        # the same order as the current hot snapshot.
+        rows = [row for _, row in sorted(
+            candidates.items(), key=lambda entry: positions.get(entry[0], len(positions)))]
     return _overlay_conversation_lifecycle_flags(rows, include_lanes=False), cached
 
 

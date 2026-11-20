@@ -19,6 +19,7 @@ import shutil
 import tempfile
 import threading
 import time
+from types import MappingProxyType
 
 from .bounded_cache import ByteBudgetCache
 
@@ -56,6 +57,15 @@ ATTENTION_FIELDS = (
 
 def attention_row(row):
     return {name: row[name] for name in ATTENTION_FIELDS if name in row}
+
+
+def attention_candidate(row):
+    """Keep rows that can produce a card in any scope of the attention feed."""
+    # Keep this superset in sync with server._classify_attention. Lifecycle
+    # flags can change after publication, so they cannot exclude a candidate.
+    return bool(row.get('is_live') or row.get('source') == 'backlog'
+                or row.get('stale_tool_call') or row.get('has_push')
+                or row.get('has_edit') or row.get('has_commit'))
 
 
 def inventory_row(row):
@@ -235,16 +245,17 @@ class _AttentionReader:
         self.lock = threading.Lock()
         self.conn = None
         self.identity = None
-        self.manifest = object()
+        self.manifests = {False: object(), True: object()}
 
     def _close(self):
         if self.conn is not None:
             self.conn.close()
             self.conn = None
         self.identity = None
-        _ATTENTION_CACHE.pop(self.manifest)
+        for manifest in self.manifests.values():
+            _ATTENTION_CACHE.pop(manifest)
 
-    def read(self, cache_file, key, schema_version, build_id):
+    def read(self, cache_file, key, schema_version, build_id, *, candidates_only=False):
         with self.lock:
             target = database_path(cache_file).resolve()
             try:
@@ -265,12 +276,13 @@ class _AttentionReader:
                 # snapshot header untouched, invalidates this manifest.
                 version = conn.execute('PRAGMA data_version').fetchone()[0]
                 guard = (version, key, schema_version, build_id, ATTENTION_VERSION)
-                cached = _ATTENTION_CACHE.get(self.manifest)
+                manifest = self.manifests[candidates_only]
+                cached = _ATTENTION_CACHE.get(manifest)
                 if cached is not None and cached[0] == guard:
-                    _, timestamp, keys = cached
+                    _, timestamp, keys, positions = cached
                     values = _ATTENTION_CACHE.get_many(keys)
                     if all(value is not None for value in values):
-                        return timestamp, keys, values
+                        return timestamp, keys, values, positions
 
                 with conn:
                     conn.execute('BEGIN')
@@ -278,12 +290,32 @@ class _AttentionReader:
                 # A publication between the version read and the transaction
                 # leaves this memo tagged with an obsolete version. The next
                 # reader will validate again rather than replaying stale rows.
-                if snapshot is not None:
-                    timestamp, keys, _ = snapshot
-                    if len(keys) < _ATTENTION_CACHE.max_entries:
-                        weight = 512 + sum(128 + 4 * (len(k[-2]) + len(k[-1])) for k in keys)
-                        _ATTENTION_CACHE.put(self.manifest, (guard, timestamp, keys), weight)
-                return snapshot
+                if snapshot is None:
+                    return None
+                timestamp, keys, values = snapshot
+                positions = None
+                if candidates_only:
+                    # An inactive archive row can have a live override at the
+                    # same position. Keep every position without copying every
+                    # historical row for each feed refresh.
+                    positions = MappingProxyType({
+                        row_key[-2]: i for i, row_key in enumerate(keys)
+                    })
+                    selected = []
+                    for row_key, value in zip(keys, values):
+                        row, nested = value
+                        # Legacy non-scalar flags can also be truthy.
+                        if attention_candidate(row) or (
+                                nested is not None and attention_candidate(marshal.loads(nested))):
+                            selected.append((row_key, value))
+                    keys = tuple(row_key for row_key, _ in selected)
+                    values = [value for _, value in selected]
+                if len(keys) < _ATTENTION_CACHE.max_entries:
+                    weight = 512 + sum(128 + 4 * (len(k[-2]) + len(k[-1])) for k in keys)
+                    if positions is not None:
+                        weight += sum(128 + 4 * len(rid) for rid in positions)
+                    _ATTENTION_CACHE.put(manifest, (guard, timestamp, keys, positions), weight)
+                return timestamp, keys, values, positions
             except sqlite3.Error:
                 self._close()
                 raise
@@ -335,12 +367,13 @@ def _read_attention(conn, key, namespace, schema_version, build_id):
     return header[0], keys, values
 
 
-def load_attention(cache_file, key, *, schema_version, build_id):
-    """Complete classifier inputs, or None until a normal publication upgrades."""
-    snapshot = _ATTENTION_READER.read(cache_file, key, schema_version, build_id)
+def load_attention(cache_file, key, *, schema_version, build_id, candidates_only=False):
+    """Load classifier inputs, with the original positions for a sparse read."""
+    snapshot = _ATTENTION_READER.read(
+        cache_file, key, schema_version, build_id, candidates_only=candidates_only)
     if snapshot is None:
         return None
-    timestamp, keys, values = snapshot
+    timestamp, keys, values, positions = snapshot
     decoded = []
     for row_key, (row, nested) in zip(keys, values):
         # Callers can modify their own copy, including structured state.
@@ -348,7 +381,10 @@ def load_attention(cache_file, key, *, schema_version, build_id):
         if nested is not None:
             result.update(marshal.loads(nested))
         decoded.append((row_key[-2], result))
-    return {'cached_at': timestamp, 'rows': decoded}
+    result = {'cached_at': timestamp, 'rows': decoded}
+    if positions is not None:
+        result['positions'] = positions
+    return result
 
 
 def _read_inventory_generation(con, key, cache_key, activity_key):
