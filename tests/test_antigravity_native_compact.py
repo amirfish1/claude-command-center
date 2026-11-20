@@ -45,7 +45,9 @@ def test_hidden_terminal_waits_for_prompt_and_real_checkpoint(tmp_path):
     transcript.write_text('')
     # Exercise real PTY I/O and cleanup with a deterministic local child.
     script = (
-        "import sys,json,os; print('> \\nModel: Example',flush=True); cmd=os.read(0,4096); "
+        "import sys,json,os,time,termios; print('> \\nModel: Example',flush=True); "
+        "time.sleep(1.1); termios.tcflush(0,termios.TCIFLUSH); "
+        "print('> \\nModel: Example (restored)',flush=True); cmd=os.read(0,4096); "
         "assert cmd==b'\\x15\\x1b[200~/compact\\x1b[201~\\r'; "
         f"f=open({str(transcript)!r},'a'); "
         "f.write(json.dumps({'type':'CHECKPOINT','status':'DONE',"

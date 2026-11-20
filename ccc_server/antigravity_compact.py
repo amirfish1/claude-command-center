@@ -77,7 +77,8 @@ def run_terminal(cmd, cwd, env, transcript, timeout=180):
                 break
             ready, _, _ = select.select([master], [], [], .2)
             if not ready:
-                if not sent and prompt_ready and time.monotonic() - last_output >= .6:
+                if (not sent and prompt_ready and time.monotonic() - started >= 2
+                        and time.monotonic() - last_output >= .6):
                     # Wait for conversation/draft restoration to settle and
                     # replace any restored draft before submitting. Bracketed
                     # paste keeps similarly named skills out of autocomplete.
