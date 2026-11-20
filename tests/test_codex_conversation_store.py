@@ -44,6 +44,27 @@ class ConversationStoreTests(unittest.TestCase):
         snap["thread"]["turns"][0]["items"][0]["text"] = "tampered"
         self.assertEqual(self.items()[0]["text"], "one")
 
+    def test_latest_turn_snapshot_skips_an_unchanged_cursor(self):
+        self.store.hydrate({"id": "task", "turns": [
+            {"id": "old", "items": [{"id": "a", "type": "agentMessage", "text": "Earlier"}]},
+            {"id": "current", "items": [{"id": "b", "type": "agentMessage", "text": "Current"}]},
+        ]}, 0)
+        full = self.store.snapshot("task")
+        latest = self.store.snapshot("task", latest_turn_only=True)
+        self.assertEqual(latest["thread"]["turns"], full["thread"]["turns"][-1:])
+        cursor = (latest["generation"], latest["cursor"])
+        self.assertIsNone(self.store.snapshot("task", after=cursor, latest_turn_only=True))
+        self.store.record("item/completed", {
+            "threadId": "task", "turnId": "new",
+            "item": {"id": "c", "type": "agentMessage", "text": "Next"},
+        })
+        latest = self.store.snapshot("task", after=cursor, latest_turn_only=True)
+        self.assertEqual([turn["id"] for turn in latest["thread"]["turns"]], ["new"])
+        self.store.connect("second")
+        latest = self.store.snapshot("task", after=cursor, latest_turn_only=True)
+        self.assertEqual(latest["generation"], "second")
+        self.assertIsNone(latest["thread"])
+
     def test_event_gap_and_generation_change_require_resync(self):
         for i in range(5):
             self.event("turn/plan/updated", plan=[{"step": str(i), "status": "pending"}])

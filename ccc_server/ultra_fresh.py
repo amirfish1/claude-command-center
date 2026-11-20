@@ -199,8 +199,12 @@ class FreshSession:
         # Baseline the cursor first: an old retained snapshot is not new work.
         from ccc_server.codex_conversation import CODEX_CONVERSATIONS
         from ccc_server.codex_live_events import live_turns_from_snapshot
-        snapshot = CODEX_CONVERSATIONS.snapshot(self.sid) if core._detect_session_engine(self.sid) == "codex" else {}
-        live_key = (snapshot.get("generation"), snapshot.get("cursor"))
+        snapshot = (
+            CODEX_CONVERSATIONS.snapshot(self.sid, after=self.codex_key, latest_turn_only=True)
+            if core._detect_session_engine(self.sid) == "codex" else {}
+        )
+        live_key = ((snapshot.get("generation"), snapshot.get("cursor"))
+                    if snapshot is not None else self.codex_key)
         if live_key != self.codex_key:
             turns = live_turns_from_snapshot(snapshot)
             if turns:

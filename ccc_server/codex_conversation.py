@@ -350,14 +350,20 @@ class CodexConversationStore:
             item["progress"] = params.get("message", params.get("progress"))
         self._put_item(thread, turn, item, complete=bool(previous and previous["complete"]))
 
-    def snapshot(self, thread_id):
+    def snapshot(self, thread_id, *, after=None, latest_turn_only=False):
+        """Copy the stored thread, or return None for a seen (generation, cursor)."""
         with self._lock:
+            if after == (self._generation, self._seq):
+                return None
             stored = self._threads.get(thread_id)
             value = None
             if stored:
+                turns = stored["turns"].values()
+                if latest_turn_only and turns:
+                    turns = (next(reversed(turns)),)
                 value = {**stored["meta"], "turns": [
                     {**turn["meta"], "items": [entry["value"] for entry in turn["items"].values()]}
-                    for turn in stored["turns"].values()]}
+                    for turn in turns]}
             return copy.deepcopy({"ok": True, "generation": self._generation,
                                   "cursor": self._seq, "connected": self._connected,
                                   "thread": value, "truncated": bool(stored and stored["truncated"])})
