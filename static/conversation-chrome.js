@@ -1903,7 +1903,7 @@
     if (!node) return 1;
     const tag = String(node.tagName || '').toLowerCase();
     const text = String(node.textContent || '').trim();
-    if (tag === 'table' || (node.matches && node.matches('.md-table'))) {
+    if (tag === 'table' || (node.matches && node.matches('.md-table-wrap'))) {
       return Math.max(8, 4 + node.querySelectorAll('tr').length * 2);
     }
     if (tag === 'pre' || (node.matches && node.matches('.code-block,.mermaid-block'))) {

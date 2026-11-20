@@ -664,7 +664,8 @@
           rows.push(cells(lines[i]));
           i++;
         }
-        let html = '<table class="md-table"><thead><tr>';
+        let html = '<div class="md-table-wrap" tabindex="0" role="region" aria-label="Table">'
+          + '<table class="md-table"><thead><tr>';
         for (const h of header) html += '<th>' + renderInline(h) + '</th>';
         html += '</tr></thead><tbody>';
         for (const r of rows) {
@@ -672,7 +673,7 @@
           for (const c of r) html += '<td>' + renderInline(c) + '</td>';
           html += '</tr>';
         }
-        html += '</tbody></table>';
+        html += '</tbody></table></div>';
         if (inCtxReport) {
           // Collapsed by default; summary keeps the column names + row count
           // so the user knows what's tucked away without expanding.
