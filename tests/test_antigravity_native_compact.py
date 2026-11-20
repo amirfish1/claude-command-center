@@ -1,12 +1,76 @@
 """Compaction must execute a native command, never an ordinary model prompt."""
 import json
 import sys
+import threading
 
 import pytest
-
-import server  # noqa: F401
+import server
 from ccc_server import engines
 from ccc_server import antigravity_compact as native
+
+
+@pytest.mark.parametrize('threshold,should_compact', [(200, True), (250, False)])
+def test_resume_honors_saved_auto_compact_threshold(monkeypatch, tmp_path, threshold, should_compact):
+    from ccc_server.pending_inputs import _PendingInputEntry
+
+    sid = 'auto-compact-example'
+    transcript = tmp_path / 'transcript.jsonl'
+    transcript.write_text(json.dumps({
+        'type': 'PLANNER_RESPONSE', 'source': 'MODEL', 'status': 'DONE',
+        'content': 'Finished.', 'input_tokens': 125000, 'cache_read_tokens': 75000,
+    }) + '\n')
+    monkeypatch.delenv('CCC_WORKER_PROCESS', raising=False)
+    monkeypatch.setattr(server, '_load_spawn_defaults', lambda: {'auto_compact_k': threshold})
+    monkeypatch.setattr(server, '_antigravity_transcript_path', lambda sid: transcript)
+    monkeypatch.setattr(server, '_antigravity_app_conversation_path', lambda sid: None)
+    monkeypatch.setattr(server, '_resolve_antigravity_bin', lambda: {'available': True})
+    monkeypatch.setattr(server, '_get_session_override', lambda sid: None)
+    monkeypatch.setattr(server, '_antigravity_command_words', lambda resolved: ['agy'])
+    monkeypatch.setattr(server, '_is_pid_alive', lambda pid: False)
+    monkeypatch.setattr(server, 'find_session_cwd', lambda sid: str(tmp_path))
+    monkeypatch.setattr(engines, '_antigravity_terminal_holder_pid', lambda sid: None)
+    monkeypatch.setattr(engines, '_antigravity_live_resume_pid', lambda sid: None)
+    monkeypatch.setattr(native.accounts, 'session_account', lambda sid: 'primary')
+    monkeypatch.setattr(native.accounts, 'configure_command', lambda cmd, *args: cmd)
+    monkeypatch.setattr(native.accounts, 'launch_env', lambda account: {})
+    monkeypatch.setattr(native, '_AUTO_ATTEMPTED', {})
+    stream_state = {'busy': False, 'pid': 123, 'key': ('', ()), 'turns': 1}
+    monkeypatch.setattr(native.stream, 'state', lambda sid: stream_state)
+    monkeypatch.setattr(native.stream, 'retire', lambda sid: None)
+    sent, writes = [], []
+    monkeypatch.setattr(native.stream, 'send', lambda sid, text: sent.append(text) or {'ok': True})
+    monkeypatch.setattr(server, '_apply_pending_input_operations',
+                        lambda sid, ops: writes.extend(ops) or {'ok': True})
+    completed = threading.Event()
+    events = []
+    monkeypatch.setattr(server, '_log_activity', lambda *args: completed.set())
+
+    def run_terminal(*args):
+        events.append('attempted')
+        return {'ok': False, 'error': 'Test compaction failure'}
+
+    monkeypatch.setattr(native, 'run_terminal', run_terminal)
+    pending = _PendingInputEntry('next request', 'original-delivery')
+    result = engines.resume_session_antigravity(sid, pending)
+    assert result.get('ok')
+    if should_compact:
+        assert result['queued']
+        assert not sent
+        assert writes == [{'field': 'resume', 'action': 'insert_front', 'value': pending}]
+        assert writes[0]['value'] is pending
+        assert completed.wait(2)
+        # A failed attempt cannot keep the same queued send in a compact loop.
+        assert events == ['attempted']
+        worker = next((thread for thread in threading.enumerate()
+                       if thread.name == f'agy-compact-{sid[:8]}'), None)
+        if worker is not None:
+            worker.join(2)
+        assert not native.is_active(sid)
+        assert engines.resume_session_antigravity(sid, pending) == {'ok': True}
+        assert sent == ['next request']
+    else:
+        assert sent == ['next request']
+        assert not writes
 
 
 def test_resume_intercepts_compact_before_any_text_delivery(monkeypatch):
@@ -51,16 +115,18 @@ def test_hidden_terminal_waits_for_prompt_and_real_checkpoint(tmp_path, prompt):
     transcript.write_text('')
     # Exercise real PTY I/O and cleanup with a deterministic local child.
     script = (
-        f"import sys,json,os,time,termios; print({prompt!r},flush=True); "
+        f"import sys,json,os,time,termios,signal; print({prompt!r},flush=True); "
         "time.sleep(1.1); termios.tcflush(0,termios.TCIFLUSH); "
         f"print({prompt!r},flush=True); cmd=os.read(0,4096); "
-        "assert cmd==b'\\x15\\x1b[200~/compact\\x1b[201~\\r'; "
+        "assert cmd==b'\\x15\\x1b[200~/compact \\x1b[201~'; "
+        "signal.signal(signal.SIGWINCH, lambda *_: print('> /compact ',flush=True)); "
+        "assert os.read(0,4096)==b'\\r'; "
         f"f=open({str(transcript)!r},'a'); "
         "f.write(json.dumps({'type':'CHECKPOINT','status':'DONE',"
         "'content':'# Resuming from a compaction'})+'\\n'); f.close(); input()"
     )
     result = native.run_terminal([sys.executable, '-u', '-c', script],
-                                 str(tmp_path), None, transcript, timeout=5)
+                                 str(tmp_path), None, transcript, timeout=9)
     assert result['ok'] is True
     assert result['status'] == 'completed'
     assert native.checkpoint_count(transcript) == 1

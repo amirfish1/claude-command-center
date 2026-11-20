@@ -829,7 +829,7 @@ _ANTIGRAVITY_APP_LS_TOKEN_RE = re.compile(
     r"--csrf_token\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
     re.IGNORECASE,
 )
-_ANTIGRAVITY_META_VERSION = 7
+_ANTIGRAVITY_META_VERSION = 8
 # An Antigravity transcript writes every assistant tool call / message, so if
 # the file moved within this window we treat the session as live. Antigravity
 # has no hook system that CCC could listen to (the way Claude Code does via
@@ -1872,6 +1872,7 @@ def _extract_antigravity_tail_meta(path_or_session_id):
                 if selected_model:
                     meta["model"] = selected_model
                 if _antigravity_compaction_done(ev):
+                    meta.pop("compact_usage_sample", None)
                     meta["turn_complete"] = True
                     meta["pending_tool"] = None
                     meta["pending_file"] = None
@@ -1896,6 +1897,13 @@ def _extract_antigravity_tail_meta(path_or_session_id):
                     content = (ev.get("content") or "").strip()
                     meta["turn_complete"] = bool(content and _antigravity_final_response(ev))
                     if meta["turn_complete"]:
+                        tokens = sum(_antigravity_usage_to_int(ev.get(field)) for field in (
+                            "input_tokens", "cache_read_tokens", "cache_creation_tokens",
+                        ))
+                        if tokens:
+                            meta["compact_usage_sample"] = (pos, tokens)
+                        else:
+                            meta.pop("compact_usage_sample", None)
                         meta["pending_tool"] = None
                         meta["pending_file"] = None
                         pending_tool = False
@@ -4885,14 +4893,15 @@ def resume_session_antigravity(session_id, text, mode="send"):
     Antigravity session needs an honest "can't interrupt" answer rather than
     the click quietly reverting with no explanation (CCC-1030).
     """
+    pending_input = text
     text = _core._strip_ccc_session_state_instruction(text)
     if not session_id or not text:
         return {"ok": False, "error": "missing session_id or text"}
     if text.strip() == "/compact":
         from ccc_server.antigravity_compact import compact_session
         return compact_session(session_id)
-    from ccc_server.antigravity_compact import queue_if_active
-    compact_queue = queue_if_active(session_id, text)
+    from ccc_server import antigravity_compact
+    compact_queue = antigravity_compact.queue_if_active(session_id, pending_input)
     if compact_queue is not None:
         return compact_queue
     account_id = _antigravity_accounts.session_account(session_id)
@@ -4940,6 +4949,10 @@ def resume_session_antigravity(session_id, text, mode="send"):
                 "queued_reason": "waiting for the current Antigravity turn to finish (it can't take input mid-turn)",
             }
         if have_account == account_id and want_dirs <= set(have_dirs) and (not want_model or want_model == have_model):
+            if mode == "send":
+                queued = antigravity_compact.maybe_before_send(session_id, pending_input)
+                if queued is not None:
+                    return queued
             sent = _antigravity_stream.send(session_id, text)
             if sent.get("ok"):
                 return sent
@@ -5014,6 +5027,10 @@ def resume_session_antigravity(session_id, text, mode="send"):
         and _antigravity_reap_finished_process(session_id, live_pid)
     ):
         live_pid = None
+    if mode == "send" and term_pid is None and live_pid is None:
+        queued = antigravity_compact.maybe_before_send(session_id, pending_input)
+        if queued is not None:
+            return queued
     delivered = antigravity_ls.send(
         session_id, text, mode=mode, require_running=live_pid is not None)
     if delivered:
