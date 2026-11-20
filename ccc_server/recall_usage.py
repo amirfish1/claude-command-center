@@ -961,59 +961,76 @@ def _usage_snapshot_epoch(snapshot):
     return dt.timestamp()
 
 
-_native_usage_snapshots_memo = {"path": None, "signature": None, "snapshots": None}
+# Publish the path, file signature and read-only snapshot together so a
+# cache hit can return during an in-progress write to the temporary file.
+_native_usage_snapshots_memo = (None, None, ())
 
 
-def _read_native_usage_snapshots_unlocked():
-    path = _core._USAGE_SNAPSHOTS_FILE
+def _snapshot_file_signature(stat):
+    return (stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
+
+
+def _cached_usage_snapshots(path):
     try:
-        stat = path.stat()
+        signature = _snapshot_file_signature(path.stat())
     except OSError:
-        return []
-    signature = (stat.st_mtime_ns, stat.st_size)
-    path_str = str(path)
-    cached = _native_usage_snapshots_memo
-    if cached["path"] == path_str and cached["signature"] == signature:
-        return list(cached["snapshots"] or [])
+        return None
+    cached_path, cached_signature, snapshots = _native_usage_snapshots_memo
+    if path == cached_path and signature == cached_signature:
+        return list(snapshots)
+    return None
+
+
+def _read_native_usage_snapshots_unlocked(path=None):
+    global _native_usage_snapshots_memo
+    path = _core._USAGE_SNAPSHOTS_FILE if path is None else path
+    cached = _cached_usage_snapshots(path)
+    if cached is not None:
+        return cached
+    snapshots = []
     try:
         with path.open("r", encoding="utf-8") as f:
-            lines = f.readlines()
+            # Bind the cached rows to the file actually opened. An atomic
+            # replacement between stat and open may change the inode.
+            signature = _snapshot_file_signature(os.fstat(f.fileno()))
+            for line in f:
+                try:
+                    item = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(item, dict):
+                    snapshots.append(item)
+            if signature == _snapshot_file_signature(os.fstat(f.fileno())):
+                _native_usage_snapshots_memo = (path, signature, tuple(snapshots))
     except OSError:
         return []
-    snapshots = []
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            item = json.loads(line)
-        except (TypeError, ValueError):
-            continue
-        if isinstance(item, dict):
-            snapshots.append(item)
-    _native_usage_snapshots_memo.update({
-        "path": path_str,
-        "signature": signature,
-        "snapshots": snapshots,
-    })
-    return list(snapshots)
+    return snapshots
+
+
+def read_usage_snapshots(path):
+    """Read native quota history. Treat snapshot dictionaries as read-only."""
+    path = Path(path)
+    cached = _cached_usage_snapshots(path)
+    if cached is not None:
+        return cached
+    with _usage_snapshots_lock:
+        return _read_native_usage_snapshots_unlocked(path)
 
 
 def _write_native_usage_snapshots_unlocked(snapshots):
+    global _native_usage_snapshots_memo
     path = _core._USAGE_SNAPSHOTS_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     with tmp.open("w", encoding="utf-8") as f:
+        written = os.fstat(f.fileno())
         for item in snapshots:
             f.write(json.dumps(item, separators=(",", ":")) + "\n")
     tmp.replace(path)
     try:
-        stat = path.stat()
-        _native_usage_snapshots_memo.update({
-            "path": str(path),
-            "signature": (stat.st_mtime_ns, stat.st_size),
-            "snapshots": list(snapshots),
-        })
+        signature = _snapshot_file_signature(path.stat())
+        if signature[:2] == (written.st_dev, written.st_ino):
+            _native_usage_snapshots_memo = (path, signature, tuple(snapshots))
     except OSError:
         pass
 

@@ -170,19 +170,8 @@ def _load_history(snapshot_path, legacy_path, cache_path):
         if saved.get('signature') == signature and _valid_history(saved.get('points')):
             points = saved['points']
         else:
-            snapshots = []
-            try:
-                with snapshot_path.open(encoding='utf-8') as stream:
-                    for line in stream:
-                        try:
-                            item = json.loads(line)
-                            if isinstance(item, dict):
-                                snapshots.append(item)
-                        except ValueError:
-                            continue
-            except OSError:
-                pass
-            points = _normalize(snapshots, _json(legacy_path))
+            from ccc_server.recall_usage import read_usage_snapshots
+            points = _normalize(read_usage_snapshots(snapshot_path), _json(legacy_path))
             try:
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
                 temp = cache_path.with_suffix('.tmp')

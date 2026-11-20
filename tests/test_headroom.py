@@ -296,6 +296,33 @@ def test_unchanged_sources_never_reparse_even_after_restart(sources, monkeypatch
     assert calls == [1]
 
 
+def test_quota_readers_reuse_native_writer_history(sources, monkeypatch):
+    from ccc_server import quota_calibration as qc, recall_usage
+
+    snapshot_path = sources['snapshot_path']
+    monkeypatch.setattr(recall_usage._core, '_USAGE_SNAPSHOTS_FILE', snapshot_path)
+    assert recall_usage._append_native_usage_snapshot(snapshot(NOW - 60, 50), now_epoch=NOW)
+    assert account(sources)['percent_left'] == 50
+    assert recall_usage._append_native_usage_snapshot(snapshot(NOW, 51), now_epoch=NOW)
+    original_open = Path.open
+
+    def reject_quota_history_read(path, *args, **kwargs):
+        assert path != snapshot_path, 'quota reader reparsed the native writer snapshot'
+        return original_open(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, 'open', reject_quota_history_read)
+        assert account(sources)['percent_left'] == 49
+        result = qc.quota_cost_calibration(snapshot_path, sources['throughput_dir'],
+                                           now=NOW, synchronous=True)
+        assert set(result) == {'claude', 'codex'}
+
+    replacement = snapshot_path.with_name('replacement.jsonl')
+    write_snapshots(replacement, [snapshot(NOW, 52)])
+    replacement.replace(snapshot_path)
+    assert account(sources)['percent_left'] == 48
+
+
 def test_size_change_invalidates_even_if_mtime_unchanged(sources):
     write_snapshots(sources['snapshot_path'], [snapshot(NOW - 3600, 48), snapshot(NOW - 60, 50)])
     assert account(sources)['percent_left'] == 50

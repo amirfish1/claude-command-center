@@ -209,20 +209,10 @@ def _compute_calibration(snapshot_path, throughput_dir, *, now=None):
         if saved.get('signature') == signature and isinstance(saved.get('value'), dict):
             value = saved['value']
         else:
-            snapshots = []
-            try:
-                with snapshot_path.open(encoding='utf-8') as stream:
-                    for line in stream:
-                        try:
-                            item = json.loads(line)
-                            if isinstance(item, dict):
-                                stamp = _epoch(item.get('ts'))
-                                if stamp is not None and stamp >= now - (LOOKBACK_DAYS + 1) * 86400:
-                                    snapshots.append(item)
-                        except ValueError:
-                            continue
-            except OSError:
-                pass
+            from ccc_server.recall_usage import read_usage_snapshots
+            cutoff = now - (LOOKBACK_DAYS + 1) * 86400
+            snapshots = [item for item in read_usage_snapshots(snapshot_path)
+                         if (stamp := _epoch(item.get('ts'))) is not None and stamp >= cutoff]
             value = {
                 engine: calibrate_days(_daily_costs(directory, engine, now),
                                        provider_observations(snapshots, engine), now=now)
