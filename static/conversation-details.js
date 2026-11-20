@@ -4797,6 +4797,8 @@
     }
     if (opts.initial) params.set('initial', '1');
     const url = '/api/conversations/list' + (params.toString() ? '?' + params.toString() : '');
+    const requestUrl = !opts.initial && !opts.includePrs && params.get('window') === 'all'
+      ? url + '&row_layouts=1' : url;
     const pending = sharedState._archiveAllInflight.get(url);
     if (pending) return pending;
     let _perfT0 = performance.now();
@@ -4810,6 +4812,24 @@
     // (its ?since= varies) for the Resource Timing split (CCC-229).
     let _perfServer = null;
     let _perfFetchUrl = url;
+    const decodeRows = payload => {
+      if (!payload || !Object.hasOwn(payload, 'row_layouts')) return payload;
+      const {row_layouts: layouts, conversations, ...metadata} = payload;
+      if (!Array.isArray(layouts) || !Array.isArray(conversations)
+          || layouts.some(keys => !Array.isArray(keys) || keys.some(key => typeof key !== 'string' || key === '__proto__'))) {
+        throw new Error('Invalid archive row layouts');
+      }
+      const rows = conversations.map(encoded => {
+        const keys = Array.isArray(encoded) && Number.isInteger(encoded[0]) && layouts[encoded[0]];
+        if (!keys || !Array.isArray(encoded[1]) || keys.length !== encoded[1].length) {
+          throw new Error('Invalid archive row');
+        }
+        const row = {};
+        for (let i = 0; i < keys.length; i++) row[keys[i]] = encoded[1][i];
+        return row;
+      });
+      return {...metadata, conversations:rows};
+    };
     const _perfListLog = function (bytes, status, extra) {
       try {
         if (typeof window.__cccPerfRow !== 'function') return;
@@ -4908,7 +4928,7 @@
           if (!r && opts.initial && window.__cccArchiveSnapshot?.skippedRecent
               && url === sharedState._archiveBootstrapUrl) return null;
           if (!r) {
-            _perfFetchUrl = deltaToken ? url + '&since=' + encodeURIComponent(deltaToken) : url;
+            _perfFetchUrl = deltaToken ? requestUrl + '&since=' + encodeURIComponent(deltaToken) : requestUrl;
             r = await backgroundApiFetch(_perfFetchUrl, init);
           }
           if (controller.signal.aborted) throw controller.signal.reason;
@@ -4962,7 +4982,7 @@
           await opts.afterPaint;
           _perfPaintWaitMs = performance.now() - waitStart;
         }
-        let d = await (r._cccArchiveParsedBody || r.json());
+        let d = decodeRows(await (r._cccArchiveParsedBody || r.json()));
         _perfBodyMs = performance.now() - _perfHdrAt - _perfPaintWaitMs;
         let _merged = null;
         if (d && d.delta) {
@@ -4978,14 +4998,14 @@
             if (window.__cccArchiveSnapshot?.url === url) window.__cccArchiveSnapshot.onResync?.();
             sharedState._archiveAllDelta.delete(url);
             sharedState._archiveAllEtag.delete(url);
-            const r2 = await backgroundApiFetch(url, { signal: controller.signal });
+            const r2 = await backgroundApiFetch(requestUrl, { signal: controller.signal });
             if (!r2.ok) {
               _perfListLog(0, r2.status, 'err');
               return null;
             }
             etag = r2.headers.get('ETag');
             _perfLen = parseInt(r2.headers.get('content-length') || '0', 10) || 0;
-            d = await r2.json();
+            d = decodeRows(await r2.json());
           }
         }
         try {

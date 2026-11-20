@@ -37120,6 +37120,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     list_cache_key, window, from_cache, _timed_payload,
                     (body_ver, _delta["ctx"]) if _delta is not None else body_ver,
                     diagnostics=_body_cache_diag, since=since, saved_order=saved_order,
+                    row_layouts=qs.get("row_layouts", ["0"])[0] == "1",
                 )
             _lt2 = time.perf_counter()
             record_diag("list_server", (_lt2 - _lt0) * 1000.0, {
@@ -47736,7 +47737,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             pass
 
     def _send_archive_list_json(self, cache_key, window, from_cache, build_payload, snap_ver,
-                                diagnostics=None, *, since="", saved_order=""):
+                                diagnostics=None, *, since="", saved_order="", row_layouts=False):
         """send_json for /api/conversations/list: same etag/304/gzip
         semantics, but the serialized body + sha1 etag + gzip copy are built
         once per (cache key, window, snapshot version) and replayed for every
@@ -47760,7 +47761,8 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             body, encoding, etag = history_representation(
                 payload, self.headers.get("Accept-Encoding"),
                 None if is_delta else self.headers.get("If-None-Match"),
-                diagnostics=diagnostics, fingerprint=fingerprint)
+                diagnostics=diagnostics, fingerprint=fingerprint,
+                row_layouts=row_layouts and not is_delta)
             status = self._send_archive_list_representation(body, encoding, etag)
             return "delta" if is_delta and status == 200 else status
 

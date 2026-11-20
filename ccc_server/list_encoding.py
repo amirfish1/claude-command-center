@@ -61,21 +61,36 @@ def representation(raw, gzip_body, accept, *, encode_gzip=None):
     return raw, None
 
 
-def history_representation(payload, accept, validator, *, diagnostics=None, fingerprint=None):
+def _with_row_layouts(payload):
+    """Encode full history rows with shared, ordered column names."""
+    layouts = {}
+    rows = []
+    for row in payload["conversations"]:
+        layout = tuple(row)
+        index = layouts.setdefault(layout, len(layouts))
+        rows.append((index, list(row.values())))
+    return dict(payload, conversations=rows, row_layouts=list(layouts))
+
+
+def history_representation(payload, accept, validator, *, diagnostics=None, fingerprint=None,
+                           row_layouts=False):
     """Reuse encoded bytes after a fresh full-history projection."""
     accepted = static_encoding.accepted_encodings(accept)
     if not accepted:
         fingerprint = None
     elif fingerprint is None:
         fingerprint = archive_list_replay.payload_fingerprint(payload)
-    key = (fingerprint, accepted)
+    key = (fingerprint, accepted, row_layouts)
     cached = _HISTORY_CACHE.get(key) if fingerprint is not None else None
     if diagnostics is not None:
         diagnostics["encoding_hit"] = cached is not None
+        diagnostics["row_layouts"] = row_layouts
     if cached is not None:
         body, encoding, etag = cached
         return (None, None, etag) if validator == etag else cached
 
+    if row_layouts:
+        payload = _with_row_layouts(payload)
     raw = archive_list_replay.encode_payload(payload)
     etag = '"' + hashlib.sha1(raw).hexdigest() + '"'
     if validator == etag:

@@ -143,8 +143,10 @@ def test_history_encoding_reuses_bytes_after_fresh_projection(monkeypatch, tmp_p
     thread.start()
     url = f'http://127.0.0.1:{httpd.server_address[1]}/api/conversations/list?window=all&stale_ok=1'
 
-    def read(encoding='gzip', validator='', since=''):
+    def read(encoding='gzip', validator='', since='', row_layouts=False):
         target = url + ('&since=' + since if since else '')
+        if row_layouts:
+            target += '&row_layouts=1'
         request = urllib.request.Request(target, headers={'Accept-Encoding': encoding,
                                                           'If-None-Match': validator})
         try:
@@ -161,6 +163,17 @@ def test_history_encoding_reuses_bytes_after_fresh_projection(monkeypatch, tmp_p
         assert first_list['conversations'][0]['first_message'] == row['first_message']
         assert read() == first
         assert read(validator=first[2]) == (304, None, first[2], b'')
+        packed = read(row_layouts=True, validator=first[2])
+        assert packed[:2] == (200, 'gzip') and packed[2] != first[2]
+        assert read(row_layouts=True) == packed
+        assert read(row_layouts=True, validator=packed[2]) == (304, None, packed[2], b'')
+        assert read(validator=packed[2]) == first
+        decoded = json.loads(gzip.decompress(packed[3]))
+        layouts = decoded.pop('row_layouts')
+        decoded['conversations'] = [dict(zip(layouts[index], values))
+                                    for index, values in decoded['conversations']]
+        assert decoded == first_list
+        assert list(decoded['conversations'][0]) == list(first_list['conversations'][0])
         row['first_message'] += 'updated'
         changed = read(validator=first[2])
         assert changed[:2] == (200, 'gzip') and changed[2] != first[2]
@@ -173,7 +186,7 @@ def test_history_encoding_reuses_bytes_after_fresh_projection(monkeypatch, tmp_p
         thread.join(timeout=5)
 
     assert [entry['body_cache'].get('encoding_hit') for entry in diagnostics] == [
-        False, True, True, False, False, None,
+        False, True, True, False, True, True, True, False, False, None,
     ]
     assert all(entry['projection']['rows'] for entry in diagnostics)
 

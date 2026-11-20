@@ -234,6 +234,7 @@
       let target = value?.delta ? fullUrl + '&since=' + encodeURIComponent(value.delta) : fullUrl;
       const savedOrder = value?.delta && /^[0-9a-f]{64}$/.test(value.order) ? value.order : '';
       if (savedOrder) target += '&saved_order=' + savedOrder;
+      if (windowName === 'all') target += '&row_layouts=1';
       const response = await window.fetch(target, {signal:controller.signal,
         headers:value?.etag ? {'If-None-Match':value.etag} : {}});
       response._cccArchiveTiming = {start,headers:performance.now()};

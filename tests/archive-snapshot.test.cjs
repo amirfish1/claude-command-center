@@ -76,6 +76,31 @@ test('a fresh early full body needs no saved base and bypasses the preview fence
   assert.equal(f.context.window.__cccArchiveProgress,undefined,'only the renderer marks completeness');
 });
 
+test('All history requests reconstruct ordered rows from shared layouts before caching', async () => {
+  const allUrl = '/api/conversations/list?window=all&stale_ok=1';
+  const body = {row_layouts:[['session_id', 'nested'], ['session_id']],
+    conversations:[[0, ['recent', {items:[1]}]], [1, ['older']]], delta_token:'history'};
+  for (const early of [false, true]) {
+    const f = setup({response:reply(body)});
+    if (early) {
+      f.context.window.__cccArchiveSnapshot = {
+        url:allUrl, read:Promise.resolve(null),
+        fetch:Promise.resolve(reply(body)), save() {},
+      };
+    }
+    let validated = 0;
+    const loaded = await f.context.loadArchiveAll({window:'all', onValidated:() => validated++});
+    assert.equal(JSON.stringify(loaded),JSON.stringify(rows));
+    assert.equal(f.state._archiveAllData.get(allUrl),loaded);
+    assert.equal(f.state._archiveAllDelta.get(allUrl),'history');
+    assert.equal(validated,1);
+    assert.deepEqual(f.reads.map(read => read.url),early ? [] : [allUrl + '&row_layouts=1']);
+  }
+  const invalid = setup({response:reply({row_layouts:[['__proto__']], conversations:[[0, [{}]]]})});
+  assert.equal(await invalid.context.loadArchiveAll({window:'all'}),null);
+  assert.equal(invalid.state._archiveAllData.size,0);
+});
+
 test('a saved-order delta merges against its validated base and persists the full order', async () => {
   const order = 'a'.repeat(64);
   const snapshot = {url:fullUrl, rows, delta:'old', order};
@@ -263,6 +288,25 @@ test('a fresh profile prefetches a parsed full response while retaining its rece
     assert.deepEqual(state.body.conversations,rows);
     assert.deepEqual(state.recent,rows);
     assert.equal(state.ready,false);
+  } finally {await context.close();}
+});
+
+test('All startup opts in to row layouts for the complete response only', async () => {
+  const context = await browser.createBrowserContext(), page = await context.newPage();
+  try {
+    await page.evaluateOnNewDocument(() => localStorage.setItem('ccc-archive-window', 'all'));
+    await page.goto(origin, {waitUntil:'load'});
+    const urls = await page.evaluate(async () => [
+      (await window.__cccArchiveBootstrap.promise).url,
+      (await window.__cccArchiveSnapshot.fetch).url,
+    ]);
+    const [recent, complete] = urls.map(url => new URL(url).searchParams);
+    assert.equal(recent.get('window'),'all');
+    assert.equal(recent.get('initial'),'1');
+    assert.equal(recent.has('row_layouts'),false);
+    assert.equal(complete.get('window'),'all');
+    assert.equal(complete.get('row_layouts'),'1');
+    assert.equal(complete.has('initial'),false);
   } finally {await context.close();}
 });
 
