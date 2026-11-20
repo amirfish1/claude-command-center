@@ -1847,7 +1847,7 @@ def _spawn_restart_runner(base, due):
                                 start_new_session=True, close_fds=True).pid
 
 
-def _queue_restart(state, base, target, due, why):
+def _queue_restart(state, base, target, due, why, dashboard_started_at=0):
     """Merge and start the runner while holding the restart-state lock."""
     pending = state.get("pending") or {}
     state["pending"] = {
@@ -1858,8 +1858,12 @@ def _queue_restart(state, base, target, due, why):
         "why": why,
     }
     runner = state.get("runner_pid")
-    if not (runner and _pid_alive(runner)):
+    if runner and _pid_alive(runner):
+        # The existing runner owns its original URL, which may be a peer.
+        dashboard_started_at = pending.get("dashboard_started_at", 0)
+    else:
         state["runner_pid"] = _spawn_restart_runner(base, state["pending"]["due"])
+    state["pending"]["dashboard_started_at"] = dashboard_started_at
     return state["pending"]
 
 
@@ -1870,9 +1874,9 @@ def _print_pending_restart(pending):
     return 0
 
 
-def _defer_restart(base, target, due, why):
+def _defer_restart(base, target, due, why, dashboard_started_at):
     pending = _restart_state_update(
-        lambda state: _queue_restart(state, base, target, due, why))
+        lambda state: _queue_restart(state, base, target, due, why, dashboard_started_at))
     return _print_pending_restart(pending)
 
 
@@ -1913,6 +1917,8 @@ def _reserve_restart(base, target=None, force=False, runner=False):
             if not pending:
                 state.pop("runner_pid", None)
                 return {"stop": True}
+            if started:
+                pending["dashboard_started_at"] = started
             due = max(float(pending.get("due") or 0), last + RESTART_DEBOUNCE_S)
             if due > stamp:
                 pending["due"] = due
@@ -1921,9 +1927,10 @@ def _reserve_restart(base, target=None, force=False, runner=False):
         elif not force and (stamp - last < RESTART_DEBOUNCE_S or pending):
             return {"pending": _queue_restart(
                 state, base, target, max(last + RESTART_DEBOUNCE_S, stamp + 1),
-                f"last restart was {int(stamp - last)}s ago")}
+                f"last restart was {int(stamp - last)}s ago", started)}
         reservation = {"at": stamp, "pid": os.getpid(),
-                       "previous": last, "previous_target": state.get("last_target")}
+                       "previous": last, "previous_target": state.get("last_target"),
+                       "dashboard_started_at": started}
         if force and pending and selected != "all" and pending.get("target") != selected:
             # Keep uncovered work queued; --now dashboard must not broaden
             # the human's request into an immediate worker restart.
@@ -1994,7 +2001,8 @@ def _retire_restart_runner(base, replace=False):
             return False
         state.pop("runner_pid", None)
         if pending:
-            _queue_restart(state, base, pending["target"], pending["due"], pending["why"])
+            _queue_restart(state, base, pending["target"], pending["due"], pending["why"],
+                           pending.get("dashboard_started_at", 0))
         return True
     return _restart_state_update(apply)
 
@@ -2083,7 +2091,9 @@ def cmd_restart(args):
         return 0
     if status == 409:
         why = payload.get("error") or payload.get("reason") or "server says unsafe now"
-        return _defer_restart(base, target, time.time() + _RESTART_RETRY_S, f"not safe yet ({why})")
+        return _defer_restart(base, target, time.time() + _RESTART_RETRY_S,
+                              f"not safe yet ({why})",
+                              slot["reservation"]["dashboard_started_at"])
     print(f"ccc restart: failed (HTTP {status}): {payload.get('error') or payload}", file=sys.stderr)
     return 1
 
@@ -2132,6 +2142,7 @@ def _run_pending_restart(base, due):
             cur = s.get("pending") or {}
             s["pending"] = {"target": _merge_restart_targets(cur.get("target"), target),
                             "due": time.time() + _RESTART_RETRY_S,
+                            "dashboard_started_at": slot["reservation"]["dashboard_started_at"],
                             "retries": retries, "failure_retries": failures,
                             "why": f"retry after HTTP {status}: "
                                    f"{payload.get('error') or payload.get('reason') or 'restart not completed'}"}
