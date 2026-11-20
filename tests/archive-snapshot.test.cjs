@@ -76,6 +76,24 @@ test('a fresh early full body needs no saved base and bypasses the preview fence
   assert.equal(f.context.window.__cccArchiveProgress,undefined,'only the renderer marks completeness');
 });
 
+test('a saved-order delta merges against its validated base and persists the full order', async () => {
+  const order = 'a'.repeat(64);
+  const snapshot = {url:fullUrl, rows, delta:'old', order};
+  const response = reply({
+    delta:true, since:'old', ids:[], same_order:true, order_token:order,
+    count:rows.length, conversations:[{session_id:rows[0].session_id, modified:42}],
+    delta_token:'new',
+  });
+  response._cccArchiveSavedOrder = order;
+  const f = setup({snapshot, early:Promise.resolve(response)});
+  const result = await f.context.loadArchiveAll();
+  assert.deepEqual(Array.from(result, row => row.session_id), rows.map(row => row.session_id));
+  assert.equal(result[0].modified,42);
+  assert.equal(f.saves[0].order,order);
+  assert.deepEqual(Array.from(f.savedDeltas[0].ids), rows.map(row => row.session_id));
+  assert.equal(f.reads.length,0);
+});
+
 test('304 reuses the exact validated rows; an expired server token replaces the full base', async () => {
   const snapshot = {url:fullUrl, rows, delta:'old', etag:'"old"'};
   const same = setup({snapshot, early:Promise.resolve(reply(null,304))});
@@ -412,7 +430,7 @@ test('real IndexedDB retains one scoped snapshot and a reload obtains an actual 
     await page.goto(origin,{waitUntil:'load'});
     await page.evaluate(async({url,rows})=>{
       window.__cccArchiveSettled=true;
-      window.__cccArchiveSnapshot.save({url,rows,delta:'valid',etag:'"valid"'});
+      window.__cccArchiveSnapshot.save({url,rows,delta:'valid',etag:'"valid"',order:'a'.repeat(64)});
     },{url:fullUrl,rows});
     await page.waitForFunction(async()=>{
       const db=await new Promise(resolve=>{const r=indexedDB.open('ccc-archive-response',1);r.onsuccess=()=>resolve(r.result)});
@@ -430,8 +448,9 @@ test('real IndexedDB retains one scoped snapshot and a reload obtains an actual 
     await page.reload({waitUntil:'load'});
     assert.deepEqual(await page.evaluate(async()=>{
       const helper=window.__cccArchiveSnapshot, saved=await helper.read, response=await helper.fetch;
-      return {count:saved.rows.length,delta:saved.delta,status:response.status};
-    }),{count:2,delta:'valid',status:304});
+      return {count:saved.rows.length,delta:saved.delta,status:response.status,
+        order:new URL(response.url).searchParams.get('saved_order')};
+    }),{count:2,delta:'valid',status:304,order:'a'.repeat(64)});
     await page.evaluate(()=>localStorage.setItem('ccc-conv-cache','0'));
     await page.reload({waitUntil:'load'});
     assert.equal(await page.evaluate(()=>!!window.__cccArchiveSnapshot),false,'existing cache opt-out applies');

@@ -231,7 +231,9 @@
     const start = performance.now();
     let body = null;
     try {
-      const target = value?.delta ? fullUrl + '&since=' + encodeURIComponent(value.delta) : fullUrl;
+      let target = value?.delta ? fullUrl + '&since=' + encodeURIComponent(value.delta) : fullUrl;
+      const savedOrder = value?.delta && /^[0-9a-f]{64}$/.test(value.order) ? value.order : '';
+      if (savedOrder) target += '&saved_order=' + savedOrder;
       const response = await window.fetch(target, {signal:controller.signal,
         headers:value?.etag ? {'If-None-Match':value.etag} : {}});
       response._cccArchiveTiming = {start,headers:performance.now()};
@@ -244,9 +246,11 @@
       const base = await read;
       // Conditional validation still requires the exact persisted body.
       // An unconditional full response needs no saved base.
-      if (value && (!base || base.etag !== value.etag || base.delta !== value.delta || base.at !== value.at)) {
+      if (value && (!base || base.etag !== value.etag || base.delta !== value.delta
+          || base.at !== value.at || (savedOrder && base.order !== savedOrder))) {
         startRecent(); return null;
       }
+      if (savedOrder) response._cccArchiveSavedOrder = savedOrder;
       if (!started && (response.status === 304 || response.ok)) {
         let ready = response.status === 304;
         if (!ready) {

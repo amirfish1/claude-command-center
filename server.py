@@ -18014,6 +18014,8 @@ def _archive_list_warm(cache_options, window, stale_ok):
     def _payload():
         payload = _archive_list_replay_payload(rows, delta, window=window, cached=from_cache)
         if delta is not None:
+            payload["order_token"] = _archive_list_order_token(
+                [_archive_row_sid(row) for row in payload["conversations"]])
             payload["delta_token"] = delta["token"]
         return payload
 
@@ -18332,9 +18334,18 @@ def _archive_list_delta_reject(state, since):
     return None
 
 
-def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=None):
-    """Rows changed after token `since`, plus the window's full ordered id
-    list so the client can drop/reorder exactly. None = send a full body."""
+def _archive_list_order_token(ids):
+    """Identify the exact visible order, independently of the delta version."""
+    return hashlib.sha256(json.dumps(ids, separators=(",", ":")).encode()).hexdigest()
+
+
+def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=None,
+                                saved_order=""):
+    """Return changed rows and the order needed to merge them.
+
+    A saved reload can reuse its exact order when its digest matches. Other
+    callers receive the ordered ids. None requests a full response.
+    """
     if _archive_list_delta_reject(state, since) is not None:
         return None
     since_ver = int(str(since).split(".")[1])
@@ -18369,18 +18380,23 @@ def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=
                 or id(r) in ancestor_ids):
             changed.append(r)
     projected = _archive_list_project_rows(changed, window="all", now=now)
+    order_token = _archive_list_order_token(ids)
+    same_order = saved_order == order_token
     payload = {
         "ok": True,
         "delta": True,
         "since": since,
         "conversations": projected,
-        "ids": ids,
+        "ids": [] if same_order else ids,
+        "order_token": order_token,
         "count": len(ids),
         "total_count": sum(isinstance(row, dict) for row in (rows or [])),
         "window": window,
         "fields": list(_ARCHIVE_LIST_FIELDS),
         "queue_health": _queue_health_stats(rows, now=now),
     }
+    if same_order:
+        payload["same_order"] = True
     if cached is not None:
         payload["cached"] = bool(cached)
     return payload
@@ -18391,7 +18407,7 @@ _ARCHIVE_LIST_DELTA_FLIGHTS_LOCK = threading.Lock()
 
 
 def _archive_list_delta_body(state, since, rows, *, window, cached=None, share=True,
-                             diagnostics=None):
+                             diagnostics=None, saved_order=""):
     """Share encoding only with overlapping reads of the same delta snapshot.
 
     No result survives its build. Explicit fresh reads bypass the flight, and
@@ -18399,7 +18415,8 @@ def _archive_list_delta_body(state, since, rows, *, window, cached=None, share=T
     join it. Immutable response bytes keep callers from editing shared rows.
     """
     def build():
-        payload = _archive_list_delta_payload(state, since, rows, window=window, cached=cached)
+        payload = _archive_list_delta_payload(state, since, rows, window=window, cached=cached,
+                                              saved_order=saved_order)
         if payload is None:
             return None
         payload["delta_token"] = state["token"]
@@ -18410,7 +18427,7 @@ def _archive_list_delta_body(state, since, rows, *, window, cached=None, share=T
 
     if not share:
         return build()
-    key = (state["token"], since, window, cached)
+    key = (state["token"], since, window, cached, saved_order)
     with _ARCHIVE_LIST_DELTA_FLIGHTS_LOCK:
         flight = _ARCHIVE_LIST_DELTA_FLIGHTS.get(key)
         owner = flight is None
@@ -36958,6 +36975,9 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             _src_phases = {}
             list_cache_key = _archive_response_cache_key(**cache_options)
             since = (qs.get("since", [""])[0] or "").strip()
+            saved_order = qs.get("saved_order", [""])[0]
+            if not re.fullmatch(r"[0-9a-f]{64}", saved_order):
+                saved_order = ""
             initial = qs.get("initial", ["0"])[0] == "1"
             _disk = None if initial else _archive_list_disk_candidate(list_cache_key, window, since)
             if _disk is not None:
@@ -37046,7 +37066,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     _pt0 = time.perf_counter()
                     _delta_body = _archive_list_delta_body(
                         _delta, since, rows, window=window, cached=from_cache,
-                        share=stale_ok, diagnostics=_body_cache_diag,
+                        share=stale_ok, diagnostics=_body_cache_diag, saved_order=saved_order,
                     )
                     if _delta_body is not None:
                         _payload_ms.append((time.perf_counter() - _pt0) * 1000.0)
@@ -37061,6 +37081,8 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     payload = _archive_list_replay_payload(
                         rows, _delta, window=window, cached=from_cache, phases=_payload_phases)
                     if _delta is not None:
+                        payload["order_token"] = _archive_list_order_token(
+                            [_archive_row_sid(row) for row in payload["conversations"]])
                         payload["delta_token"] = _delta["token"]
                     return payload
                 finally:

@@ -223,14 +223,25 @@ def test_delta_list_sends_only_changed_rows(monkeypatch):
         assert status == 200 and not full.get('delta')
         token = full['delta_token']
         assert [r['session_id'] for r in full['conversations']] == ['a', 'b']
+        order = full['order_token']
         # Nothing changed: 304 without a body.
         assert get(base + '&since=' + token)[0] == 304
+        server._archive_serve_cache_store(
+            key, [_row('a', 'A', now), _row('b', 'B2', now)], gen)
+        status, compact = get(base + '&since=' + token + '&saved_order=' + order)
+        assert status == 200 and compact['same_order'] is True
+        assert compact['order_token'] == order and compact['ids'] == []
+        assert [r['session_id'] for r in compact['conversations']] == ['b']
+        status, legacy = get(base + '&since=' + token)
+        assert status == 200 and legacy['ids'] == ['a', 'b']
+        assert 'same_order' not in legacy
         # One row changed and one appeared: only those two rows ship.
         server._archive_serve_cache_store(
             key, [_row('c', 'C', now), _row('a', 'A', now), _row('b', 'B2', now)], gen)
-        status, delta = get(base + '&since=' + token)
+        status, delta = get(base + '&since=' + token + '&saved_order=' + order)
         assert status == 200 and delta['delta'] is True
         assert delta['ids'] == ['c', 'a', 'b']
+        assert delta['order_token'] != order and 'same_order' not in delta
         assert sorted(r['session_id'] for r in delta['conversations']) == ['b', 'c']
         assert delta['delta_token'] != token
         # A token from another process (or garbage) gets a full body.

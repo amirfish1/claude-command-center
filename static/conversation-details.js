@@ -4757,18 +4757,22 @@
     arm();
   }
 
-  function _mergeArchiveListDelta(prev, d) {
+  function _mergeArchiveListDelta(prev, d, savedOrder) {
     if (!Array.isArray(prev) || !Array.isArray(d.ids) || !Array.isArray(d.conversations)) return null;
+    const sameOrder = d.same_order === true;
+    if (sameOrder && (!savedOrder || d.order_token !== savedOrder || d.count !== prev.length)) return null;
     const byId = new Map();
     for (const row of prev) {
       const id = row && (row.session_id || row.id);
       if (id) byId.set(String(id), row);
     }
+    if (sameOrder && byId.size !== prev.length) return null;
     for (const row of d.conversations) {
       const id = row && (row.session_id || row.id);
-      if (!id) return null;
+      if (!id || (sameOrder && !byId.has(String(id)))) return null;
       byId.set(String(id), row);
     }
+    if (sameOrder) return [...byId.values()];
     const out = new Array(d.ids.length);
     for (let i = 0; i < d.ids.length; i++) {
       const row = byId.get(String(d.ids[i]));
@@ -4856,9 +4860,11 @@
     };
     const p = (async () => {
       try {
+        let savedRows;
         if (!opts.initial && !opts.includePrs && !sharedState._archiveAllData.has(url)) {
           const snapshot = await window.__cccArchiveSnapshot?.read;
           if (snapshot?.url === url && !sharedState._archiveAllData.has(url)) {
+            savedRows = snapshot.rows;
             sharedState._archiveAllData.set(url, snapshot.rows);
             if (snapshot.etag) sharedState._archiveAllEtag.set(url, snapshot.etag);
             if (snapshot.delta) sharedState._archiveAllDelta.set(url, snapshot.delta);
@@ -4960,7 +4966,10 @@
         _perfBodyMs = performance.now() - _perfHdrAt - _perfPaintWaitMs;
         let _merged = null;
         if (d && d.delta) {
-          _merged = _mergeArchiveListDelta(sharedState._archiveAllData.get(url), d);
+          const baseRows = sharedState._archiveAllData.get(url);
+          const savedOrder = baseRows === savedRows && d.since === deltaToken
+            ? r._cccArchiveSavedOrder : null;
+          _merged = _mergeArchiveListDelta(baseRows, d, savedOrder);
           if (!_merged) {
             // Ids we never had: resync with one full body.
             _clientLog('[ARCHIVE-DIAG] conversations/list delta unmergeable; full refetch');
@@ -5021,8 +5030,11 @@
         if (!opts.includePrs && !opts.initial) {
           _scheduleArchiveSidebarCache(convs, params.get('window'));
           window.__cccArchiveSnapshot?.save({url, rows:convs,
-            etag:sharedState._archiveAllEtag.get(url), delta:sharedState._archiveAllDelta.get(url)},
-            _merged ? {from: deltaToken, ids: d.ids, changes: d.conversations} : null);
+            etag:sharedState._archiveAllEtag.get(url), delta:sharedState._archiveAllDelta.get(url),
+            order:d.order_token},
+            _merged ? {from: deltaToken,
+              ids:d.same_order ? convs.map(row => row.session_id || row.id) : d.ids,
+              changes: d.conversations} : null);
         }
         if (typeof opts.onValidated === 'function') opts.onValidated();
         if (typeof opts.onPage === 'function') opts.onPage(d);
