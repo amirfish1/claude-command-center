@@ -8320,6 +8320,9 @@ def _build_repo_usage_signals(repo_paths, now):
     cutoff_7 = today - timedelta(days=6)   # inclusive: last 7 days
     cutoff_30 = today - timedelta(days=29)  # inclusive: last 30 days
 
+    # Many transcripts share a day. Parse it once per ranking build while
+    # keeping the accepted date syntax and local calendar cutoffs.
+    parsed_dates = {}
     signals = {}
     for p in repo_paths:
         signals[p] = {
@@ -8389,11 +8392,14 @@ def _build_repo_usage_signals(repo_paths, now):
                 session_id = agg.get("session_id")
                 by_date = agg.get("by_date") or {}
                 for date_str, day in by_date.items():
-                    try:
-                        d = datetime.strptime(date_str, "%Y-%m-%d").date()
-                    except ValueError:
-                        continue
-                    if d > today:
+                    if date_str not in parsed_dates:
+                        try:
+                            day_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                        except ValueError:
+                            day_date = None
+                        parsed_dates[date_str] = day_date
+                    d = parsed_dates[date_str]
+                    if d is None or d > today:
                         continue
                     turns = int(day.get("messages", 0))
                     tokens = int(day.get("in_tokens", 0)) + int(day.get("out_tokens", 0))

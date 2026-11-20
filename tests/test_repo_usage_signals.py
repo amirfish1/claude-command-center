@@ -1,4 +1,5 @@
 from concurrent.futures import Future, ThreadPoolExecutor
+from datetime import datetime
 import json
 from pathlib import Path
 import tempfile
@@ -32,6 +33,35 @@ class TestRepoUsageSignals(unittest.TestCase):
             server.PROJECTS_ROOT = original_root
             server._REPO_SIGNALS_CACHE.clear()
             server._REPO_SIGNALS_CACHE.update(original_cache)
+
+
+def test_repo_signal_dates_keep_window_boundaries_and_skip_invalid_days(monkeypatch, tmp_path):
+    class LocalDateTime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 1, 7, 12)
+
+    project = tmp_path / "project"
+    project.mkdir()
+    for name in ("one.jsonl", "two.jsonl"):
+        (project / name).touch()
+    day = {"messages": 1, "in_tokens": 2, "out_tokens": 3}
+    by_date = {stamp: day for stamp in (
+        "2026-1-1", "2025-12-31", "2025-12-9", "2025-12-8", "2026-1-8", "malformed",
+    )}
+    monkeypatch.setattr(server, "datetime", LocalDateTime)
+    monkeypatch.setattr(server, "PROJECTS_ROOT", tmp_path)
+    monkeypatch.setattr(server, "_candidate_conversation_dirs", lambda _: [project])
+    monkeypatch.setattr(server, "_stats_get_file_agg", lambda transcript: {
+        "session_id": transcript.stem, "by_date": by_date,
+    })
+    monkeypatch.setattr(server, "_maybe_persist_stats_cache", lambda _: False)
+
+    assert server._build_repo_usage_signals(["/demo/repo"], 0)["/demo/repo"]["signals"] == {
+        "d7": {"sessions": 2, "turns": 2, "tokens": 10},
+        "d30": {"sessions": 2, "turns": 6, "tokens": 30},
+        "all": {"sessions": 2, "turns": 8, "tokens": 40},
+    }
 
 
 @pytest.mark.parametrize("fails", [False, True])
