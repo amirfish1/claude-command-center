@@ -9,11 +9,12 @@ stdin takes one NDJSON object per line (``{"event":"user","message":
 stdout, and the process exits once stdin is closed (after the current turn).
 
 That gives the dashboard what a one-shot ``agy -p`` cannot: an explicit
-end-of-turn signal that does not depend on the process exiting. Busy/idle is
-decided from the ``result`` event, never from whether the process is alive.
+end-of-turn signal that does not depend on the process exiting. A stream
+that stops reporting after persisting its final response can be retired
+without replaying the completed turn.
 
-The docs say nothing about messages sent mid-turn, so none are: while a turn
-is in flight the caller queues durably and sends after ``result``.
+The caller keeps follow-ups on the durable queue until the stream reports
+``result`` or a retired stream exits.
 """
 from __future__ import annotations
 
@@ -45,18 +46,21 @@ def _idle_close_seconds():
 
 
 class _StreamProc:
-    def __init__(self, sid, proc, log_fh, key, cwd):
+    def __init__(self, sid, proc, log_fh, key, cwd, cli_log_path):
         self.sid = sid
         self.proc = proc
         self.log_fh = log_fh
         self.key = key          # (model, add_dirs): a change needs a new process
         self.cwd = cwd
+        self.cli_log_path = cli_log_path
         self.busy = False
         self.busy_since = 0.0
         self.idle_since = time.time()
         self.inflight = None    # text of the turn being run
         self.turns = 0
         self.last_result = None
+        self.final_step_at = None
+        self.retiring = False
         self.exited = False
         self.started = time.time()
         self.lock = threading.Lock()
@@ -76,12 +80,24 @@ class _StreamProc:
                     event = json.loads(raw)
                 except ValueError:
                     continue
-                if isinstance(event, dict) and event.get("event") == "result":
+                if not isinstance(event, dict):
+                    continue
+                if event.get("event") == "result":
                     with self.lock:
-                        self.busy = False
+                        self.busy = self.retiring
                         self.inflight = None
+                        self.final_step_at = None
                         self.idle_since = time.time()
                         self.last_result = event.get("result") or {}
+                elif event.get("event") == "step_update":
+                    step = event.get("step_update")
+                    with self.lock:
+                        self.final_step_at = (
+                            time.time() if self.inflight
+                            and isinstance(step, dict)
+                            and step.get("step_type") == "agent_response"
+                            and step.get("state") == "DONE" else None
+                        )
         finally:
             self.exited = True
             with self.lock:
@@ -116,12 +132,44 @@ class _StreamProc:
     def write(self, text):
         line = json.dumps({"event": "user", "message": {"content": text}}) + "\n"
         with self.lock:
+            if self.busy:
+                return False
             self.proc.stdin.write(line.encode())
             self.proc.stdin.flush()
             self.busy = True
             self.busy_since = time.time()
             self.inflight = text
+            self.final_step_at = None
             self.turns += 1
+            return True
+
+    def retire_if_missing_result(self, now):
+        """Close stdin once a confirmed final response has gone quiet."""
+        if self.final_step_at is None or self.cli_log_path is None:
+            return
+        idle_s = _core._antigravity_turn_idle_seconds()
+        with self.lock:
+            if self.final_step_at is None or now - self.final_step_at < idle_s:
+                return
+            try:
+                last_io = max(os.stat(self.cli_log_path).st_mtime,
+                              os.fstat(self.log_fh.fileno()).st_mtime)
+                if now - last_io < idle_s:
+                    return
+            except (OSError, ValueError):
+                return
+            if not _core._antigravity_turn_finished(self.sid, pid=self.proc.pid, idle_s=idle_s):
+                return
+            # The previous input already ran. Keep ownership until this
+            # process exits, and let the durable queue deliver the next turn.
+            self.inflight = None
+            self.final_step_at = None
+            self.retiring = True
+            self.close()
+            _core._log_activity(
+                "inject", "AGY_STREAM_MISSING_RESULT",
+                f"session={self.sid} pid={self.proc.pid} confirmed_final=1",
+            )
 
     def close(self):
         """Ask the process to exit: closing stdin ends it after the current turn."""
@@ -142,7 +190,10 @@ def state(sid):
             if _PROCS.get(sid) is sp:
                 _PROCS.pop(sid, None)
         return None
-    if sp.busy and time.time() - sp.busy_since > _core._antigravity_resume_stale_seconds():
+    now = time.time()
+    if sp.busy:
+        sp.retire_if_missing_result(now)
+    if sp.busy and now - sp.busy_since > _core._antigravity_resume_stale_seconds():
         # A turn that outlived the print timeout is hung, not working.
         sp.close()
         try:
@@ -172,16 +223,15 @@ def send(sid, text):
         sp = _PROCS.get(sid)
     if sp is None or not sp.alive():
         return {"ok": False, "error": "no live Antigravity stream process"}
-    if sp.busy:
-        return {"ok": False, "code": "busy", "error": "turn in progress"}
     try:
-        sp.write(text)
+        if not sp.write(text):
+            return {"ok": False, "code": "busy", "error": "turn in progress"}
     except (OSError, ValueError) as exc:
         return {"ok": False, "error": f"stream write failed: {exc}"}
     return {"ok": True, "pid": sp.proc.pid, "via": "antigravity-stream", "turn": sp.turns}
 
 
-def spawn(sid, cmd, cwd, log_path, key, env=None):
+def spawn(sid, cmd, cwd, log_path, key, env=None, cli_log_path=None):
     """Start the stream process for ``sid``. ``cmd`` already ends with the
     stream-json flags; the first message is sent with ``send``."""
     log_fh = open(log_path, "a")
@@ -193,7 +243,7 @@ def spawn(sid, cmd, cwd, log_path, key, env=None):
     except (OSError, ValueError):
         log_fh.close()
         raise
-    sp = _StreamProc(sid, proc, log_fh, key, cwd)
+    sp = _StreamProc(sid, proc, log_fh, key, cwd, cli_log_path)
     threading.Thread(target=sp._read, daemon=True, name=f"agy-stream-{sid[:8]}").start()
     with _LOCK:
         old = _PROCS.get(sid)

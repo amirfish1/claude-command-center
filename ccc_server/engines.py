@@ -5125,8 +5125,10 @@ def resume_session_antigravity(session_id, text, mode="send"):
     add_dirs.extend(_core._pasted_image_parent_dirs(text))
     _core._antigravity_add_dirs(cmd, user_args, add_dirs)
     cli_log_path = Path(str(log_path) + ".agy.log")
+    stream_cli_log = None
     if not _core._antigravity_has_arg(user_args, "--log-file"):
         cmd.extend(["--log-file", str(cli_log_path)])
+        stream_cli_log = cli_log_path
     if not _core._antigravity_has_arg(user_args, "--print-timeout"):
         cmd.extend(["--print-timeout", _core._antigravity_print_timeout()])
     if _antigravity_stream.enabled():
@@ -5142,7 +5144,7 @@ def resume_session_antigravity(session_id, text, mode="send"):
             _antigravity_stream.spawn(
                 session_id, stream_cmd, cwd, log_path,
                 (model_to_use or "", tuple(sorted(set(add_dirs))), account_id),
-                env=child_env,
+                env=child_env, cli_log_path=stream_cli_log,
             )
             sent = _antigravity_stream.send(session_id, text)
         except (OSError, ValueError):

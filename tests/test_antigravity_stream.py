@@ -1,5 +1,6 @@
 """Persistent stream-json Antigravity process: `result` decides busy vs idle."""
 import importlib
+import os
 import sys
 import time
 from unittest import mock
@@ -13,6 +14,11 @@ for line in sys.stdin:
     msg = json.loads(line)["message"]["content"]
     if msg == "die":
         sys.exit(3)
+    if msg == "missing-result":
+        print(json.dumps({"event": "step_update", "step_update": {
+            "state": "DONE", "step_type": "agent_response",
+        }}), flush=True)
+        continue
     time.sleep(0.4)
     print(json.dumps({"event": "result", "result": {"status": "SUCCESS", "response": msg.upper()}}), flush=True)
 """
@@ -31,9 +37,10 @@ def stream(tmp_path):
     antigravity_stream._DISABLED_UNTIL = 0.0
 
 
-def _start(stream, tmp_path, sid="conv-1"):
+def _start(stream, tmp_path, sid="conv-1", cli_log_path=None):
     return stream.spawn(sid, [sys.executable, "-c", FAKE_AGY], str(tmp_path),
-                        str(tmp_path / "agy.log"), ("", ()))
+                        str(tmp_path / "agy.log"), ("", ()),
+                        cli_log_path=cli_log_path)
 
 
 def _wait(predicate, timeout=5.0):
@@ -80,6 +87,38 @@ def test_process_lost_mid_turn_requeues_and_backs_off(stream, tmp_path):
     op = apply_ops.call_args[0][1][0]
     assert (op["field"], op["action"], op["value"]) == ("resume", "append_tail", "die")
     assert stream.enabled() is False        # one-shot path takes over for a while
+
+
+def test_missing_result_retires_after_quiet_final_without_replay(stream, tmp_path):
+    server = importlib.import_module("server")
+    cli_log = tmp_path / "diagnostics.log"
+    cli_log.touch()
+    sp = _start(stream, tmp_path, cli_log_path=cli_log)
+    assert stream.send("conv-1", "missing-result")["ok"]
+    assert _wait(lambda: sp.final_step_at is not None)
+    quiet_time = time.time() - 120
+    sp.final_step_at = quiet_time
+    os.utime(sp.log_fh.name, (quiet_time, quiet_time))
+
+    with mock.patch.object(server, "_antigravity_turn_finished", return_value=False) as finished, \
+         mock.patch.object(server, "_apply_pending_input_operations") as apply_ops, \
+         mock.patch.object(server, "_log_activity"):
+        assert stream.state("conv-1")["busy"]  # native diagnostics are still active
+        finished.assert_not_called()
+        os.utime(cli_log, (quiet_time, quiet_time))
+        assert stream.state("conv-1")["busy"]  # no persisted final response yet
+        assert not sp.proc.stdin.closed
+
+        finished.return_value = True
+        assert stream.state("conv-1")["busy"]  # still owns the conversation
+        assert sp.proc.stdin.closed
+        assert _wait(lambda: stream.state("conv-1") is None)
+        apply_ops.assert_not_called()
+
+    _start(stream, tmp_path)
+    assert stream.send("conv-1", "next")["ok"]
+    assert _wait(lambda: stream.state("conv-1")["last_result"])
+    assert stream.state("conv-1")["last_result"]["response"] == "NEXT"
 
 
 def test_resume_sends_to_idle_stream_and_queues_behind_a_busy_one():
