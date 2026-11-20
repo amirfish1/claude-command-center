@@ -33008,15 +33008,21 @@ body.conv-compact.conv-compact .conversations-view .cc-run-head.tool-call.cc-run
 body.conv-compact.conv-compact .conversations-view .cc-run-head:not(.cc-run-open) > .tool-call-group-header > .cc-orch-chip {
   display: inline-block !important;
 }
-body.conv-compact.conv-compact .conversations-view .cc-run-head:not(.cc-run-open) > .cc-run-preview {
+body.conv-compact.conv-compact .conversations-view :is(.cc-run-head:not(.cc-run-open), :is(.tool-call-group, .kimi-tool-group).collapsed:not(.cc-run-head, .cc-run-tail)) > .cc-run-preview {
   display: -webkit-box !important; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
   overflow: hidden; white-space: normal; font-style: normal;
   color: var(--text-secondary); font-size: 13px; line-height: 1.5; margin: 4px 0 8px;
+}
+body.conv-compact.conv-compact .conversations-view :is(.cc-run-head:not(.cc-run-open), :is(.tool-call-group, .kimi-tool-group).collapsed:not(.cc-run-head, .cc-run-tail)) > .cc-run-preview.is-tool-preview {
+  -webkit-line-clamp: 1; height: 1.5em; overflow-wrap: anywhere; margin-inline: 8px;
 }
 body.conv-compact.conv-compact .conversations-view .cc-run-head.cc-run-chipped:not(.cc-run-open):has(> .cc-run-preview) {
   display: block !important;
 }
 body.conv-compact.conv-compact .conversations-view .cc-run-head.cc-run-chipped:not(.cc-run-open)::before { content: none; }
+body.conv-compact.conv-compact .conversations-view .tool-call-group.cc-run-chipped:not(.cc-run-open):has(> .cc-run-preview) > .tool-call-group-header {
+  display: none;
+}
 body.conv-compact.conv-compact .conversations-view .cc-run-head.cc-run-open .cc-run-fold,
 body.conv-compact.conv-compact .conversations-view .cc-run-head.cc-run-open .cc-run-tools {
   display: inline-flex; border: 0; background: transparent; padding: 2px 6px;

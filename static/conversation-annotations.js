@@ -166,6 +166,32 @@
     let run = [];
     let prevText = null;
     let turnText = null;
+    const markPreview = (head, active) => {
+      const latest = active[active.length - 1];
+      const tool = latest.kind === 'tool' ? latest.el : null;
+      const calls = tool?.querySelectorAll('.tool-call, .kimi-tool');
+      const call = calls?.length ? calls[calls.length - 1] : tool;
+      const detail = call?.querySelector('.tool-detail, .kimi-tool-arg')?.textContent.trim();
+      // Retain the reasoning teaser when there is no newer tool description.
+      const firstThought = active.find(u => u.kind === 'think')?.el;
+      const thoughtBody = firstThought?.querySelector('.t-body, .kimi-thinking-full') || firstThought;
+      const previewText = detail || (thoughtBody && Array.from(thoughtBody.childNodes)
+        .filter(el => !el.matches?.('.cc-run-preview, .cc-run-fold, .cc-run-tools, .cc-orch-chip, .cc-run-thumbs'))
+        .map(el => el.textContent).join('').trim());
+      if (!previewText) return;
+      let preview = head.querySelector(':scope > .cc-run-preview');
+      if (!preview) {
+        preview = document.createElement('div');
+        preview.className = 'cc-run-preview';
+        preview.dir = 'auto';
+        head.appendChild(preview);
+      }
+      const text = detail ? detail.replace(/[.…]+$/u, '') + '...'
+        : previewText.slice(0, 600) + (previewText.length > 600 ? '…' : '');
+      if (preview.textContent !== text) preview.textContent = text;
+      preview.classList.toggle('is-tool-preview', !!detail);
+      staleFolds.delete(preview);
+    };
     const flush = () => {
       const active = run.filter(u => u.kind !== 'passive');
       // A chip costs no row, so with a preceding text even one step folds;
@@ -222,24 +248,8 @@
             tools.setAttribute('aria-expanded', String(open && !thinking));
             staleFolds.delete(tools);
           }
-          // Keep the first thought readable without expanding commands.
-          const firstThought = active.find(u => u.kind === 'think')?.el;
-          const thoughtBody = firstThought?.querySelector('.t-body, .kimi-thinking-full') || firstThought;
-          const previewText = thoughtBody && Array.from(thoughtBody.childNodes)
-            .filter(el => !el.matches?.('.cc-run-preview, .cc-run-fold, .cc-run-tools, .cc-orch-chip, .cc-run-thumbs'))
-            .map(el => el.textContent).join('').trim();
-          let preview = head.querySelector(':scope > .cc-run-preview');
-          if (previewText) {
-            if (!preview) {
-              preview = document.createElement('div');
-              preview.className = 'cc-run-preview';
-              head.appendChild(preview);
-            }
-            const text = previewText.slice(0, 600) + (previewText.length > 600 ? '…' : '');
-            if (preview.textContent !== text) preview.textContent = text;
-            staleFolds.delete(preview);
-          }
         }
+        markPreview(head, active);
         // Chip at the end of the preceding text, so the fold line doesn't
         // take a row between sentences (CSS exempts chip-bearing text from
         // the two-line clamp so the chip is never cut off). No preceding
@@ -328,6 +338,8 @@
             staleThumbs.delete(strip);
           }
         }
+      } else if (active[0]?.el.matches('.tool-call-group, .kimi-tool-group')) {
+        markPreview(active[0].el, active);
       }
       run = [];
     };

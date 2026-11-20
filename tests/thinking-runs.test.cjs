@@ -185,5 +185,61 @@ test('real renderers replace consecutive thoughts in a steady slot, then preserv
         if (process.env.CCC_THINKING_SCREENSHOTS) await page.screenshot({path:process.env.CCC_THINKING_SCREENSHOTS + '/activity-' + width + '-' + merged + '.png'});
       }
     }
+    for (const width of [1280, 390]) {
+      await page.setViewport({width, height:850});
+      await page.evaluate(() => window.cccMobileNav.show());
+      await page.waitForFunction(() => !document.querySelector('.main').getAnimations().some(a => a.playState === 'running'));
+      for (const merged of [false, true, 'codex']) for (const narration of [false, true]) {
+        const result = await page.evaluate(({merged, narration}) => {
+          const h = window.thinkingTest, paneId = h.activePaneId(), view = h.getConvViewForPane(paneId);
+          const pane = view.closest('.conv-pane');
+          pane.classList.toggle('is-webui-session', !!merged);
+          pane.classList.toggle('is-codex-session', merged === 'codex');
+          document.body.classList.add('conv-compact');
+          document.body.dataset.convView = 'compact';
+          view.replaceChildren();
+          let line = 990000;
+          const render = block => h.renderConversationEvents([{type:'assistant',line:++line,blocks:[block]}], paneId, {initialLoad:true});
+          const tool = (id, detail) => render({kind:'tool_use',name:'Bash',id,detail,command:'wt find SAMPLE-1'});
+          if (narration) render({kind:'text',text:'Checking the report.'});
+          const findPreview = () => view.querySelector('.cc-run-preview.is-tool-preview');
+          tool('compact-first','Read the report');
+          const first = findPreview()?.textContent;
+          tool('compact-second','Look up the OAuth project owner…');
+          const preview = findPreview();
+          const before = preview?.getBoundingClientRect();
+          const second = preview?.textContent;
+          tool('compact-third','Check the latest entries ' + 'and compare timestamps '.repeat(20));
+          const latest = findPreview();
+          const after = latest?.getBoundingClientRect();
+          const stable = !!before && !!after && Math.abs(before.top - after.top) < 1
+            && Math.abs(before.height - after.height) < 1 && after.height > 0;
+          const description = latest?.textContent.startsWith('Check the latest entries ');
+          const newestOnly = view.querySelectorAll('.cc-run-preview.is-tool-preview').length === 1;
+          const overflow = view.scrollWidth > view.clientWidth + 1;
+          const chip = view.querySelector('.cc-run-chip');
+          const group = latest?.parentElement;
+          const disclosure = group?.querySelector('.tool-call-group-header, .kimi-tool-group-head');
+          const oneHeading = !chip || !disclosure?.matches('.tool-call-group-header') || !disclosure.checkVisibility();
+          (chip || disclosure)?.click();
+          const expanded = !latest?.checkVisibility()
+            && [...view.querySelectorAll('.tool-call, .kimi-tool')].every(row=>row.checkVisibility());
+          (chip || group?.querySelector('.cc-run-fold') || disclosure)?.click();
+          const collapsed = latest?.checkVisibility();
+          document.body.classList.remove('conv-compact');
+          document.body.dataset.convView = 'normal';
+          const normal = !latest?.checkVisibility() && view.querySelector('.activity-run-preview')?.checkVisibility();
+          document.body.classList.add('conv-compact');
+          document.body.dataset.convView = 'compact';
+          return {first,second,stable,description,newestOnly,oneHeading,overflow,expanded,collapsed,normal};
+        }, {merged, narration});
+        assert.deepEqual(result,{first:'Read the report...',second:'Look up the OAuth project owner...',stable:true,
+          description:true,newestOnly:true,oneHeading:true,overflow:false,expanded:true,collapsed:true,normal:true},
+          JSON.stringify({width,merged,narration}));
+        if (process.env.CCC_THINKING_SCREENSHOTS && narration) {
+          await page.screenshot({path:process.env.CCC_THINKING_SCREENSHOTS + '/compact-activity-' + width + '-' + merged + '.png'});
+        }
+      }
+    }
   } finally { await browser.close(); }
 });
