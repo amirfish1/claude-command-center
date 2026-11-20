@@ -420,18 +420,28 @@ def extract_decisions_from_file(path: str, engine: str):
     cwd = ""
     out = []
     seen = set()
+    claude = engine == "claude"
     with open(path, "rb") as f:
         for line_number, raw in enumerate(f, 1):
+            # Decode any event that can supply user text or change the
+            # transcript's identity. Escaped values and UTF-16/32 JSON
+            # still go through the decoder.
+            if claude:
+                relevant = b'"user"' in raw or (not cwd and b'"cwd"' in raw)
+            else:
+                relevant = (b'"response_item"' in raw or b'"session_meta"' in raw
+                            or (not cwd and b'"turn_context"' in raw))
+            if not relevant and b'\\u' not in raw and b'\x00' not in raw[:4]:
+                continue
             try:
                 d = json.loads(raw)
             except Exception:
                 continue
             if not isinstance(d, dict):
                 continue
-            if engine == "claude":
+            if claude:
                 cwd = cwd or d.get("cwd") or ""
                 text = _genuine_user_text(d)
-                ts = _ts(d.get("timestamp"))
             else:  # codex
                 payload = d.get("payload") or {}
                 if d.get("type") == "session_meta":
@@ -441,9 +451,9 @@ def extract_decisions_from_file(path: str, engine: str):
                 if d.get("type") == "turn_context" and not cwd:
                     cwd = payload.get("cwd") or cwd
                 text = _codex_user_text(d)
-                ts = _ts(d.get("timestamp"))
             if not text:
                 continue
+            ts = _ts(d.get("timestamp"))
             for quote, pattern, confidence in extract_decisions_from_text(text):
                 key = quote.lower()
                 if key in seen:
@@ -461,7 +471,7 @@ def extract_decisions_from_file(path: str, engine: str):
                     "confidence": confidence,
                     "source_path": path,
                     "source_line": line_number,
-                    "project_dir": Path(path).parent.name if engine == "claude" else "",
+                    "project_dir": Path(path).parent.name if claude else "",
                 })
     return out
 

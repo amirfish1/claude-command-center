@@ -240,6 +240,47 @@ def test_extract_decisions_from_file_codex(dex_env):
     assert found[0]["repo"] == "widgetco"
 
 
+def test_extract_decisions_reads_claude_cwd_and_escaped_user(tmp_path):
+    path = tmp_path / "session.jsonl"
+    path.write_bytes(b"\n".join([
+        br'{"type":"assistant","c\u0077d":"/workspace/widgetco"}',
+        br'{"type":"assistant","message":{"role":"assistant","content":"Approved, ship it."}}',
+        br'{"type":"\u0075ser","timestamp":"2026-09-20T10:00:00Z",'
+        br'"message":{"role":"\u0075ser","content":"Approved, merge the parser."}}',
+    ]))
+
+    decision, = dex.extract_decisions_from_file(str(path), engine="claude")
+    assert decision["quote"] == "Approved, merge the parser."
+    assert decision["repo"] == "widgetco"
+    assert decision["source_line"] == 3
+    assert decision["date"] == "2026-09-20"
+
+
+def test_extract_decisions_preserves_codex_identity_and_context(tmp_path):
+    path = tmp_path / "rollout.jsonl"
+    path.write_bytes(b"\n".join([
+        br'{"type":"session_m\u0065ta","payload":{"id":"from-metadata"}}',
+        br'{"type":"turn_context","payload":{"cwd":"/workspace/widgetco"}}',
+        br'{"type":"event_msg","payload":{"type":"agent_message"}}',
+        br'{"type":"response_item","payload":{"type":"message","role":"user",'
+        br'"content":[{"type":"input_text","text":"Approved, merge the parser."}]}}',
+    ]))
+
+    decision, = dex.extract_decisions_from_file(str(path), engine="codex")
+    assert decision["session_id"] == "from-metadata"
+    assert decision["repo"] == "widgetco"
+    assert decision["source_line"] == 4
+
+
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-32"])
+def test_extract_decisions_keeps_decoder_for_wide_json(tmp_path, encoding):
+    path = tmp_path / "session.jsonl"
+    path.write_bytes(json.dumps(_user_line("Approved, merge the parser.")).encode(encoding))
+
+    decision, = dex.extract_decisions_from_file(str(path), engine="claude")
+    assert decision["quote"] == "Approved, merge the parser."
+
+
 # ── incremental scan (mtime, size) ───────────────────────────────────────────
 
 def test_run_once_second_call_reparses_nothing(dex_env, monkeypatch):
