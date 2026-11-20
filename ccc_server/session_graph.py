@@ -1747,8 +1747,15 @@ def _strip_ccc_session_state_instruction(text):
     """
     if text is None:
         return ""
-    text = re.sub(r"\n*<ccc-session-state-instructions>.*?</ccc-session-state-instructions>\s*$", "", str(text), flags=re.DOTALL)
-    return _CCC_SESSION_STATE_INSTRUCTION_TRAILER_RE.sub("", text).rstrip()
+    text = str(text).rstrip()
+    # Ordinary prompts and replies have no closing trailer. Their full text
+    # need not pass through either multiline expression during row rebuilds.
+    if text.endswith("</ccc-session-state-instructions>"):
+        text = re.sub(r"\n*<ccc-session-state-instructions>.*?</ccc-session-state-instructions>\s*$",
+                      "", text, flags=re.DOTALL).rstrip()
+    if text.endswith(">") and "</" in text:
+        text = _CCC_SESSION_STATE_INSTRUCTION_TRAILER_RE.sub("", text).rstrip()
+    return text
 
 
 def _strip_f2_retrieval_prompt(text):

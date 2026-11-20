@@ -41,3 +41,18 @@ def test_last_complete_footer_wins_over_incomplete_tail():
             '<!-- <session-state>\nDID: Last.\n</session-state> -->'
             '<session-state>\nDID: Incomplete.')
     assert session_graph._parse_session_state(text)['did'] == 'Last.'
+
+
+@pytest.mark.parametrize(('text', 'expected'), [
+    ('Ordinary reply.\n\t', 'Ordinary reply.'),
+    ('Before your final reply, check the build.\n', 'Before your final reply, check the build.'),
+    ('Mention </session-state> in the docs.', 'Mention </session-state> in the docs.'),
+    ('Reply.\n<ccc-session-state-instructions>Reminder.</ccc-session-state-instructions>\u2003', 'Reply.'),
+    ('Reply.\nBEFORE YOUR FINAL REPLY\n<!-- <SESSION-STATE>Reminder.</ſESSION-STATE>\n-->\n', 'Reply.'),
+    ('Reply.\nBefore your final reply\n</session-state>\n'
+     '<ccc-session-state-instructions>Reminder.</ccc-session-state-instructions>\n', 'Reply.'),
+    ('Reply.\n<ccc-session-state-instructions>Reminder.</ccc-session-state-instructions>\nKeep this.',
+     'Reply.\n<ccc-session-state-instructions>Reminder.</ccc-session-state-instructions>\nKeep this.'),
+])
+def test_prompt_trailer_stripping_preserves_visible_text(text, expected):
+    assert session_graph._strip_ccc_session_state_instruction(text) == expected
