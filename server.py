@@ -7552,6 +7552,7 @@ def extract_session_slash_commands(session_id):
             "session_id": session_id,
             "engine": engine,
             "commands": [
+                {"name": "/autocompact", "description": "Open the auto-compact threshold setting"},
                 {"name": "/compact", "description": "Summarize the conversation to free up context"},
             ],
             "source": "antigravity-fallback",

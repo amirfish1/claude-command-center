@@ -3091,6 +3091,7 @@
       get currentSession() { return window.currentSession; },
     },
     helpers: {
+      openAutoCompactSettings,
       setActivePaneById,
       liveStatusMatchesOpenConv,
       activePaneId,
@@ -53510,6 +53511,14 @@
     if (focusSearch) settingsSearchFocusTimer = setTimeout(() => {
       if (!$settingsModal.hidden && $settingsSearchInput) $settingsSearchInput.focus();
     }, 0);
+  }
+
+  async function openAutoCompactSettings() {
+    openSettingsModal({ focusSearch: false });
+    await window.cccRoutingPolicy.open('defaults');
+    const input = document.getElementById('spawnDefaultsAutoCompact');
+    input?.scrollIntoView({ block: 'center' });
+    input?.focus({ preventScroll: true });
   }
 
   // Deep link: /?ccc_settings=<section> opens Settings on that pane. The q2

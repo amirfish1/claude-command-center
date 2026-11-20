@@ -432,7 +432,10 @@
   function slashFallbackCommandsForSource(source) {
     if (source === 'codex') return sharedState.CODEX_SLASH_FALLBACK_COMMANDS;
     if (source === 'antigravity') {
-      return [{ name: '/compact', description: 'Summarize the conversation to free up context' }];
+      return [
+        { name: '/autocompact', description: 'Open the auto-compact threshold setting' },
+        { name: '/compact', description: 'Summarize the conversation to free up context' },
+      ];
     }
     // Kimi/Grok expose their own ACP-reported catalog (fetched below) —
     // Claude's fallback list would show commands like /context that don't
