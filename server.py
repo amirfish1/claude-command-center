@@ -28967,12 +28967,15 @@ def _codex_first_prompt_event(filepath, before_line, scan_limit=4000):
     return None
 
 
-def _read_tail_lines(filepath, n):
+def _read_tail_lines(filepath, n, *, after_line=0, max_increment=0):
     """(total_lines, [(line_no, text), ...]) for the last ``n`` lines of a file.
 
     ``total_lines`` matches ``sum(1 for _ in open(path))``: a trailing partial
     line (writer mid-append) counts as a line, exactly like text iteration.
     Returns None when the file is missing.
+
+    For a reader with a prior cursor, read only the unseen lines when they
+    fit in max_increment. A shorter file or a larger gap uses the normal tail.
     """
     try:
         f = open(filepath, "rb")
@@ -28998,6 +29001,8 @@ def _read_tail_lines(filepath, n):
         f.seek(size - 1)
         ends_with_newline = f.read(1) == b"\n"
         total = newlines + (0 if ends_with_newline else 1)
+        if after_line and 0 <= total - after_line <= max_increment:
+            n = total - after_line
         if n <= 0:
             return total, []
         # Read backwards until the suffix holds n complete lines: n+1 newlines
@@ -29134,7 +29139,7 @@ def _out_of_order_head_lines(filepath, tail_lines):
 
 
 def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser=None,
-                                 *, messages_only=False):
+                                 *, messages_only=False, message_cursor=0):
     """Parse only a window of a conversation JSONL instead of the whole file.
 
     Two modes:
@@ -29143,11 +29148,13 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
 
     A Codex initial tail may extend backward by up to 1024 lines to retain
     the user prompt for a turn that began before the requested window.
+    An ongoing sidebar read with a valid cursor inside the tail only needs
+    new message events. The caller already has its user watermark, and
+    sidebar frames do not consume the earlier prompt or turn metadata.
 
-    The full file is still *read* (cheap — a 22MB read is ~14ms), but json.loads
-    + the per-event parser run only on the windowed lines, which is where the
-    cost is. Returns the normal {events,last_line} plus `first_line` and
-    `truncated_before` so the UI knows whether earlier history remains.
+    On a cold read, newline counting can read the full file, but JSON
+    decoding and event parsing run only on the requested lines. Returns
+    `first_line` and `truncated_before` so the UI can page earlier history.
 
     Claude (stateless) and codex are supported. Codex carries a running token
     usage across lines; we accumulate it from usage events *within the window*,
@@ -29161,6 +29168,7 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
     total = 0
     extra_lines = []
     extended = None
+    incremental = False
     if before is None:
         # Click path: the last N lines come from the end of the file and the
         # absolute numbering from an incremental newline count. Iterating a
@@ -29169,10 +29177,16 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
         if not is_codex:
             _timestamp_runs(filepath)
         if is_codex and messages_only:
-            # The live reader also needs this suffix for prompt and turn
-            # context recovery. Decode it once for all three lookups.
-            extended = _read_tail_lines(filepath, window + _CODEX_TAIL_LOOKBACK)
-            loaded = (extended[0], extended[1][-window:]) if extended is not None else None
+            # With no usable cursor, the recent tail, earlier prompt and
+            # turn context share the same extended suffix.
+            loaded = _read_tail_lines(filepath, window + _CODEX_TAIL_LOOKBACK,
+                                      after_line=message_cursor, max_increment=window)
+            if loaded is not None:
+                total, suffix = loaded
+                incremental = bool(message_cursor and 0 <= total - message_cursor <= window)
+                if not incremental:
+                    extended = loaded
+                    loaded = (total, suffix[-window:])
         else:
             loaded = _read_tail_lines(filepath, window)
         if loaded is None:
@@ -29182,7 +29196,7 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
         if not is_codex:
             extra_lines = _out_of_order_head_lines(filepath, tail_lines)
         starts_with_user = False
-        if is_codex:
+        if is_codex and not incremental:
             for number, raw in tail_lines:
                 try:
                     first_event = parser(json.loads(raw), number)
@@ -29191,7 +29205,8 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
                 if first_event and first_event.get("type") in ("user_text", "assistant", "tool_result"):
                     starts_with_user = first_event["type"] == "user_text"
                     break
-        if is_codex and not starts_with_user and tail_lines and tail_lines[0][0] > 1:
+        if (is_codex and not incremental and not starts_with_user
+                and tail_lines and tail_lines[0][0] > 1):
             # A long turn can push its user prompt outside the line window.
             # Extend to that prompt, retaining intervening rows so paging
             # remains contiguous and loading older history cannot reorder it.
@@ -29229,7 +29244,7 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
     events = []
     codex_token_usage = None
     codex_turn_meta = None
-    if is_codex and buf and buf[0][0] > 1:
+    if is_codex and not incremental and buf and buf[0][0] > 1:
         # The turn_context that stamps turn_id on a turn's rows precedes its
         # user prompt, so a window starting mid-file can miss it. Without a
         # turn_id the client can't tell the live app-server overlay for that
@@ -29332,7 +29347,7 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
         "first_line": first_line,
         "truncated_before": truncated,
     }
-    if is_codex and before is None and truncated:
+    if is_codex and not incremental and before is None and truncated:
         first_prompt = _codex_first_prompt_event(filepath, first_line)
         if first_prompt:
             result["first_prompt"] = first_prompt
@@ -29408,7 +29423,7 @@ def _finish_full_parse_conversation(conversation_id, result, tail=None, before=N
 
 
 def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=True,
-                       tail=None, before=None, *, messages_only=False):
+                       tail=None, before=None, *, messages_only=False, message_cursor=0):
     """Parse a conversation JSONL file into structured events.
 
     `use_cache=True` (default) checks the in-memory parse cache keyed on the
@@ -29421,7 +29436,8 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
     their resulting structured event stream before returning it.
 
     `messages_only` is a sidebar optimization hint for native Codex windows;
-    other readers retain their normal output for the caller to filter.
+    `message_cursor` is the last line that consumer already read. Other readers
+    retain their normal output for the caller to filter.
     """
     windowed = bool(tail) or (before is not None)
     if _detect_session_engine(conversation_id) == "codex":
@@ -29550,7 +29566,7 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
     if windowed and parser in (_parse_conversation_event, _parse_codex_event) \
             and Path(filepath).is_file():
         return _parse_conversation_windowed(conversation_id, filepath, tail, before, parser,
-                                            messages_only=messages_only)
+                                            messages_only=messages_only, message_cursor=message_cursor)
     events = []
     line_num = 0
     is_codex = parser is _parse_codex_event

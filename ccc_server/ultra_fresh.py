@@ -97,7 +97,8 @@ class FreshSession:
             self.key = key
             # Reuse the normal bounded transcript tail and its absolute line
             # cursor. Tools advance the cursor but emit no explanation text.
-            result = core.parse_conversation(self.sid, tail=80, messages_only=True)
+            result = core.parse_conversation(
+                self.sid, tail=80, messages_only=True, message_cursor=self.last_line)
             previous_line = 0 if initial or result.get("last_line", 0) < self.last_line else self.last_line
             self.last_line = result.get("last_line", self.last_line)
             events = result.get("events") or []

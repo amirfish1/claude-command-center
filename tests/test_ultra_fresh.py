@@ -66,8 +66,10 @@ def test_new_message_arrives_from_transcript_without_archive_poll():
         assert reader.read()[-1]["text"] == "New explanation"
         assert reader.read() == []
         assert reader.last_text == "New explanation"
-        assert all(call.kwargs == {"tail": 80, "messages_only": True}
-                   for call in parse.call_args_list)
+        assert [call.kwargs for call in parse.call_args_list] == [
+            {"tail": 80, "messages_only": True, "message_cursor": cursor}
+            for cursor in (0, 2, 3)
+        ]
 
 
 def test_new_user_is_a_barrier_for_old_messages():
