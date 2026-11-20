@@ -361,7 +361,26 @@ class ConcurrencyAndMemoTest(unittest.TestCase):
         self.assertTrue(updated["questions"][0]["answered"])
         self.assertEqual(updated["questions"][0]["answered_by"], "owner")
 
+    def test_index_reuses_events_across_file_metadata_updates(self):
+        from unittest import mock
 
+        ask = ev("assistant", "2026-01-01T00:00:01Z", "[Q7:publish] OK?", "ask")
+        qt._files["a"] = {"m": 1, "s": 100, "ev": [ask]}
+        first = qt.build_index()
+
+        qt._files["a"] = {"m": 2, "s": 200, "ev": [dict(ask)]}
+        qt._files["untagged"] = {"m": 2, "s": 100, "ev": []}
+        with mock.patch.object(qt, "_TAG") as tag_mock:
+            self.assertEqual(qt.build_index(), first)
+            tag_mock.finditer.assert_not_called()
+
+        # A reparse can replace a question without changing its timestamp,
+        # message ID or event count.
+        qt._files["a"]["ev"][0] = dict(ask, text="[Q7:publish] Ready to publish?")
+        self.assertEqual(qt.build_index()["questions"][0]["first"]["text"],
+                         "[Q7:publish] Ready to publish?")
+        del qt._files["a"]
+        self.assertEqual(qt.build_index()["questions"], [])
 
     def test_response_reuses_encodings_until_ticket_or_scanner_changes(self):
         from unittest import mock

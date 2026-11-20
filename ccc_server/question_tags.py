@@ -435,21 +435,23 @@ def refresh(max_age: float = _SCAN_MIN_GAP, force: bool = False) -> bool:
             _last_scan = time.time()
 
 
+def _event_batches(files):
+    # The scanner replaces event records. Snapshot each list in file order
+    # so offset-only updates can reuse the index and timestamp ties stay stable.
+    return tuple(tuple(events) for _, record in _snapshot_files(files)
+                 if (events := record.get("ev")))
+
+
 def build_index(files: dict | None = None) -> dict:
     """Fold events into questions; answers belong to question-bearing sessions."""
-    sig = None
     if files is None:
         with _lock:
-            items = _snapshot_files(_files)
-            sig = tuple((k, id(v), len(ev := (v.get("ev") or ())), id(ev[-1]) if ev else 0) for k, v in items)
-            if sig == _index_memo["sig"]:
+            batches = _event_batches(_files)
+            if batches == _index_memo["sig"]:
                 return {"questions": _copy_questions(_index_memo["questions"])}
-        records = [v for _, v in items]
     else:
-        records = [v for _, v in _snapshot_files(files)]
-    events = []
-    for rec in records:
-        events.extend(list(rec.get("ev") or ()))
+        batches = _event_batches(files)
+    events = [event for batch in batches for event in batch]
     events.sort(key=lambda e: e.get("ts") or "")
     qs: dict[int, dict] = {}
     question_sessions: dict[int, set] = {}
@@ -484,7 +486,7 @@ def build_index(files: dict | None = None) -> dict:
     questions = [qs[n] for n in sorted(qs)]
     if files is None:
         with _lock:
-            _index_memo["sig"] = sig
+            _index_memo["sig"] = batches
             _index_memo["questions"] = _copy_questions(questions)
     return {"questions": questions}
 
