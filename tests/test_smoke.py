@@ -2662,63 +2662,16 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-objects-splitter.is-dragging", app_css)
         self.assertIn("body.objects-splitter-resizing", app_css)
 
-    def test_evergreen_agents_object_has_own_bottom_section(self):
-        """The Triggered Workers section is its own bottom region in By objects,
-        driven PURELY by WatchTower server data (drain-on queues + live workers)
-        with NO Flow-object / localStorage dependency."""
+    def test_sidebar_refreshes_worker_identities_without_loading_repository_cards(self):
         app_js = conversation_source()
-        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        refresh = conversation_function("_refreshSidebarWorkerState")
 
-        # The legacy Evergreen flow-object detection is retained ONLY to keep a
-        # legacy "Evergreen Agents" object out of the Project tree — it no longer
-        # feeds the bottom section.
-        self.assertIn("const _isEvergreenAgentsObjectTitle = (title) =>", app_js)
-        self.assertIn("replace(/[^a-z0-9]+/g, '').startsWith('evergreen')", app_js)
-        self.assertIn("const _evergreenObjectNodes = new Set();", app_js)
+        self.assertIn("await Promise.all([_fetchUxqHealth(), _fetchWtWorkers()]);", refresh)
+        self.assertIn("_uxqHealthCache.worker_session_ids", refresh)
+        self.assertIn("_scheduleSidebarRender();", refresh)
+        self.assertNotIn("_fetchMissingWorkerConvs", app_js)
+        # Keep the legacy Evergreen object out of the active project tree.
         self.assertIn("if (_evergreenObjectNodes.has(nodeId)) continue;", app_js)
-        # The section is built from the cached server endpoints only: drain-on
-        # queues from /api/ux-fixes/health and live workers from /api/wt/workers.
-        self.assertIn("_uxqHealthCache.queues.filter(q => q && (q.auto_drain === true || Number(q.workers) > 0))", app_js)
-        self.assertIn("const _twWorkers = (_wtWorkersCache && Array.isArray(_wtWorkersCache.workers))", app_js)
-        self.assertIn("const _twWorkersByQueue = new Map();", app_js)
-        # Workers resolve to the EXISTING session row via their cloud session_id.
-        self.assertIn("const card = sid ? _twCardById.get(sid) : null;", app_js)
-        self.assertIn("return _renderRow(enriched, { lifecycleContext: 'active', suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: true, evergreenSingleLine: true });", app_js)
-        self.assertIn("return _twFallbackRow(w);", app_js)
-        self.assertIn("_twQueueHeaderHtml(q, workers.length)", app_js)
-        self.assertIn("const _evergreenAgentsHtml = '';", app_js)
-        self.assertIn('class="conv-evergreen-queue-header', app_js)
-        # An unattended auto-drain queue is waiting for a worker, rather than
-        # genuinely stuck. The sidebar must match the Queue health strip's
-        # less alarming terminology for this zero-worker state.
-        self.assertIn("const waiting = stuck && workers === 0;", app_js)
-        self.assertIn("stateLabel = 'Waiting';", app_js)
-        self.assertIn("Waiting means this auto-drain queue has claimable open tickets, but no WatchTower worker is currently assigned.", app_js)
-        # The section must NOT read Flow-object state for its data.
-        self.assertNotIn("const _renderEvergreenQueueGroup", app_js)
-        self.assertNotIn("_evergreenRoots", app_js)
-        self.assertNotIn("_emitObjTree(n, 0, i + 1, { includeEvergreen: true })", app_js)
-        # Server-driven warm of BOTH caches with a single sig-gated re-render.
-        self.assertIn("async function _fetchWtWorkers()", app_js)
-        self.assertIn("await Promise.all([_fetchUxqHealth(), _fetchWtWorkers()]);", app_js)
-        # Section header renamed to Triggered Workers (routed through
-        # simpleLabel() so Simple mode can relabel it to plain language).
-        self.assertIn("escapeHtml(simpleLabel('Triggered Workers'))", app_js)
-        self.assertIn('data-role="evergreen-agents-header"', app_js)
-        self.assertIn('data-role="evergreen-agents-scroll"', app_js)
-        self.assertIn(
-            "_activeRowsHtml = _currentSessionsHeaderHtml + _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml;",
-            app_js,
-        )
-
-        self.assertIn(".conv-evergreen-agents-header {", app_css)
-        self.assertIn(".conv-evergreen-agents-scroll {", app_css)
-        evergreen_css = app_css[
-            app_css.index(".conv-evergreen-agents-scroll {"):
-            app_css.index(".conv-project-tree {", app_css.index(".conv-evergreen-agents-scroll {"))
-        ]
-        self.assertIn("flex: 0 0 auto;", evergreen_css)
-        self.assertIn("overflow-y: auto;", evergreen_css)
 
     def test_evergreen_agent_rows_keep_status_context_visible(self):
         """Evergreen agents need their queue count, goal, WIP/idle state, and
@@ -2780,19 +2733,15 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("border-radius: 0 0 8px 8px;", evergreen_css)
 
     def test_by_objects_current_sessions_exclude_evergreen_agents(self):
-        """Evergreen agents belong only in their own bottom region at rest."""
+        """Current sessions uses the same worker identities as the Workers lane."""
         app_js = conversation_source()
 
-        self.assertIn("const _evergreenSessionIds = new Set();", app_js)
-        # When a worker resolves to a loaded session card, its id is collected so
-        # that session stays out of the normal Current sessions list (it lives in
-        # its queue group, not twice).
-        self.assertIn("if (cid) _evergreenSessionIds.add(cid);", app_js)
+        self.assertIn("const _watchTowerSessionIds = _sidebarLanes.workerSessionIds;", app_js)
         self.assertIn("const _currentSessionSource = _ipSearchActive", app_js)
         self.assertIn("? (_visibleSessionConvs || []).slice()", app_js)
         self.assertTrue(
-            "if (_evergreenSessionIds.has(c.session_id || c.id || '')) return false;" in app_js,
-            "Current Sessions should exclude rows rendered in Triggered Workers.",
+            "if (_watchTowerSessionIds.has(c.session_id || c.id || '')) return false;" in app_js,
+            "Current sessions should exclude WatchTower worker sessions.",
         )
         self.assertIn("const _currentSessionWindowed = _ipSearchActive", app_js)
         self.assertIn("const _currentSessionLineage = _ipSearchActive", app_js)
@@ -3006,7 +2955,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _currentSessionVisibleIds = new Set(_currentSessionLineage.rows.map(_currentSessionId));", app_js)
         self.assertIn("const _currentSessionRehomedOpenAsks = new Map();", app_js)
         self.assertIn("_sessionConvs.forEach(c => {", app_js)
-        self.assertIn("if (!_isRecentOpenAsk(c) || _currentSessionVisibleIds.has(id) || _evergreenSessionIds.has(id)) return;", app_js)
+        self.assertIn("if (!_isRecentOpenAsk(c) || _currentSessionVisibleIds.has(id) || _watchTowerSessionIds.has(id)) return;", app_js)
         self.assertIn("_openAskConvs.push(...Array.from(_currentSessionRehomedOpenAsks.values()));", app_js)
         self.assertIn("? _currentSessionLineage.rows\n        : _currentSessionLineage.rows", app_js)
         self.assertTrue(
@@ -5984,9 +5933,8 @@ class TestServerImports(unittest.TestCase):
         """Queue health badges should answer what each compact state means."""
         app_js = conversation_source()
         self.assertIn("STUCK means this queue has open claimable work assigned to a worker/session", app_js)
-        self.assertIn("Stuck means this auto-drain queue has claimable open tickets", app_js)
+        self.assertIn("WAITING means this queue has open tickets, but no worker is assigned yet.", app_js)
         self.assertIn('" aria-label="\' + escapeAttr(badgeTip)', app_js)
-        self.assertIn('" aria-label="\' + escapeAttr(stateTip)', app_js)
 
     def test_queue_drain_toggle_reports_parked_and_failed_updates(self):
         """Turning on drain must explain why zero-claimable queues stay idle."""

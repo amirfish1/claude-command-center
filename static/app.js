@@ -22473,7 +22473,6 @@
       ((_uxqHealthCache && _uxqHealthCache.queues) || []).forEach(q => {
         if (q && q.queue) _wtWorkerQueues.add(String(q.queue).trim().toUpperCase());
       });
-      Object.keys(_wtWorkerConvsCache || {}).forEach(sid => { if (sid) _wtWorkerSessionIds.add(String(sid)); });
     } catch (_) {}
     const _looksLikeWtWorkerTitle = (c) => {
       const raw = String((c && (c.display_name || c.ai_title || c.title || c.name)) || '').trim();
@@ -22671,7 +22670,7 @@
       return [_allTabParentId(c), raw, fold.headOf(raw), continuationParentId(c)].filter(Boolean);
     };
     return { sessionId: _allTabSessionId, parentId: _allTabParentId,
-      byId: _allTabById, laneFor, ticketFor: _ideaTicketFor, parentIds,
+      byId: _allTabById, laneFor, ticketFor: _ideaTicketFor, parentIds, workerSessionIds: _wtWorkerSessionIds,
       ideaTicketsOn: _ideaTicketsOn, ticketlessInAll, ticketView, ticketViewLane, otherLane, matches,
       // Ticket view: the owner's own tickets share the page with the worker
       // fleet, so a busy queue cannot push a Features ticket off it.
@@ -22909,7 +22908,7 @@
       _sidebarLoadNotice = '';
     }
     const _sidebarFullRows = convs;
-    try { _ensureEvergreenQueuesFresh(); } catch (_) {}
+    _refreshSidebarWorkerState();
     const localParents = f2LocalParents();
     const _sidebarLanes = _sidebarLaneModel(_sidebarFullRows, localParents);
     const _sidebarMembership = {
@@ -25961,218 +25960,7 @@
         return html;
       };
       const _objGroupsHtml = _objRoots.map((n, i) => _emitObjTree(n, 0, i + 1)).join('');
-      // TRIGGERED WORKERS — driven PURELY by WatchTower server data. This
-      // section reads NO Flow-object / localStorage state (no flowNodeParents,
-      // no flowCustomObjects, no _byObject). It is built from two cached server
-      // endpoints:
-      //   1) /api/ux-fixes/health "queues" → drain-on queues (auto_drain ===
-      //      true) PLUS any queue with a live worker right now (CCC-437's
-      //      per-row "drain once" button deliberately spawns on non-auto-drain
-      //      queues — WT-103 — so excluding auto_drain===false here hid every
-      //      run-once worker from this panel even while it was running). Each
-      //      becomes a header row with badges (open depth · live worker count
-      //      · drain on/off · state). A drain-on queue with zero workers still
-      //      shows its header — the queue is the durable anchor; a drain-off
-      //      queue only shows here while it actually has a worker.
-      //   2) /api/wt/workers "workers" → live WatchTower workers, grouped by the
-      //      worker's own `queue` field. Each worker renders as the EXISTING
-      //      session row by resolving its cloud `session_id` to the loaded
-      //      conversation and calling `_renderRow(..., evergreenAgent:true)`. If
-      //      the session isn't in the loaded list (ephemeral / cross-project),
-      //      a minimal fallback row (worker id + queue) is rendered — never a
-      //      crash, never a silent skip.
-      // Workers are reaped after ~5min idle, so /api/wt/workers may be empty;
-      // headers still render. Scope: WatchTower queues + their workers only.
-      const _twQueues = (_uxqHealthCache && Array.isArray(_uxqHealthCache.queues))
-        ? _uxqHealthCache.queues.filter(q => q && (q.auto_drain === true || Number(q.workers) > 0))
-        : [];
-      const _twWorkers = (_wtWorkersCache && Array.isArray(_wtWorkersCache.workers))
-        ? _wtWorkersCache.workers : [];
-      // Past workers from the last 24h, grouped by queue.
-      const _twPastWorkers = (_uxqHealthCache && Array.isArray(_uxqHealthCache.past_workers))
-        ? _uxqHealthCache.past_workers : [];
-      const _twPastByQueue = new Map();
-      _twPastWorkers.forEach((w) => {
-        if (!w) return;
-        const key = String(w.queue || '').trim().toUpperCase();
-        if (!key) return;
-        (_twPastByQueue.get(key) || _twPastByQueue.set(key, []).get(key)).push(w);
-      });
-      // Group live workers by their queue (uppercased key, e.g. "CCC").
-      const _twWorkersByQueue = new Map();
-      _twWorkers.forEach((w) => {
-        if (!w) return;
-        const key = String(w.queue || '').trim().toUpperCase();
-        if (!key) return;
-        (_twWorkersByQueue.get(key) || _twWorkersByQueue.set(key, []).get(key)).push(w);
-      });
-      // Resolve a worker's cloud session_id to its loaded conversation card so
-      // it renders as the normal session row. Workers can live in any project;
-      // _wtWorkerConvsCache holds cross-repo cards fetched by _fetchMissingWorkerConvs.
-      const _twCardById = new Map();
-      (Array.isArray(conversationsData) ? conversationsData : []).forEach((c) => {
-        if (!c) return;
-        const sid = c.session_id || c.id;
-        if (sid && !_twCardById.has(sid)) _twCardById.set(sid, c);
-      });
-      // Supplement with cross-repo worker session cards.
-      Object.values(_wtWorkerConvsCache).forEach((c) => {
-        if (!c) return;
-        const sid = c.session_id || c.id;
-        if (sid && !_twCardById.has(sid)) _twCardById.set(sid, c);
-      });
-      // Exclusion set — the worker sessions that WILL render in TRIGGERED WORKERS
-      // (drain-on queues, resolved to a loaded card). Computed UP FRONT, before
-      // the Current-sessions list is filtered below, so a worker session never
-      // shows in both lists regardless of render order (the render loop also
-      // adds to it, but relying on that side-effect alone was order-fragile).
-      // Fallback-only workers (no resolvable card) are NOT added: they don't
-      // render as a real session row in TW, so they may still belong in Current.
-      const _evergreenSessionIds = new Set();
-      _twQueues.forEach((q) => {
-        const key = String((q && q.queue) || '').trim().toUpperCase();
-        (_twWorkersByQueue.get(key) || []).forEach((w) => {
-          const sid = w && w.session_id;
-          const card = sid ? _twCardById.get(sid) : null;
-          if (card) {
-            const cid = card.session_id || card.id;
-            if (cid) _evergreenSessionIds.add(cid);
-          }
-        });
-      });
-      // Also exclude EVERY session that was ever a WatchTower worker, from the
-      // persistent ledger (survives WT pruning, served as worker_session_ids on
-      // /api/ux-fixes/health). A reaped worker leaves a dead "worker" session
-      // behind; this hides those from Current sessions regardless of liveness.
-      // Data-driven (session_id ledger), never name-based. They remain reachable
-      // via search/all and can still render live in TRIGGERED WORKERS above.
-      try {
-        ((_uxqHealthCache && _uxqHealthCache.worker_session_ids) || [])
-          .forEach((sid) => { if (sid) _evergreenSessionIds.add(String(sid)); });
-      } catch (_) {}
-      // Minimal fallback when a worker's session isn't in the loaded list.
-      const _twFallbackRow = (w) => {
-        return _renderWtWorkerCompactRow(w, { showQueue: true });
-      };
-      const _twQueueHeaderHtml = (q, liveWorkers) => {
-        const label = String((q && q.queue) || '').trim() || 'Untitled';
-        const depth = Number(q && q.depth) || 0;
-        const closed = Number(q && q.closed) || 0;
-        const total = Number(q && q.total) || 0;
-        const workers = Number(liveWorkers) || 0;
-        const drainOn = !!(q && q.auto_drain);
-        const stuck = !!(q && q.stuck);
-        // Match the Queue health strip: no worker has stalled here. Work is
-        // simply waiting for a worker to be assigned.
-        const waiting = stuck && workers === 0;
-        // Claimable depth (claim_types-aware). A bug-only queue full of features
-        // has open depth but ZERO claimable work, so it is NOT "Draining" (nothing
-        // to drain) — it's a Backlog. Fall back to raw depth when unknown.
-        const claimable = (q && q.claimable != null) ? Number(q.claimable) : depth;
-        // Pill is derived client-side from the row's data fields (depth/auto_drain/
-        // stuck/claimable) — no new server states. Idle (0 open) reads "Ready".
-        let stateLabel, stateCls, stateTip;
-        if (waiting) {
-          stateLabel = 'Waiting';
-          stateCls = 'is-waiting';
-          stateTip = 'Waiting means this auto-drain queue has claimable open tickets, but no WatchTower worker is currently assigned.';
-        } else if (stuck) {
-          stateLabel = 'Stuck';
-          stateCls = 'is-stuck';
-          stateTip = 'Stuck means this auto-drain queue has claimable open tickets but no live WatchTower worker is currently draining them.';
-        } else if (depth === 0) {
-          stateLabel = 'Ready';
-          stateCls = 'is-ready';
-          stateTip = 'Ready means this queue has no open tickets.';
-        } else if (drainOn && claimable > 0) {
-          stateLabel = 'Draining';
-          stateCls = 'is-draining';
-          stateTip = 'Draining means auto-drain is on and claimable tickets are waiting for a worker.';
-        } else {
-          stateLabel = 'Backlog';
-          stateCls = 'is-backlog';
-          stateTip = 'Backlog means this queue has open tickets, but auto-drain is off or no open tickets match the claim-type filter.';
-        }
-        const progress = closed + '/' + total;
-        const tip = label + ': ' + progress + ' done · ' + depth + ' open · '
-          + workers + ' worker' + (workers === 1 ? '' : 's')
-          + ' · drain ' + (drainOn ? 'on' : 'off') + ' · ' + stateLabel
-          + ' - ' + stateTip;
-        const meta = '<span class="ceq-meta">'
-          + '<span class="ceq-depth">' + escapeHtml(progress) + '</span>'
-          + '<span class="ceq-sep">·</span>'
-          + '<span class="ceq-workers">' + workers + ' worker' + (workers === 1 ? '' : 's') + '</span>'
-          + '<span class="ceq-sep">·</span>'
-          + '<span class="ceq-drain ' + (drainOn ? 'is-on' : 'is-off') + '">drain ' + (drainOn ? 'on' : 'off') + '</span>'
-          + '</span>'
-          + '<span class="ceq-state ' + stateCls + '" title="' + escapeAttr(stateTip) + '" aria-label="' + escapeAttr(stateTip) + '">' + escapeHtml(stateLabel) + '</span>';
-        return '<div class="conv-evergreen-queue-header" role="button" tabindex="0"'
-          + ' data-queue-name="' + escapeAttr(label) + '"'
-          + ' title="' + escapeAttr(tip + ' - click to open queue') + '">'
-          + '<span class="ceq-name">' + escapeHtml(label) + '</span>'
-          + meta
-          + '<button class="ceq-add-btn" type="button" data-ceq-add-queue="' + escapeAttr(label) + '" title="Add a ticket to ' + escapeAttr(label) + '" aria-label="Add ticket to ' + escapeAttr(label) + '">+</button>'
-          + '</div>';
-      };
-      // Worker sessions live here, not twice — the flat "Current sessions" list
-      // below suppresses them via _evergreenSessionIds (populated up front).
-      // Reverse-chronological: the queue that most recently got worked (lowest
-      // last_activity_seconds, from compute_queues_health's ticket-touch scan)
-      // sorts first. Mirrors the Current-sessions 5-min hysteresis + remembered
-      // order (below) so a queue doesn't jump position on every 5s poll just
-      // because its age ticks past another queue's by a few seconds.
-      const _TW_HYST_S = 5 * 60;
-      const _TW_ORDER_KEY = 'ccc-triggered-workers-order';
-      const _twQueueKey = (q) => String((q && q.queue) || '').trim().toUpperCase();
-      const _twActivityAge = (q) => {
-        const s = q && q.last_activity_seconds;
-        return (typeof s === 'number' && isFinite(s)) ? s : 1e12; // never touched -> sorts last
-      };
-      let _twPrevOrder = {};
-      try { _twPrevOrder = JSON.parse(localStorage.getItem(_TW_ORDER_KEY) || '{}'); } catch (_) {}
-      const _twQueuesSorted = _twQueues.slice().sort((a, b) => {
-        const ageA = _twActivityAge(a), ageB = _twActivityAge(b);
-        if (Math.abs(ageA - ageB) < _TW_HYST_S) {
-          const ia = _twPrevOrder[_twQueueKey(a)], ib = _twPrevOrder[_twQueueKey(b)];
-          if (ia !== undefined && ib !== undefined && ia !== ib) return ia - ib;
-        }
-        return ageA - ageB || _twQueueKey(a).localeCompare(_twQueueKey(b));
-      });
-      try {
-        const _o = {};
-        _twQueuesSorted.forEach((q, i) => { _o[_twQueueKey(q)] = i; });
-        localStorage.setItem(_TW_ORDER_KEY, JSON.stringify(_o));
-      } catch (_) {}
-      const _evergreenAgentsBody = _twQueuesSorted.map((q) => {
-        const key = String((q && q.queue) || '').trim().toUpperCase();
-        const workers = _twWorkersByQueue.get(key) || [];
-        const rows = workers.map((w) => {
-          const sid = w && w.session_id;
-          const card = sid ? _twCardById.get(sid) : null;
-          if (card) {
-            const cid = card.session_id || card.id;
-            if (cid) _evergreenSessionIds.add(cid);
-            // Attach worker_id so _uxFixesRowIdentityKeys can match claims by worker id.
-            const enriched = w.worker_id ? Object.assign(Object.create(null), card, { _worker_id: w.worker_id }) : card;
-            return _renderRow(enriched, { lifecycleContext: 'active', suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: true, evergreenSingleLine: true });
-          }
-          return _twFallbackRow(w);
-        }).join('');
-        // Past workers for this queue (last 24h, log-file based).
-        const pastWorkers = _twPastByQueue.get(key) || [];
-        const pastRows = _renderWtPastWorkers(pastWorkers);
-        return '<div class="conv-evergreen-queue-group">'
-          + _twQueueHeaderHtml(q, workers.length)
-          + rows
-          + pastRows
-          + '</div>';
-      }).join('');
-      // The Triggered Workers sidebar section is retired (CCC-117): the Workers
-      // tab covers it. Worker sessions stay excluded from Current sessions above.
-      const _evergreenAgentsHtml = '';
-      // Warm the queue-health + worker caches in the background; re-renders once
-      // when either snapshot changes so headers/rows fill in after first paint.
-      _ensureEvergreenQueuesFresh();
+      const _watchTowerSessionIds = _sidebarLanes.workerSessionIds;
       // Codex-layout: stacked regions in the by-objects view.
       //  1) "Current sessions" — every session active in the selected window
       //     (the live triage list), flat, regardless of object attachment. During search,
@@ -26273,7 +26061,7 @@
           // places.  The chat's indented participant row is context, not a
           // replacement for the session card.
           if (c.is_watchtower_worker && !_inGroupChatIds.has(c.session_id || c.id || '')) return false;
-          if (_evergreenSessionIds.has(c.session_id || c.id || '')) return false;
+          if (_watchTowerSessionIds.has(c.session_id || c.id || '')) return false;
           return true;
         });
       const _currentSessionWindowed = _ipSearchActive
@@ -26300,7 +26088,7 @@
         _sessionConvs.forEach(c => {
           const id = _currentSessionId(c);
           if (!id) return;
-          if (!_isRecentOpenAsk(c) || _currentSessionVisibleIds.has(id) || _evergreenSessionIds.has(id)) return;
+          if (!_isRecentOpenAsk(c) || _currentSessionVisibleIds.has(id) || _watchTowerSessionIds.has(id)) return;
           _currentSessionRehomedOpenAsks.set(id, c);
         });
       }
@@ -26617,26 +26405,6 @@
           + _addObjectBtnHtml
           + '</div>'
         : '';
-      // Collapse/expand for the Triggered Workers section so it can be folded
-      // down to give the project tree more room (CCC-282). State persists; the
-      // click handler toggles in place (no re-render → no scroll jump). No
-      // object drop-target: the section is server-driven, not Flow-backed.
-      let _evergreenCollapsed = false;
-      try { _evergreenCollapsed = localStorage.getItem('ccc-evergreen-agents-collapsed') === '1'; } catch (_) {}
-      const _evergreenChevron = _evergreenCollapsed ? '&#9656;' : '&#9662;';
-      const _evergreenAgentsHeaderHtml = _evergreenAgentsHtml
-        ? '<div class="conv-objects-section-label conv-evergreen-agents-header' + (_evergreenCollapsed ? ' is-collapsed' : '')
-          + '" data-role="evergreen-agents-header" role="button" tabindex="0"'
-          + ' title="Collapse / expand Triggered Workers">'
-          + '<span class="conv-section-collapse-chevron" data-role="evergreen-agents-collapse" aria-hidden="true">' + _evergreenChevron + '</span>'
-          + escapeHtml(simpleLabel('Triggered Workers'))
-          + '<span class="evergreen-log-btn" data-role="evergreen-log-btn" role="button" tabindex="0" title="Open Watchtower activity log">See log</span>'
-          + '</div>'
-        : '';
-      const _evergreenAgentsScrollHtml = _evergreenAgentsHtml
-        ? '<div class="conv-evergreen-agents-scroll' + (_evergreenCollapsed ? ' is-collapsed' : '')
-          + '" data-role="evergreen-agents-scroll">' + _evergreenAgentsHtml + '</div>'
-        : '';
       const _currentIds = new Set(_currentSessions.map(c => c.session_id || c.id));
       const _looseRest = _unclassified.filter(c => !_currentIds.has(c.session_id || c.id));
       const _looseHtml = _looseRest.length
@@ -26657,9 +26425,6 @@
         : '';
       const _objectsSplitHandleHtml = (_currentSessionsScrollHtml && _projectTreeScrollHtml)
         ? '<div class="conv-objects-splitter" data-role="objects-splitter" role="separator" aria-orientation="horizontal" title="Drag to resize Current sessions"></div>'
-        : '';
-      const _evergreenSplitHandleHtml = _evergreenAgentsScrollHtml
-        ? '<div class="conv-evergreen-agents-splitter" data-role="evergreen-agents-splitter" role="separator" aria-orientation="horizontal" title="Drag to resize Triggered Workers"></div>'
         : '';
       _activeRowsHtml = _currentSessionsHeaderHtml + _currentSessionsScrollHtml + _objectsSplitHandleHtml + _projectTreeHeaderHtml + _projectTreeScrollHtml;
     } else if (_shouldGroupByFolder) {
@@ -32502,100 +32267,20 @@
     })();
     return _wtWorkersPromise;
   }
-  // Cross-repo session cards for workers whose session_id isn't in the current
-  // repo's conversationsData. Keyed by session_id. Populated by
-  // _fetchMissingWorkerConvs() so _twCardById can resolve cross-repo workers
-  // and render the full session card instead of the fallback row.
-  const _wtWorkerConvsCache = {};
-  // Per-repo fetch gating (CCC-614): workers whose session_id never resolves
-  // (ended/cross-machine sessions) otherwise re-fire one
-  // /api/conversations?repo_path= per repo on EVERY sidebar re-render, in
-  // parallel, with no dedupe. Recheck each repo at most once per 15s (the
-  // _fetchWtWorkers cadence) and share one in-flight promise per repo_path.
-  const _wtWorkerConvsRepoTs = {};
-  const _wtWorkerConvsRepoInflight = new Map();
-  const _WT_WORKER_CONVS_REPO_TTL_MS = 15000;
-  async function _fetchWorkerConvsForRepo(repoPath, sids) {
-    const pending = _wtWorkerConvsRepoInflight.get(repoPath);
-    if (pending) return pending;
-    const p = (async () => {
-      let found = false;
-      try {
-        const res = await fetch('/api/conversations?repo_path=' + encodeURIComponent(repoPath), { cache: 'no-store' });
-        const data = await res.json().catch(() => ([]));
-        const convs = Array.isArray(data) ? data : ((data && data.conversations) || []);
-        convs.forEach(c => {
-          const sid = c && (c.session_id || c.id);
-          if (sid && sids.has(sid)) { _wtWorkerConvsCache[sid] = c; found = true; }
-        });
-        _wtWorkerConvsRepoTs[repoPath] = Date.now();
-      } catch (_) {}
-      return found;
-    })();
-    _wtWorkerConvsRepoInflight.set(repoPath, p);
-    p.finally(() => _wtWorkerConvsRepoInflight.delete(repoPath));
-    return p;
-  }
-  async function _fetchMissingWorkerConvs() {
-    const workers = (_wtWorkersCache && _wtWorkersCache.workers) || [];
-    const currentSids = new Set(
-      (Array.isArray(conversationsData) ? conversationsData : [])
-        .map(c => c && (c.session_id || c.id)).filter(Boolean)
-    );
-    const missing = workers.filter(w =>
-      w && w.session_id && !currentSids.has(w.session_id) && !_wtWorkerConvsCache[w.session_id]
-    );
-    if (!missing.length) return false;
-    // Build queue -> repo_path from the queues cache (server now includes repo_path).
-    const queueToRepo = new Map();
-    ((_uxqHealthCache && _uxqHealthCache.queues) || []).forEach(q => {
-      if (q && q.queue && q.repo_path) queueToRepo.set(String(q.queue).toUpperCase(), q.repo_path);
-    });
-    // Group missing workers by repo_path.
-    const repoToSids = new Map();
-    missing.forEach(w => {
-      const rp = queueToRepo.get(String(w.queue || '').toUpperCase());
-      if (!rp) return;
-      if (!repoToSids.has(rp)) repoToSids.set(rp, new Set());
-      repoToSids.get(rp).add(w.session_id);
-    });
-    if (!repoToSids.size) return false;
-    const now = Date.now();
-    const results = await Promise.all([...repoToSids.entries()].map(([repoPath, sids]) => {
-      const last = _wtWorkerConvsRepoTs[repoPath] || 0;
-      if (now - last < _WT_WORKER_CONVS_REPO_TTL_MS) return false;
-      return _fetchWorkerConvsForRepo(repoPath, sids);
-    }));
-    return results.some(Boolean);
-  }
-  // The Triggered Workers sidebar section renders queue headers + worker rows
-  // synchronously from the caches (above), then this warms BOTH caches in the
-  // background and triggers ONE re-render when either snapshot actually changes.
-  // Mirrors the queue-health strip's async-fetch-then-render pattern, but the
-  // sidebar render is sync so we re-render rather than patch a static node.
-  // Sig-gated → no render storm.
-  let _evergreenQueuesSig = null;
-  async function _ensureEvergreenQueuesFresh() {
+  // The sidebar only needs identities to classify worker sessions. The
+  // roster and ledger cover other repositories without loading their cards.
+  let _sidebarWorkerStateSignature = null;
+  async function _refreshSidebarWorkerState() {
     try {
       await Promise.all([_fetchUxqHealth(), _fetchWtWorkers()]);
-      // Fetch cross-repo conv cards for any workers not in current conversationsData.
-      // If new cards were found, force a re-render regardless of the queue sig.
-      const gotNewCards = await _fetchMissingWorkerConvs();
-      const queues = ((_uxqHealthCache && _uxqHealthCache.queues) || [])
-        .filter(q => q && q.auto_drain === true);
-      const workers = (_wtWorkersCache && _wtWorkersCache.workers) || [];
-      const pastWorkers = (_uxqHealthCache && _uxqHealthCache.past_workers) || [];
-      const sig = JSON.stringify([
-        queues.map(q => [q.queue, q.depth, q.workers, q.auto_drain, q.state]),
-        workers.map(w => [w.worker_id, w.queue, w.session_id, w.alive]),
-        // The rendered age label, not raw seconds: those tick on every fetch,
-        // so the sig never matched and each poll forced a full 11k-row
-        // sidebar re-render with window=all (CCC-120).
-        pastWorkers.map(pw => [pw.worker_id, pw.queue, _uxqFmtAge(Number(pw && pw.ended_ago_seconds) || 0)]),
+      const signature = JSON.stringify([
+        _uxqHealthCache.worker_session_ids || [],
+        (_uxqHealthCache.queues || []).map(q => q?.queue),
+        (_wtWorkersCache.workers || []).map(w => w && [w.worker_id, w.queue, w.session_id, w.alive]),
       ]);
-      if (sig !== _evergreenQueuesSig || gotNewCards) {
-        _evergreenQueuesSig = sig;
-        try { _scheduleSidebarRender({ lifecycle: !!gotNewCards }); } catch (_) {}
+      if (signature !== _sidebarWorkerStateSignature) {
+        _sidebarWorkerStateSignature = signature;
+        _scheduleSidebarRender();
       }
     } catch (_) { /* keep stale cache */ }
   }

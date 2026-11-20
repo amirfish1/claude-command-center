@@ -7,7 +7,7 @@ const modelCode = app.slice(app.indexOf('  const _NON_WORKER_SPAWNED_VIAS'), app
 const foldCode = app.slice(app.indexOf('  function _continuationFoldMaps('), app.indexOf('  let _f2ContinuationEdgesCache'));
 const budgetCode = app.slice(app.indexOf('  function _sidebarBudgetIdeaLane('), app.indexOf('  // What an empty list says'));
 
-function setup(rows, {engine = '', cutoff = 0, f2 = {}, workerIds = [], ticketView = false} = {}) {
+function setup(rows, {engine = '', cutoff = 0, f2 = {}, workerIds = [], liveWorkers = [], ticketView = false} = {}) {
   const classifications = [];
   const context = {
     Map, Set, currentConversation: '',
@@ -21,7 +21,7 @@ function setup(rows, {engine = '', cutoff = 0, f2 = {}, workerIds = [], ticketVi
     ticketViewOn: () => ticketView,
     _ultraFreshCurrent: row => row.fresh || row,
     ticketSessionSection: row => row.state === 'working' ? 'active' : 'needs-you',
-    _uxqHealthCache: {worker_session_ids: workerIds}, _wtWorkersCache: {}, _wtWorkerConvsCache: {},
+    _uxqHealthCache: {worker_session_ids: workerIds}, _wtWorkersCache: {workers: liveWorkers},
     classifyKanbanColumn: row => {
       classifications.push(row.session_id);
       return row.archived ? 'archived' : row.source === 'backlog' ? 'backlog' : 'active';
@@ -73,6 +73,18 @@ test('negative membership caching preserves cycle and search behavior', () => {
     assert.equal(model.matches(item, 'ideas', true), true);
     assert.equal(model.matches(item, 'workers', false), true);
   }
+});
+
+test('worker identities include reaped and cross-repo sessions before their rows load', () => {
+  const oldWorker = row('reaped');
+  const ordinary = row('ordinary');
+  const {model} = setup([oldWorker, ordinary], {
+    workerIds: ['reaped'],
+    liveWorkers: [{queue: 'EXAMPLE', session_id: 'other-repo'}, {queue: 'EXAMPLE'}],
+  });
+  assert.deepEqual([...model.workerSessionIds], ['reaped', 'other-repo']);
+  assert.equal(model.laneFor(oldWorker), 'workers');
+  assert.equal(model.laneFor(ordinary), 'coding');
 });
 
 test('pagination includes effective F2 family membership that the old lane guess missed', () => {

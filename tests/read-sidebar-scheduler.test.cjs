@@ -260,6 +260,6 @@ test('background archive timers and queue history use the passive scheduler', ()
   const timers = app.slice(start, end);
   assert.equal(timers.includes('renderArchiveList('), false);
   assert.equal((timers.match(/_scheduleSidebarRender\(/g) || []).length, 2);
-  const queues = app.slice(app.indexOf('  async function _ensureEvergreenQueuesFresh('), app.indexOf('  // Watchtower activity log panel'));
-  assert.ok(queues.includes('_scheduleSidebarRender({ lifecycle: !!gotNewCards })'));
+  const queues = app.slice(app.indexOf('  async function _refreshSidebarWorkerState('), app.indexOf('  // Watchtower activity log panel'));
+  assert.ok(queues.includes('_scheduleSidebarRender();'));
 });

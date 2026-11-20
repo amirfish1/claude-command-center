@@ -335,13 +335,11 @@ def test_window_all_sidebar_render_avoids_per_row_formatter_and_repo_rebuilds():
     assert "cache.repos === repos" in known
 
 
-def test_evergreen_queue_sig_ignores_ticking_past_worker_seconds():
-    # CCC-120: ended_ago_seconds changes on every fetch, so a sig over the raw
-    # value forced a full sidebar re-render on every evergreen poll. Key on the
-    # rendered age label instead.
-    fresh = _function("async function _ensureEvergreenQueuesFresh()", "function _wtLogVerbClass(")
-    assert "pw.ended_ago_seconds])" not in fresh
-    assert "_uxqFmtAge(" in fresh
+def test_sidebar_worker_refresh_ignores_past_worker_age():
+    fresh = _function("async function _refreshSidebarWorkerState()", "function _wtLogVerbClass(")
+    assert "past_workers" not in fresh
+    assert "worker_session_ids" in fresh
+    assert "w.session_id" in fresh
 
 
 def test_startup_critical_read_defers_federated_and_live_activity_session_polls():
