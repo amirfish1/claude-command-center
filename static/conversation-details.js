@@ -5257,7 +5257,8 @@
       const requestedWindow = opts.window || (_archiveQuery().trim() ? 'all' : _archiveWindow());
       const isCurrentWindow = () => requestedWindow === (_archiveQuery().trim() ? 'all' : _archiveWindow());
       const progress = window.__cccArchiveProgress;
-      if (!opts.includePrs && (!progress || progress.window !== requestedWindow || !progress.complete)) {
+      const fillingArchive = !opts.includePrs && (!progress || progress.window !== requestedWindow || !progress.complete);
+      if (fillingArchive) {
         _setArchiveCompleteness(requestedWindow, false, sharedState.archiveData.length);
         if (sharedState._archiveFromLocalCache) {
           // A ready full response can replace the preview in this microtask
@@ -5292,7 +5293,7 @@
             sharedState.archiveDataWindow = requestedWindow;
             sharedState.archiveLoaded = true;
             _setArchiveCompleteness(requestedWindow, false, first.length, false, true);
-            (0, hostServices.renderArchiveList)(_archiveQuery(), { force: true });
+            (0, hostServices.renderArchiveList)(_archiveQuery(), { force: true, skipReorderAnimation: true });
             await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
           }
         } finally {
@@ -5334,7 +5335,9 @@
       sharedState.archiveDataWindow = requestedWindow;
         sharedState.archiveLoaded = true;
         _clientLog('[ARCHIVE-DIAG] refreshArchiveData merged ' + (Array.isArray(sharedState.archiveData) ? sharedState.archiveData.length : -1) + ' rows, archiveLoaded=true');
-        (0, hostServices.renderArchiveList)(_archiveQuery(), { force: true });
+        // Filling in an incomplete list changes its membership and grouping.
+        // Keep scroll anchoring without measuring every row for a reorder.
+        (0, hostServices.renderArchiveList)(_archiveQuery(), { force: true, skipReorderAnimation: fillingArchive });
         // Base rows are useful immediately. Let the live/approval overlay land
         // afterward instead of holding first paint behind a contended status
         // read; the unified session watcher also pushes those state changes.

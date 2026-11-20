@@ -63,6 +63,14 @@
       if ($input) $input.focus();
       return;
     }
+    if (state.currentSession.source === 'antigravity' && /^\/autocompact$/i.test(text)) {
+      rememberComposerCommand(text);
+      $input.value = '';
+      _autosizeTextareaLike($input, $input.closest('.conv-input-bar'));
+      clearInputDraftForConversation(draftConversation);
+      await helpers.openAutoCompactSettings();
+      return;
+    }
     rememberComposerCommand(text);
     // CCC-762: typing `/goal clear` directly (rather than clicking the goal
     // strip's Clear button) skipped applyOptimisticConversationGoalAction

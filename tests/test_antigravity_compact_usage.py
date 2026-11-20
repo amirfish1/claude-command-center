@@ -63,15 +63,16 @@ def test_native_compact_captures_new_card_instead_of_replayed_card(tmp_path, mon
     transcript.write_text('')
     monkeypatch.setattr(native._core, 'COMMAND_CENTER_STATE_DIR', str(tmp_path))
     script = (
-        "import os,json; print('11 steps summarized · context 900k → ~800k (5k summary)\\n> \\nModel: Example',flush=True); "
-        "os.read(0,4096); "
+        "import os,json,signal; print('11 steps summarized · context 900k → ~800k (5k summary)\\n> \\nModel: Example',flush=True); "
+        "os.read(0,4096); signal.signal(signal.SIGWINCH, lambda *_: print('> /compact ',flush=True)); "
+        "assert os.read(0,4096)==b'\\r'; "
         f"f=open({str(transcript)!r},'a'); "
         "f.write(json.dumps({'type':'CHECKPOINT','status':'DONE','step_index':12,"
         "'content':'# Resuming from a compaction'})+'\\n'); f.close(); "
         "print('4 steps summarized · context 389.0k → ~20.3k (5.0k summary)',flush=True); os.read(0,4096)"
     )
     result = native.run_terminal([sys.executable, '-u', '-c', script], str(tmp_path),
-                                 None, transcript, timeout=6)
+                                 None, transcript, timeout=9)
     assert result['ok'] is True
     assert result['context_tokens'] == 20300
     assert native.context_estimate(transcript, native.latest_checkpoint(transcript)) == 20300

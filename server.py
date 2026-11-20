@@ -7552,6 +7552,7 @@ def extract_session_slash_commands(session_id):
             "session_id": session_id,
             "engine": engine,
             "commands": [
+                {"name": "/autocompact", "description": "Open the auto-compact threshold setting"},
                 {"name": "/compact", "description": "Summarize the conversation to free up context"},
             ],
             "source": "antigravity-fallback",
@@ -33703,7 +33704,8 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 fresh_s=10.0, max_stale_s=300.0))
         elif path == "/api/question-tags":
             from ccc_server import question_tags as _question_tags
-            self.send_json(_question_tags.payload(tickets=_wt_list_items_for_requests()))
+            data, encoded = _question_tags.response(_wt_list_items_for_requests())
+            self.send_json(data, encoded=encoded)
         elif path in ("/api/sessions/spawned", "/api/spawned"):
             qs = urllib.parse.parse_qs(parsed.query)
             rows = list_spawned_sessions()
