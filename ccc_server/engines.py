@@ -4888,6 +4888,13 @@ def resume_session_antigravity(session_id, text, mode="send"):
     text = _core._strip_ccc_session_state_instruction(text)
     if not session_id or not text:
         return {"ok": False, "error": "missing session_id or text"}
+    if text.strip() == "/compact":
+        from ccc_server.antigravity_compact import compact_session
+        return compact_session(session_id)
+    from ccc_server.antigravity_compact import queue_if_active
+    compact_queue = queue_if_active(session_id, text)
+    if compact_queue is not None:
+        return compact_queue
     account_id = _antigravity_accounts.session_account(session_id)
     cli_conversation = _core._antigravity_cli_conversation_path(session_id)
     has_cli_pb = bool(cli_conversation and cli_conversation.is_file())

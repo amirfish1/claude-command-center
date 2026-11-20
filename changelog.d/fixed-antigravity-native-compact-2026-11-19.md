@@ -1,0 +1,1 @@
+Antigravity Compact now runs the native command in an invisible terminal. Headless prompt replies can no longer masquerade as a completed compaction; completion requires a fresh transcript checkpoint.

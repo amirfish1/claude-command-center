@@ -4111,6 +4111,9 @@ def _transcript_peer_receipt(session_id, msg_id, body, start_offset=0, timeout_s
 
 def _resume_queue_engine_busy(sid):
     if _core._is_antigravity_session(sid):
+        from ccc_server.antigravity_compact import is_active
+        if is_active(sid):
+            return True
         # A persistent stream-json process reports its own turn state (the
         # `result` event); an idle one is not busy however long it lives.
         from ccc_server import antigravity_stream
