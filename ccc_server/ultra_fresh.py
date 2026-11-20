@@ -200,7 +200,7 @@ class FreshSession:
         from ccc_server.codex_conversation import CODEX_CONVERSATIONS
         from ccc_server.codex_live_events import live_turns_from_snapshot
         snapshot = (
-            CODEX_CONVERSATIONS.snapshot(self.sid, after=self.codex_key, latest_turn_only=True)
+            CODEX_CONVERSATIONS.snapshot(self.sid, after=self.codex_key, assistant_preview=True)
             if core._detect_session_engine(self.sid) == "codex" else {}
         )
         live_key = ((snapshot.get("generation"), snapshot.get("cursor"))

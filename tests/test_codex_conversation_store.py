@@ -65,6 +65,24 @@ class ConversationStoreTests(unittest.TestCase):
         self.assertEqual(latest["generation"], "second")
         self.assertIsNone(latest["thread"])
 
+    def test_assistant_preview_keeps_the_original_item_window(self):
+        earlier = {"id": "earlier", "type": "agentMessage", "text": "Outside the window"}
+        latest = {"id": "latest", "type": "agentMessage", "content": [{"text": "Latest reply"}]}
+        tools = [{"id": f"tool-{i}", "type": "commandExecution", "aggregatedOutput": "Tool output"}
+                 for i in range(conversation.LIVE_OVERLAY_ITEM_LIMIT)]
+        self.store.hydrate({"id": "task", "turns": [
+            {"id": "old", "items": [earlier]},
+            {"id": "turn", "items": [earlier, *tools[:3], latest, *tools[3:]]},
+        ]}, 0)
+        snapshot = self.store.snapshot("task", assistant_preview=True)
+        turns = snapshot["thread"]["turns"]
+        self.assertEqual(turns, [{"id": "turn", "items": [latest]}])
+        turns[0]["items"][0]["content"][0]["text"] = "Tampered"
+        self.assertEqual(self.store.snapshot("task", assistant_preview=True)["thread"]["turns"][0]["items"], [latest])
+        self.assertEqual(len(self.store.snapshot("task")["thread"]["turns"][-1]["items"]), len(tools) + 2)
+        self.assertIsNone(self.store.snapshot("task", after=(snapshot["generation"], snapshot["cursor"]),
+                                             assistant_preview=True))
+
     def test_event_gap_and_generation_change_require_resync(self):
         for i in range(5):
             self.event("turn/plan/updated", plan=[{"step": str(i), "status": "pending"}])

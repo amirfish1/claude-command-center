@@ -10,6 +10,10 @@ import json
 import threading
 import time
 from collections import OrderedDict, deque
+from itertools import islice
+
+
+LIVE_OVERLAY_ITEM_LIMIT = 32
 
 
 class CodexConversationStore:
@@ -350,14 +354,25 @@ class CodexConversationStore:
             item["progress"] = params.get("message", params.get("progress"))
         self._put_item(thread, turn, item, complete=bool(previous and previous["complete"]))
 
-    def snapshot(self, thread_id, *, after=None, latest_turn_only=False):
-        """Copy the stored thread, or return None for a seen (generation, cursor)."""
+    def snapshot(self, thread_id, *, after=None, latest_turn_only=False, assistant_preview=False):
+        """Copy the stored thread, or return None for a seen (generation, cursor).
+
+        The sidebar preview needs only assistant items from the same last-turn
+        window the full live overlay maps. Exclude tools before copying.
+        """
         with self._lock:
             if after == (self._generation, self._seq):
                 return None
             stored = self._threads.get(thread_id)
             value = None
-            if stored:
+            if stored and assistant_preview:
+                latest = next(reversed(stored["turns"].values()), None)
+                if latest is not None:
+                    tail = list(islice(reversed(latest["items"].values()), LIVE_OVERLAY_ITEM_LIMIT))
+                    items = [entry["value"] for entry in reversed(tail)
+                             if entry["value"].get("type") == "agentMessage"]
+                    value = {"turns": [{"id": latest["meta"]["id"], "items": items}]}
+            elif stored:
                 turns = stored["turns"].values()
                 if latest_turn_only and turns:
                     turns = (next(reversed(turns)),)

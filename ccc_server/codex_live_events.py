@@ -35,9 +35,9 @@ Slice-1 unknowns, verified against real rollouts before this was written
 from __future__ import annotations
 
 from ccc_server import core as _core
+from ccc_server.codex_conversation import LIVE_OVERLAY_ITEM_LIMIT
 
 _MAX_TURNS = 4
-_MAX_ITEMS_PER_TURN = 32
 _MAX_TEXT = 4000
 _MAX_DETAIL = 200
 _MAX_TOOL_OUTPUT = 800
@@ -263,7 +263,7 @@ def _map_item(turn_id, item):
     return []
 
 
-def live_turns_from_snapshot(snapshot, *, max_turns=_MAX_TURNS, max_items=_MAX_ITEMS_PER_TURN):
+def live_turns_from_snapshot(snapshot, *, max_turns=_MAX_TURNS, max_items=LIVE_OVERLAY_ITEM_LIMIT):
     """Map a `CodexConversationStore.snapshot()` reading into
     `[{turn_id, status, events}, ...]`, oldest turn first, bounded.
 
