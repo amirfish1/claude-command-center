@@ -6,7 +6,7 @@ function setup({manualFrames = false, initial = [{session_id: 'recent'}]} = {}) 
   let resolveFull;
   const full = new Promise(resolve => { resolveFull = resolve; });
   const notice = { style: {}, setAttribute() {} };
-  const paints = [], calls = [], deferred = [], events = [], releases = [], ready = [], frames = [];
+  const paints = [], paintOptions = [], calls = [], deferred = [], events = [], releases = [], ready = [], frames = [];
   const state = { archiveData: [], archiveLoaded: false, _archiveFirstLoadedResolve: () => ready.push(true) };
   const context = {
     sharedState: state, window: {dispatchEvent: event => events.push(event.type)}, Event, AbortController, performance,
@@ -21,7 +21,10 @@ function setup({manualFrames = false, initial = [{session_id: 'recent'}]} = {}) 
     },
     _applyPendingDashboardConversationPatches: rows => rows,
     _mergeArchivePrSnapshot: rows => rows, _mergeIntoMasterRows() {}, _resetArchiveUnknownPatchIds() {},
-    hostServices: { renderArchiveList: () => paints.push(state.archiveData.map(r => r.session_id)) },
+    hostServices: { renderArchiveList: (_query, opts) => {
+      paints.push(state.archiveData.map(r => r.session_id));
+      paintOptions.push(opts);
+    } },
     refreshLiveSessionsActivity: async () => {}, _queueDashboardArchiveRender() {},
     hideLoadingOverlay() {}, _releaseStartupApiReads() { releases.push(true); },
     _hydrateArchiveSideData() {}, _scheduleArchiveStaleRetry() { context.retryScheduled = true; },
@@ -32,7 +35,7 @@ function setup({manualFrames = false, initial = [{session_id: 'recent'}]} = {}) 
   vm.runInContext(functionSource('_markArchiveFirstLoaded'), context);
   vm.runInContext(functionSource('_setArchiveCompleteness'), context);
   vm.runInContext(functionSource('refreshArchiveData'), context);
-  return { context, state, notice, paints, calls, deferred, events, releases, ready, frames, resolveFull };
+  return { context, state, notice, paints, paintOptions, calls, deferred, events, releases, ready, frames, resolveFull };
 }
 async function initialPaint(f) {
   for (let n = 0; n < 20 && f.calls.length < 2; n++) await new Promise(setImmediate);
@@ -57,6 +60,11 @@ test('recent rows paint while complete request is still pending, then full rows 
   assert.deepEqual(f.events, ['ccc:archive-settled']);
   assert.equal(f.context.window.__cccArchiveSettled, true);
   assert.ok(f.releases.length, 'full completion releases the startup backlog even after initial readiness');
+  assert.deepEqual(f.paintOptions.map(opts => opts.skipReorderAnimation), [true, true]);
+
+  await f.context.refreshArchiveData();
+  assert.equal(f.calls.length, 3, 'the complete window refreshes without fetching a preview');
+  assert.equal(f.paintOptions.at(-1).skipReorderAnimation, false, 'normal updates can still animate real reorders');
 });
 test('history starts before initial paint and cannot replace it until both frames finish', async () => {
   const f = setup({manualFrames: true}), task = f.context.refreshArchiveData();

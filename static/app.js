@@ -28189,7 +28189,7 @@
     const _userIsTyping = !!(_activeEl && (_activeEl.tagName === 'TEXTAREA'
       || (_activeEl.tagName === 'INPUT' && /^(text|search|email|url|tel|password)$/i.test(_activeEl.type || 'text'))));
     const _skipFlipForTouchScroll = shouldUseTouchRowMode();
-    if ($convList && !document.hidden && !_userIsTyping && !_skipFlipForTouchScroll) {
+    if (!opts?.skipReorderAnimation && $convList && !document.hidden && !_userIsTyping && !_skipFlipForTouchScroll) {
       for (const row of $convList.querySelectorAll('[data-id]')) {
         const id = row.getAttribute('data-id');
         // First occurrence wins: a session can appear TWICE now (the Current
@@ -43657,7 +43657,10 @@
       if ($kanban) $kanban.style.display = 'none';
       if ($flow) $flow.style.display = 'none';
       $list.style.display = '';
-      renderConversationList(conversationsData, { beforeReplace: captureScroll });
+      renderConversationList(conversationsData, {
+        beforeReplace: captureScroll,
+        skipReorderAnimation: opts?.skipReorderAnimation,
+      });
     }
     if (archiveSelectionSwap) {
       rebindCurrentSelectionToRealCard(archiveSelectionSwap.realCard);

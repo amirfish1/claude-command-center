@@ -1,0 +1,1 @@
+- Reduce sidebar layout work as the archive fills in by skipping reorder animation during preview replacement.
