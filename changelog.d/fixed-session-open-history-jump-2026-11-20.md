@@ -1,0 +1,1 @@
+- Opening a session no longer jumps the transcript up a few seconds later when earlier messages load in and thinking blocks merge across the page join.

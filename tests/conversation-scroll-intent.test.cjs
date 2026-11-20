@@ -318,6 +318,56 @@ for (const scenario of ['short page', 'long page', 'saved reading position', 'co
   });
 }
 
+// Thinking rows on both sides of a page join merge into one run, which hides
+// the older row's own run and shrinks that row. The prepend already accounts
+// for that, so the resize observer must not shift the reader a second time.
+test('history joining thinking runs does not jump on the next resize tick', async () => {
+  const page = await fixture();
+  try {
+    const result = await page.evaluate(async ({ prepend }) => {
+      document.head.insertAdjacentHTML('beforeend', `<style>
+        .event.assistant { height: auto; }
+        .thinking-run-source { display: none !important; }
+        .event.assistant.thinking-run-event:not(:has(> .thinking-run)) { display: none !important; }
+        .thinking-run { height: 300px; }
+      </style>`);
+      Object.assign(window, { _ultraFreshFeed() {}, _refreshTokenEconomizerAnnotation() {},
+        _viewIsWebUiPane: () => false, _kimiRegroupTools() {}, getConvViewForPane: () => view,
+        _currentToolGroup: null, _currentToolCount: 0, _firstUserMsgRendered: true,
+        _dynamicAskState: null, currentConversation: 'test' });
+      const thought = (line, text, reply) => {
+        const row = document.createElement('div');
+        row.className = 'event assistant';
+        row.dataset.jsonlLine = line;
+        row.innerHTML = '<div class="thinking-block"><div class="t-body">' + text + '</div></div>'
+          + (reply ? '<div class="assistant-text" style="height:200px">' + reply + '</div>' : '');
+        return row;
+      };
+      window.renderConversationEvents = (events) => {
+        for (const ev of events) view.appendChild(thought(ev.line, 'Earlier thought'));
+        return true;
+      };
+      (0, eval)(prepend);
+      for (let i = 0; i < 3; i++) view.insertBefore(thought(90 + i, 'Old thought ' + i, 'Old reply ' + i), view.firstChild);
+      _syncThinkingRuns(view);
+      _observeConvEventSizes(view, [{ addedNodes: view.querySelectorAll('.event.assistant') }]);
+      view._pinnedToBottom = false;
+      view.scrollTop = 2000;
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const row = view.querySelector('[data-jsonl-line="105"]');
+      const before = row.getBoundingClientRect().top;
+      _prependConversationEvents([{ line: 1, type: 'assistant' }], 'p1');
+      _observeConvEventSizes(view, [{ addedNodes: [view.querySelector('[data-jsonl-line="1"]')] }]);
+      const afterHistory = row.getBoundingClientRect().top;
+      view._pinnedToBottom = false;
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return { before, afterHistory, afterResize: row.getBoundingClientRect().top };
+    }, { prepend });
+    assert.equal(result.afterHistory, result.before, 'history response moved the visible message');
+    assert.equal(result.afterResize, result.before, 'resize observer moved the visible message');
+  } finally { await page.close(); }
+});
+
 for (const width of [390, 1280]) {
   for (const change of ['late image growth', 'content shrink', 'composer growth', 'pane growth']) {
     test(`bottom-follow survives ${change} (${width}px)`, async () => {
