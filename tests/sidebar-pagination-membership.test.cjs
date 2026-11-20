@@ -108,7 +108,7 @@ test('Other uses real ledger, Hermes profiles, typed lanes and the full-list tic
   const ledgerWorker = row('ledger-worker');
   const chat = row('chat', {source: 'hermes', hermes_profile: ''});
   const hermesWorker = row('profile-worker', {source: 'hermes', hermes_profile: 'queue'});
-  const typedOther = row('other', {spawned_lane: 'other'});
+  const typedOther = row('other', {spawned_lane: 'other', spawned_via: 'external'});
   const ticket = row('ticket', {idea_ticket: {ref: 'TEST-1'}});
   rows.push(ledgerWorker, chat, hermesWorker, typedOther, ticket);
   const {model, page} = setup(rows, {workerIds: ['ledger-worker']});
@@ -118,7 +118,9 @@ test('Other uses real ledger, Hermes profiles, typed lanes and the full-list tic
   assert.equal(model.matches(ledgerWorker, 'archived', false), false);
   assert.equal(model.matches(chat, 'archived', false), true);
   assert.equal(model.matches(hermesWorker, 'archived', false), false);
+  assert.equal(model.laneFor(typedOther), 'other');
   assert.equal(model.matches(typedOther, 'archived', false), true);
+  assert.equal(model.matches(typedOther, 'workers', false), false);
   assert.equal(model.matches(ticket, 'archived', false), false);
   assert.equal(page('archived', 20).omitted, 42);
   assert.equal(page('archived', 80).omitted, 0);

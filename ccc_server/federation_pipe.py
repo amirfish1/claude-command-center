@@ -39,6 +39,7 @@ memory route requests over it as NDJSON.
 from __future__ import annotations
 
 import atexit
+import io
 import itertools
 import json
 import subprocess
@@ -215,7 +216,9 @@ class PeerPipe:
 
     def _read_loop(self) -> None:
         proc = self._proc
-        out = proc.stdout if proc else None
+        # Popen uses unbuffered writes so raw stdin remains independently
+        # closable. Buffer stdout here to avoid a system call for each byte.
+        out = io.BufferedReader(proc.stdout) if proc and proc.stdout is not None else None
         try:
             while out is not None:
                 line = out.readline(MAX_FRAME_BYTES + 1)

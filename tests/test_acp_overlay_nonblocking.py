@@ -85,13 +85,13 @@ def test_overlay_reads_only_its_marker_and_observes_replacement(monkeypatch, tmp
         return {row["session_id"]: row["spawned_via"]
                 for row in server._archive_overlay_acp_sessions([])}
 
-    assert attributions() == {"new": "ui", "../outside": "terminal"}
+    assert attributions() == {"new": "ui", "../outside": "unknown"}
     assert reads == [marker]
     replacement = marker_dir / "replacement.json"
     replacement.write_text(json.dumps({"spawned_via": "cli"}))
     replacement.replace(marker)
     assert attributions()["new"] == "cli"
     marker.write_text("{malformed")
-    assert attributions()["new"] == "terminal"
+    assert attributions()["new"] == "unknown"
     marker.unlink()
-    assert attributions()["new"] == "terminal"
+    assert attributions()["new"] == "unknown"

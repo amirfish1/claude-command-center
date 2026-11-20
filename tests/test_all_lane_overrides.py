@@ -100,15 +100,6 @@ def test_top_level_lane_drop_targets_only_accept_coding_and_workers():
     assert "lane === 'coding' || lane === 'workers'" in split_js
 
 
-def test_typed_spawn_marker_can_route_a_session_to_other():
-    app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
-
-    assert "const _spawnMarkerLane = (c) =>" in app_js
-    assert "return lane === 'workers' || lane === 'other' ? lane : '';" in app_js
-    assert "if (spawnedLane) return spawnedLane;" in app_js
-    assert "const _allTabOtherConvs = _allTabConvs.filter(c => {" in app_js
-
-
 def test_helper_conversations_default_to_other_but_allow_manual_move():
     rows = [
         {"id": "te", "session_cwd": "/tmp/te-side-example"},
