@@ -28,6 +28,8 @@ USER = {"source": "USER", "type": "USER_INPUT", "status": "DONE"}
 
 
 @pytest.mark.parametrize("rows,age,expected", [
+    ([USER, {"type": "CHECKPOINT", "status": "DONE",
+              "content": "# Resuming from a compaction\n\nSummary."}], 300, True),
     ([USER, FINAL], 300, True),            # final answer, idle
     ([USER, FINAL], 5, False),             # still being written
     ([USER, TOOL], 300, False),            # last step is a tool call

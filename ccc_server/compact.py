@@ -854,6 +854,14 @@ def _compact_session_context_impl(session_id, *, terminal_app=None, _from_termin
         result = _compact_result(result, backup_path=backup_path)
         result.setdefault("engine", "codex")
         return result
+    if engine == "antigravity":
+        # AGY implements /compact natively. Reuse its normal delivery path
+        # so an active turn is preserved and busy sessions queue durably.
+        # Acceptance is not completion: the reader's CHECKPOINT boundary is
+        # the authoritative signal that the native compactor finished.
+        result = _compact_result(_core.resume_session_antigravity(sid, "/compact"))
+        result.setdefault("engine", "antigravity")
+        return result
     if engine == "kimi":
         # CCC-934: Kimi's own ACP adapter intercepts "/compact" as one of its
         # BUILTIN slash commands (MoonshotAI/kimi-code

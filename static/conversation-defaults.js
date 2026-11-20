@@ -2011,7 +2011,7 @@
         return _FFV_ICON;
       },
       COMPACT_UNSUPPORTED_SOURCES() {
-        const COMPACT_UNSUPPORTED_SOURCES = new Set(['cursor', 'gemini', 'antigravity', 'pkood', 'kimi']);
+        const COMPACT_UNSUPPORTED_SOURCES = new Set(['cursor', 'gemini', 'pkood', 'kimi']);
         return COMPACT_UNSUPPORTED_SOURCES;
       },
       NON_CLAUDE_SOURCES() {

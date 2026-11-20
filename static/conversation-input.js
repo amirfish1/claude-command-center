@@ -587,9 +587,8 @@
                           ? 'Steer is available while a tool is running'
                           : 'Steer needs a live headless, Codex, Kimi, or Devin session'))));
       }
-      // Compact button — only for compaction-capable open sessions (Claude
-      // AND Codex). cursor/gemini/antigravity/kimi return
-      // compact_unsupported_engine server-side, so we don't show it for them.
+      // Compact button — only for compaction-capable open sessions.
+      // Antigravity runs its native command through its normal delivery path.
       // Clicking runs the same path
       // as typing /compact (routed via postRunCompactForSession).
       if (activeCompactBtn) {

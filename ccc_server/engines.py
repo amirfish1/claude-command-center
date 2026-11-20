@@ -1693,6 +1693,12 @@ def _antigravity_event_path_candidates(ev):
 _antigravity_tail_resume = {}  # path -> {offset, pos, pending_tool, cwd_candidates, meta, meta_version}
 
 
+def _antigravity_compaction_done(event):
+    return (event.get("type") == "CHECKPOINT"
+            and event.get("status") == "DONE"
+            and str(event.get("content") or "").lstrip().startswith("# Resuming from a compaction"))
+
+
 def _antigravity_final_response(event):
     return (event.get("type") == "PLANNER_RESPONSE"
             and event.get("source") == "MODEL"
@@ -1865,6 +1871,14 @@ def _extract_antigravity_tail_meta(path_or_session_id):
                 selected_model = _antigravity_model_from_text(content_text)
                 if selected_model:
                     meta["model"] = selected_model
+                if _antigravity_compaction_done(ev):
+                    meta["turn_complete"] = True
+                    meta["pending_tool"] = None
+                    meta["pending_file"] = None
+                    meta["last_thinking_text"] = None
+                    meta["last_event_type"] = "system"
+                    pending_tool = False
+                    continue
                 if ev_type == "USER_INPUT" and source == "USER_EXPLICIT":
                     meta["turn_complete"] = False
                     meta["last_thinking_text"] = None
@@ -2426,6 +2440,13 @@ def _parse_antigravity_event(ev, line_num, usage_map=None):
     ev_type = ev.get("type") or ""
     source = ev.get("source") or ""
     ts = _antigravity_event_timestamp(ev)
+    if ev_type == "CHECKPOINT":
+        if _antigravity_compaction_done(ev):
+            # Checkpoint input/output token counts describe the summarizer
+            # request, not the retained context size. Leave those unknown.
+            return {"line": line_num, "ts": ts, "type": "system",
+                    "subtype": "compact_boundary", "compact": {"trigger": "Antigravity"}}
+        return None
     if ev_type == "USER_INPUT" and source == "USER_EXPLICIT":
         text = _antigravity_user_text(ev.get("content") or "")
         if text:
@@ -4557,7 +4578,8 @@ def _antigravity_turn_finished(session_id, pid=None, idle_s=None):
         row = json.loads(lines[-1])
     except (OSError, ValueError, IndexError):
         return False
-    return isinstance(row, dict) and _antigravity_final_response(row)
+    return isinstance(row, dict) and (
+        _antigravity_final_response(row) or _antigravity_compaction_done(row))
 
 
 def _antigravity_reap_finished_process(session_id, pid):

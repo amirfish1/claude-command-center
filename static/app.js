@@ -21944,9 +21944,9 @@
   // Shared conversation-core.js: postCompactSession.
   // Engines whose /compact runs through /api/session/compact (a real
   // compaction). Claude opens an interactive TUI; Codex routes to the
-  // app-server's thread/compact RPC. cursor/gemini/antigravity/kimi return
-  // compact_unsupported_engine server-side, so we don't expose compaction
-  // for them. Exclusion-based because Claude sessions carry assorted source
+  // app-server's thread/compact RPC; Antigravity receives native /compact
+  // through its existing send/resume route. Unsupported sources stay hidden.
+  // Exclusion-based because Claude sessions carry assorted source
   // values ('interactive', 'sdk-cli', 'claude', 'bg', or empty) — anything
   // that isn't a known unsupported engine is treated as Claude-family.
   const COMPACT_UNSUPPORTED_SOURCES = conversationInitializers.COMPACT_UNSUPPORTED_SOURCES();
