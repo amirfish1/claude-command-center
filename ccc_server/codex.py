@@ -8460,21 +8460,8 @@ def _codex_compact_via_app_server(session_id, cwd=None, model=None):
     }
 
 
-def _codex_goal_via_app_server(session_id, action, objective=None, cwd=None):
-    """Set, clear, pause, or resume a Codex thread goal.
-
-    `action` is "clear" (-> `thread/goal/clear`, params `{threadId}`) or "set"
-    (-> `thread/goal/set`, params `{threadId, objective}`). This is the non-live
-    fallback for `/goal clear` / `/goal <objective>`: the codex `goals` feature
-    is native, but its slash command only runs in a live TUI. The RPCs let CCC
-    drive the same native goal store for a dormant thread — mirrors
-    `_codex_compact_via_app_server` (`thread/compact/start`).
-
-    The app-server RPC currently reports success without always updating the
-    local goals sqlite used by Codex/CCC, so CCC verifies the same native store
-    directly under a file lock. Pause/resume have no app-server RPC; they are
-    direct status updates.
-    """
+def _codex_goal_via_app_server(session_id, action, objective=None, cwd=None, *, user_initiated=False):
+    """Apply a dormant-thread goal through Codex so its runtime sees the change."""
     sid = (session_id or "").strip()
     if not sid:
         return {"ok": False, "via": "codex-goal", "error": "missing session_id"}
@@ -8493,37 +8480,62 @@ def _codex_goal_via_app_server(session_id, action, objective=None, cwd=None):
             "code": "codex_goal_empty_objective",
             "error": "Goal objective must not be empty.",
         }
-    app_server_ok = False
-    if action in ("clear", "set") and os.environ.get("CCC_CODEX_APP_SERVER", "1").lower() not in ("0", "false", "no"):
-        # Best-effort: let Codex handle any side effects it knows about, then
-        # enforce the durable store CCC actually reads below.
-        resume_params = {"threadId": sid, "excludeTurns": False}
+    stopping = action in ("pause", "clear")
+    params = {"threadId": sid, "origin": "user" if user_initiated else "automatic"}
+    if action != "clear":
+        params["status"] = "paused" if action == "pause" else "active"
+        if action == "set":
+            params["objective"] = objective.strip()
+    app_server_enabled = os.environ.get("CCC_CODEX_APP_SERVER", "1").lower() not in ("0", "false", "no")
+    if app_server_enabled:
+        method = "thread/goal/clear" if action == "clear" else "thread/goal/set"
+        response = _core._codex_app_server_request(method, params, timeout=30)
+    else:
+        response = {"error": "The Codex app-server is disabled."}
+    if not _core._codex_response_succeeded(response):
+        error = _codex_app_server_response_error(response, f"Codex goal {action} failed")
+        rpc_error = response.get("error") if isinstance(response, dict) else None
+        unsupported = (
+            not app_server_enabled or "goals feature is disabled" in error.lower()
+            or (isinstance(rpc_error, dict) and rpc_error.get("code") == -32601)
+        )
+        if stopping and unsupported:
+            # Keep the emergency stop working where the native RPC is unavailable.
+            return _core._codex_goal_store_update(sid, action)
+        return {"ok": False, "engine": "codex", "via": "codex-goal",
+                "code": "codex_goal_unavailable" if unsupported else "codex_goal_failed",
+                "error": error, "app_server_ok": False}
+
+    _core._invalidate_codex_goals_cache()
+    result = response.get("result") or {}
+    goal = None
+    if action == "clear":
+        if not isinstance(result, dict) or not isinstance(result.get("cleared"), bool):
+            return {"ok": False, "engine": "codex", "via": "codex-goal",
+                    "code": "codex_goal_unconfirmed", "error": "Codex did not confirm the clear request."}
+    else:
+        goal = result.get("goal") if isinstance(result, dict) else None
+        if not isinstance(goal, dict) or goal.get("status") != params["status"] or (
+            action == "set" and goal.get("objective") != params["objective"]
+        ):
+            return {"ok": False, "engine": "codex", "via": "codex-goal",
+                    "code": "codex_goal_unconfirmed", "error": "Codex did not confirm the requested goal state."}
+
+    if not stopping:
+        # Persist the explicit objective/status before loading an idle thread.
+        # Resuming first could continue an older active objective.
+        resume_params = {"threadId": sid, "excludeTurns": True}
         if cwd:
             resume_params["cwd"] = cwd
         resumed = _core._codex_app_server_request("thread/resume", resume_params, timeout=20)
-        if not (resumed.get("error") or (resumed.get("ok") is False and "result" not in resumed)):
-            if action == "clear":
-                rpc_method = "thread/goal/clear"
-                rpc_params = {"threadId": sid}
-            else:
-                rpc_method = "thread/goal/set"
-                rpc_params = {"threadId": sid, "objective": objective.strip()}
-            result = _core._codex_app_server_request(rpc_method, rpc_params, timeout=30)
-            app_server_ok = _core._codex_response_succeeded(result)
+        if not _core._codex_response_succeeded(resumed):
+            error = _codex_app_server_response_error(resumed)
+            return {"ok": False, "engine": "codex", "via": "codex-goal",
+                    "code": "codex_goal_start_failed",
+                    "error": f"Goal saved, but Codex could not resume the thread: {error}"}
 
-    store = _core._codex_goal_store_update(sid, action, objective=objective)
-    if store.get("ok"):
-        store.setdefault("engine", "codex")
-        store["app_server_ok"] = app_server_ok
-        return store
-    return {
-        "ok": False,
-        "via": "codex-goal",
-        "code": store.get("code") or "codex_goal_failed",
-        "engine": "codex",
-        "error": store.get("error") or f"Codex goal {action} failed",
-        "app_server_ok": app_server_ok,
-    }
+    return {"ok": True, "engine": "codex", "via": "codex-goal-store",
+            "action": action, "session_id": sid, "app_server_ok": True, "goal": goal}
 
 
 def _codex_grab_back_settings_params(session_id, cwd=None, model=None, reasoning_effort=None):

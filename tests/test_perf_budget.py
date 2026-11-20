@@ -131,7 +131,7 @@ def test_healthcheck_session_probe_stops_after_first_file(monkeypatch, tmp_path)
     assert seen == 1
 
 
-def test_archive_list_projection_keeps_renderer_and_lifecycle_contract():
+def test_archive_list_projection_keeps_renderer_and_lifecycle_contract(monkeypatch):
     """The slim sidebar response must retain every current row-critical field."""
     now = 2_000_000.0
     transcript = " ".join(
@@ -192,6 +192,9 @@ def test_archive_list_projection_keeps_renderer_and_lifecycle_contract():
         "last_assistant_text": transcript,
         "debug": {"transcript": transcript},
     }
+    monkeypatch.setattr(server, "_codex_goals_snapshot", lambda: {
+        row["session_id"]: {"objective": row["goal"], "status": row["goal_status"]},
+    })
 
     payload = server._archive_list_payload([row], window="1d", now=now)
 

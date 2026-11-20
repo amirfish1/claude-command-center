@@ -18244,21 +18244,21 @@ def _archive_list_delta_state(key, rows, window, from_cache):
     # Inputs of the row projection that are not part of the row itself: any
     # change invalidates every older token (the client gets a full body).
     # Overlay rows stay out: every delta resends them whole.
-    titles = _archive_list_title_overlays()
+    row_overlays = _archive_list_row_overlays()
     from ccc_server import continuation_topics
     topic_revision = continuation_topics.revision()
     graph_revision = _session_graph.projection_revision()
     ctx = hashlib.sha1(json.dumps(
-        [key, window, graph_revision, resumes, ideas, titles, topic_revision],
+        [key, window, graph_revision, resumes, ideas, row_overlays, topic_revision],
         sort_keys=True, separators=(",", ":"), default=str,
     ).encode()).hexdigest()[:12]
     # Ticket updates run on every projection replay. They still invalidate
     # HTTP bodies/delta tokens, without reprojecting unchanged archive rows.
     projection_ctx = hashlib.sha1(json.dumps(
-        [key, window, graph_revision, resumes, titles, topic_revision],
+        [key, window, graph_revision, resumes, row_overlays, topic_revision],
         sort_keys=True, separators=(",", ":"), default=str,
     ).encode()).hexdigest()[:12]
-    _archive_delta_ctx_remember(ctx, key, window, resumes, ideas, titles, topic_revision)
+    _archive_delta_ctx_remember(ctx, key, window, resumes, ideas, row_overlays, topic_revision)
     ovl = hashlib.sha1(json.dumps(
         extra, sort_keys=True, separators=(",", ":"), default=str,
     ).encode()).hexdigest()[:8] if extra else "0"
@@ -18267,6 +18267,7 @@ def _archive_list_delta_state(key, rows, window, from_cache):
         "nonce": _ARCHIVE_DELTA_NONCE, "ver": ver, "ctx": ctx,
         "track_since": track_since, "row_rev": row_rev,
         "base": base, "extra": extra, "projection_ctx": projection_ctx,
+        "row_overlays": row_overlays,
     }
 
 
@@ -18397,7 +18398,8 @@ def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=
                 or sid in extra_sids
                 or id(r) in ancestor_ids):
             changed.append(r)
-    projected = _archive_list_project_rows(changed, window="all", now=now)
+    projected = _archive_list_project_rows(changed, window="all", now=now,
+                                           _row_overlays=state.get("row_overlays"))
     order_token = _archive_list_order_token(ids)
     same_order = saved_order == order_token
     payload = {
@@ -19001,6 +19003,16 @@ def _archive_list_title_overlays():
     return titles
 
 
+def _archive_list_row_overlays():
+    # Goal changes do not touch transcript rows or their archive revision.
+    # Use the same snapshot in the body and the delta context.
+    overlays = _archive_list_title_overlays()
+    for sid, goal in _codex_goals_snapshot().items():
+        overlays.setdefault(sid, {}).update(goal=goal.get("objective") or "",
+                                            goal_status=goal.get("status") or "")
+    return overlays
+
+
 def _archive_list_parent_ids(row, parents):
     sid = _archive_row_sid(row)
     return {str(value) for value in (
@@ -19056,7 +19068,7 @@ def _archive_list_window_rows(rows, cutoff, idea_tickets_by_sid, parents, *, anc
 
 
 def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _inputs=None,
-                               _retain_templates=True):
+                               _retain_templates=True, _row_overlays=None):
     # Request-local diagnostics distinguish CPU work from GIL/lock waits on
     # the real corpus, without the per-call overhead of a Python profiler.
     phase_wall = time.perf_counter() if phases is not None else 0
@@ -19100,15 +19112,17 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _in
         for row, template in zip(window_rows, templates)
     ]
     phase("rows")
-    # Persisted row snapshots may predate the title or this projection field.
-    # One cached snapshot for the batch; never scan history to refresh names.
-    titles = _archive_list_title_overlays()
+    # Persisted rows may predate a goal change or a title override.
+    row_overlays = _archive_list_row_overlays() if _row_overlays is None else _row_overlays
     drivers = _session_graph.driver_snapshot()
     for out in projected:
         sid = out.get("session_id") or out.get("id")
         if sid in drivers:
             out.update(_driver.fields(out, sid, observed=drivers[sid]))
-        out.update(titles.get(out.get("session_id") or out.get("id"), {}))
+        if (out.get("engine") == "codex" and ("goal" in out or "goal_status" in out)
+                and not (out.get("cloud") or out.get("codex_cloud"))):
+            out.update(goal="", goal_status="")
+        out.update(row_overlays.get(sid, {}))
     phase("titles_drivers")
     # Resolve topic identity independently of which ancestors are loaded in
     # this response, after applying the current explicit title overrides.
@@ -20045,10 +20059,10 @@ def _archive_list_initial_payload(rows, *, window="all", now=None, cached=None, 
 
 
 def _archive_list_payload(rows, *, window="all", now=None, cached=None, phases=None, _inputs=None,
-                          _retain_templates=True):
+                          _retain_templates=True, _row_overlays=None):
     window = _archive_list_window(window)
     projected = _archive_list_project_rows(rows, window=window, now=now, phases=phases, _inputs=_inputs,
-                                           _retain_templates=_retain_templates)
+                                           _retain_templates=_retain_templates, _row_overlays=_row_overlays)
     if window == "all":
         _trace_row_flicker(projected, now=now)
     payload = {
@@ -20093,11 +20107,13 @@ def _archive_list_projection_diag(window, key, hit):
 
 
 def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=None, phases=None):
+    row_overlays = delta.get("row_overlays") if delta else None
     if not delta or not delta.get("extra"):
         # Unversioned All reads sweep the cold store. Reuse matching templates
         # without letting that sweep evict the scoped sidebar's working set.
         return _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
-                                     _retain_templates=window != "all" or bool(delta))
+                                     _retain_templates=window != "all" or bool(delta),
+                                     _row_overlays=row_overlays)
     window = _archive_list_window(window)
     now = time.time() if now is None else now
     try:
@@ -20106,7 +20122,8 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
         resume_fields = {sid: usage_limit_resume_at_for_session(sid, resumes=resumes)
                          for sid in resumes}
     except Exception:
-        return _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases)
+        return _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
+                                     _row_overlays=row_overlays)
     parents = _session_graph.parent_snapshot()
     selected = _archive_list_window_rows(
         rows, _archive_list_window_cutoff(window, now=now), ideas, parents)
@@ -20117,7 +20134,8 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
     # Missing/duplicate identities cannot safely address replacement spans.
     if (not all(ids) or len(set(ids)) != len(ids) or not all(overlay_ids)
             or len(set(overlay_ids)) != len(overlay_ids) or base_ids.intersection(overlay_ids)):
-        return _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases)
+        return _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
+                                     _row_overlays=row_overlays)
     # These two fields are copied by projection, not used by topic/driver
     # resolution. Window membership is checked separately on every request.
     # Keep presence in the guard, and every other overlay field unchanged.
@@ -20141,7 +20159,8 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
         phases["projection_cache"] = _archive_list_projection_diag(window, key, entry is not None)
     if entry is None:
         payload = _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
-                                       _inputs=(resumes, parents, ideas, selected))
+                                       _inputs=(resumes, parents, ideas, selected),
+                                       _row_overlays=row_overlays)
         entry = _list_replay.encode_rows(payload["conversations"], overlay_set)
         raw = entry[0]
         if projection_ctx is not None:

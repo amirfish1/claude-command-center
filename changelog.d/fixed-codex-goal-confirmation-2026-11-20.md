@@ -1,0 +1,1 @@
+- Report native Codex goal failures without a success banner, and keep confirmed goals current in the sidebar.

@@ -2138,25 +2138,20 @@ def _inject_text_into_session_router(
                 text,
                 submit_key=submit_key,
             )
-        # Non-live fallback: `/goal` is codex's native goal command, but its
-        # slash only runs in a live TUI. For a dormant thread, drive the same
-        # native goal store directly — `/goal clear` clears, `/goal <objective>`
-        # sets, and pause/resume update the goal status. `edit` still needs a
-        # live TUI because the button form carries no replacement objective.
+        # The native app-server can change a goal without an attached TUI.
+        # Edit still needs a live TUI because it carries no new objective.
         if _first_tok == "/goal":
             _goal_rest = text.strip()[len("/goal"):].strip()
             _goal_sub = _goal_rest.split(None, 1)[0].lower() if _goal_rest else ""
-            if _goal_sub == "clear":
-                res = _core._codex_goal_via_app_server(session_id, "clear", cwd=cwd)
-                res.setdefault("engine", "codex")
-                return res
-            if _goal_sub in ("pause", "resume"):
-                res = _core._codex_goal_via_app_server(session_id, _goal_sub, cwd=cwd)
+            goal_origin = source == "composer" and not wt_origin and not peer_sender_sid
+            if _goal_sub in ("clear", "pause", "resume"):
+                res = _core._codex_goal_via_app_server(
+                    session_id, _goal_sub, cwd=cwd, user_initiated=goal_origin)
                 res.setdefault("engine", "codex")
                 return res
             if _goal_rest and _goal_sub not in ("edit", "pause", "resume"):
                 res = _core._codex_goal_via_app_server(
-                    session_id, "set", objective=_goal_rest, cwd=cwd
+                    session_id, "set", objective=_goal_rest, cwd=cwd, user_initiated=goal_origin
                 )
                 res.setdefault("engine", "codex")
                 return res

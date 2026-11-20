@@ -1422,7 +1422,7 @@ document.addEventListener('click', async (ev) => {
     btn.disabled = true;
     btn.textContent = '...';
     try {
-      const data = await (0, sharedState.postInjectInput)(sid, command);
+      const data = await (0, sharedState.postInjectInput)(sid, command, undefined, { userInitiated: true });
       if (!data.ok) throw new Error(data.error || 'goal action failed');
       (0, sharedState.applyOptimisticConversationGoalAction)(row, action);
       (0, sharedState.renderConversationGoalStrip)((0, sharedState.activePaneId)(), row);

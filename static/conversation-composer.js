@@ -347,17 +347,15 @@
         // then let the existing per-transport branches add their toast/echo.
         renderConvWakeOutcome(getConvViewForPane(paneId || activePaneId()) || getConvView(), data);
         if (data.via === 'codex-goal-store') {
-          // Dormant Codex /goal commands update the native goal store directly;
-          // they deliberately do not write a user_message to the transcript.
-          // Treat that durable store update as the echo's terminal state rather
-          // than leaving a blue "Delivered — waiting" bubble forever.
+          // Codex acknowledges goal commands separately from normal sends,
+          // so finish the pending echo when the goal update is confirmed.
           removePendingSendEcho(pendingSend);
           clearOptimisticAgentIndicator(getConvViewForPane(paneId || activePaneId()) || getConvView());
           const row = currentConversationRow();
-          if (row) {
-            if (data.action === 'set') {
-              row.goal = text.replace(/^\/goal\s+/i, '').trim();
-              row.goal_status = 'active';
+          if (row && (row.session_id || row.id) === sid) {
+            if (data.goal) {
+              row.goal = data.goal.objective;
+              row.goal_status = data.goal.status;
             } else {
               applyOptimisticConversationGoalAction(row, data.action);
             }
