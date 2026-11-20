@@ -238,6 +238,7 @@ def _perf_tickets_enabled():
 _TAIL_READ_BYTES = 2 * 1024 * 1024  # the JSONL sink grows forever; only tail this much
 _OPEN_STATUSES = {"open", "in_progress", "claimed", "blocked",
                   "awaiting_answer", "in_review"}
+_PERF_INVESTIGATION_STATUSES = _OPEN_STATUSES | {"awaiting_release"}
 _PERF_TICKET_UPDATE_S = 6 * 3600
 
 
@@ -265,30 +266,35 @@ def _ticket_perf_topic(ticket):
 
 
 def _existing_perf_ticket(topic):
-    """Return (lookup succeeded, oldest matching investigation).
+    """Return (lookup complete, preferred matching investigation).
 
     Inspect the queue, not just the last auto-filed ref: another metric or
     a human may already have opened the investigation. A failed lookup
     must never be interpreted as an empty queue.
     """
-    rc, out = _wt_run(["ls", "-q", "CCC", "--status", "active",
-                       "--limit", "0", "--json"])
-    if rc != 0:
-        return False, None
-    try:
-        tickets = json.loads(out)
-    except (TypeError, ValueError):
-        return False, None
-    if not isinstance(tickets, list) or any(not isinstance(t, dict) for t in tickets):
-        return False, None
-    matching = [t for t in tickets
-                if t.get("ref") and t.get("status") in _OPEN_STATUSES
-                and not t.get("duplicate_of") and _ticket_perf_topic(t) == topic]
-    # Prefer an explicit investigation over an automatically filed symptom.
+    matching = []
+    complete = True
+    # WatchTower omits awaiting_release from "active". Read the release
+    # holds first so an adoption between reads remains visible in "active".
+    for status in ("awaiting_release", "active"):
+        rc, out = _wt_run(["ls", "-q", "CCC", "--status", status,
+                           "--limit", "0", "--json"])
+        try:
+            tickets = json.loads(out) if rc == 0 else None
+        except (TypeError, ValueError):
+            tickets = None
+        if not isinstance(tickets, list) or any(not isinstance(t, dict) for t in tickets):
+            complete = False
+            continue
+        matching.extend(t for t in tickets
+                        if t.get("ref") and t.get("status") in _PERF_INVESTIGATION_STATUSES
+                        and not t.get("duplicate_of") and _ticket_perf_topic(t) == topic)
+    # Prefer an active owner and, among those, an explicit investigation.
     matching.sort(key=lambda t: (
+        t.get("status") == "awaiting_release",
         str(t.get("title") or "").lower().startswith("[perf]"),
         t.get("created_at") or "", t["ref"]))
-    return True, matching[0] if matching else None
+    return complete, matching[0] if matching else None
 
 
 # ---------------------------------------------------------------------------
@@ -1164,7 +1170,7 @@ def perf_ticket_check_once(now=None):
             state.update({k: v for k, v in topic_state.items() if k.startswith("last_")})
             _save_ticket_state(state)
             return "open-ticket-exists"
-        if str(topic_state.get("last_status") or "").lower() in _OPEN_STATUSES:
+        if str(topic_state.get("last_status") or "").lower() in _PERF_INVESTIGATION_STATUSES:
             return "open-ticket-exists"
         if not lookup_ok:
             return "wt-unavailable"

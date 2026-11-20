@@ -59,7 +59,13 @@ class FakeWt:
     def __call__(self, args, timeout):
         self.calls.append(list(args))
         if args[0] == "ls":
-            return (self.list_rc, json.dumps(self.tickets))
+            status = args[args.index("--status") + 1]
+            statuses = (status,)
+            if status == "active":
+                statuses = ("open", "in_progress", "in_review", "awaiting_answer")
+            return (self.list_rc, json.dumps([
+                ticket for ticket in self.tickets if ticket["status"] in statuses
+            ]))
         if args[0] == "comment":
             return (0, "")
         if args[0] == "find":
@@ -482,6 +488,26 @@ class TestPerfTicketCheckOnce(PerfEventsTestBase):
         pe._WT_RUNNER = fake
         self.assertEqual(pe.perf_ticket_check_once(now), "open-ticket-exists")
         self.assertFalse(any(c[0] == "add" for c in fake.calls))
+
+    def test_release_wait_reuses_topic_until_it_closes(self):
+        now = time.time()
+        self._seed_breach(now)
+        fake = FakeWt()
+        owner = {"ref": "CCC-500", "status": "awaiting_release",
+                 "title": "[perf] slow list read: p95 4000ms"}
+        fake.tickets = [owner]
+        pe._WT_RUNNER = fake
+
+        self.assertEqual(pe.perf_ticket_check_once(now), "open-ticket-exists")
+        comment = next(call for call in fake.calls if call[0] == "comment")
+        self.assertEqual(comment[1], owner["ref"])
+        self.assertIn("kind=archive_load", comment[2])
+        self.assertFalse(any(call[0] == "add" for call in fake.calls))
+
+        owner["status"] = fake.find_status = "closed"
+        later = now + pe._PERF_TICKET_UPDATE_S
+        self._seed_breach(later)
+        self.assertEqual(pe.perf_ticket_check_once(later), "filed:CCC-501")
 
     def test_unrelated_topic_does_not_suppress_sidebar_alert(self):
         now = time.time()
