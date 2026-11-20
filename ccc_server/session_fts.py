@@ -1308,15 +1308,21 @@ def _drain_embeddings(conn: sqlite3.Connection, embed_jobs: list[tuple[str, list
         return
 
     if not embed_jobs:
-        pending = [r[0] for r in conn.execute("SELECT sid FROM semb_pending")]
-        if pending:
-            rows = conn.execute(
-                f"SELECT sid, title, prompts, report FROM sdoc WHERE {sdoc_rowids_sql(len(pending))}", pending,
-            ).fetchall()
-            for sid, title, prompts, report in rows:
-                first_prompt = (prompts or "").split("\n---\n")[0]
-                r = {"title": title, "first_prompt": first_prompt, "final_text": report, "user_text": prompts}
-                embed_jobs.append((sid, _session_chunks(r)))
+        # Take the same first rowids as the unbounded read would deliver,
+        # before loading document text. Unmatched pending ids take no slots.
+        rows = conn.execute("""
+            SELECT sid, title, prompts, report FROM sdoc
+            WHERE rowid IN (
+                SELECT DISTINCT rid FROM sdoc_map
+                WHERE sid IN (SELECT sid FROM semb_pending)
+                ORDER BY rid LIMIT ?
+            )
+            ORDER BY rowid
+            """, (_MAX_EMBED_SESSIONS_PER_SYNC,)).fetchall()
+        for sid, title, prompts, report in rows:
+            first_prompt = (prompts or "").split("\n---\n")[0]
+            r = {"title": title, "first_prompt": first_prompt, "final_text": report, "user_text": prompts}
+            embed_jobs.append((sid, _session_chunks(r)))
 
     if not embed_jobs:
         return
@@ -1353,19 +1359,19 @@ def _drain_embeddings(conn: sqlite3.Connection, embed_jobs: list[tuple[str, list
 def _backfill_missing_embeddings(conn: sqlite3.Connection) -> int:
     """Queue one bounded slice of sdoc sids that have no semb row at all into
     semb_pending, so the normal drain picks them up. Covers sdoc rows that
-    were indexed before semb_pending queueing existed (or from any other gap
-    between sdoc and semb) -- never a full-corpus scan, and never called on a
-    user-facing path. Returns the number of sids queued."""
-    rows = fetch_rows(conn,
-        """
-        SELECT sid FROM sdoc
-        WHERE sid NOT IN (SELECT sid FROM semb)
-          AND sid NOT IN (SELECT sid FROM semb_pending)
-        LIMIT ?
-        """,
-        (_MAX_EMBED_SESSIONS_PER_SYNC,),
-        ("sid",),
-    )
+    were indexed before pending queueing existed and gaps between sdoc and
+    semb. The row map keeps document bodies out of the background search."""
+    missing = "sid NOT IN (SELECT sid FROM semb) AND sid NOT IN (SELECT sid FROM semb_pending)"
+    params = (_MAX_EMBED_SESSIONS_PER_SYNC,)
+    try:
+        rows = fetch_rows(conn,
+            f"SELECT sid FROM sdoc_map WHERE {missing} ORDER BY rid LIMIT ?", params, ("sid",))
+    except sqlite3.OperationalError as exc:
+        if str(exc) != "no such table: sdoc_map":
+            raise
+        # An old index can still be waiting for the background migration.
+        rows = fetch_rows(conn,
+            f"SELECT sid FROM sdoc WHERE {missing} LIMIT ?", params, ("sid",))
     if not rows:
         return 0
     with conn:

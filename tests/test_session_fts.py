@@ -368,6 +368,36 @@ def _insert_sdoc_row(conn, sid: str) -> None:
     conn.execute("INSERT INTO sdoc_map (sid, rid) VALUES (?, ?)", (sid, cur.lastrowid))
 
 
+def test_drain_only_chunks_the_next_documents_in_index_order(fts_env, monkeypatch):
+    conn = session_fts._get_connection()
+    session_fts._init_db(conn)
+    for sid in ("z-first-row", "b-second-row", "a-third-row"):
+        _insert_sdoc_row(conn, sid)
+        conn.execute("UPDATE sdoc SET title = ? WHERE rowid IN "
+                     "(SELECT rid FROM sdoc_map WHERE sid = ?)", (sid, sid))
+    conn.executemany("INSERT INTO semb_pending (sid) VALUES (?)", [
+        ("a-third-row",), ("b-second-row",), ("0-no-document",), ("z-first-row",),
+    ])
+    conn.commit()
+
+    chunked = []
+
+    def chunks(row):
+        chunked.append(row["title"])
+        return [("card", row["title"])]
+
+    monkeypatch.setattr(session_fts, "_MAX_EMBED_SESSIONS_PER_SYNC", 2)
+    monkeypatch.setattr(session_fts, "_ollama_available", lambda: True)
+    monkeypatch.setattr(session_fts, "_session_chunks", chunks)
+    monkeypatch.setattr(session_fts, "_embed_texts", lambda texts: [[1.0, 0.0] for _ in texts])
+    session_fts._drain_embeddings(conn, [])
+
+    assert chunked == ["z-first-row", "b-second-row"]
+    assert {row[0] for row in conn.execute("SELECT sid FROM semb_pending")} == {
+        "a-third-row", "0-no-document",
+    }
+
+
 def test_backfill_missing_embeddings_queues_unembedded_sdoc_sids(fts_env):
     """sdoc rows with no matching semb row (the historical-outage backlog, or
     any other sdoc/semb gap) get queued into semb_pending; rows that already
