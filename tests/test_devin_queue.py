@@ -850,6 +850,31 @@ class DevinListPerfTests(unittest.TestCase):
         self.assertFalse(devin_mod._devin_title_is_tool_dump(""))
         self.assertFalse(devin_mod._devin_title_is_tool_dump(None))
 
+    def test_devin_list_reuses_folder_probes_only_within_a_rebuild(self):
+        server, devin_mod, db_path, _ = self._setup()
+        worktree = pathlib.Path(db_path).parent / "project-wt-lane"
+        cwd = worktree / "child"
+        cwd.mkdir(parents=True)
+        with sqlite3.connect(db_path) as con:
+            con.execute("UPDATE sessions SET working_directory=? WHERE id='alpha-one'", (str(cwd),))
+        pins = {"devincli-beta-two": str(cwd)}
+
+        with mock.patch.object(server, "_load_repo_pins", return_value=pins), \
+             mock.patch.object(server, "_resolve_dir_case", side_effect=os.path.basename), \
+             mock.patch.object(server, "_find_git_root", side_effect=[str(worktree), None]) as root:
+            first = server.find_devin_cli_conversations(include_old=True)
+            devin_mod._DEVIN_CLI_LIST_CACHE.clear()
+            second = server.find_devin_cli_conversations(include_old=True)
+
+        self.assertEqual(root.call_args_list, [mock.call(str(cwd)), mock.call(str(cwd))])
+        for rows, expected in ((first, (str(worktree), "project", "lane")),
+                               (second, (str(cwd), "child", None))):
+            self.assertEqual(len(rows), 2)
+            for row in rows:
+                self.assertEqual(row["session_cwd"], str(cwd))
+                self.assertTrue(row["session_cwd_exists"])
+                self.assertEqual((row["folder_path"], row["folder_label"], row["worktree_label"]), expected)
+
     def test_devin_list_memoizes_per_session_fields(self):
         server, devin_mod, db_path, now = self._setup()
         orig = devin_mod._devin_cli_row_fields_for_session

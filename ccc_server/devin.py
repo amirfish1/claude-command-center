@@ -2217,6 +2217,29 @@ def _find_devin_cli_db_conversations(
         )
 
 
+def _devin_cli_folder_fields(session_cwd):
+    folder_path = session_cwd or ""
+    wd_exists = False
+    if session_cwd:
+        try:
+            folder_path = _core._find_git_root(session_cwd) or session_cwd
+        except Exception:
+            pass
+        folder_label = _core._resolve_dir_case(folder_path) or Path(folder_path).name
+        try:
+            wd_exists = Path(session_cwd).is_dir()
+        except OSError:
+            pass
+    else:
+        folder_label = "Devin"
+    worktree_label = None
+    wt_idx = folder_label.find("-wt-")
+    if wt_idx > 0:
+        worktree_label = folder_label[wt_idx + 4:]
+        folder_label = folder_label[:wt_idx]
+    return folder_path, folder_label, worktree_label, wd_exists
+
+
 def _find_devin_cli_conversations_locked(
     repo_path=None,
     include_old=False,
@@ -2321,6 +2344,7 @@ def _find_devin_cli_conversations_locked(
 
     rows = []
     raw_id_to_con = {}
+    folder_by_cwd = {}
     # One probe for the whole scan: whether the Devin ACP delivery path
     # (acp.py's _devin_acp_try_steer) could be attempted at all. Not
     # per-session — the `devin acp` connection is attached lazily by the
@@ -2388,34 +2412,9 @@ def _find_devin_cli_conversations_locked(
             # honor a repo pin, walk up to the git root for the label, and split
             # out a sibling worktree suffix so the UI badge renders correctly.
             session_cwd = pinned or working_dir or None
-            folder_path = pinned or working_dir or ""
-            git_root = ""
-            if folder_path:
-                try:
-                    git_root = _core._find_git_root(folder_path) or ""
-                except Exception:
-                    git_root = ""
-            if git_root:
-                folder_path = git_root
-                folder_label = _core._resolve_dir_case(git_root) or Path(git_root).name
-            elif folder_path:
-                folder_label = _core._resolve_dir_case(folder_path) or Path(folder_path).name
-            else:
-                folder_label = "Devin"
-            worktree_label = None
-            wt_idx = folder_label.find("-wt-")
-            if wt_idx > 0:
-                worktree_label = folder_label[wt_idx + 4:]
-                folder_label = folder_label[:wt_idx]
-            folder_label_chip = "Devin" if not folder_path else ""
-
-            # Check if the working directory exists.
-            wd_exists = False
-            if session_cwd:
-                try:
-                    wd_exists = Path(session_cwd).is_dir()
-                except OSError:
-                    pass
+            if session_cwd not in folder_by_cwd:
+                folder_by_cwd[session_cwd] = _devin_cli_folder_fields(session_cwd)
+            folder_path, folder_label, worktree_label, wd_exists = folder_by_cwd[session_cwd]
             raw_id_to_con[raw_id] = con
             rows.append({
                 "_raw_id": raw_id,
@@ -2451,7 +2450,7 @@ def _find_devin_cli_conversations_locked(
                 "jsonl_path": "",
                 "folder_label": folder_label,
                 "folder_path": folder_path,
-                "folder_label_chip": folder_label_chip,
+                "folder_label_chip": "Devin" if not folder_path else "",
                 "worktree_label": worktree_label,
                 "session_cwd": session_cwd,
                 "session_cwd_exists": wd_exists,
