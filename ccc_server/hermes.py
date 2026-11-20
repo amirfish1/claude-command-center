@@ -2063,10 +2063,11 @@ def _hermes_reasoning_visible():
     return os.environ.get("CCC_HERMES_SHOW_REASONING", "0").lower() in ("1", "true", "yes", "on")
 
 
-def _parse_hermes_message(msg, line_num, session_row=None):
+def _parse_hermes_message(msg, line_num, session_row=None, *, messages_only=False):
     role = str(msg.get("role") or "").lower()
     ts = _hermes_iso(msg.get("timestamp") or msg.get("created_at"))
-    text = _hermes_visible_text(msg.get("content"))
+    text = (_hermes_visible_text(msg.get("content"))
+            if not messages_only or role in ("user", "human", "assistant") else "")
     # Where the row came from. The same database holds gateway chats, cron and
     # worker runs, and nothing else on a row tells them apart.
     source = str((session_row or {}).get("source") or "")
@@ -2094,20 +2095,24 @@ def _parse_hermes_message(msg, line_num, session_row=None):
                 })
         if text:
             blocks.append({"kind": "text", "text": text})
-        tool_blocks = [_core._hermes_tool_block(call) for call in _hermes_tool_calls(msg.get("tool_calls"))]
-        blocks.extend(tool_blocks)
-        if not text and not tool_blocks:
+        tool_calls = _hermes_tool_calls(msg.get("tool_calls"))
+        if not messages_only:
+            blocks.extend(_core._hermes_tool_block(call) for call in tool_calls)
+        if not text and not tool_calls:
             # JSON-mode / structured reply: content is a bare object with no
             # whitelisted text key. Render it raw rather than dropping the turn,
             # with a distilled one-liner above it when it reads like a decision.
             raw = _hermes_raw_content_text(msg.get("content"))
             if raw:
                 block = {"kind": "text", "text": raw}
-                summary = _core._hermes_decision_summary(msg.get("content"))
-                if summary:
-                    block["summary"] = summary
+                if not messages_only:
+                    summary = _core._hermes_decision_summary(msg.get("content"))
+                    if summary:
+                        block["summary"] = summary
                 blocks.append(block)
-        if blocks:
+        # Keep the line occupied even when its only blocks were tool calls.
+        # The sidebar uses the same absolute cursor as the full transcript.
+        if blocks or tool_calls:
             ev = {
                 "line": line_num,
                 "ts": ts,
@@ -2122,7 +2127,7 @@ def _parse_hermes_message(msg, line_num, session_row=None):
             return ev
         return None
     if role in ("tool", "function") or msg.get("tool_name") or msg.get("tool_call_id"):
-        if not text:
+        if not text and not messages_only:
             text = _hermes_visible_text(msg.get("tool_calls")) or _hermes_raw_content_text(msg.get("content"))
         if len(text) > 800:
             text = text[:800] + "\n..."
@@ -2240,7 +2245,7 @@ def _parse_hermes_bridge_conversation(session_id, after_line=0):
     return {"events": visible, "last_line": line}
 
 
-def _parse_hermes_conversation(session_id, after_line=0):
+def _parse_hermes_conversation(session_id, after_line=0, *, messages_only=False):
     kind = _hermes_external_session_kind(session_id)
     if kind == "pending":
         return _parse_hermes_pending_conversation(session_id, after_line=after_line)
@@ -2271,7 +2276,7 @@ def _parse_hermes_conversation(session_id, after_line=0):
             last_ep = 0.0
             order = 0
             for msg in _hermes_fetch_messages(con, sid):
-                parsed = _parse_hermes_message(msg, 0, row)
+                parsed = _parse_hermes_message(msg, 0, row, messages_only=messages_only)
                 if parsed:
                     ep = _hermes_epoch(msg.get("timestamp") or msg.get("created_at")) or last_ep
                     last_ep = ep

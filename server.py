@@ -29471,7 +29471,7 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
     Engines whose source formats require a full parse apply the same window to
     their resulting structured event stream before returning it.
 
-    `messages_only` lets the sidebar skip native Codex tool formatting and
+    `messages_only` lets the sidebar skip native tool formatting and
     Antigravity token enrichment. `message_cursor` is the last line the
     sidebar already read.
     """
@@ -29539,6 +29539,8 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
         return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "hermes":
+        if messages_only:
+            return _parse_hermes_conversation(conversation_id, after_line=after_line, messages_only=True)
         result = _parse_hermes_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
         return {"events": list(result.get("events") or []), "last_line": result.get("last_line", 0)}

@@ -1,5 +1,7 @@
 """Message-only, bounded live row feed; no list polling required."""
 import json
+import sqlite3
+from contextlib import closing
 from unittest import mock
 
 import pytest
@@ -50,6 +52,49 @@ def test_only_agent_message_text_is_explanation():
     for kind in ("thinking", "tool_use", "plan", "tool_result"):
         assert message_text({"type": "assistant", "blocks": [{"kind": kind, "text": "secret tool detail"}]}) == ""
     assert message_text({"type": "result", "text": "tool output"}) == ""
+
+
+def test_hermes_message_only_read_preserves_lineage_and_cursor(tmp_path, monkeypatch):
+    db = tmp_path / "state.db"
+    with closing(sqlite3.connect(db)) as con, con:
+        con.executescript("""
+            CREATE TABLE sessions (id TEXT PRIMARY KEY, parent_session_id TEXT);
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT,
+                timestamp REAL, tool_calls TEXT, reasoning TEXT
+            );
+            INSERT INTO sessions VALUES ('parent', NULL), ('child', 'parent');
+        """)
+        con.executemany(
+            "INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (1, "parent", "user", "Check the output", 1, None, None),
+                (2, "parent", "assistant", None, 2, '[{"name":"Read"}]', None),
+                (3, "parent", "tool", "retained tool output", 3, None, None),
+                (4, "child", "assistant", None, 4, None, "Private reasoning"),
+                (5, "child", "assistant", '{"intent":"ready"}', 5, None, None),
+            ],
+        )
+    monkeypatch.setattr(server, "_detect_session_engine", lambda _sid: "hermes")
+    monkeypatch.setattr(server, "_hermes_db_for_session", lambda _sid: db)
+    monkeypatch.setenv("CCC_HERMES_SHOW_REASONING", "1")
+
+    with mock.patch.object(server, "_conv_parse_cache_put") as cache_put:
+        full = server.parse_conversation("child", tail=80)
+        sidebar = server.parse_conversation("child", tail=80, messages_only=True)
+        cache_put.assert_called_once_with("child", 0, None, full)
+
+    def consumed(result):
+        return [(e["line"], e["type"], e["ts"], message_text(e),
+                 e.get("text") if e["type"] == "user_text" else None)
+                for e in result["events"]]
+
+    assert consumed(sidebar) == consumed(full)
+    assert sidebar["last_line"] == full["last_line"]
+    assert any(b["kind"] == "tool_use" for e in full["events"] for b in e.get("blocks", []))
+    assert all(b["kind"] != "tool_use" for e in sidebar["events"] for b in e.get("blocks", []))
+    assert any(e["type"] == "tool_result" and not e["text"] for e in sidebar["events"])
+    assert '"intent": "ready"' in message_text(sidebar["events"][-1])
 
 
 def test_new_message_arrives_from_transcript_without_archive_poll():
