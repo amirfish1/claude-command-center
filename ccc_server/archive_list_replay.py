@@ -18,6 +18,7 @@ from ccc_server.bounded_cache import ByteBudgetCache
 # Snapshot versions change when only a few rows change. Keep small encoded
 # runs reusable across those versions, bounded independently of full bodies.
 _RUN_CACHE = ByteBudgetCache(32 * 1024 * 1024, 512)
+_HISTORY_MANIFESTS = ByteBudgetCache(4 * 1024 * 1024, 32)
 _RUN_MAX_ROWS = 256
 _RUN_BOUNDARY_MASK = 63
 
@@ -50,6 +51,59 @@ def payload_fingerprint(payload):
     except (TypeError, ValueError, pickle.PicklingError, RecursionError):
         return None
     return writer.digest.digest()
+
+
+def order_token(ids):
+    """Identify the exact visible order independently of row contents."""
+    return hashlib.sha256(json.dumps(ids, separators=(",", ":")).encode()).hexdigest()
+
+
+def history_delta(payload, scope, nonce, since, saved_order):
+    """Compare final history rows when the hot snapshot cannot supply revisions.
+
+    A manifest retains only fingerprints. An unchanged run already exists in
+    the client's base, even if it moved. Send the complete current order and
+    rows from changed runs so removals and insertions can be applied exactly.
+    """
+    rows = payload["conversations"]
+    ids, seen, runs = [], set(), []
+    start = 0
+    for end, row in enumerate(rows, 1):
+        sid = row.get("session_id") or row.get("id")
+        if not isinstance(sid, str) or not sid or sid in seen:
+            return payload, None
+        ids.append(sid)
+        seen.add(sid)
+        if (end - start == _RUN_MAX_ROWS or end == len(rows)
+                or zlib.crc32(sid.encode("utf-8", "surrogatepass")) & _RUN_BOUNDARY_MASK == 0):
+            digest = payload_fingerprint(rows[start:end])
+            if digest is None:
+                return payload, None
+            runs.append((digest, start, end))
+            start = end
+
+    metadata = payload_fingerprint({key: value for key, value in payload.items() if key != "conversations"})
+    if metadata is None:
+        return payload, None
+    fingerprint = hashlib.sha256(metadata + b"".join(digest for digest, _, _ in runs)).digest()
+    token = f"{nonce}.history.{fingerprint.hex()}"
+    if since == token:
+        return None, None
+
+    previous = _HISTORY_MANIFESTS.get((scope, since)) if since else None
+    current = frozenset(digest for digest, _, _ in runs)
+    _HISTORY_MANIFESTS.put((scope, token), current, 512 + 128 * len(current))
+    order = order_token(ids)
+    payload.update(order_token=order, delta_token=token)
+    if previous is not None and previous.intersection(current):
+        changed = [row for digest, start, end in runs if digest not in previous for row in rows[start:end]]
+        same_order = saved_order == order
+        payload.update(conversations=changed, delta=True, since=since, ids=[] if same_order else ids)
+        if same_order:
+            payload["same_order"] = True
+        return payload, None
+    # Domain-separate the assembled manifest from the plain payload guard.
+    return payload, (nonce, fingerprint)
 
 
 def _encoded_run(rows):

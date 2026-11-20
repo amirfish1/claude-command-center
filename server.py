@@ -18354,7 +18354,7 @@ def _archive_list_delta_reject(state, since):
 
 def _archive_list_order_token(ids):
     """Identify the exact visible order, independently of the delta version."""
-    return hashlib.sha256(json.dumps(ids, separators=(",", ":")).encode()).hexdigest()
+    return _list_replay.order_token(ids)
 
 
 def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=None,
@@ -37119,7 +37119,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 _status = self._send_archive_list_json(
                     list_cache_key, window, from_cache, _timed_payload,
                     (body_ver, _delta["ctx"]) if _delta is not None else body_ver,
-                    diagnostics=_body_cache_diag,
+                    diagnostics=_body_cache_diag, since=since, saved_order=saved_order,
                 )
             _lt2 = time.perf_counter()
             record_diag("list_server", (_lt2 - _lt0) * 1000.0, {
@@ -47736,7 +47736,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             pass
 
     def _send_archive_list_json(self, cache_key, window, from_cache, build_payload, snap_ver,
-                                diagnostics=None):
+                                diagnostics=None, *, since="", saved_order=""):
         """send_json for /api/conversations/list: same etag/304/gzip
         semantics, but the serialized body + sha1 etag + gzip copy are built
         once per (cache key, window, snapshot version) and replayed for every
@@ -47749,12 +47749,20 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         if window == "all" and not snap_ver:
             from ccc_server.list_encoding import history_representation
 
+            payload, fingerprint = _list_replay.history_delta(
+                build_payload(), cache_key, _ARCHIVE_DELTA_NONCE, since, saved_order)
+            is_delta = payload is not None and payload.get("delta") is True
             if diagnostics is not None:
-                diagnostics.update(hit=False, reason="unversioned-history", version=snap_ver)
+                diagnostics.update(hit=False, reason="unversioned-history", version=snap_ver,
+                                   history="current" if payload is None else "delta" if is_delta else "full")
+            if payload is None:
+                return self._send_archive_list_representation(None, None, '"d-' + since + '"')
             body, encoding, etag = history_representation(
-                build_payload(), self.headers.get("Accept-Encoding"),
-                self.headers.get("If-None-Match"), diagnostics=diagnostics)
-            return self._send_archive_list_representation(body, encoding, etag)
+                payload, self.headers.get("Accept-Encoding"),
+                None if is_delta else self.headers.get("If-None-Match"),
+                diagnostics=diagnostics, fingerprint=fingerprint)
+            status = self._send_archive_list_representation(body, encoding, etag)
+            return "delta" if is_delta and status == 200 else status
 
         raw, gzip_body, etag_val = _archive_list_body_get_or_build(
             cache_key, window, from_cache, build_payload, snap_ver, diagnostics=diagnostics)

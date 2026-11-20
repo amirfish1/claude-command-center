@@ -61,10 +61,13 @@ def representation(raw, gzip_body, accept, *, encode_gzip=None):
     return raw, None
 
 
-def history_representation(payload, accept, validator, *, diagnostics=None):
+def history_representation(payload, accept, validator, *, diagnostics=None, fingerprint=None):
     """Reuse encoded bytes after a fresh full-history projection."""
     accepted = static_encoding.accepted_encodings(accept)
-    fingerprint = archive_list_replay.payload_fingerprint(payload) if accepted else None
+    if not accepted:
+        fingerprint = None
+    elif fingerprint is None:
+        fingerprint = archive_list_replay.payload_fingerprint(payload)
     key = (fingerprint, accepted)
     cached = _HISTORY_CACHE.get(key) if fingerprint is not None else None
     if diagnostics is not None:

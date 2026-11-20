@@ -143,9 +143,10 @@ def test_history_encoding_reuses_bytes_after_fresh_projection(monkeypatch, tmp_p
     thread.start()
     url = f'http://127.0.0.1:{httpd.server_address[1]}/api/conversations/list?window=all&stale_ok=1'
 
-    def read(encoding='gzip', validator=''):
-        request = urllib.request.Request(url, headers={'Accept-Encoding': encoding,
-                                                       'If-None-Match': validator})
+    def read(encoding='gzip', validator='', since=''):
+        target = url + ('&since=' + since if since else '')
+        request = urllib.request.Request(target, headers={'Accept-Encoding': encoding,
+                                                          'If-None-Match': validator})
         try:
             response = urllib.request.urlopen(request, timeout=5)
         except urllib.error.HTTPError as exc:
@@ -156,20 +157,53 @@ def test_history_encoding_reuses_bytes_after_fresh_projection(monkeypatch, tmp_p
     try:
         first = read()
         assert first[:2] == (200, 'gzip')
-        assert json.loads(gzip.decompress(first[3]))['conversations'][0]['first_message'] == row['first_message']
+        first_list = json.loads(gzip.decompress(first[3]))
+        assert first_list['conversations'][0]['first_message'] == row['first_message']
         assert read() == first
         assert read(validator=first[2]) == (304, None, first[2], b'')
         row['first_message'] += 'updated'
         changed = read(validator=first[2])
         assert changed[:2] == (200, 'gzip') and changed[2] != first[2]
         assert read(encoding='identity') == (200, None, changed[2], gzip.decompress(changed[3]))
+        active_token = json.loads(gzip.decompress(changed[3]))['delta_token']
+        assert read(since=active_token) == (304, None, '"d-' + active_token + '"', b'')
     finally:
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=5)
 
-    assert [entry['body_cache']['encoding_hit'] for entry in diagnostics] == [False, True, True, False, False]
+    assert [entry['body_cache'].get('encoding_hit') for entry in diagnostics] == [
+        False, True, True, False, False, None,
+    ]
     assert all(entry['projection']['rows'] for entry in diagnostics)
+
+
+def test_history_delta_preserves_projected_values_and_order(monkeypatch):
+    from ccc_server import archive_list_replay as replay
+
+    monkeypatch.setattr(replay, '_RUN_MAX_ROWS', 2)
+    monkeypatch.setattr(replay, '_RUN_BOUNDARY_MASK', 0xffffffff)
+    monkeypatch.setattr(replay, '_HISTORY_MANIFESTS', replay.ByteBudgetCache(1 << 20, 4))
+    first = [{'session_id': sid, 'title': sid} for sid in 'abcdef']
+    base, _ = replay.history_delta({'conversations': first}, 'scope', 'boot', '', '')
+    token, order = base['delta_token'], base['order_token']
+    modified = [*first[:5], dict(first[5], title='new title')]
+    delta, _ = replay.history_delta({'conversations': modified}, 'scope', 'boot', token, order)
+    assert delta['same_order'] and delta['ids'] == []
+    assert delta['conversations'] == modified[-2:]
+    assert delta['order_token'] == order and delta['delta_token'] != token
+
+    reordered = modified[2:4] + [{'session_id': 'new'}] + modified[4:]
+    delta, _ = replay.history_delta({'conversations': reordered}, 'scope', 'boot', token, order)
+    assert delta['ids'] == [row['session_id'] for row in reordered]
+    by_id = {row['session_id']: row for row in [*first, *delta['conversations']]}
+    assert [by_id[sid] for sid in delta['ids']] == reordered
+    assert delta['order_token'] != order
+
+    full, _ = replay.history_delta({'conversations': reordered}, 'other-scope', 'boot', token, order)
+    assert 'delta' not in full and full['conversations'] == reordered
+    duplicate = {'conversations': [*first, first[0]]}
+    assert replay.history_delta(duplicate, 'scope', 'boot', token, order) == (duplicate, None)
 
 
 def test_history_encoding_builds_gzip_only_when_requested_or_needed(monkeypatch):
