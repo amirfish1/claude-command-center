@@ -1,0 +1,1 @@
+- Allow compact requests to proceed after finished Antigravity turns on macOS by using portable process checks and verifying conversation identity before stopping lingering CLI processes.

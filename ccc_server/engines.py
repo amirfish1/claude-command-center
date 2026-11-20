@@ -4532,10 +4532,11 @@ def _antigravity_turn_idle_seconds():
 def _pid_age_seconds(pid):
     try:
         out = subprocess.run(
-            ["ps", "-o", "etimes=", "-p", str(int(pid))],
+            ["ps", "-o", "etime=", "-p", str(int(pid))],
             capture_output=True, text=True, timeout=5,
         )
-        return float(out.stdout.strip()) if out.returncode == 0 and out.stdout.strip() else None
+        from ccc_server.session_graph import _parse_ps_etime
+        return _parse_ps_etime(out.stdout) if out.returncode == 0 else None
     except (OSError, ValueError, subprocess.SubprocessError):
         return None
 
@@ -4583,19 +4584,47 @@ def _antigravity_turn_finished(session_id, pid=None, idle_s=None):
 
 
 def _antigravity_reap_finished_process(session_id, pid):
-    """Stop an ``agy --conversation <sid>`` process that outlived its turn.
+    """Stop a verified Antigravity CLI process that outlived its turn.
 
-    Only a process whose argv really is that conversation's agy is touched.
-    Returns True when it is gone.
+    Initial spawns identify their conversation in the CLI log; resumed
+    processes identify it with --conversation. Unknown identity fails closed.
     """
     try:
         pid = int(pid)
-        argv = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
-    except (OSError, TypeError, ValueError):
-        return True  # already gone
-    if f"--conversation {session_id}" not in argv or Path(argv.split(" ", 1)[0]).name != "agy":
+        if pid <= 1:
+            return False
+        out = subprocess.run(
+            ["ps", "-ww", "-p", str(pid), "-o", "command="],
+            capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode != 0 or not out.stdout.strip():
+            return not _paths_is_pid_alive(pid, perm_alive=True, unknown_alive=True)
+        # A prompt can mention flags or contain unbalanced shell quotes.
+        # Only inspect options before the print-mode prompt.
+        options = re.split(r"\s(?:-p|--print)(?:\s|=)", out.stdout.strip(), maxsplit=1)[0]
+        executable = re.split(r"\s+-{1,2}[a-zA-Z]", options, maxsplit=1)[0]
+    except (OSError, TypeError, ValueError, subprocess.SubprocessError):
         return False
+    if Path(executable).name != "agy":
+        return False
+    match = re.search(r"(?:^|\s)--conversation(?:=|\s+)(\S+)", options)
+    conversation = match[1] if match else None
+    if conversation is None:
+        # ps displays argv without shell escaping. Preserve spaces and
+        # apostrophes in the log path rather than applying shlex to it.
+        match = re.search(
+            r"(?:^|\s)--log-file(?:=|\s+)(.+?)(?=\s+--[\w-]+(?:=|\s|$)|$)",
+            options,
+        )
+        log = match[1].strip() if match else None
+        conversation = (_core._antigravity_cli_log_meta(log).get("session_id")
+                        if log else None)
+    if conversation != session_id:
+        return False
+    alive = lambda: _paths_is_pid_alive(pid, perm_alive=True, unknown_alive=True)
     for sig, wait_s in ((signal.SIGTERM, 5.0), (signal.SIGKILL, 2.0)):
+        if not alive():
+            break
         try:
             os.kill(pid, sig)
         except ProcessLookupError:
@@ -4603,20 +4632,24 @@ def _antigravity_reap_finished_process(session_id, pid):
         except OSError:
             return False
         deadline = time.time() + wait_s
-        while time.time() < deadline and Path(f"/proc/{pid}").exists():
-            try:  # a child of this server stays a zombie until reaped
+        while time.time() < deadline:
+            try:  # Reap a child so a zombie does not look alive.
                 if os.waitpid(pid, os.WNOHANG)[0] == pid:
                     break
             except ChildProcessError:
                 pass
+            if not alive():
+                break
             time.sleep(0.2)
-        if not Path(f"/proc/{pid}").exists():
+        if not alive():
             break
-    _core._log_activity(
-        "inject", "AGY_REAP",
-        f"session={session_id} pid={pid} reason=turn_finished_process_lingered",
-    )
-    return not Path(f"/proc/{pid}").exists()
+    gone = not alive()
+    if gone:
+        _core._log_activity(
+            "inject", "AGY_REAP",
+            f"session={session_id} pid={pid} reason=turn_finished_process_lingered",
+        )
+    return gone
 
 
 def _antigravity_live_resume_pid(session_id):
