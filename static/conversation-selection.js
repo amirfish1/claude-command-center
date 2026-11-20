@@ -156,6 +156,7 @@
     pane.restored = true;
     saveSplitState();
     state.convLastLine = 0;
+    pane.antigravityProvisional = false;
     pane.firstLine = 0;
     pane.loadBeforeLine = 0;
     pane.wantFull = false;

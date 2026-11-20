@@ -23,11 +23,13 @@ test('startup marks require visible assistant text in the selected connected pan
       const paneByPaneId = () => pane, activePaneId = () => active;
       const getConvViewForPane = () => view;
       const spawnStatsEnabled = () => true, fmtStatMs = ms => ms + 'ms';
+      const renderSpawnStatsPanel = () => {};
       const pendingSpawnIsSelected = () => pane.conversationId === 'task';
       window.__posted = [];
       window.fetch = async (_, init) => { __posted.push(JSON.parse(init.body)); return {}; };
       eval(code + '\nwindow.__mark = markSpawnAssistantPaint; window.__track = trackSpawnView; window.__stats = spawnStatsMark;');
       window.__select = id => { pane.conversationId = id; };
+      window.__setSource = source => { pane.currentSession = {source}; };
       window.__activate = id => { active = id; };
       window.__card = {id:'task',expected_session_id:'task',spawn_requested_at:Date.now()-1000};
       codexSpawnPreviews.set('task', __card);
@@ -70,5 +72,13 @@ test('startup marks require visible assistant text in the selected connected pan
     const timing = await page.evaluate(() => __posted.at(-1).marks);
     assert.ok(timing.first_paint_hidden_ms >= 300);
     assert.ok(timing.first_paint_unselected_ms >= 400);
+    await page.evaluate(() => {
+      __setSource('antigravity');
+      view.innerHTML = '<div class="activity-run"><button class="activity-run-toggle">Working</button></div>';
+    });
+    await paint();
+    const activity = await page.evaluate(() => __posted.at(-1).marks);
+    assert.ok(activity.first_visible_activity >= 1000);
+    assert.equal(activity.first_visible_output, undefined);
   } finally { await browser.close(); }
 });

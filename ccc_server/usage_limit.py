@@ -1107,7 +1107,7 @@ def _record_spawn_to_registry(
     parent_session_id=None, prewarm=False, prewarm_id=None, client_id=None,
     reasoning_effort="", auto_compact_k=None, created_at_epoch=None,
     input_result_target=None, input_accepted_at=None, input_command_uuids=None,
-    spawned_via="", runtime="",
+    spawned_via="", runtime="", antigravity_spawn_timing=None,
 ):
     """Append a freshly-spawned session to the on-disk registry. The
     session_id is provided for known resume calls and otherwise filled in
@@ -1147,6 +1147,8 @@ def _record_spawn_to_registry(
         "spawned_via": clean_via,
     }
     clean_runtime = str(runtime or "").strip()[:32]
+    if engine == "antigravity" and antigravity_spawn_timing:
+        record["_antigravity_spawn_timing"] = antigravity_spawn_timing
     if clean_runtime:
         # Only stamped for non-default runtimes (e.g. "free") — paid/default
         # rows stay field-free so old entries and new ones look alike.

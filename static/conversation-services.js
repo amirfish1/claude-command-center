@@ -69,6 +69,7 @@
       source,
       is_live: true, archived: false, verified: false,
       spawn_pid: pid, pending_spawn: true,
+      spawn_requested_at: Date.now(),
       spawn_pane_id: (0, sharedState.activePaneId)(),
       has_edit: false, has_commit: false, has_push: false,
       sidecar_status: 'active', sidecar_has_writes: false,
@@ -119,7 +120,7 @@
       }
     }
     sharedState.pendingSpawns.set(pid, card);
-    if (source === 'codex') trackSpawnView(card);
+    if (source === 'codex' || source === 'antigravity') trackSpawnView(card);
     sharedState.conversationsData = [card, ...sharedState.conversationsData];
     // Pin to Working column for the moment
     sharedState.columnOverrides[id] = 'working';

@@ -12,7 +12,8 @@
     // event-handler closures always target THIS pane's stream even if
     // the user switches the active pane between SSE events.
     const streamConvId = streamPane.conversationId;
-    const url = '/api/conversations/' + streamConvId + '/stream?after=' + streamPane.lastLine;
+    const url = '/api/conversations/' + streamConvId + '/stream?after=' + streamPane.lastLine
+      + (streamPane.antigravityProvisional ? '&antigravity_provisional=1' : '');
     const source = new EventSource(url);
     streamPane.eventSource = source;
     // Watchdog: WKWebView (and Chromium on flaky links) sometimes lets an
@@ -71,6 +72,7 @@
             // delivery receipt retires them; otherwise every output tick hides
             // the tray and the next poll restores it, jolting the transcript.
             if ((0, state.renderConversationEvents)(data.events, streamPaneId, { queueSnapshot: false }) !== false) {
+              streamPane.antigravityProvisional = !!data.antigravity_provisional;
               state.convLastLine = data.last_line;
               // Advance the pane's own lastLine so reconnects (post-error
               // or post-watchdog) request events from the right offset
@@ -172,9 +174,29 @@
         return;
       }
       if (!c) return;
-      if (c && isSpawnLogPlaceholderSource(c.source) && typeof c.spawn_pid === 'number') {
+      const hasLogPid = typeof c.spawn_pid === 'number'
+        || (c.source === 'antigravity' && /^[1-9]\d*$/.test(String(c.spawn_pid)));
+      if (isSpawnLogPlaceholderSource(c.source) && hasLogPid) {
         await loadCodexLog(c);
+        if (state.currentConversation !== id || c._landedResolved || c.spawn_failed) return;
         stopCodexLogPoller();
+        if (c.source === 'antigravity') {
+          // The focused composer pauses background intervals. This probe
+          // follows the session the user just opened, like its live stream.
+          const retry = async () => {
+            const timer = state.codexLogPoller;
+            if (state.currentConversation !== id) { stopCodexLogPoller(); return; }
+            if (!_pollerOff('codexLog')) {
+              _pollerTick('codexLog');
+              await loadCodexLog(c);
+            }
+            if (state.codexLogPoller === timer && !c._landedResolved && !c.spawn_failed) {
+              state.codexLogPoller = setTimeout(retry, 1500);
+            }
+          };
+          state.codexLogPoller = setTimeout(retry, 1500);
+          return;
+        }
         state.codexLogPoller = setInterval(() => { if (_pollerOff('codexLog')) return;
           if (state.currentConversation !== id) { stopCodexLogPoller(); return; }
           _pollerTick('codexLog');
@@ -322,6 +344,10 @@
       // while the fetch was in-flight), discard the stale response.
       const currentPane = paneByPaneId(fetchPaneId);
       if (!currentPane || currentPane.conversationId !== id) return;
+      if (!_loadingEarlier && !_freshOpen && currentPane.antigravityProvisional
+          && !data.antigravity_provisional) {
+        return (0, state.selectConversation)(id, fetchPaneId);
+      }
       // The server authoritatively detects the engine while parsing. View
       // paths that opened the conversation WITHOUT a list row (popout URLs
       // missing `source`, synthetic rows defaulting to 'interactive') set
@@ -403,7 +429,10 @@
         } else {
           const _perfRenderAt = performance.now();
           const _renderOk = (0, state.renderConversationEvents)(data.events, fetchPaneId, { initialLoad: _freshOpen, isTruncated: data.truncated_before }) !== false;
-          if (_renderOk) state.convLastLine = data.last_line;
+          if (_renderOk) {
+            state.convLastLine = data.last_line;
+            currentPane.antigravityProvisional = !!data.antigravity_provisional;
+          }
           if (_renderOk && _freshOpen && !data.error) noteAppEmbedDrawn(id, false);
           if (_renderOk && _cacheEligible) _convCachePutSoon(id, data);
           if (_renderOk && _freshOpen && data.truncated_before && data.first_prompt) {

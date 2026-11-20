@@ -1400,7 +1400,7 @@ def _parse_antigravity_cli_log_conversation(session_id, after_line=0):
         if line_num > after_line:
             events.append(ev)
     if not log_path:
-        return {"events": events, "last_line": line_num}
+        return {"events": events, "last_line": line_num, "antigravity_provisional": True}
     stdout_path = str(log_path)
     if stdout_path.endswith(".agy.log"):
         stdout_path = stdout_path[:-8]
@@ -1415,6 +1415,7 @@ def _parse_antigravity_cli_log_conversation(session_id, after_line=0):
                 "ts": "",
                 "type": "assistant",
                 "message_id": f"antigravity-cli-{line_num}",
+                "diagnostic": bool(re.match(r"^(?:Error:|Authentication required)", stdout_text)),
                 "blocks": [{"kind": "text", "text": stdout_text}],
             })
     debug_text = _core._antigravity_read_log_tail(log_path, max_bytes=24000)
@@ -1428,10 +1429,11 @@ def _parse_antigravity_cli_log_conversation(session_id, after_line=0):
                 "line": line_num,
                 "ts": "",
                 "type": "assistant",
-                "message_id": f"antigravity-cli-{line_num}",
+                "message_id": f"antigravity-cli-diagnostic-{line_num}",
+                "diagnostic": True,
                 "blocks": [{"kind": "text", "text": diagnostic}],
             })
-    return {"events": events, "last_line": line_num}
+    return {"events": events, "last_line": line_num, "antigravity_provisional": True}
 
 
 def _antigravity_user_text(content):
@@ -2602,7 +2604,10 @@ def _parse_antigravity_conversation(session_id, after_line=0, *, include_usage=T
             if event["line"] > after_line:
                 events.append(event)
         line_num += fallback["last_line"]
-    return {"events": events, "last_line": line_num}
+    result = {"events": events, "last_line": line_num}
+    if not has_output:
+        result["antigravity_provisional"] = True
+    return result
 
 
 def _antigravity_reader_cache_key(session_id):
@@ -2624,6 +2629,22 @@ def _antigravity_reader_cache_key(session_id):
         except OSError:
             stamps.append((0, 0))
     return (max((s[0] for s in stamps), default=0), tuple(stamps))
+
+
+def _record_antigravity_output_marks(session_id, events):
+    kinds = {
+        block.get("kind")
+        for event in events if event.get("type") == "assistant" and not event.get("diagnostic")
+        for block in event.get("blocks", [])
+        if block.get("text") or block.get("name")
+    }
+    if not kinds.intersection(("text", "tool_use", "thinking")):
+        return
+    dirty = _core._spawn_timeline_mark(session_id, "antigravity_activity_read")
+    if "text" in kinds:
+        dirty = _core._spawn_timeline_mark(session_id, "antigravity_text_read") or dirty
+    if dirty:
+        _core._spawn_timeline_save()
 
 
 def _antigravity_usage_to_int(val):
@@ -4348,12 +4369,19 @@ def spawn_session_cursor(prompt, name=None, cwd=None, repo_path=None, worktree=F
     return _finalize_spawn_response(resp, entry, ctx)
 
 
-def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None, antigravity_account_id=None):
+def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None, antigravity_account_id=None, timeline_t0_epoch_ms=None):
     """Spawn a headless AGY print-mode run and return tracking info.
 
     If `worktree=True`, create a fresh git worktree off the launch cwd on a
     `feat/<slug>` branch (same shape as the Claude path) and run AGY there.
     """
+    request_epoch = time.time()
+    try:
+        client_epoch = float(timeline_t0_epoch_ms) / 1000
+    except (TypeError, ValueError, OverflowError):
+        client_epoch = request_epoch
+    timeline_t0_epoch_ms = (client_epoch if abs(client_epoch - request_epoch) <= 60
+                            else request_epoch) * 1000
     prompt = _core._strip_ccc_session_state_instruction(prompt or "")
     if not prompt:
         return {"ok": False, "error": "missing prompt"}
@@ -4427,6 +4455,7 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
     except (FileNotFoundError, OSError) as e:
         log_fh.close()
         return {"ok": False, "error": str(e), "via": "antigravity-spawn"}
+    process_epoch = time.time()
     time.sleep(0.15)
     early_exit = proc.poll()
     if early_exit is not None and early_exit != 0:
@@ -4465,19 +4494,6 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
     }
     entry['antigravity_account_id'] = account_id
     _core._spawned_sessions.append(entry)
-    _core._record_spawn_to_registry(
-        pid=proc.pid,
-        name=session_name,
-        log_path=log_path,
-        cwd=spawn_cwd,
-        spawned_at=timestamp,
-        command_summary=prompt[:200],
-        fifo=None,
-        engine="antigravity",
-        repo_path=repo_for_logs,
-        model=model_to_use,
-        parent_session_id=parent_session_id,
-    )
     resp = {
         "ok": True,
         "pid": proc.pid,
@@ -4493,7 +4509,49 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
     # AGY's --conversation option only resumes an existing conversation.  A
     # generated UUID here is not durable state, so wait briefly for AGY's real
     # session ID instead of returning a fabricated, unresumable one.
-    return _finalize_spawn_response(resp, entry, ctx)
+    resp = _finalize_spawn_response(resp, entry, ctx)
+    entry["_antigravity_spawn_timing"] = (
+        request_epoch, timeline_t0_epoch_ms, process_epoch, time.time()
+    )
+    _core._record_spawn_to_registry(
+        pid=proc.pid,
+        name=session_name,
+        log_path=log_path,
+        cwd=spawn_cwd,
+        spawned_at=timestamp,
+        command_summary=prompt[:200],
+        fifo=None,
+        engine="antigravity",
+        repo_path=repo_for_logs,
+        model=model_to_use,
+        session_id=entry.get("session_id"),
+        parent_session_id=parent_session_id,
+        antigravity_spawn_timing=entry["_antigravity_spawn_timing"],
+    )
+    if resp.get("session_id"):
+        _core._antigravity_spawn_session_status(entry)
+    return resp
+
+
+def _antigravity_spawn_session_status(entry):
+    """Resolve only the native ID from this process's log during startup."""
+    sid = _core._spawn_session_id_from_entry(entry)
+    if not sid:
+        return {"session_id": None, "landed": False}
+    timing = entry.get("_antigravity_spawn_timing")
+    if timing and _core._spawn_timeline_enabled() and not _core._spawn_timeline_get(sid):
+        request_epoch, client_ms, process_epoch, response_epoch = timing
+        _core._spawn_timeline_start(
+            sid, client_ms, request_epoch=request_epoch,
+            initial_marks={
+                "process_started": process_epoch,
+                "spawn_response_sent": response_epoch,
+                "antigravity_id_observed": time.time(),
+            },
+            engine="antigravity", model=entry.get("model") or "",
+        )
+        _core._spawn_timeline_save()
+    return {"session_id": sid, "landed": _core._is_antigravity_session(sid)}
 
 
 def _resume_session_antigravity_app(session_id, text):

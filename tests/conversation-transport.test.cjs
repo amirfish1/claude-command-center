@@ -36,6 +36,7 @@ function fixture(options = {}) {
     noteAppEmbedDrawn:(...args)=>ready.push(args),_flushAfterConvTailAfterPaint(){},
     convPaneElById:()=>({classList:{toggle(){}}}),restorePendingSendEchoes(){},
     spawnStatsMark(){},renderSpawnStatsPanel(){},_convCachePutSoon(){},
+    ...options.pending,
   };
   // The constructor reads stable service functions; live values remain getters.
   const controller = context.window.CCCConversationTransport.createController({state,helpers});
@@ -63,6 +64,43 @@ test('stale stream cannot paint or reset a newly selected conversation',()=>{
   source.onmessage({data:JSON.stringify({events:[{type:'assistant',line:6}],last_line:6})});
   source.listeners.source_reset();assert.equal(h.rendered.length,0);assert.equal(h.panes[0].lastLine,0);
   h.controller.stopConvStream('left');
+});
+
+test('provisional Antigravity cursor requests a reset when the native source takes over', async () => {
+  const h = fixture({load: async () => ({
+    events: [{type: 'user_text', line: 1}], last_line: 5, antigravity_provisional: true,
+  })});
+  await h.controller.fetchConversationEvents('left');
+  h.controller.startConvStream('left');
+  const source = h.streams[0];
+  assert.equal(source.url, '/api/conversations/one/stream?after=5&antigravity_provisional=1');
+  const reopened = [];
+  h.state.selectConversation = (...args) => reopened.push(args);
+  source.listeners.source_reset();
+  assert.equal(source.closed, true);
+  assert.deepEqual(reopened, [['one', 'left']]);
+});
+
+test('selected Antigravity spawn retries its string PID until the native ID lands', async () => {
+  const card = {id: 'spawning-temp', source: 'antigravity', spawn_pid: '123'};
+  const reads = [];
+  const pending = fixture({pending: {
+    resolvedSpawnConversationId: id => id,
+    isSpawnLogPlaceholderSource: source => source === 'antigravity',
+    loadCodexLog: async row => {
+      reads.push(row.spawn_pid);
+      if (reads.length === 2) row._landedResolved = true;
+    },
+    stopCodexLogPoller() {}, _pollerOff: () => false, _pollerTick() {},
+  }});
+  pending.panes[0].conversationId = card.id;
+  pending.state.conversationsData.push(card);
+  await pending.controller.fetchConversationEvents('left');
+  assert.deepEqual(reads, ['123']);
+  const timer = pending.state.codexLogPoller;
+  await pending.timers.get(timer).fn();
+  assert.deepEqual(reads, ['123', '123']);
+  assert.equal(pending.state.codexLogPoller, timer);
 });
 
 test('fresh fetch reports ready only after the shared renderer succeeds',async()=>{

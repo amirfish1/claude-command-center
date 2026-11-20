@@ -29474,7 +29474,10 @@ def _finish_full_parse_conversation(conversation_id, result, tail=None, before=N
     if tail or before is not None:
         result = _window_parsed_conversation_events(result, tail=tail, before=before)
     else:
+        provisional = result.get("antigravity_provisional")
         result = {"events": list(result.get("events") or []), "last_line": result.get("last_line", 0)}
+        if provisional:
+            result["antigravity_provisional"] = True
     if before is None:
         result["events"] = _merge_synthetic_conversation_events(
             list(result.get("events") or []), _get_queued_events_for_session(conversation_id))
@@ -29523,7 +29526,7 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
             if hit is not None:
                 events_copy = list(hit.get("events") or [])
                 events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-                return {"events": events_copy, "last_line": hit.get("last_line", 0)}
+                return {**hit, "events": events_copy}
     # Route via the memoized engine detector instead of probing gemini then
     # antigravity unconditionally — _is_gemini_session scans the whole gemini
     # store (~160ms cold), which every codex/claude open was paying for nothing.
@@ -29547,6 +29550,7 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
         result = _parse_antigravity_conversation(
             conversation_id, after_line=after_line, include_usage=not messages_only)
         if not messages_only:
+            _record_antigravity_output_marks(conversation_id, result["events"])
             _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
         return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "kilo":
@@ -34140,6 +34144,14 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                         ),
                         None,
                     )
+                if entry is None:
+                    # A short print-mode run can exit between log polls.
+                    entry = next((
+                        row for row in reversed(_load_spawn_history())
+                        if row.get("pid") == pid and row.get("engine") == "antigravity"
+                        and isinstance(row.get("ended_at_epoch"), (int, float))
+                        and time.time() - row["ended_at_epoch"] < 180
+                    ), None)
                 if not entry:
                     self.send_json({"ok": False, "error": "no spawn entry for pid"}, 404)
                 else:
@@ -34153,7 +34165,9 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                         except OSError as e:
                             self.send_json({"ok": False, "error": str(e)}, 500)
                         else:
-                            if entry.get("proc") is not None:
+                            if entry.get("ended_at"):
+                                poll = entry.get("exit_code")
+                            elif entry.get("proc") is not None:
                                 poll = _poll_spawn_entry(entry)
                             else:
                                 poll = None if _pid_alive(pid) else entry.get("exit_code")
@@ -34163,10 +34177,11 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                                 "engine": entry.get("engine", "claude"),
                                 "log_path": log_path,
                                 "text": text,
-                                "running": poll is None,
+                                "running": poll is None and not entry.get("ended_at"),
                                 "exit_code": poll,
                             }
                             if entry.get("engine") == "antigravity":
+                                payload.update(_antigravity_spawn_session_status(entry))
                                 debug_path = str(log_path) + ".agy.log"
                                 payload["debug_log_path"] = debug_path
                                 if os.path.exists(debug_path):
@@ -35494,7 +35509,10 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 return
             qs = urllib.parse.parse_qs(parsed.query)
             after_line = int(qs.get("after", ["0"])[0])
-            self._stream_conversation(conv_id, after_line)
+            if qs.get("antigravity_provisional") == ["1"]:
+                self._stream_conversation(conv_id, after_line, antigravity_provisional=True)
+            else:
+                self._stream_conversation(conv_id, after_line)
         elif re.match(r"^/api/session/[^/]+/spawn-info$", path):
             sid = path.split("/")[-2]
             acp_harness = _session_acp_harness(sid)
@@ -42607,6 +42625,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                             worktree=worktree_flag,
                             model=model,
                             parent_session_id=parent_session_id,
+                            timeline_t0_epoch_ms=payload.get("timeline_t0_epoch_ms"),
                         )
                     elif engine == "gemini":
                         result = spawn_session_gemini(
@@ -43166,6 +43185,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                         repo_path=payload.get("repo_path"),
                         worktree=bool(payload.get("worktree")),
                         model=model,
+                        timeline_t0_epoch_ms=payload.get("timeline_t0_epoch_ms"),
                     )
                     if isinstance(result, dict) and result.get("ok"):
                         result["spawned_via"] = spawned_via
@@ -47119,7 +47139,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             except OSError:
                 pass
 
-    def _stream_conversation(self, conversation_id, after_line):
+    def _stream_conversation(self, conversation_id, after_line, *, antigravity_provisional=False):
         """SSE endpoint for real-time conversation tailing."""
         if _is_hermes_session(conversation_id):
             self.send_response(200)
@@ -47321,8 +47341,9 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             # session doesn't re-read its transcript a couple times a second.
             def _stream_mtime():
                 try:
-                    p = (_antigravity_transcript_path(conversation_id) if is_ag
-                         else _resolve_gemini_chat_path(conversation_id))
+                    if is_ag:
+                        return _antigravity_reader_cache_key(conversation_id)
+                    p = _resolve_gemini_chat_path(conversation_id)
                     return p.stat().st_mtime if p else None
                 except OSError:
                     return None
@@ -47342,10 +47363,23 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     if cur_mtime is not None:
                         last_mtime = cur_mtime
                     result = parse_fn(conversation_id, after_line=after_line)
+                    if is_ag:
+                        provisional = bool(result.get("antigravity_provisional"))
+                        if antigravity_provisional and not provisional:
+                            # The live DB/log preview and brain transcript use
+                            # different cursors. Replace the preview on handoff.
+                            self.wfile.write(b"event: source_reset\ndata: {}\n\n")
+                            self.wfile.flush()
+                            return
+                        antigravity_provisional = provisional
                     events = result.get("events") or []
                     if events:
                         after_line = result.get("last_line") or after_line
                         payload = {"events": events, "last_line": after_line}
+                        if is_ag:
+                            _record_antigravity_output_marks(conversation_id, events)
+                            if antigravity_provisional:
+                                payload["antigravity_provisional"] = True
                         self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
                         self.wfile.flush()
                     now = time.time()

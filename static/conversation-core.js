@@ -8591,7 +8591,7 @@
       // endpoint the post-completion stats banner reads, rendered expanded.
       // The id arrives with the POST response AFTER this view first renders,
       // so read it lazily from the card on every tick.
-      if (card.source === 'codex') renderPendingCodexStats(card, $view);
+      if (card.source === 'codex' || card.source === 'antigravity') renderPendingCodexStats(card, $view);
       if (spawnStatsEnabled()) {
         const livePaneId = paneId || (0, sharedState.activePaneId)();
         let liveSid = '';
@@ -8602,7 +8602,7 @@
           const stillThisCard = pane && (pane.conversationId === card.id || (liveSid && pane.conversationId === liveSid));
           if (!stillThisCard || ++liveTicks > 90) { clearInterval(liveTimer); return; }
           if (liveSid) (0, hostServices.renderSpawnStatsPanel)(liveSid, $view, { open: true });
-          else if (card.source === 'codex') renderPendingCodexStats(card, $view);
+          else if (card.source === 'codex' || card.source === 'antigravity') renderPendingCodexStats(card, $view);
         }, 2000);
       }
     }
@@ -8615,6 +8615,7 @@
       || sharedState.conversationsData.find(x => x && x.id === 'spawning-' + tempPid);
     if (!placeholder) return null;
     placeholder.spawn_pid = realPid;
+    if (placeholder.source === 'antigravity') placeholder.spawn_response_at = Date.now();
     placeholder.expected_session_id = sessionId || '';
     if (isSpawnLogPlaceholderSource(placeholder.source) && logPath) {
       placeholder.agent_log_path = logPath;
@@ -8639,9 +8640,8 @@
     card.expected_session_id = sid;
     card.pending_spawn = false;
     card._landedResolved = true;
-    // Grok also returns a usable session UUID in the spawn acknowledgement.
-    // Bind it now: a full archive refresh can take seconds, and the pending
-    // selection itself suppresses periodic polling while we wait for it.
+    // A native session can be ready before a full archive refresh finishes.
+    // Move the selected pane onto its transcript as soon as the store is ready.
     if (card.source === 'codex') sharedState.codexSpawnPreviews.set(sid, card);
     sharedState.sessionIdByConv[sid] = sid;
     sharedState.sessionSourceByConv[sid] = card.source;
@@ -8758,16 +8758,25 @@
       paneEl?.classList.add('is-codex-session', 'is-webui-session');
       window.CCCCodexLiveSource?.start(paneEl, { startup: sharedState.codexSpawnPreviews.has(sid) });
     }
-    (0, sharedState.fetchConversationEvents)();
+    const paneId = (0, sharedState.activePaneId)();
+    const firstRead = (0, sharedState.fetchConversationEvents)(paneId);
     // CCC-31: a fresh inline spawn rebinds its optimistic placeholder onto
     // the real session here, not through selectConversation() — so without
     // this call the workspace/repo-path pill had no trigger at all and
     // stayed empty until an unrelated event (tab refocus, manually
     // reselecting the conversation) happened to fetch it.
     if (sid && typeof fetchSessionWorkspace === 'function') fetchSessionWorkspace(sid, (0, sharedState.activePaneId)());
-    (0, sharedState.startConvStream)();
+    if (real.source === 'antigravity') {
+      firstRead.then(() => {
+        if ((0, sharedState.paneByPaneId)(paneId)?.conversationId === realId) {
+          (0, sharedState.startConvStream)(paneId);
+        }
+      });
+    } else {
+      (0, sharedState.startConvStream)(paneId);
+    }
     if (!keepFirstResponseStream
-        && sid && real.source !== 'codex' && real.source !== 'cursor') {
+        && sid && real.source !== 'codex' && real.source !== 'cursor' && real.source !== 'antigravity') {
       startSpawnStream(
         sid,
         (0, sharedState.activePaneId)(),
@@ -14005,7 +14014,8 @@
     const $view = (0, sharedState.getConvView)();
     const engine = logEngine;
     try {
-      const res = await fetch('/api/sessions/spawned/' + encodeURIComponent(card.spawn_pid) + '/log?_=' + Date.now());
+      const res = await fetch('/api/sessions/spawned/' + encodeURIComponent(card.spawn_pid) + '/log?_=' + Date.now(),
+        engine === 'antigravity' ? { cccPriority: 'user' } : undefined);
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
       if ((0, sharedState.paneByPaneId)(logPaneId)?.conversationId !== logConversationId
           || card._landedResolved || !$view.isConnected) return;
@@ -14013,6 +14023,17 @@
         $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Failed to load ' + engine + ' log: ' + (0, sharedState.escapeHtml)(data.error || ('HTTP ' + res.status)) + '</div>';
         updateConversationEndAffordance($view);
         stopCodexLogPoller();
+        return;
+      }
+      if (engine === 'antigravity' && data.session_id && data.landed) {
+        const sid = data.session_id;
+        if (spawnStatsEnabled() && card.spawn_requested_at && !sharedState.spawnStatsT0.has(sid)) {
+          sharedState.spawnStatsT0.set(sid, card.spawn_requested_at);
+          if (card.spawn_response_at) spawnStatsMark(sid, 'response_received', card.spawn_response_at);
+        }
+        if (card.parent_session_id) f2RecordContinuationLineage(card.parent_session_id, sid);
+        stopCodexLogPoller();
+        bindAcceptedCodexSpawn(card, sid);
         return;
       }
       const atBottom = (0, sharedState.isConversationAtBottom)($view);
@@ -14028,6 +14049,7 @@
         markSpawnAssistantPaint(card.expected_session_id, $view, logPaneId);
         await (0, hostServices.renderSpawnStatsPanel)(card.expected_session_id, $view, { open: !!data.running });
       }
+      if (engine === 'antigravity' && data.running) renderPendingCodexStats(card, $view);
       if (atBottom) scrollConversationToEnd($view);
       else updateConversationEndAffordance($view);
       // Process exited — stop polling. Final render already in place.
@@ -14794,25 +14816,38 @@
             .some(c => c.id === pane?.conversationId && c.expected_session_id === sid))
           || (0, sharedState.getConvViewForPane)(paneId) !== view) return;
       const bounds = view.getBoundingClientRect();
-      const visible = Array.from(view.querySelectorAll('.assistant-text, .codex-msg.assistant')).some(el => {
+      const antigravity = pane?.currentSession?.source === 'antigravity';
+      const isVisible = el => {
         const rect = el.getBoundingClientRect();
-        return el.textContent.trim() && rect.width > 0 && rect.height > 0
+        return (!antigravity || !el.closest('[data-diagnostic]'))
+          && el.textContent.trim() && getComputedStyle(el).visibility === 'visible'
+          && rect.width > 0 && rect.height > 0
           && rect.bottom > bounds.top && rect.top < bounds.bottom;
-      });
-      if (!visible) return;
-      spawnStatsMark(sid, 'first_visible_output');
+      };
+      const textVisible = Array.from(view.querySelectorAll('.assistant-text, .codex-msg.assistant')).some(isVisible);
+      const activityVisible = antigravity && (textVisible || Array.from(view.querySelectorAll(
+        '.event.thinking .thinking-toggle, .event.tool_use, .activity-run-toggle'
+      )).some(isVisible));
+      const activityMarked = activityVisible && spawnStatsMark(sid, 'first_visible_activity');
+      const textMarked = textVisible && spawnStatsMark(sid, 'first_visible_output');
+      if (!(antigravity ? activityVisible : textVisible)) return;
       // Refresh from local marks immediately, even if the timeline GET lags.
       const summary = view.querySelector('.spawn-stats-summary strong');
       if (summary) {
-        summary.textContent = fmtStatMs(sharedState.spawnStatsLocalMarks.get(sid)?.client_first_visible_output);
+        const marks = sharedState.spawnStatsLocalMarks.get(sid);
+        summary.textContent = fmtStatMs(antigravity ? marks?.client_first_visible_activity : marks?.client_first_visible_output);
         const label = summary.nextSibling;
-        if (label?.nodeType === Node.TEXT_NODE) label.textContent = ' to first visible output';
-        else summary.after(document.createTextNode(' to first visible output'));
+        const text = antigravity ? ' to first visible activity' : ' to first visible output';
+        if (label?.nodeType === Node.TEXT_NODE) label.textContent = text;
+        else summary.after(document.createTextNode(text));
         const note = view.querySelector('.spawn-stats-note');
         if (note?.textContent.includes('Waiting for CCC')) {
-          note.textContent = 'The accepted session is showing its first answer. Detailed timings are loading.';
+          note.textContent = antigravity
+            ? 'The session is showing activity. Detailed timings are loading.'
+            : 'The accepted session is showing its first answer. Detailed timings are loading.';
         }
       }
+      if (antigravity && (activityMarked || textMarked)) (0, hostServices.renderSpawnStatsPanel)(sid, view);
     }));
   }
 
@@ -14820,7 +14855,7 @@
     try { return localStorage.getItem('ccc-spawn-stats') !== '0'; } catch (_) { return true; }
   }
 
-  function spawnStatsMark(sid, name) {
+  function spawnStatsMark(sid, name, at = Date.now()) {
     if (!sid || !spawnStatsEnabled()) return;
     const t0 = sharedState.spawnStatsT0.get(sid);
     if (!t0) return;
@@ -14828,12 +14863,12 @@
     if (!sent) { sent = new Set(); sharedState.spawnStatsSent.set(sid, sent); }
     if (sent.has(name)) return;   // first occurrence is the interesting one
     sent.add(name);
-    const ms = Date.now() - t0;
+    const ms = at - t0;
     const marks = { [name]: ms };
     const card = sharedState.codexSpawnPreviews.get(sid) || Array.from(sharedState.pendingSpawns.values())
       .find(c => c && c.expected_session_id === sid);
     const timing = card?._spawnViewTiming;
-    if (timing && (name === 'first_paint' || name === 'first_visible_output')) {
+    if (timing && (name === 'first_paint' || name === 'first_visible_activity' || name === 'first_visible_output')) {
       clearTimeout(timing.timer);
       timing.done = timing.done || name === 'first_visible_output';
       timing.sample();
@@ -14848,6 +14883,7 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: sid, marks }),
     }).catch(() => {});
+    return true;
   }
 
   function fmtStatMs(ms) {
@@ -14859,9 +14895,12 @@
     if (!spawnStatsEnabled()) return;
     if (!card.spawn_requested_at) card.spawn_requested_at = Date.now();
     const elapsed = Math.max(0, Date.now() - card.spawn_requested_at);
+    const detail = card.source === 'antigravity'
+      ? 'Waiting for Antigravity to open its native conversation.'
+      : 'Waiting for CCC to create the Codex thread and accept the turn. Detailed timings appear when the spawn request returns.';
     const html = '<details class="spawn-stats" open><summary class="spawn-stats-summary">&#9201; Session start: <strong>'
       + fmtStatMs(elapsed) + '</strong> elapsed</summary><div class="spawn-stats-body">'
-      + '<div class="spawn-stats-note">Waiting for CCC to create the Codex thread and accept the turn. Detailed timings appear when the spawn request returns.</div></div></details>';
+      + '<div class="spawn-stats-note">' + detail + '</div></div></details>';
     const existing = $view.querySelector('.spawn-stats');
     if (existing) existing.outerHTML = html;
     else $view.insertAdjacentHTML('afterbegin', html);
@@ -22358,6 +22397,9 @@
   function chasePendingSpawn(pid, opts) {
     const card = sharedState.pendingSpawns.get(pid) || Array.from(sharedState.pendingSpawns.values())
       .find(c => c && (c.id === 'spawning-' + pid || (opts?.sessionId && c.expected_session_id === opts.sessionId)));
+    // The selected Antigravity pane already polls its own process for the
+    // native ID. Background launches still reconcile via the ordinary list.
+    if (card?.source === 'antigravity' && sharedState.currentConversation === card.id) return;
     if (card?.source === 'codex' && card._landedResolved) return;
     const deadline = Date.now() + ((opts && opts.timeoutMs) || 45000);
     const every = (opts && opts.intervalMs) || 1200;

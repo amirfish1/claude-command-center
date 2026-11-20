@@ -50,6 +50,7 @@
   async function f2RunContinue(paneId, st, btn) {
     const input = (0, sharedState.composerInputForPane)(paneId) || sharedState.$convInput;
     if (!(0, sharedState.guardComposerSend)(input)) return;
+    const spawnAskedAt = Date.now();
     if (btn) btn.disabled = true;
     const sid = st.sid;
     const paneKey = (0, sharedState.f2PaneKey)(paneId);
@@ -63,7 +64,7 @@
       (ctx.row && (ctx.row.display_name || ctx.row.name || ctx.row.title)) || ''
     ) || 'session';
     const subject = parentTitle;
-    const tempPid = 'tmp-f2-' + Date.now();
+    const tempPid = 'tmp-f2-' + spawnAskedAt;
     try {
       const cwd = (0, sharedState.f2ResolveSpawnCwd)(ctx);
       // The chip already told the user "Launches on <engine> <model> at
@@ -79,6 +80,7 @@
         repoPath: cwd,
       });
       body.parent_session_id = sid;
+      if (launch.engine === 'antigravity') body.timeline_t0_epoch_ms = spawnAskedAt;
       let endpoint = '/api/sessions/spawn';
       try { if (typeof spawnEndpointForEngine === 'function') endpoint = spawnEndpointForEngine(launch.engine); } catch (_) {}
       // Continue New is a navigation action as well as a spawn. Use the
@@ -98,6 +100,7 @@
         reasoning_effort: launch.effort || '',
         parent_session_id: sid,
         spawn_composer_text: ctx.text || '',
+        spawn_requested_at: spawnAskedAt,
         // The exact request, so a failed spawn's Retry re-runs it verbatim
         // (prompt/engine/model/effort/cwd/origin all preserved) instead of
         // routing through whatever the global spawn controls show by then.
@@ -129,7 +132,8 @@
             newSid,
           );
         }
-      if (typeof sharedState.showOpToast === 'function') (0, sharedState.showOpToast)('Continuing in a new session. It will pull only the slice it needs.', 'success');
+        if (launch.engine === 'antigravity') (0, hostServices.refreshSelectedPendingSpawn)(placeholder);
+        if (typeof sharedState.showOpToast === 'function') (0, sharedState.showOpToast)('Continuing in a new session. It will pull only the slice it needs.', 'success');
         f2ClearComposer();
         setTimeout(hostServices.refreshConversationList, 600);
         // ...then chase with a cheap probe rather than two more full-corpus

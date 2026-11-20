@@ -1549,6 +1549,7 @@
     helpers: {
       get insertPendingSpawnCard() { return insertPendingSpawnCard; },
       get refreshConversationList() { return refreshConversationList; },
+      get refreshSelectedPendingSpawn() { return refreshSelectedPendingSpawn; },
     },
   });
 

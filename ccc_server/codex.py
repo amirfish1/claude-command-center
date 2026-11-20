@@ -187,14 +187,15 @@ def _spawn_timeline_enabled():
     return os.environ.get("CCC_SPAWN_STATS", "1") not in ("0", "false", "no")
 
 
-def _spawn_timeline_start(session_id, t0_epoch_ms=None, **fields):
+def _spawn_timeline_start(session_id, t0_epoch_ms=None, *, request_epoch=None,
+                          initial_marks=None, **fields):
     """Open a timeline for a spawn. t0 is when CCC accepted the request."""
     if not _spawn_timeline_enabled() or not session_id:
         return
     # Adopt the shared history before adding to it, so a freshly booted
     # process does not hold a dict that knows only about its own spawns.
     _core._spawn_timeline_sync()
-    now = time.time()
+    now = time.time() if request_epoch is None else request_epoch
     try:
         requested_t0 = float(t0_epoch_ms) / 1000.0
     except (TypeError, ValueError):
@@ -204,10 +205,13 @@ def _spawn_timeline_start(session_id, t0_epoch_ms=None, **fields):
     # cannot produce absurd or negative timing rows.
     t0 = requested_t0 if abs(now - requested_t0) <= 60.0 else now
     with _SPAWN_TIMELINE_LOCK:
+        if initial_marks is not None and str(session_id) in _core._SPAWN_TIMELINE:
+            return
         _core._SPAWN_TIMELINE[str(session_id)] = {
             "session_id": str(session_id),
             "t0": t0,
-            "marks": {},
+            "marks": {name: round(max(0.0, (epoch - t0) * 1000), 1)
+                      for name, epoch in (initial_marks or {}).items()},
             **fields,
         }
         while len(_core._SPAWN_TIMELINE) > _SPAWN_TIMELINE_MAX:

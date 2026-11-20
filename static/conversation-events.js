@@ -243,6 +243,7 @@
         }
       }
       if (ev.line != null) div.dataset.jsonlLine = String(ev.line);
+      if (ev.diagnostic) div.dataset.diagnostic = '1';
       if (ev.turn_id != null) div.dataset.turnId = String(ev.turn_id);
       if (ev.codex_item_id != null) div.dataset.codexItemId = String(ev.codex_item_id);
       if (ev.live_key != null) {
@@ -2142,8 +2143,10 @@
     } catch (_) {
       // Best-effort re-apply of stored annotations — never blocks rendering.
     }
-    if (_codexPane) {
+    if (_codexPane || state.sessionSourceByConv?.[renderedConversationId] === 'antigravity') {
       markSpawnAssistantPaint(renderedConversationId, $view, paneId);
+    }
+    if (_codexPane) {
       queueMicrotask(() => {
         if (paneByPaneId(paneId)?.conversationId !== renderedConversationId) return;
         const paneEl = convPaneElById(paneId);

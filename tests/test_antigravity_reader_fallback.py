@@ -37,22 +37,28 @@ def test_prompt_only_transcript_shows_cli_failure_and_incremental_cursor(reader_
         "Continue the previous task with its full context."]
     assert any("Individual quota reached" in block.get("text", "")
                for ev in parsed["events"] for block in ev.get("blocks", []))
+    assert parsed["events"][-1]["diagnostic"] is True
+    assert parsed["antigravity_provisional"] is True
     tail = engines._parse_antigravity_conversation("example", after_line=1)
     assert tail["events"] == [ev for ev in parsed["events"] if ev["line"] > 1]
     assert engines._parse_antigravity_conversation(
         "example", after_line=parsed["last_line"]) == {
-            "events": [], "last_line": parsed["last_line"]}
+            "events": [], "last_line": parsed["last_line"], "antigravity_provisional": True}
 
 
 def test_completed_transcript_does_not_append_old_cli_output(reader_files):
     transcript, stdout, debug, db = reader_files
+    stdout.write_text("Error: Old CLI output")
+    preview = engines._parse_antigravity_conversation("example")
     with transcript.open("a") as f:
         f.write(json.dumps({"type": "PLANNER_RESPONSE", "content": "Completed."}) + "\n")
-    stdout.write_text("Old CLI output")
     parsed = engines._parse_antigravity_conversation("example", after_line=1)
     assert len(parsed["events"]) == 1
     assert parsed["events"][0]["blocks"] == [{"kind": "text", "text": "Completed."}]
     assert parsed["last_line"] == 2
+    assert preview["last_line"] > parsed["last_line"]
+    assert "antigravity_provisional" not in engines._parse_antigravity_conversation(
+        "example", after_line=preview["last_line"])
 
 
 def test_transcript_preserves_thinking_in_initial_and_incremental_reads(reader_files):

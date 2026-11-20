@@ -1729,7 +1729,19 @@
     const local = sharedState.spawnStatsLocalMarks.get(sid);
     if (local) Object.assign(marks, local);
     if (!Object.keys(marks).length) return;
-    const statRows = data.timeline.engine === 'claude'
+    const antigravity = data.timeline.engine === 'antigravity';
+    const statRows = antigravity ? [
+      ['process_started', 'AGY process started'],
+      ['spawn_response_sent', 'CCC answered the browser'],
+      ['client_response_received', 'Browser got the response'],
+      ['antigravity_id_observed', 'CCC found the AGY conversation'],
+      ['antigravity_activity_read', 'CCC read the first AGY activity'],
+      ['client_first_visible_activity', 'First AGY activity painted'],
+      ['antigravity_text_read', 'CCC read the first AGY reply text'],
+      ['client_first_visible_output', 'First assistant text painted'],
+      ['client_first_paint', 'Transcript first painted'],
+      ['client_row_resolved', 'Row left "spawning"'],
+    ] : data.timeline.engine === 'claude'
       ? sharedState.CLAUDE_SPAWN_STAT_ROWS : sharedState.SPAWN_STAT_ROWS;
     const rows = statRows
       .filter(([k]) => marks[k] != null)
@@ -1737,20 +1749,24 @@
         + (0, sharedState.escapeHtml)(label) + '</span><span class="spawn-stat-val">'
         + (0, sharedState.fmtStatMs)(marks[k]) + '</span></div>').join('');
     // "Visible" is the honest headline: the number the user actually felt.
-    const visible = marks.client_first_visible_output != null ? marks.client_first_visible_output : null;
+    const visible = (antigravity ? marks.client_first_visible_activity : marks.client_first_visible_output) ?? null;
+    const visibleLabel = antigravity ? 'first visible activity' : 'first visible output';
+    const hiddenMs = antigravity ? marks.client_first_visible_activity_hidden_ms : marks.client_first_visible_output_hidden_ms;
+    const unselectedMs = antigravity ? marks.client_first_visible_activity_unselected_ms : marks.client_first_visible_output_unselected_ms;
     const existing = $view.querySelector('.spawn-stats');
-    const forceOpen = !!(opts && opts.open) || (data.timeline.engine === 'codex' && visible == null);
+    const forceOpen = !!(opts && opts.open) || ((antigravity || data.timeline.engine === 'codex') && visible == null);
     const html = '<details class="spawn-stats"' + ((forceOpen || (existing && existing.open)) ? ' open' : '') + '>'
       + '<summary class="spawn-stats-summary">&#9201; Session start: '
-      + (visible == null ? '<strong>Waiting for first visible output</strong>' : '<strong>' + (0, sharedState.fmtStatMs)(visible) + '</strong> to first visible output')
+      + (visible == null ? '<strong>Waiting for ' + visibleLabel + '</strong>'
+        : '<strong>' + (0, sharedState.fmtStatMs)(visible) + '</strong> to ' + visibleLabel)
       + '<span class="spawn-stats-sub"> &middot; accepted in '
       + (0, sharedState.fmtStatMs)(marks.spawn_response_sent) + '</span>'
       + '<button type="button" class="spawn-stats-copy" title="Copy timeline">&#128203;</button></summary>'
       + '<div class="spawn-stats-body">' + rows
       + '<div class="spawn-stats-note">Times are from the browser submit action. '
-      + (marks.client_first_visible_output_hidden_ms || marks.client_first_visible_output_unselected_ms
-        ? 'Includes ' + (0, sharedState.fmtStatMs)(marks.client_first_visible_output_hidden_ms || 0) + ' with the tab hidden and '
-          + (0, sharedState.fmtStatMs)(marks.client_first_visible_output_unselected_ms || 0) + ' viewing another session. ' : '')
+      + (hiddenMs || unselectedMs
+        ? 'Includes ' + (0, sharedState.fmtStatMs)(hiddenMs || 0) + ' with the tab hidden and '
+          + (0, sharedState.fmtStatMs)(unselectedMs || 0) + ' viewing another session. ' : '')
       + 'Hide with <code>localStorage[\'ccc-spawn-stats\']=\'0\'</code>.</div></div></details>';
     if (existing) {
       existing.outerHTML = html;
@@ -1766,7 +1782,7 @@
         const lines = statRows
           .filter(([k]) => marks[k] != null)
           .map(([k, label]) => label + ': ' + (0, sharedState.fmtStatMs)(marks[k]));
-        const text = 'Session start: ' + (0, sharedState.fmtStatMs)(visible) + ' to first visible output '
+        const text = 'Session start: ' + (0, sharedState.fmtStatMs)(visible) + ' to ' + visibleLabel + ' '
           + '(accepted in ' + (0, sharedState.fmtStatMs)(marks.spawn_response_sent) + ')\n' + lines.join('\n');
         const ok = await copyTextValue(text);
         (0, sharedState.showOpToast)(ok ? 'Timeline copied' : 'Copy failed', ok ? 'success' : 'error');
