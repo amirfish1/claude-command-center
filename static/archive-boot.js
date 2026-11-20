@@ -14,7 +14,7 @@
   const url = '/api/conversations/list?window=' + windowName + '&stale_ok=1&initial=1';
   const hintKey = 'ccc-archive-response-at:' + windowName;
   let started = false, skipped = false, finishRecent, recentController, recentStart, recentTimer;
-  let snapshot;
+  let snapshot, baseAvailable = false;
   const promise = new Promise(resolve => { finishRecent = resolve; });
   const startRecent = () => {
     if (started || skipped) return;
@@ -37,7 +37,10 @@
     const age = Date.now() - at;
     savedHint = at > 0 && age >= 0 && age < 86400000;
   } catch (_) {}
-  if (savedHint) recentTimer = setTimeout(startRecent, 1000);
+  // Once the complete base is usable, let the active loader decide whether
+  // it has a saved preview to paint. The full request also releases this
+  // fallback if it cannot validate the base.
+  if (savedHint) recentTimer = setTimeout(() => { if (!baseAvailable) startRecent(); }, 1000);
   else startRecent();
   window.__cccArchiveBootstrap = {url, promise};
   // Keep one complete response only as a conditional-request base. It never
@@ -107,7 +110,10 @@
       } catch (_) { finish(null); }
     });
   })();
-  read.then(value => { if (!value) startRecent(); });
+  read.then(value => {
+    baseAvailable = !!value;
+    if (!baseAvailable) startRecent();
+  });
   let pending = null, scheduled = false;
   const save = value => {
     try { if (localStorage.getItem('ccc-conv-cache') === '0') return; } catch (_) { return; }
@@ -141,7 +147,7 @@
     else window.addEventListener('ccc:archive-settled', arm, {once:true});
   };
   header.then(value => { if (!value) startRecent(); });
-  snapshot = {read, save, url:fullUrl, recentStart,
+  snapshot = {read, save, url:fullUrl, recentStart, startRecent,
     cancelRecent() {
       snapshot.recentCancelled = true;
       recentController?.abort();

@@ -281,7 +281,31 @@ test('a committed snapshot hint avoids an unsent preview for 304 and parsed 200 
   } finally {await context.close();}
 });
 
-test('a slow full body starts the bounded preview and cannot later mark it unsent', async () => {
+test('the active loader requests a recent preview when it has no saved rows to show', async () => {
+  for (const useSavedPreview of [false, true]) {
+    const f = setup({snapshot:{url:fullUrl, rows}});
+    const helper = f.context.window.__cccArchiveSnapshot;
+    const response = reply({conversations:rows});
+    let finish, starts = 0;
+    f.state._archiveBootstrapUrl = fullUrl + '&initial=1';
+    f.state._archiveBootstrapFetchPromise = new Promise(resolve => { finish = resolve; });
+    helper.startRecent = () => { starts++; finish(response); };
+    helper.cancelRecent = () => {};
+    const loading = f.context.loadArchiveAll({initial:true, useSavedPreview});
+    if (useSavedPreview) {
+      assert.equal(starts, 0);
+      helper.skippedRecent = true;
+      finish(null);
+      assert.equal(await loading, null);
+    } else {
+      assert.equal((await loading).length, rows.length);
+      assert.equal(starts, 1);
+    }
+    assert.equal(f.reads.length, 0, 'the application reuses the boot request');
+  }
+});
+
+test('a slow validated full read holds the preview until the active view requests it', async () => {
   const context=await browser.createBrowserContext(),page=await context.newPage();
   try {
     await page.goto(origin,{waitUntil:'load'});
@@ -292,11 +316,16 @@ test('a slow full body starts the bounded preview and cannot later mark it unsen
     });
     await page.reload({waitUntil:'load'});
     assert.deepEqual(await page.evaluate(async()=>{
+      const helper=window.__cccArchiveSnapshot;
+      await helper.read;
+      await new Promise(resolve => setTimeout(resolve, 150));
+      const waited=helper.recentStart===undefined;
+      helper.startRecent();
       const recent=await window.__cccArchiveBootstrap.promise;
       const rows=(await recent.json()).conversations;
-      await window.__cccArchiveSnapshot.fetch;
-      return {count:rows.length,skipped:!!window.__cccArchiveSnapshot.skippedRecent};
-    }),{count:2,skipped:false});
+      await helper.fetch;
+      return {waited,count:rows.length,skipped:!!helper.skippedRecent};
+    }),{waited:true,count:2,skipped:false});
   } finally {await context.close();}
 });
 

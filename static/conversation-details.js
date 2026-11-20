@@ -4882,6 +4882,9 @@
             sharedState._archiveBootstrapConsumed = true;
             const snapshot = window.__cccArchiveSnapshot;
             if (snapshot?.url + '&initial=1' === url && snapshot.cancelRecent) {
+              // A validated persisted base can hold the boot preview. Ask
+              // for it as soon as the active view has no saved rows to show.
+              if (!opts.useSavedPreview) snapshot.startRecent?.();
               if (Number.isFinite(snapshot.recentStart)) _perfT0 = Math.min(_perfT0, snapshot.recentStart);
               if (controller.signal.aborted) snapshot.cancelRecent();
               else controller.signal.addEventListener('abort', () => snapshot.cancelRecent(), {once:true});
@@ -5271,8 +5274,10 @@
         let releaseInitialPaint;
         const afterPaint = new Promise(resolve => { releaseInitialPaint = resolve; });
         const initialController = new AbortController();
+        const useSavedPreview = sharedState._archiveFromLocalCache && requestedWindow === _archiveWindow()
+          && !_archiveQuery().trim() && opts.staleOk !== false && !opts.force;
         const initialRead = loadArchiveAll({ staleOk: true, window: requestedWindow,
-          initial: true, controller: initialController });
+          initial: true, controller: initialController, useSavedPreview });
         // Start the full download while the recent-row request is pending.
         // Ordinary response parsing waits for recent rows to paint; the early
         // conditional response can already be parsed while the app loads.
