@@ -155,6 +155,10 @@ def compose_job_prompt(f):
         ]
     lines += [
         "",
+        "If the job needs an AI agent or model turn, NEVER hardcode `claude -p` or a fixed model:"
+        " use `ccc spawn --wait` (full-tool agent session) or `ccc run` (read-only / tool-free / JSON-schema turn)"
+        " with no `--engine`, `--model`, or `--effort` flags so the job automatically follows CCC's default session engine.",
+        "",
         "The job script must end by printing one line `CCC_OUTCOME: <one plain sentence about what this run did>`"
         " so the Jobs row shows a readable outcome, and must print any ticket refs or PR URLs it creates.",
         "",

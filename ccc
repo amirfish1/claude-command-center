@@ -92,7 +92,7 @@ from datetime import datetime, timezone
 
 PORT_FILE = os.path.expanduser("~/.claude/command-center/port.txt")
 
-SUBCOMMANDS = ("sessions", "session", "list-sessions", "spawn", "models", "doctor", "send", "ask", "quota", "restart",
+SUBCOMMANDS = ("sessions", "session", "list-sessions", "spawn", "run", "models", "doctor", "send", "ask", "quota", "restart",
                "rebind-report-to", "recall", "shipped", "history", "decisions", "question", "brief", "where",
                "recap", "brain", "consent", "jobs", "vault", "secret", "remind", "oncall", "service", "uxlab")
 
@@ -2486,10 +2486,10 @@ def cmd_spawn(args):
     except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
         print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
         return 1
-    if args.json:
-        print(json.dumps(result, indent=2))
-        return 0 if result.get("ok") else 1
     if not result.get("ok"):
+        if args.json:
+            print(json.dumps(result, indent=2))
+            return 1
         print(f"ccc: spawn failed: {result.get('error') or f'HTTP {status}'}", file=sys.stderr)
         if result.get("supported_engines"):
             print(f"  engines: {', '.join(result['supported_engines'])}", file=sys.stderr)
@@ -2500,6 +2500,38 @@ def cmd_spawn(args):
               file=sys.stderr)
         return 1
     sid = result.get("session_id") or ""
+    if getattr(args, "wait", False):
+        if not sid and payload.get("task_key"):
+            sid = _resolve_pending_spawn_sid(base, payload["task_key"], payload.get("cwd"), timeout_s=30.0)
+            if sid:
+                result["session_id"] = sid
+        if not sid:
+            err_msg = "spawn returned no session id; cannot --wait"
+            if args.json:
+                print(json.dumps(dict(result, ok=False, wait_ok=False, wait_error=err_msg, result=None, reply=None), indent=2))
+            else:
+                print(f"ccc: spawn --wait: {err_msg}", file=sys.stderr)
+            return 1
+        ok, text = _wait_for_turn_end(base, sid, args.timeout, stop_on_timeout=True)
+        if args.json:
+            out = dict(
+                result,
+                ok=bool(ok),
+                wait_ok=bool(ok),
+                result=text if ok else None,
+                reply=text if ok else None,
+                wait_error=None if ok else text,
+            )
+            print(json.dumps(out, indent=2))
+            return 0 if ok else (124 if text == "timeout" else 1)
+        if not ok:
+            print(f"ccc: spawn --wait: {text} (session {sid})", file=sys.stderr)
+            return 124 if text == "timeout" else 1
+        print(text or "")
+        return 0
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return 0 if result.get("ok") else 1
     pid = result.get("pid")
     engine = result.get("engine") or args.engine or "claude"
     bits = []
@@ -2720,31 +2752,144 @@ def cmd_jobs_ls(args):
     return 0
 
 
-def _wait_for_turn_end(base, sid, timeout_s, poll_s=5.0):
+def _resolve_pending_spawn_sid(base, task_key, cwd=None, timeout_s=30.0):
+    """Poll /api/sessions/spawned?task_key=... until a session_id is attached."""
+    import time
+    deadline = time.monotonic() + timeout_s
+    q = urllib.parse.urlencode({"task_key": task_key, "include_finished": "1"})
+    while time.monotonic() < deadline:
+        try:
+            rows = _get_json(base, f"/api/sessions/spawned?{q}", timeout=10)
+            if isinstance(rows, list):
+                for r in rows:
+                    if not isinstance(r, dict):
+                        continue
+                    if cwd and r.get("repo_path") and os.path.realpath(r["repo_path"]) != os.path.realpath(cwd):
+                        continue
+                    if r.get("session_id"):
+                        return r["session_id"]
+        except (OSError, urllib.error.HTTPError, ValueError):
+            pass
+        time.sleep(1.0)
+    return ""
+
+
+def _census_session_state(base, sid):
+    """Fallback state lookup for managed Codex/ACP threads before archive indexing."""
+    try:
+        census = _get_json(base, "/api/sessions/census", timeout=15)
+    except (OSError, urllib.error.HTTPError, ValueError):
+        return None
+    for row in (census.get("sessions") or []):
+        if isinstance(row, dict) and row.get("session_id") == sid:
+            return row.get("state")
+    return None
+
+
+def _wait_for_turn_end(base, sid, timeout_s, poll_s=5.0, stop_on_timeout=False):
     """Block until the spawned session stops working; return (ok, text).
-    Polls GET /api/session/<sid> (state + last_assistant_text)."""
+    Polls GET /api/session/<sid> (state + last_assistant_text), with fallback
+    to /api/sessions/census for managed threads whose rollout is not yet indexed."""
     import time
     deadline = time.monotonic() + timeout_s
     seen_working = False
     started = time.monotonic()
     while time.monotonic() < deadline:
+        d = {}
         try:
             d = _get_json(base, f"/api/session/{urllib.parse.quote(sid, safe='')}", timeout=15)
         except urllib.error.HTTPError as e:
             if e.code != 404:
                 return False, f"HTTP {e.code}"
-            d = {}
         except OSError:
-            d = {}
+            pass
         state = d.get("state") if d.get("ok") else None
+        if not state:
+            state = _census_session_state(base, sid)
         if state == "working":
             seen_working = True
         # A brand-new transcript can read as idle before the first turn starts;
-        # accept a non-working state once the turn was seen or after a grace.
-        elif state and (seen_working or time.monotonic() - started > 60):
-            return True, (d.get("last_assistant_text") or "").strip()
-        time.sleep(poll_s)
+        # accept a non-working state once the turn was seen, when reply text is
+        # already present, or after a grace window.
+        elif state in ("idle", "ended", "waiting") and (
+            seen_working or (d.get("last_assistant_text") or "").strip() or time.monotonic() - started > 60
+        ):
+            text = (d.get("last_assistant_text") or "").strip()
+            if not text:
+                # One final check in case /api/session/<sid> just indexed the rollout.
+                try:
+                    d2 = _get_json(base, f"/api/session/{urllib.parse.quote(sid, safe='')}", timeout=15)
+                    text = (d2.get("last_assistant_text") or "").strip()
+                except (OSError, urllib.error.HTTPError, ValueError):
+                    pass
+            return True, text
+        time.sleep(min(poll_s, max(0.5, deadline - time.monotonic())))
+    if stop_on_timeout:
+        try:
+            _post_json(base, "/api/inject-esc", {"session_id": sid}, timeout=10)
+        except OSError:
+            pass
     return False, "timeout"
+
+
+def cmd_run(args):
+    """Run one headless bounded model turn using CCC's saved session defaults."""
+    prompt = " ".join(args.prompt).strip()
+    if not prompt and not sys.stdin.isatty():
+        prompt = sys.stdin.read().strip()
+    if not prompt:
+        print("ccc run: missing prompt (pass it as an argument or pipe it on stdin)", file=sys.stderr)
+        return 2
+    system_prompt = args.system_prompt
+    if args.system_prompt_file:
+        try:
+            with open(args.system_prompt_file, encoding="utf-8") as fh:
+                system_prompt = fh.read()
+        except OSError as exc:
+            print(f"ccc run: cannot read --system-prompt-file: {exc}", file=sys.stderr)
+            return 2
+
+    repo_dir = os.path.dirname(os.path.realpath(__file__))
+    if repo_dir not in sys.path:
+        sys.path.append(repo_dir)
+    from ccc_server import headless_run
+
+    base = _resolve_server(args.server)
+    result = headless_run.run_headless(
+        prompt,
+        cwd=args.cwd or os.getcwd(),
+        engine=args.engine,
+        model=args.model,
+        effort=args.effort,
+        tools=args.tools,
+        allowed_tools=args.allowed_tool or [],
+        disallowed_tools=args.disallowed_tool or [],
+        system_prompt=system_prompt,
+        json_schema=args.json_schema,
+        mcp_config=args.mcp_config,
+        strict_mcp_config=args.strict_mcp_config,
+        safe_mode=args.safe_mode,
+        max_turns=args.max_turns,
+        max_budget_usd=args.max_budget_usd,
+        timeout_s=args.timeout,
+        max_output_bytes=args.max_output_bytes,
+        session_id=args.session_id,
+        no_session_persistence=args.no_session_persistence,
+        name=args.name,
+        subscription_only=args.subscription_only,
+        server_url=base or None,
+    )
+    if args.json:
+        print(json.dumps(result))
+        return 0 if result.get("ok") else (124 if result.get("subtype") == "timeout" else 1)
+    if not result.get("ok"):
+        print(f"ccc run: {result.get('error') or result.get('result') or 'failed'}", file=sys.stderr)
+        return 124 if result.get("subtype") == "timeout" else 1
+    if result.get("structured_output") is not None:
+        print(json.dumps(result["structured_output"]))
+    else:
+        print(result.get("result") or "")
+    return 0
 
 
 def cmd_jobs_add(args):
@@ -3338,8 +3483,55 @@ def main(argv=None):
     p.add_argument("--confirm-blocked-model", action="store_true",
                    help="spawn even if --model is on the model-policy blocklist "
                         "(~/.claude/command-center/model-policy.json)")
+    p.add_argument("--wait", action="store_true",
+                   help="block until the spawned session finishes its turn and print its reply")
+    p.add_argument("--timeout", type=float, default=1800.0, metavar="SECONDS",
+                   help="with --wait: stop waiting after this many seconds (default 1800)")
     p.add_argument("--json", action="store_true", help="raw spawn result JSON")
     p.set_defaults(func=cmd_spawn)
+
+    p = sub.add_parser(
+        "run",
+        help="run one headless turn using CCC's saved session engine/model/effort",
+        description="Run a bounded, non-interactive model turn that reads CCC's "
+                    "saved session defaults (/api/spawn-defaults or spawn-defaults.json) "
+                    "and enforces tool, sandbox, MCP, and JSON Schema contracts across engines.",
+    )
+    p.add_argument("prompt", nargs="*", help="prompt text (or pipe on stdin)")
+    p.add_argument("--cwd", help="working directory (default: current directory)")
+    p.add_argument("--engine", help="override session default engine")
+    p.add_argument("--model", help="override session default model")
+    p.add_argument("--effort", help="override session default reasoning effort")
+    p.add_argument("--tools", default="none",
+                   help="tool policy: none (default), readonly, full, or explicit Claude tool CSV")
+    p.add_argument("--allowed-tool", action="append", default=[], metavar="PATTERN",
+                   help="repeatable tool allowlist pattern (Claude --allowedTools)")
+    p.add_argument("--disallowed-tool", action="append", default=[], metavar="PATTERN",
+                   help="repeatable tool denylist pattern (Claude --disallowedTools)")
+    p.add_argument("--system-prompt", help="system prompt text")
+    p.add_argument("--system-prompt-file", metavar="PATH", help="read system prompt from file")
+    p.add_argument("--json-schema", metavar="JSON_OR_PATH",
+                   help="JSON Schema string or @file/path for structured output")
+    p.add_argument("--mcp-config", metavar="JSON_OR_PATH",
+                   help="MCP config JSON string or path to mcp.json")
+    p.add_argument("--strict-mcp-config", action="store_true",
+                   help="restrict MCP tools strictly to --mcp-config")
+    p.add_argument("--safe-mode", action="store_true",
+                   help="enable restricted safe mode where supported")
+    p.add_argument("--max-turns", type=int, help="maximum agent turns")
+    p.add_argument("--max-budget-usd", type=float, help="maximum USD spend cap where supported")
+    p.add_argument("--timeout", type=float, default=300.0, metavar="SECONDS",
+                   help="wall-clock timeout in seconds (default 300)")
+    p.add_argument("--max-output-bytes", type=int, default=4 * 1024 * 1024, metavar="BYTES",
+                   help="cap captured stdout+stderr bytes (default 4MiB)")
+    p.add_argument("--session-id", help="explicit session UUID where supported")
+    p.add_argument("--no-session-persistence", action="store_true",
+                   help="do not persist session transcript to disk")
+    p.add_argument("--name", help="display name for persisted session where supported")
+    p.add_argument("--subscription-only", action="store_true",
+                   help="strip API-key env vars so only subscription login is used")
+    p.add_argument("--json", action="store_true", help="emit normalized JSON envelope")
+    p.set_defaults(func=cmd_run)
 
     p = sub.add_parser(
         "send",

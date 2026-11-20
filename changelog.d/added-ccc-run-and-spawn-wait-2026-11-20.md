@@ -1,0 +1,1 @@
+- Add `ccc spawn --wait` and `ccc run` headless single-turn runner so scheduled jobs and automation scripts automatically follow CCC's saved default session engine, model, and reasoning effort instead of hardcoding `claude -p`.
