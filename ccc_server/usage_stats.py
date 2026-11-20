@@ -32,6 +32,7 @@ from ccc_server import share_savings
 
 _STATS_FILE_CACHE = {}        # str(path) -> {"mtime", "size", "agg"}
 _STATS_CACHE_LOCK = threading.Lock()
+_STATS_FILE_SAVE_LOCK = threading.Lock()
 _STATS_FILE_CACHE_DIRTY = False
 _STATS_FILE_CACHE_SCHEMA = 1
 _STATS_FILE_CACHE_FILE = (
@@ -74,24 +75,30 @@ def _save_stats_file_cache():
     _STATS_CACHE_LOCK (it acquires the lock; compute_global_stats holds it for
     the whole build, so call this after that returns)."""
     global _STATS_FILE_CACHE_DIRTY
-    with _STATS_CACHE_LOCK:
-        if not _STATS_FILE_CACHE_DIRTY:
-            return
-        snapshot = {
-            "schema_version": _STATS_FILE_CACHE_SCHEMA,
-            "entries": dict(_core._STATS_FILE_CACHE),
-        }
-        _STATS_FILE_CACHE_DIRTY = False
-    try:
-        _core._STATS_FILE_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = _core._STATS_FILE_CACHE_FILE.with_suffix(".tmp")
-        with tmp.open("w") as f:
-            json.dump(snapshot, f)
-        tmp.replace(_core._STATS_FILE_CACHE_FILE)
-    except OSError as e:
+    # The Stats request and its background publisher share a destination.
+    # Take the snapshot in publication order, without holding the stats
+    # data lock during encoding or disk I/O.
+    with _STATS_FILE_SAVE_LOCK:
         with _STATS_CACHE_LOCK:
-            _STATS_FILE_CACHE_DIRTY = True
-        print(f"  [stats-file-cache] save failed: {e}")
+            if not _STATS_FILE_CACHE_DIRTY:
+                return
+            snapshot = {
+                "schema_version": _STATS_FILE_CACHE_SCHEMA,
+                "entries": dict(_core._STATS_FILE_CACHE),
+            }
+            _STATS_FILE_CACHE_DIRTY = False
+        try:
+            target = _core._STATS_FILE_CACHE_FILE
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_suffix(".tmp")
+            # dumps uses the native encoder instead of streaming each
+            # token through Python while the dashboard is serving requests.
+            tmp.write_text(json.dumps(snapshot))
+            tmp.replace(target)
+        except OSError as e:
+            with _STATS_CACHE_LOCK:
+                _STATS_FILE_CACHE_DIRTY = True
+            print(f"  [stats-file-cache] save failed: {e}")
 
 # Token equivalent of "The Lord of the Rings" — ~576k words × ~1.25 tokens/word.
 # Used for the whimsical comparison line at the bottom of the stats overlay.
