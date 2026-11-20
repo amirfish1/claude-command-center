@@ -94,24 +94,34 @@ def identity(row, index=0):
                        row.get('jsonl_path')], separators=(',', ':'))
 
 
-def sticky(row):
+def sticky(row, *, stamp=None):
     # Preserve the existing sidebar exceptions, including imported Hermes
     # history. Unknown timestamps cannot safely be classified as old.
-    return bool(row.get('pinned') or row.get('is_live') or not activity(row)
+    return bool(row.get('pinned') or row.get('is_live')
+                or not (activity(row) if stamp is None else stamp)
                 or (row.get('engine') or row.get('source') or '').lower() == 'hermes')
 
 
 def hot_rows(rows, now=None):
     cutoff = (time.time() if now is None else now) - HOT_SECONDS
     by_sid = {str(r.get('session_id') or r.get('id') or ''): r for r in rows}
-    keep = {identity(r, i) for i, r in enumerate(rows) if sticky(r) or activity(r) >= cutoff}
-    pending = [r for i, r in enumerate(rows) if identity(r, i) in keep]
+    # Reuse the serialized identities across selection, ancestor retention,
+    # and output. Duplicate identities share the same eligibility.
+    indexed = [(identity(row, index), row) for index, row in enumerate(rows)]
+    keep = set()
+    for rid, row in indexed:
+        stamp = activity(row)
+        if sticky(row, stamp=stamp) or stamp >= cutoff:
+            keep.add(rid)
+    pending = [row for rid, row in indexed if rid in keep]
     for row in pending:
         parent = by_sid.get(str(row.get('parent_session_id') or row.get('hermes_parent_session_id') or ''))
-        if parent and identity(parent) not in keep:
-            keep.add(identity(parent))
-            pending.append(parent)
-    return [r for i, r in enumerate(rows) if identity(r, i) in keep]
+        if parent:
+            parent_id = identity(parent)
+            if parent_id not in keep:
+                keep.add(parent_id)
+                pending.append(parent)
+    return [row for rid, row in indexed if rid in keep]
 
 
 def database_path(cache_file):
@@ -210,10 +220,11 @@ def save(cache_file, snapshot, *, complete=False):
                     if existing[rid][1] != index:
                         con.execute('UPDATE rows SET position=? WHERE variant=? AND identity=?', (index, key, rid))
                     continue
+                row_activity = activity(row)
                 con.execute('INSERT OR REPLACE INTO rows VALUES(?,?,?,?,?,?,?,?,?)', (
                     key, rid, str(row.get('session_id') or row.get('id') or ''),
                     str(row.get('parent_session_id') or row.get('hermes_parent_session_id') or ''),
-                    index, activity(row), int(sticky(row)), digest, body,
+                    index, row_activity, int(sticky(row, stamp=row_activity)), digest, body,
                 ))
                 changed += 1
             if complete:
