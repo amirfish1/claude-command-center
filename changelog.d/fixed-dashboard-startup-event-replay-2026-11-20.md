@@ -1,0 +1,1 @@
+- New dashboard tabs avoid repeating the archive list read for events that predate the page.

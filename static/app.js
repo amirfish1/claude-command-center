@@ -41765,6 +41765,16 @@
   let _dashboardSavedCursor = conversationInitializers._dashboardSavedCursor();
   try { _dashboardSavedCursor = JSON.parse(localStorage.getItem(_dashboardEventCursorKey) || 'null'); }
   catch (_) { _dashboardSavedCursor = null; }
+  if (!_dashboardSavedCursor) {
+    // A new browser already reads dashboard state during boot. Start replay
+    // at the document response instead of invalidating it with old events.
+    const navigation = performance.getEntriesByType('navigation')[0];
+    const cursor = navigation?.serverTiming?.find(t => t.name === 'ccc-event-cursor')?.description;
+    const match = /^([\w-]+):(\d+)$/.exec(cursor || '');
+    if (match && Number.isSafeInteger(Number(match[2]))) {
+      _dashboardSavedCursor = { boot_id: match[1], seq: Number(match[2]) };
+    }
+  }
   const _dashboardEventState = conversationInitializers._dashboardEventState();
 
   function _persistDashboardEventCursor() {

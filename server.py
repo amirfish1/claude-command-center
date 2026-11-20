@@ -33000,8 +33000,12 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     return
             selected_app = (next(iter(_resolve_apps(only_id=app_id)), None)
                             if app_shell else None)
+            event_cursor = (not app_shell and not app_embed and
+                            not query.get("ccc_popout") and not query.get("popout") and
+                            time.time() - _SERVER_START_TS > _ARCHIVE_LIST_DISK_BOOT_S)
             self.send_html(_load_app_shell_html(selected_app) if app_shell else
-                           _load_index_html(app_embed=app_embed))
+                           _load_index_html(app_embed=app_embed),
+                           dashboard_event_cursor=event_cursor)
         elif path == "/api/control-plane/status":
             self.send_json(_control_plane_request("health"))
         elif path == "/api/model-picker/picks":
@@ -47698,16 +47702,23 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         self.end_headers()
         self.wfile.write(body)
 
-    def send_html(self, content):
+    def send_html(self, content, *, dashboard_event_cursor=False):
         self._send_prepared_html(_prepare_html_response(
-            content, self.headers.get("Accept-Encoding", "")))
+            content, self.headers.get("Accept-Encoding", "")),
+            dashboard_event_cursor=dashboard_event_cursor)
 
-    def _send_prepared_html(self, prepared):
+    def _send_prepared_html(self, prepared, *, dashboard_event_cursor=False):
         body, enc = prepared["body"], prepared.get("encoding")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self._send_server_timing(cache=prepared.get("cache"),
                                  page_timing=prepared.get("page_timing"))
+        if dashboard_event_cursor:
+            # The page's first state reads start after these headers arrive.
+            # Capture the cursor here so a change during page boot still replays.
+            hub = _dashboard_events
+            self.send_header("Server-Timing",
+                             f'ccc-event-cursor;desc="{hub.boot_id}:{hub.latest_seq}"')
         # Page HTML always revalidates the current source and agent identity.
         self.send_header("Cache-Control", "no-store, must-revalidate")
         self.send_header("Content-Length", str(len(body)))

@@ -193,6 +193,27 @@ def dashboard_server(monkeypatch):
         thread.join(timeout=2)
 
 
+def test_dashboard_document_cursor_preserves_changes_during_page_load(dashboard_server, monkeypatch):
+    server, base = dashboard_server
+    hub = server._dashboard_events
+    monkeypatch.setattr(server, "_SERVER_START_TS", time.time() - server._ARCHIVE_LIST_DISK_BOOT_S - 1)
+    hub.publish("invalidate", invalidate=[{"resource": "archive"}])
+
+    with urllib.request.urlopen(base + "/", timeout=5) as response:
+        timings = response.headers.get_all("Server-Timing")
+        assert 'ccc-event-cursor;desc="http-boot:1"' in timings
+
+    published = hub.publish("invalidate", invalidate=[{"resource": "archive"}])
+    with urllib.request.urlopen(base + "/api/events?since=1&boot_id=http-boot", timeout=2) as response:
+        _, received = _read_sse_event(response)
+        assert received == published
+
+    # A disk replay from the previous process still needs stream catch-up.
+    monkeypatch.setattr(server, "_SERVER_START_TS", time.time())
+    with urllib.request.urlopen(base + "/", timeout=5) as response:
+        assert all("ccc-event-cursor" not in metric for metric in response.headers.get_all("Server-Timing"))
+
+
 def test_dashboard_events_endpoint_replays_envelope(dashboard_server):
     server, base = dashboard_server
     published = server._dashboard_events.publish(
