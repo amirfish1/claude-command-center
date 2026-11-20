@@ -24,107 +24,81 @@
     // ourselves. Reconnect uses the freshly-advanced streamPane.lastLine
     // so we catch up on any events that landed during the silent gap.
     const WATCHDOG_MS = 15000;
-    const reconnect = () => {
-      const pane = paneByPaneId(streamPaneId);
-      if (!pane || pane.eventSource !== source) return;
-      stopConvStream(streamPaneId);
-      setTimeout(() => startConvStream(streamPaneId), 500);
+    const ownsStream = () => paneByPaneId(streamPaneId) === streamPane
+      && streamPane.conversationId === streamConvId && streamPane.eventSource === source;
+    let retryTimer;
+    const reconnect = (delay) => {
+      if (retryTimer || !ownsStream()) return;
+      clearTimeout(watchdog);
+      retryTimer = setTimeout(() => {
+        if (ownsStream()) startConvStream(streamPaneId);
+      }, delay);
+      source.close();
     };
-    let watchdog = setTimeout(reconnect, WATCHDOG_MS);
+    let watchdog;
     const bumpWatchdog = () => {
       clearTimeout(watchdog);
-      watchdog = setTimeout(reconnect, WATCHDOG_MS);
+      watchdog = setTimeout(() => reconnect(500), WATCHDOG_MS);
     };
-    streamPane._eventSourceWatchdog = () => clearTimeout(watchdog);
+    bumpWatchdog();
+    streamPane._eventSourceCleanup = () => {
+      clearTimeout(watchdog);
+      clearTimeout(retryTimer);
+    };
     source.addEventListener('keepalive', () => {
+      if (retryTimer || !ownsStream()) return;
       bumpWatchdog();
       _refreshTokenEconomizerAnnotation(streamPaneId);
     });
     source.addEventListener('source_reset', () => {
-      const pane = paneByPaneId(streamPaneId);
-      if (!pane || pane.conversationId !== streamConvId || pane.eventSource !== source) return;
+      if (retryTimer || !ownsStream()) return;
       stopConvStream(streamPaneId);
       (0, state.selectConversation)(streamConvId, streamPaneId);
     });
     source.onmessage = (ev) => {
+      if (retryTimer || !ownsStream()) return;
       bumpWatchdog();
       try {
         const data = JSON.parse(ev.data);
-        if (data.events && data.events.length > 0) {
-          // Route into the pane that owns this stream, not the currently
-          // active pane (which may have shifted to the other pane).
-          const streamPane = paneByPaneId(streamPaneId);
-          // Stale-stream guard: bail out if the pane was closed OR if its
-          // conversation has changed since the stream started. Without this,
-          // a queued message from the old conversation can write into the
-          // new conversation's transcript when the user switches convs in
-          // the same pane.
-          if (!streamPane || streamPane.conversationId !== streamConvId || streamPane.eventSource !== source) return;
-          const savedIdx = state.splitState.activeIndex;
-          state.splitState.activeIndex = paneIndexByPaneId(streamPaneId);
-          try {
-            // Invalidate the FFC cache so new file references picked up during
-            // this streaming turn are reflected in the pill count on the next
-            // ffcRefreshForCurrent() call (triggered by renderConversationEvents).
-            ffcInvalidate(state.currentConversation);
-            // SSE tails transcript changes, not a complete input-queue snapshot.
-            // Preserve parked cards until an HTTP queue snapshot or a durable
-            // delivery receipt retires them; otherwise every output tick hides
-            // the tray and the next poll restores it, jolting the transcript.
-            if ((0, state.renderConversationEvents)(data.events, streamPaneId, { queueSnapshot: false }) !== false) {
-              streamPane.antigravityProvisional = !!data.antigravity_provisional;
-              state.convLastLine = data.last_line;
-              // Advance the pane's own lastLine so reconnects (post-error
-              // or post-watchdog) request events from the right offset
-              // instead of replaying from the original stream-start.
-              if (typeof data.last_line === 'number' && data.last_line > streamPane.lastLine) {
-                streamPane.lastLine = data.last_line;
-              }
-            }
-          } finally {
-            // Always restore activeIndex, even if renderConversationEvents
-            // throws — otherwise the shim stays pointed at streamPaneId
-            // and corrupts every subsequent shim read until another action
-            // shifts it.
-            state.splitState.activeIndex = savedIdx;
+        if (!data.events?.length) return;
+        const savedIdx = state.splitState.activeIndex;
+        state.splitState.activeIndex = paneIndexByPaneId(streamPaneId);
+        try {
+          ffcInvalidate(state.currentConversation);
+          // Stream batches are deltas. Keep parked cards until an HTTP
+          // queue snapshot or a durable delivery receipt retires them.
+          if ((0, state.renderConversationEvents)(data.events, streamPaneId, { queueSnapshot: false }) === false) {
+            reconnect(2000);
+            return;
           }
-          // Refresh the context / cost pills as new events stream in. The
-          // poll fallback (loadConvAfter) already does this; without the
-          // same call here the pills only update on reselect or refresh
-          // whenever the SSE path is the one delivering events. Usage
-          // rollups land sporadically across a turn, so we re-fetch on
-          // every event batch — fetchSessionUsage already bails out if the
-          // active session id has shifted.
-          const sid = (state.conversationsData.find(x => x.id === streamConvId) || {}).session_id || streamConvId;
-          fetchSessionUsage(sid);
+          streamPane.antigravityProvisional = !!data.antigravity_provisional;
+          if (Number.isFinite(data.last_line)) {
+            streamPane.lastLine = Math.max(streamPane.lastLine, data.last_line);
+          }
+        } finally {
+          state.splitState.activeIndex = savedIdx;
         }
-      } catch (err) {}
+      } catch (_) {
+        // The server has already sent this batch. Replay from the last
+        // applied cursor before accepting any subsequent batch.
+        reconnect(2000);
+        return;
+      }
+      try {
+        const sid = (state.conversationsData.find(x => x.id === streamConvId) || {}).session_id || streamConvId;
+        fetchSessionUsage(sid);
+      } catch (_) {}
     };
-    source.onerror = () => {
-      const pane = paneByPaneId(streamPaneId);
-      if (!pane || pane.eventSource !== source) return;
-      stopConvStream(streamPaneId);
-      setTimeout(() => startConvStream(streamPaneId), 2000);
-    };
+    source.onerror = () => reconnect(2000);
   }
 
   function stopConvStream(paneId) {
-    if (paneId) {
-      const pane = paneByPaneId(paneId);
-      if (pane && pane.eventSource) {
-        pane.eventSource.close();
-        pane.eventSource = null;
-      }
-      if (pane && typeof pane._eventSourceWatchdog === 'function') {
-        try { pane._eventSourceWatchdog(); } catch (_) {}
-        pane._eventSourceWatchdog = null;
-      }
-      return;
-    }
-    if (state.convEventSource) {
-      state.convEventSource.close();
-      state.convEventSource = null;
-    }
+    const pane = paneByPaneId(paneId || activePaneId());
+    if (!pane) return;
+    pane._eventSourceCleanup?.();
+    pane._eventSourceCleanup = null;
+    pane.eventSource?.close();
+    pane.eventSource = null;
   }
 
   async function fetchConversationEvents(paneId) {
@@ -409,7 +383,9 @@
           }
         }
         if (_loadingEarlier) {
-          const _prepended = _prependConversationEvents(data.events, fetchPaneId);
+          // A before= window reports the file's full length, including
+          // unseen new lines. Only an initial or live read can commit it.
+          _prependConversationEvents(data.events, fetchPaneId);
           const pane = paneByPaneId(fetchPaneId);
           if (pane) {
             const emptyEvents = !Array.isArray(data.events) || data.events.length === 0;
@@ -423,14 +399,11 @@
               pane.firstLine = data.first_line || pane.firstLine || 0;
             }
           }
-          // convLastLine tracks the OPEN conversation's live tail only — an
-          // ancestor file's line count must never inflate it.
-          if (_prepended !== false && _fetchSid === id) state.convLastLine = Math.max(state.convLastLine, data.last_line || 0);
         } else {
           const _perfRenderAt = performance.now();
           const _renderOk = (0, state.renderConversationEvents)(data.events, fetchPaneId, { initialLoad: _freshOpen, isTruncated: data.truncated_before }) !== false;
           if (_renderOk) {
-            state.convLastLine = data.last_line;
+            state.convLastLine = Math.max(state.convLastLine, data.last_line || 0);
             currentPane.antigravityProvisional = !!data.antigravity_provisional;
           }
           if (_renderOk && _freshOpen && !data.error) noteAppEmbedDrawn(id, false);

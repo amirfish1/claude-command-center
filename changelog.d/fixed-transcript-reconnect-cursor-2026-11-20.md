@@ -1,0 +1,1 @@
+Keep open conversations receiving replies when a live stream reconnects during history loading. Resume from the last applied transcript line so delivered messages clear when their transcript entries arrive.

@@ -14,7 +14,8 @@ function fixture(options = {}) {
   }
   const context = {EventSource, JSON, performance, AbortSignal,
     setTimeout(fn,ms) { timers.set(++timerId,{fn,ms}); return timerId; },
-    clearTimeout(id) { timers.delete(id); }, window:{}, fetch:async()=>{throw new Error('unexpected network');}};
+    clearTimeout(id) { timers.delete(id); }, window:{},
+    fetch:options.fetch || (async()=>{throw new Error('unexpected network');})};
   vm.runInNewContext(fs.readFileSync(require.resolve('../static/conversation-transport.js'),'utf8'),context);
   const state = {splitState:{panes,activeIndex:0},conversationsData:[],archiveData:[],sessionSourceByConv:{},
     codexSpawnPreviews:new Set(),claudeSpawnAwaitingFirstPaint:new Map(),_perfConvOpen:null,
@@ -64,6 +65,56 @@ test('stale stream cannot paint or reset a newly selected conversation',()=>{
   source.onmessage({data:JSON.stringify({events:[{type:'assistant',line:6}],last_line:6})});
   source.listeners.source_reset();assert.equal(h.rendered.length,0);assert.equal(h.panes[0].lastLine,0);
   h.controller.stopConvStream('left');
+});
+
+test('an unapplied batch reconnects from the last rendered line and ignores later packets', () => {
+  const h = fixture();
+  h.panes[0].lastLine = 12;
+  h.controller.startConvStream('left');
+  const source = h.streams[0];
+  const render = h.state.renderConversationEvents;
+  const batch = line => ({data: JSON.stringify({events: [{type: 'assistant', line}], last_line: line})});
+  h.state.renderConversationEvents = () => false;
+  source.onmessage(batch(13));
+  assert.equal(source.closed, true);
+  h.state.renderConversationEvents = render;
+  source.onmessage(batch(14));
+  assert.equal(h.rendered.length, 0);
+  assert.equal(h.panes[0].lastLine, 12);
+  const [retry] = h.timers.values();
+  assert.equal(retry.ms, 2000);
+  retry.fn();
+  assert.equal(h.streams[1].url, '/api/conversations/one/stream?after=12');
+  h.streams[1].onmessage(batch(13));
+  assert.equal(h.panes[0].lastLine, 13);
+});
+
+test('a scheduled retry cannot replace the stream for a reopened pane', () => {
+  const h = fixture();
+  h.controller.startConvStream('left');
+  h.streams[0].onerror();
+  const [retry] = h.timers.values();
+  h.controller.stopConvStream();
+  assert.equal(h.timers.size, 0);
+  h.controller.startConvStream('left');
+  retry.fn();
+  assert.equal(h.streams.length, 2);
+  assert.equal(h.panes[0].eventSource, h.streams[1]);
+});
+
+test('an older HTTP response cannot rewind the cursor advanced by the stream', async () => {
+  let finish;
+  const h = fixture({fetch: url => {
+    assert.equal(url, '/api/conversations/one?after=12');
+    return new Promise(resolve => { finish = resolve; });
+  }});
+  h.panes[0].lastLine = 12;
+  const pending = h.controller.fetchConversationEvents('left');
+  h.controller.startConvStream('left');
+  h.streams[0].onmessage({data: JSON.stringify({events: [{type: 'assistant', line: 14}], last_line: 14})});
+  finish({ok: true, json: async () => ({events: [], last_line: 12})});
+  await pending;
+  assert.equal(h.panes[0].lastLine, 14);
 });
 
 test('provisional Antigravity cursor requests a reset when the native source takes over', async () => {

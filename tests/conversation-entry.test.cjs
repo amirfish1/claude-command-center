@@ -22,8 +22,26 @@ test('embedded entry binds real controls before readiness and keeps drafts live'
   let issueRequests = 0;
   let failIssuesRead = false;
   const issueActions = [];
+  const live = { streams: [], earlier: null, events: [] };
+  let historyStarted;
+  const historyRequest = new Promise(resolve => { historyStarted = resolve; });
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, 'http://localhost');
+    if (entrySource === 'interactive' && url.pathname === '/api/conversations/session-test/stream') {
+      const after = Number(url.searchParams.get('after'));
+      live.streams.push({ after, response });
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      response.write('event: keepalive\ndata: {}\n\n');
+      const events = live.events.filter(event => event.line > after);
+      if (events.length) response.write('data: ' + JSON.stringify({ events, last_line: 14 }) + '\n\n');
+      return;
+    }
+    if (entrySource === 'interactive' && url.pathname === '/api/conversations/session-test'
+        && url.searchParams.has('before')) {
+      live.earlier = response;
+      historyStarted();
+      return;
+    }
     if (url.pathname === '/static/conversation-issues.js') {
       issueRequests++;
       if (failIssuesRead) {response.writeHead(503).end();return;}
@@ -58,6 +76,8 @@ test('embedded entry binds real controls before readiness and keeps drafts live'
         response.setHeader('Content-Type','application/json');
         if (payload.text === 'Rejected draft') {
           response.writeHead(400).end(JSON.stringify({ok:false,error:'Fixture rejection'}));
+        } else if (entrySource === 'interactive') {
+          response.end(JSON.stringify({ok:true,via:'spawn-fifo'}));
         } else response.end(JSON.stringify({ok:true,queued:true,delivery_id:'fixture-'+injections.length}));
       });
     } else if (url.pathname === '/') {
@@ -78,7 +98,8 @@ test('embedded entry binds real controls before readiness and keeps drafts live'
       }
       response.setHeader('Content-Type', 'application/json');
       response.end(JSON.stringify(url.pathname === '/api/conversations/session-test'
-        ? {events:[{type:'user',text:'A test request',line:1},{type:'assistant',text:'A test response',blocks:[{kind:'text',text:'A test response'}],line:2,tokens_in:50000,tokens_cached:0}],last_line:2}
+        ? {events:[{type:'user_text',text:'A test request',line:entrySource === 'interactive'?11:1},{type:'assistant',text:'A test response',blocks:[{kind:'text',text:'A test response'}],line:entrySource === 'interactive'?12:2,tokens_in:50000,tokens_cached:0}],
+          ...(entrySource === 'interactive' ? {first_line:11,last_line:12,truncated_before:true} : {last_line:2})}
         : {}));
     }
   });
@@ -117,6 +138,37 @@ test('embedded entry binds real controls before readiness and keeps drafts live'
       assert.equal(await agent.evaluate(() => window._ccCacheMissLog[0].tokens_uncached), 50000);
       assert.equal(await agent.$eval('#convInput', input => input.disabled), false);
       assert.match(await agent.$eval('#conversationsView', view => view.textContent), /A test response/);
+      await agent.waitForSelector('.conv-load-earlier');
+      await agent.$eval('#convInput', input => {
+        input.value = 'A headless follow-up';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      await agent.$eval('#convSendBtn', button => button.click());
+      await agent.waitForSelector('.send-delivered-note');
+      live.events = [
+        { type:'user_text', line:13, text:'A headless follow-up' },
+        { type:'assistant', line:14, blocks:[{ kind:'text', text:'The headless reply' }] },
+      ];
+      // History replies report the file's total length, even when the
+      // returned events are all before the already-rendered tail.
+      if (!live.earlier) await agent.$eval('.conv-load-earlier', button => button.click());
+      await historyRequest;
+      assert.equal(live.streams[0]?.after, 12);
+      live.earlier.writeHead(200, { 'Content-Type': 'application/json' });
+      live.earlier.end(JSON.stringify({
+        events:[{ type:'user_text', line:1, text:'Earlier question' }],
+        first_line:1, last_line:14,
+      }));
+      await agent.waitForSelector('.event[data-jsonl-line="1"]');
+      const reconnect = cold.waitForRequest(request =>
+        new URL(request.url()).pathname === '/api/conversations/session-test/stream', {timeout:6000});
+      live.streams[0].response.end();
+      assert.equal(new URL((await reconnect).url()).searchParams.get('after'), '12');
+      await agent.waitForFunction(() => document.querySelector('.event[data-jsonl-line="14"]')
+        ?.textContent.includes('The headless reply'), {timeout:6000});
+      assert.equal(await agent.$$eval('.event[data-jsonl-line="13"]', rows => rows.length), 1);
+      assert.equal(await agent.$('.send-delivered-note'), null);
+      injections.length = 0;
       assert.equal(detailsRequests, 0, 'archive code does not load before readiness');
       const archive = await agent.evaluate(() => Promise.all([
         cccConversation.loadArchiveAll({window:'1d'}),
