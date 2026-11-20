@@ -7546,6 +7546,16 @@ def extract_session_slash_commands(session_id):
             "commands": list(_CODEX_FALLBACK_SLASH_COMMANDS),
             "source": "codex-fallback",
         }
+    if engine == "antigravity":
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "engine": engine,
+            "commands": [
+                {"name": "/compact", "description": "Summarize the conversation to free up context"},
+            ],
+            "source": "antigravity-fallback",
+        }
     if engine in ("kimi", "grok"):
         # Kimi/Grok ACP push their own catalog once per session via an
         # `available_commands_update` notification (session/new, load, or
@@ -34698,9 +34708,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                                 )
             self.send_json(usage)
         elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/slash-commands$", path):
-            # Slash commands reported by Claude's system/init event. The
-            # composer uses this for `/` suggestions, including project and
-            # personal custom skills.
+            # The composer uses the engine catalog for `/` suggestions.
             sid = path.rsplit("/", 2)[-2]
             self.send_json(extract_session_slash_commands(sid))
         elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/token-sitter-checkpoint$", path):

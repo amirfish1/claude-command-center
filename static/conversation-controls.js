@@ -431,6 +431,9 @@
 
   function slashFallbackCommandsForSource(source) {
     if (source === 'codex') return sharedState.CODEX_SLASH_FALLBACK_COMMANDS;
+    if (source === 'antigravity') {
+      return [{ name: '/compact', description: 'Summarize the conversation to free up context' }];
+    }
     // Kimi/Grok expose their own ACP-reported catalog (fetched below) —
     // Claude's fallback list would show commands like /context that don't
     // exist for those engines, so start empty rather than misleading.
@@ -445,7 +448,6 @@
     const source = sess && sess.source;
     if (source === 'gemini') return 'Slash commands are not wired for Gemini sessions';
     if (source === 'cursor') return 'Slash commands are not wired for Cursor sessions';
-    if (source === 'antigravity') return 'Slash commands are not wired for Antigravity sessions';
     if (source === 'pkood') return 'pkood agents do not use slash commands';
     if (sharedState.currentConversation === '__new__') {
       const engine = (typeof sharedState.getSpawnEngine === 'function') ? (0, sharedState.getSpawnEngine)() : 'claude';
@@ -453,7 +455,7 @@
         ? ''
         : 'Slash commands are not wired for ' + engine + ' sessions';
     }
-    return (sess && sess.id) ? '' : 'Select a Claude or Codex session first';
+    return (sess && sess.id) ? '' : 'Select a session first';
   }
 
   async function slashCommandsForCurrentContext() {
@@ -473,7 +475,9 @@
     try {
       const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/slash-commands', { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
-      if (res.ok && data && Array.isArray(data.commands) && data.commands.length) {
+      // The local server can misidentify an Antigravity conversation owned by a peer.
+      if (res.ok && data && (sess.source !== 'antigravity' || data.engine === 'antigravity')
+          && Array.isArray(data.commands) && data.commands.length) {
         commands = data.commands
           .map(c => ({
             name: String((c && c.name) || '').trim(),

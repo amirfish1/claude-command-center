@@ -1,8 +1,15 @@
 """Native Antigravity compaction routing and authoritative completion."""
 import pytest
-import server  # noqa: F401
+import server
 from ccc_server import compact, engines
 from ccc_server import core
+
+
+def test_slash_catalog_offers_native_compact(monkeypatch):
+    monkeypatch.setattr(server, '_detect_session_engine', lambda sid: 'antigravity')
+    result = server.extract_session_slash_commands('test-session')
+    assert result['engine'] == 'antigravity'
+    assert [command['name'] for command in result['commands']] == ['/compact']
 
 
 @pytest.mark.parametrize('response', [
