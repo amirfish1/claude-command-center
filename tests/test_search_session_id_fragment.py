@@ -67,6 +67,6 @@ def test_client_checks_the_id_before_any_filter_and_ranks_it_top():
 def test_sidebar_list_shows_id_hits_that_are_not_loaded():
     app = dashboard_source(ROOT / "static" / "app.js")
     body = app[app.index("function renderArchiveList(filter, opts)"):]
-    union = body[body.index("if (q && _historyState.query === q && _historyState.map.size)"):]
+    union = body[body.index("if (q && _historyState.query === searchKey && _historyState.map.size)"):]
     assert "hit.source === 'id'" in union[:900]
     assert "_historySyntheticRow(sid, hit)" in union[:900]
