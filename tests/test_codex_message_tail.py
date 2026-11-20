@@ -88,6 +88,36 @@ def test_default_parser_still_formats_tools_and_opt_in_reaches_window(tmp_path, 
     assert messages["last_line"] == regular["last_line"] == 2
 
 
+@pytest.mark.parametrize("context_line, suffix_reads", [(250, 1), (95, 2)])
+def test_message_tail_reuses_suffix_and_recovers_earlier_turn_context(
+        tmp_path, monkeypatch, context_line, suffix_reads):
+    source = tmp_path / "rollout.jsonl"
+    rows = [{"type": "unrendered"} for _ in range(1206)]
+    rows[context_line - 1] = {"type": "turn_context", "payload": {"turn_id": "earlier-turn"}}
+    rows[399] = record("user_message", message="Check the result.")
+    rows[-1] = record("agent_message", message="The result is ready.")
+    source.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    monkeypatch.setattr(server, "_get_queued_events_for_session", lambda sid: [])
+    monkeypatch.setattr(server, "_detect_session_engine", lambda sid: "codex")
+    monkeypatch.setattr(server, "_resolve_conversation_reader",
+                        lambda *args, **kwargs: (source, server._parse_codex_event))
+    baseline = server.parse_conversation("test-session", tail=80)
+    read_tail = server._read_tail_lines
+    reads = []
+
+    def count_read(filepath, lines):
+        reads.append(lines)
+        return read_tail(filepath, lines)
+
+    monkeypatch.setattr(server, "_read_tail_lines", count_read)
+    result = server.parse_conversation("test-session", tail=80, messages_only=True)
+
+    assert len(reads) == suffix_reads
+    assert [ev["turn_id"] for ev in result["events"]] == ["earlier-turn", "earlier-turn"]
+    assert consumed(result) == consumed(baseline)
+    assert result["last_line"] == len(rows)
+
+
 def test_live_reader_keeps_new_user_barrier_and_recovers_after_file_rewrite(tmp_path, monkeypatch):
     source = tmp_path / "rollout.jsonl"
 

@@ -28892,6 +28892,7 @@ _LINE_COUNT_CACHE = {}
 _LINE_COUNT_LOCK = threading.Lock()
 _LINE_COUNT_CACHE_MAX = 2048
 _TAIL_READ_CHUNK = 256 * 1024
+_CODEX_TAIL_LOOKBACK = 1024
 
 
 def _count_newlines(f, start, end):
@@ -28907,18 +28908,10 @@ def _count_newlines(f, start, end):
     return n
 
 
-def _codex_turn_meta_before_line(filepath, first_line, total, lookback=1024):
-    """Turn meta from the nearest Codex turn_context before ``first_line``.
-
-    Bounded: scans at most ``lookback`` lines above the window, decoding only
-    rows that mention turn_context. None when there is none in range.
-    """
-    if first_line <= 1 or total < first_line:
-        return None
-    loaded = _read_tail_lines(filepath, (total - first_line + 1) + lookback)
-    if loaded is None:
-        return None
-    for number, raw in reversed(loaded[1]):
+def _codex_turn_meta_from_lines(lines, first_line, earliest):
+    for number, raw in reversed(lines):
+        if number < earliest:
+            break
         if number >= first_line or '"turn_context"' not in raw:
             continue
         try:
@@ -28928,6 +28921,24 @@ def _codex_turn_meta_before_line(filepath, first_line, total, lookback=1024):
         if meta:
             return meta
     return None
+
+
+def _codex_turn_meta_before_line(filepath, first_line, total, lookback=_CODEX_TAIL_LOOKBACK,
+                                 *, loaded_lines=()):
+    """Turn meta from the nearest Codex turn_context before ``first_line``.
+
+    Bounded: scans at most ``lookback`` lines above the window, decoding only
+    rows that mention turn_context. None when there is none in range.
+    """
+    if first_line <= 1 or total < first_line:
+        return None
+    earliest = max(1, first_line - lookback)
+    if loaded_lines:
+        meta = _codex_turn_meta_from_lines(loaded_lines, first_line, earliest)
+        if meta or loaded_lines[0][0] <= earliest:
+            return meta
+    loaded = _read_tail_lines(filepath, (total - first_line + 1) + lookback)
+    return None if loaded is None else _codex_turn_meta_from_lines(loaded[1], first_line, earliest)
 
 
 def _codex_first_prompt_event(filepath, before_line, scan_limit=4000):
@@ -29149,6 +29160,7 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
     buf = collections.deque(maxlen=window)
     total = 0
     extra_lines = []
+    extended = None
     if before is None:
         # Click path: the last N lines come from the end of the file and the
         # absolute numbering from an incremental newline count. Iterating a
@@ -29156,7 +29168,13 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
         # a few ms.
         if not is_codex:
             _timestamp_runs(filepath)
-        loaded = _read_tail_lines(filepath, window)
+        if is_codex and messages_only:
+            # The live reader also needs this suffix for prompt and turn
+            # context recovery. Decode it once for all three lookups.
+            extended = _read_tail_lines(filepath, window + _CODEX_TAIL_LOOKBACK)
+            loaded = (extended[0], extended[1][-window:]) if extended is not None else None
+        else:
+            loaded = _read_tail_lines(filepath, window)
         if loaded is None:
             return {"events": [], "last_line": 0, "first_line": 0, "truncated_before": False}
         total, tail_lines = loaded
@@ -29178,7 +29196,8 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
             # Extend to that prompt, retaining intervening rows so paging
             # remains contiguous and loading older history cannot reorder it.
             # Decode only candidate user rows during the bounded lookback.
-            extended = _read_tail_lines(filepath, window + 1024)
+            if extended is None:
+                extended = _read_tail_lines(filepath, window + _CODEX_TAIL_LOOKBACK)
             if extended is not None:
                 for idx in range(len(extended[1]) - 1, -1, -1):
                     number, raw = extended[1][idx]
@@ -29215,7 +29234,8 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
         # user prompt, so a window starting mid-file can miss it. Without a
         # turn_id the client can't tell the live app-server overlay for that
         # turn is already on screen and appends it again (CCC-219).
-        codex_turn_meta = _codex_turn_meta_before_line(filepath, buf[0][0], total)
+        codex_turn_meta = _codex_turn_meta_before_line(
+            filepath, buf[0][0], total, loaded_lines=extended[1] if messages_only and extended else ())
     memo = None
     new_memo = None
     if not is_codex and before is None:
