@@ -2949,8 +2949,11 @@ def _extract_antigravity_usage(session_id):
     # turn_series uses. Steps don't carry a timestamp, so ts stays "".
     turn_series = collections.deque(maxlen=_core.USAGE_TURN_SERIES_MAX)
 
+    from ccc_server import antigravity_compact as native_compact
+    checkpoint = native_compact.latest_checkpoint(path) if path else None
+    post_compact_peak = 0
     steps = _antigravity_trajectory_steps(session_id)
-    for step in steps:
+    for pos, step in enumerate(steps):
         if not isinstance(step, dict):
             continue
         metadata = step.get("metadata")
@@ -2970,6 +2973,12 @@ def _extract_antigravity_usage(session_id):
         thinking_tokens = usage["thinking"]
 
         window = in_tokens + cr_tokens + cc_tokens
+        try:
+            index = int(step.get('stepIndex', step.get('step_index', pos)))
+        except (ValueError, TypeError):
+            index = -1
+        if checkpoint and index > checkpoint['index']:
+            post_compact_peak = max(post_compact_peak, window)
         if window:
             latest = window
             if window > peak:
@@ -2990,8 +2999,20 @@ def _extract_antigravity_usage(session_id):
                 "tokens_out": turn_out,
             })
 
+    context_fields = {}
+    if checkpoint:
+        if post_compact_peak:
+            peak = post_compact_peak
+        else:
+            # Checkpoint tokens measure the summarizer's request. Until the
+            # next model turn, use only the native rebuilt-context estimate.
+            latest = native_compact.context_estimate(path, checkpoint)
+            peak = latest
+            context_fields = {'context_estimated': bool(latest),
+                              'context_after_compact_pending': not bool(latest)}
     return {
         **empty,
+        **context_fields,
         "latest_input_tokens": latest,
         "peak_input_tokens": peak,
         "total_output_tokens": total_out,

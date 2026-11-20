@@ -6,7 +6,9 @@ invisible and retain the usual busy-session queue rather than interrupt work.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import tempfile
 import os
 from pathlib import Path
 import re
@@ -40,8 +42,71 @@ def checkpoint_count(transcript):
         return 0
 
 
-def run_terminal(cmd, cwd, env, transcript, timeout=180):
-    """Run the interactive command; a model's text can never mean success."""
+def latest_checkpoint(transcript):
+    """Return the latest completed checkpoint, independent of its token usage."""
+    found = None
+    try:
+        with open(transcript, encoding='utf-8') as fh:
+            for line in fh:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if (row.get('type') == 'CHECKPOINT' and row.get('status') == 'DONE'
+                        and '# Resuming from a compaction' in row.get('content', '')):
+                    found = {'index': int(row['step_index']),
+                             'key': hashlib.sha256(line.strip().encode()).hexdigest()}
+    except (OSError, TypeError, ValueError, KeyError):
+        pass
+    return found
+
+
+def _context_snapshot_path(transcript):
+    digest = hashlib.sha256(str(transcript).encode()).hexdigest()
+    return Path(_core.COMMAND_CENTER_STATE_DIR) / 'antigravity-context' / (digest + '.json')
+
+
+def save_context_estimate(transcript, tokens):
+    checkpoint = latest_checkpoint(transcript)
+    if not checkpoint or not tokens:
+        return
+    target = _context_snapshot_path(transcript)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp_name = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', dir=target.parent, delete=False) as fh:
+            temp_name = fh.name
+            json.dump({**checkpoint, 'tokens': int(tokens)}, fh)
+        os.replace(temp_name, target)
+    finally:
+        if temp_name and os.path.exists(temp_name):
+            os.unlink(temp_name)
+
+
+def context_estimate(transcript, checkpoint):
+    try:
+        saved = json.loads(_context_snapshot_path(transcript).read_text())
+        if saved.get('key') == checkpoint['key']:
+            return max(0, int(saved.get('tokens') or 0))
+    except (OSError, ValueError, TypeError):
+        pass
+    return 0
+
+
+def terminal_context_estimate(text):
+    matches = re.findall(r'context [\d.,]+[kKmM]?\s*→\s*~([\d.]+)([kKmM]?)', text)
+    if not matches:
+        return None
+    value, unit = matches[-1]
+    return round(float(value) * {'': 1, 'k': 1000, 'm': 1000000}[unit.lower()])
+
+
+def run_terminal(cmd, cwd, env, transcript, timeout=180, *, context_only=False):
+    """Run native compaction, or read its latest card without submitting input.
+
+    context_only is a read-only recovery utility for an already compacted,
+    idle conversation; ordinary usage requests never launch a CLI process.
+    """
     import pty
     import select
     import fcntl
@@ -70,20 +135,43 @@ def run_terminal(cmd, cwd, env, transcript, timeout=180):
         prompt_ready = False
         last_output = time.monotonic()
         started = time.monotonic()
+        checkpoint_seen = None
+        clean = b''
+        old_cards = set()
         while time.monotonic() - started < timeout:
             if sent and checkpoint_count(transcript) > before:
-                return {'ok': True, 'status': 'completed', 'via': 'antigravity-hidden-pty'}
+                checkpoint_seen = checkpoint_seen or time.monotonic()
+            if checkpoint_seen or context_only:
+                checkpoint = latest_checkpoint(transcript)
+                text = clean.decode('utf-8', 'replace')
+                # The step count on the card is relative, unlike the raw
+                # checkpoint index. Reject startup history and accept the new
+                # post-command card; read-only recovery uses the latest card.
+                cards = re.findall(r'\d+ steps summarized[^\r\n]*', text)
+                card = cards[-1] if cards else ''
+                tokens = terminal_context_estimate(card)
+                if checkpoint and tokens and (context_only or card not in old_cards):
+                    try:
+                        save_context_estimate(transcript, tokens)
+                    except OSError:
+                        pass  # A missing optional estimate must not undo compaction.
+                    return {'ok': True, 'status': 'completed', 'context_tokens': tokens,
+                            'via': 'antigravity-hidden-pty'}
+                if checkpoint_seen and time.monotonic() - checkpoint_seen >= 3:
+                    return {'ok': True, 'status': 'completed', 'via': 'antigravity-hidden-pty'}
             if proc.poll() is not None:
                 break
             ready, _, _ = select.select([master], [], [], .2)
             if not ready:
-                if (not sent and prompt_ready and time.monotonic() - started >= 2
+                if (not context_only and not sent and prompt_ready and time.monotonic() - started >= 2
                         and time.monotonic() - last_output >= .6):
                     # Wait for conversation/draft restoration to settle and
                     # replace any restored draft before submitting. Bracketed
                     # paste keeps similarly named skills out of autocomplete.
                     os.write(master, b'\x15\x1b[200~/compact\x1b[201~\r')
                     sent = True
+                    old_cards = set(re.findall(r'\d+ steps summarized[^\r\n]*', clean.decode('utf-8', 'replace')))
+                    tail = clean = b''
                 continue
             try:
                 chunk = os.read(master, 65536)
@@ -101,6 +189,8 @@ def run_terminal(cmd, cwd, env, transcript, timeout=180):
             prompt_ready = bool(re.search(rb'(?:^|[\r\n])>[ \t]*(?:[\r\n]|$)', clean)
                                 or b'Model:' in clean[-1000:]
                                 or b'? for shortcuts' in clean[-1000:])
+        if checkpoint_seen:
+            return {'ok': True, 'status': 'completed', 'via': 'antigravity-hidden-pty'}
         return {'ok': False, 'via': 'antigravity-hidden-pty',
                 'error': 'Antigravity did not write a new completed compaction checkpoint.'}
     finally:

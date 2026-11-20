@@ -16193,7 +16193,7 @@
     const limit = override || (hasLiveContext ? liveContextLimit : 0) || u.context_limit || 200000;
     const displayTokens = transcriptLatest || (hasLiveContext ? liveContextTokens : 0);
     const qualityPill = '';
-    if (!displayTokens && !peak) {
+    if (!displayTokens && !peak && !u.context_after_compact_pending) {
       if (!modelPill && !qualityPill) {
         uSlot.innerHTML = '';
         syncInputContextVisibility(slot);
@@ -16232,7 +16232,9 @@
         + (liveContextLimit || limit).toLocaleString() + ' context limit'
         + ' (' + (livePct || Math.round((liveContextTokens / limit) * 100)) + '%)'
       : '\nLatest /context output: none captured';
-    const title = 'Calculated estimate: '
+    const title = u.context_after_compact_pending
+      ? 'Context compacted. The next model turn will measure its rebuilt size.'
+      : (u.context_estimated ? 'Antigravity post-compaction estimate (updates next turn): ' : 'Calculated estimate: ')
       + displayTokens.toLocaleString() + ' tokens / '
       + limit.toLocaleString() + ' context limit' + overrideNote
       + ' (' + calcPct + '%)'
@@ -16319,7 +16321,7 @@
     // "calc" is internal jargon (this session's own estimate, as opposed to
     // an /ctx probe) — meaningful in the tooltip/sidebar title, not worth a
     // word in the compact pill itself (CCC-969).
-    const sourceLabelPill = sourceLabel === 'calc' ? '' : sourceLabel + ' ';
+    const sourceLabelPill = u.context_estimated ? '~' : (sourceLabel === 'calc' ? '' : sourceLabel + ' ');
     // A session on CCC's free router says so in the bar it is billed from.
     const freePill = String(u.runtime || '').toLowerCase() === 'free'
       ? ' <span class="meta-runtime-free" title="' + (0, sharedState.escapeHtml)('This session runs on CCC’s free router - it costs $0.'
@@ -16328,8 +16330,10 @@
       : '';
     uSlot.innerHTML = qualityPill + '<span class="' + cls + '" title="' + (0, sharedState.escapeHtml)(title) + '">'
       + _contextRingSvg(calcPct)
-      + sourceLabelPill + (0, sharedState._formatTokens)(displayTokens) + ' / ' + (0, sharedState._formatTokens)(limit)
-      + ' <span class="wp-usage-pct">(' + calcPct + '%)</span>'
+      + (u.context_after_compact_pending
+        ? 'Compacted · size next turn'
+        : sourceLabelPill + (0, sharedState._formatTokens)(displayTokens) + ' / ' + (0, sharedState._formatTokens)(limit)
+          + ' <span class="wp-usage-pct">(' + calcPct + '%)</span>')
       + slashContextText
       + '</span>' + peakNote + costPill + freePill + antigravityTotalsPill + modelPill + handoverPill;
     syncInputContextVisibility(slot);
