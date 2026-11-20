@@ -14548,6 +14548,13 @@
         if (shift) view.scrollTop += shift;
       });
       view._convEventRO = ro;
+      // A prepend restores its own scroll position after re-rendering. Rows
+      // it resized (thinking runs regrouped across the page join) must not be
+      // compensated a second time on the next observer tick, or the reader
+      // jumps a screen up a few seconds after opening a session.
+      view._convEventRebase = () => {
+        view.querySelectorAll('.event').forEach((n) => sizes.set(n, n.getBoundingClientRect().height));
+      };
       ro.observe(view);
       view.querySelectorAll('.event').forEach((n) => ro.observe(n));
     }
@@ -14769,6 +14776,18 @@
     if (!Array.isArray(events) || events.length === 0) return true;
     const scrollHeightBefore = $view.scrollHeight;
     const scrollTopBefore = $view.scrollTop;
+    // Anchor on the first row the reader can see, so rows that change height
+    // below it during the re-render cannot move what is on screen.
+    let anchor = null;
+    let anchorOffset = 0;
+    try {
+      const viewTop = $view.getBoundingClientRect().top;
+      for (const el of $view.children) {
+        if (!el.matches('.event') || el.matches('.conv-first-prompt-pin, .conv-sticky-header')) continue;
+        const r = el.getBoundingClientRect();
+        if (r.bottom > viewTop) { anchor = el; anchorOffset = r.top - viewTop; break; }
+      }
+    } catch (_) {}
     const savedToolGroup = sharedState._currentToolGroup;
     const savedToolCount = sharedState._currentToolCount;
     const savedFirstUser = sharedState._firstUserMsgRendered;
@@ -14802,7 +14821,12 @@
     sharedState._firstUserMsgRendered = savedFirstUser || renderedFirstUser;
     sharedState._dynamicAskState = renderedDynamicAsk || savedDynamicAsk;
     (0, sharedState._syncThinkingRuns)($view);
-    $view.scrollTop = scrollTopBefore + Math.max(0, $view.scrollHeight - scrollHeightBefore);
+    if (anchor && anchor.isConnected && anchor.parentNode === $view && anchor.getClientRects().length) {
+      $view.scrollTop += anchor.getBoundingClientRect().top - $view.getBoundingClientRect().top - anchorOffset;
+    } else {
+      $view.scrollTop = scrollTopBefore + Math.max(0, $view.scrollHeight - scrollHeightBefore);
+    }
+    if (typeof $view._convEventRebase === 'function') $view._convEventRebase();
     updateConversationEndAffordance($view);
     return ok;
   }
