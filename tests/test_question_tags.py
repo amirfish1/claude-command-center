@@ -3,6 +3,18 @@ import unittest
 from ccc_server import question_tags as qt
 
 
+def test_cache_writer_preserves_format_across_batches():
+    import io
+    import json
+
+    files = {f"file-{index}": {"m": index, "s": 12, "ev": []} for index in range(130)}
+    files["file-65"]["ev"] = [{"text": 'Question "with" é and \n'}] * 65
+    for records in ({}, files):
+        output = io.StringIO()
+        qt._write_cache(output, records.items())
+        assert output.getvalue() == json.dumps({"v": 2, "files": records})
+
+
 def ev(role, ts, text, uuid):
     return {"role": role, "ts": ts, "text": text, "uuid": uuid, "sid": "s1"}
 

@@ -1,0 +1,1 @@
+- Reduce dashboard contention while saving the question-tag index by encoding cache records in small batches.

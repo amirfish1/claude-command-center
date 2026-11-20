@@ -35,6 +35,7 @@ import tempfile
 import threading
 import time
 from datetime import datetime, timezone
+from itertools import islice
 from pathlib import Path
 
 _TAG_BYTES = re.compile(rb"\[Q\d+[:\]]")
@@ -94,13 +95,32 @@ def _load_cache() -> None:
         pass
 
 
+def _write_cache(f, items):
+    # Use the C encoder in small batches. Stream batches with many events so
+    # long transcripts do not monopolize the interpreter during a cache save.
+    batch_size = 64
+    f.write('{"v": 2, "files": {')
+    separator = ""
+    items = iter(items)
+    while batch := dict(islice(items, batch_size)):
+        if sum(len(record.get("ev") or ()) for record in batch.values()) > batch_size:
+            for key, record in batch.items():
+                f.write(separator + json.dumps(key) + ": ")
+                json.dump(record, f)
+                separator = ", "
+        else:
+            f.write(separator + json.dumps(batch)[1:-1])
+            separator = ", "
+    f.write("}}")
+
+
 def _save_cache() -> None:
     p = _state_path()
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".qtags-")
         with os.fdopen(fd, "w") as f:
-            json.dump({"v": 2, "files": dict(_snapshot_files(_files))}, f)
+            _write_cache(f, _snapshot_files(_files))
         os.replace(tmp, p)
     except OSError:
         pass
