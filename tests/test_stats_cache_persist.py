@@ -20,6 +20,30 @@ def _server():
     return server
 
 
+def test_stats_prefilter_keeps_escaped_roles_and_existing_turn_rules(tmp_path):
+    _server()
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        '{"type":"progress","timestamp":"2026-01-05T12:00:00Z"}\n'
+        '{"type":"progress","timestamp":"2026-01-05T12:00:01Z","data":{"type":"user"}}\n'
+        '{"type":"\\u0075ser","timestamp":"2026-01-05T12:00:02Z","sessionId":"example"}\n'
+        '{"type":"assistant","timestamp":"2026-01-05T12:00:03Z","isSidechain":true}\n'
+        '{"type":"assistant","timestamp":"2026-01-05T12:00:04Z","message":'
+        '{"id":"response","usage":{"input_tokens":10,"output_tokens":5}}}\n'
+        '{"type":"assist\\u0061nt","timestamp":"2026-01-05T12:00:05Z","message":'
+        '{"id":"response","usage":{"input_tokens":10,"output_tokens":5}}}\n',
+        encoding="utf-8",
+    )
+
+    agg = usage_stats._stats_aggregate_file(transcript)
+
+    assert agg["session_id"] == "example"
+    days = agg["by_date"].values()
+    assert sum(day["messages"] for day in days) == 3
+    assert sum(day["in_tokens"] for day in days) == 10
+    assert sum(day["out_tokens"] for day in days) == 5
+
+
 def test_repo_signals_persist_the_stats_cache_at_most_once_per_interval(monkeypatch):
     server = _server()
     calls = []

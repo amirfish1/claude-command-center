@@ -154,6 +154,12 @@ def _stats_aggregate_file(path):
                 line = line.strip()
                 if not line:
                     continue
+                # Tool and bookkeeping records can have large payloads.
+                # A turn's role must appear as a quoted value or contain a
+                # Unicode escape. Leave escaped and ambiguous lines to JSON.
+                if (line.startswith("{") and '"user"' not in line
+                        and '"assistant"' not in line and "\\u" not in line):
+                    continue
                 try:
                     ev = json.loads(line)
                 except json.JSONDecodeError:
