@@ -29454,9 +29454,9 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
     Engines whose source formats require a full parse apply the same window to
     their resulting structured event stream before returning it.
 
-    `messages_only` is a sidebar optimization hint for native Codex windows;
-    `message_cursor` is the last line that consumer already read. Other readers
-    retain their normal output for the caller to filter.
+    `messages_only` lets the sidebar skip native Codex tool formatting and
+    Antigravity token enrichment. `message_cursor` is the last line the
+    sidebar already read.
     """
     windowed = bool(tail) or (before is not None)
     if _detect_session_engine(conversation_id) == "codex":
@@ -29504,8 +29504,10 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
         return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "antigravity":
-        result = _parse_antigravity_conversation(conversation_id, after_line=after_line)
-        _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
+        result = _parse_antigravity_conversation(
+            conversation_id, after_line=after_line, include_usage=not messages_only)
+        if not messages_only:
+            _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
         return _finish_full_parse_conversation(conversation_id, result, tail=tail, before=before)
     if engine == "kilo":
         result = _parse_kilo_conversation(conversation_id, after_line=after_line)

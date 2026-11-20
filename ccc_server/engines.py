@@ -2552,20 +2552,21 @@ def _parse_antigravity_event(ev, line_num, usage_map=None):
     }
 
 
-def _parse_antigravity_conversation(session_id, after_line=0):
+def _parse_antigravity_conversation(session_id, after_line=0, *, include_usage=True):
     path = _core._antigravity_transcript_path(session_id)
     events = []
     line_num = 0
     has_output = False
     if not path:
         return _parse_antigravity_cli_log_conversation(session_id, after_line=after_line)
-    # One RPC call per parse — the trajectory carries per-step token usage
-    # that the transcript.jsonl itself doesn't. If the Antigravity app isn't
-    # running the map is just empty and the parser degrades to its old shape.
-    try:
-        usage_map = _antigravity_step_usage_map(session_id)
-    except Exception:  # pragma: no cover — RPC layer is best-effort
-        usage_map = {}
+    # The conversation pane uses trajectory tokens. The sidebar's text feed
+    # can skip the RPC and its SQLite/protobuf fallback entirely.
+    usage_map = {}
+    if include_usage:
+        try:
+            usage_map = _antigravity_step_usage_map(session_id)
+        except Exception:  # pragma: no cover — RPC layer is best-effort
+            pass
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:

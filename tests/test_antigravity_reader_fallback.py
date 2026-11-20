@@ -1,5 +1,6 @@
 """Reader coverage for CLI failures after a transcript is seeded."""
 import json
+from unittest.mock import Mock
 
 import pytest
 
@@ -70,6 +71,29 @@ def test_transcript_preserves_thinking_in_initial_and_incremental_reads(reader_f
         {"kind": "text", "text": "Completed."},
     ]
     assert tail[1]["blocks"] == [{"kind": "thinking", "text": "", "signature_only": True}]
+
+
+def test_sidebar_skips_usage_without_replacing_conversation_cache(reader_files, monkeypatch):
+    transcript, _, _, _ = reader_files
+    with transcript.open("a") as f:
+        f.write(json.dumps({
+            "type": "PLANNER_RESPONSE", "content": "Completed.", "step_index": 7,
+        }) + "\n")
+    usage = Mock(return_value={7: {"in": 42}})
+    monkeypatch.setattr(engines, "_antigravity_step_usage_map", usage)
+    monkeypatch.setattr(server, "_detect_session_engine", lambda sid: "antigravity")
+    monkeypatch.setattr(server, "_CONV_PARSE_CACHE", server.ByteBudgetCache(1 << 20, 4))
+
+    sidebar = server.parse_conversation("example", tail=80, messages_only=True)
+    usage.assert_not_called()
+    assert not len(server._CONV_PARSE_CACHE)
+    normal = server.parse_conversation("example")
+    assert normal["events"][-1]["tokens_in"] == 42
+    assert sidebar["events"][-1]["blocks"] == normal["events"][-1]["blocks"]
+    assert sidebar["last_line"] == normal["last_line"] == 2
+    server.parse_conversation("example", tail=80, messages_only=True)
+    assert server.parse_conversation("example")["events"][-1]["tokens_in"] == 42
+    usage.assert_called_once_with("example")
 
 
 @pytest.mark.parametrize("source", ["stdout", "debug", "db", "wal"])
