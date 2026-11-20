@@ -64,15 +64,30 @@ test('a new render observes in-place eligibility and utility changes', () => {
   assert.equal(setup([changed]).model.laneFor(changed), 'coding');
 });
 
-test('negative membership caching preserves cycle and search behavior', () => {
+test('negative membership caching preserves cycle handling in search', () => {
   const first = row('first', {parent_session_id: 'second', spawned_lane: 'workers'});
   const second = row('second', {parent_session_id: 'first', spawned_lane: 'workers'});
   const {model} = setup([first, second]);
   for (const item of [first, second, first]) {
     assert.equal(model.matches(item, 'ideas', false), false);
-    assert.equal(model.matches(item, 'ideas', true), true);
+    assert.equal(model.matches(item, 'ideas', true), false);
     assert.equal(model.matches(item, 'workers', false), true);
+    assert.equal(model.matches(item, 'workers', true), true);
   }
+});
+
+test('search uses the selected tab and preserves membership on shaped matches', () => {
+  const feature = row('feature', {modified: 1, idea_ticket: {ref: 'TEST-1'}});
+  const oldHelper = row('old-helper', {parent_session_id: 'feature', modified: 1});
+  const worker = row('worker', {spawned_lane: 'workers'});
+  const issue = row('issue', {source: 'backlog'});
+  const {model} = setup([feature, oldHelper, worker, issue], {cutoff: 50});
+  assert.equal(model.matches({...oldHelper}, 'ideas', true), true);
+  assert.equal(model.matches({...worker}, 'ideas', true), false);
+  assert.equal(model.matches({...worker}, 'workers', true), true);
+  assert.equal(model.matches({...worker}, 'jobs', true), false);
+  assert.equal(model.matches({...issue}, 'issues', true), true);
+  assert.equal(model.matches({...issue}, 'ideas', true), false);
 });
 
 test('worker identities include reaped and cross-repo sessions before their rows load', () => {
@@ -255,7 +270,8 @@ test('automatic checks stay in Other despite inherited tickets and family member
       assert.ok(!page(tab).rows.filter(r => model.matches(r, tab, false)).includes(check));
     }
     assert.equal(model.matches(check, 'archived', false), true);
-    assert.equal(model.matches(check, 'alltickets', true), true, 'search still finds checks');
+    assert.equal(model.matches(check, 'alltickets', true), false);
+    assert.equal(model.matches(check, 'archived', true), true, 'search finds checks in Other');
   }
   assert.deepEqual(Array.from(page('archived').rows.filter(r => model.matches(r, 'archived', false)), r => r.session_id).sort(), checks.map(r => r.session_id).sort());
   assert.ok(page('alltickets').rows.includes(reviewer), 'real reviewer remains an individual lane');

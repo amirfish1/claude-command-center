@@ -22627,9 +22627,13 @@
     const ticketView = _ideaTicketsOn && ticketViewOn();
     const ticketViewLane = (c, lane = laneFor(c)) => lane === 'ideas' || lane === 'smallbugs'
       || codingInAll(c, lane);
-    const directMatch = (c, tab) => {
-      if (!sessionAllowed(c) || !_archiveEngineAllowsRow(c, engineFilter)
-          || !_archiveWindowAllowsRow(c, windowCutoff)) return false;
+    const directMatch = (c, tab, search = false) => {
+      if (search) {
+        if (tab === 'queues' || tab === 'jobs' || tab === 'decisions' || tab === 'decisions2') return false;
+        if (tab === 'issues') return baseAllowed(c) && classifyKanbanColumn(c) === 'backlog';
+      }
+      if (!sessionAllowed(c) || (!search && (!_archiveEngineAllowsRow(c, engineFilter)
+          || !_archiveWindowAllowsRow(c, windowCutoff)))) return false;
       const lane = laneFor(c);
       if (ticketView && tab === 'workers') return lane === 'workers' || ticketViewLane(c, lane);
       if (tab === 'alltickets') return ticketViewLane(c, lane);
@@ -22641,17 +22645,20 @@
     const viewCaches = new Map();
     const matches = (c, tab, search, seen) => {
       if (!baseAllowed(c)) return false;
-      if (search) return true; // Search spans tabs, engines and time windows.
-      if (!viewCaches.has(tab)) {
+      const cacheKey = search ? 'search-' + tab : tab;
+      if (!viewCaches.has(cacheKey)) {
         // A ticketed lane can pull its worker parent into the view as an
         // anchor. That parent renders its other lanes too; those siblings
         // must remain pageable even though their own lane is Workers.
-        const anchors = sidebarRowsWithParentAnchors(rows.filter(row => directMatch(row, tab)), rows);
-        viewCaches.set(tab, new Map(anchors.map(row => [row, true])));
+        const anchors = sidebarRowsWithParentAnchors(rows.filter(row => directMatch(row, tab, search)), rows);
+        viewCaches.set(cacheKey, new Map(anchors.map(row => [row, true])));
       }
-      const cache = viewCaches.get(tab);
+      const cache = viewCaches.get(cacheKey);
+      // Search renders shaped copies of archive rows. Use the complete
+      // archive model for the same parent/anchor membership as the tab.
+      if (search) c = _allTabById.get(_allTabSessionId(c)) || c;
       if (cache.has(c)) return cache.get(c);
-      if (directMatch(c, tab)) { cache.set(c, true); return true; }
+      if (directMatch(c, tab, search)) { cache.set(c, true); return true; }
       // Family membership must not pull automatic checks back into All.
       if (isUtility(c)) { cache.set(c, false); return false; }
       if (c.trashed || !sessionAllowed(c)) { cache.set(c, false); return false; }
@@ -22661,7 +22668,7 @@
       if (!parent || parent === c || (seen && seen.has(c))) { cache.set(c, false); return false; }
       if (!seen) seen = new Set();
       seen.add(c);
-      const included = matches(parent, tab, false, seen);
+      const included = matches(parent, tab, search, seen);
       cache.set(c, included);
       return included;
     };
@@ -22908,10 +22915,11 @@
       _sidebarRenderRowLimit = SIDEBAR_RENDER_INITIAL_ROWS;
       _sidebarLoadNotice = '';
     }
-    const _sidebarFullRows = convs;
     _refreshSidebarWorkerState();
     const localParents = f2LocalParents();
-    const _sidebarLanes = _sidebarLaneModel(_sidebarFullRows, localParents);
+    const _sidebarLanes = _sidebarLaneModel(opts?.searchUniverse || convs, localParents);
+    if (_ipSearchActive) convs = convs.filter(row => _sidebarLanes.matches(row, _sidebarTab, true));
+    const _sidebarFullRows = convs;
     const _sidebarMembership = {
       matches: row => _sidebarLanes.matches(row, _sidebarTab, _ipSearchActive),
       priority: row => !_ipSearchActive && _sidebarLanes.priority(row, _sidebarTab),
@@ -22935,7 +22943,7 @@
         end: _activeDraftInputBefore.selectionEnd,
       };
     }
-    if (!convs.length) {
+    if (!convs.length && !_ipSearchActive) {
       opts?.beforeReplace?.();
       _convListRenderSig = null;
       $convList.innerHTML = firstRunEmptyHtml();
@@ -23122,8 +23130,8 @@
         _idSearchConvs.push(c);
         continue;
       }
-      // Text searches span lanes; preserve every match before the normal
-      // Ideas/Workers/Coding classification and ticket grouping can hide it.
+      // The tab filter has already run, so collect text matches here before
+      // the normal state buckets and ticket grouping reshape them.
       if (_ipSearchActive) _textSearchConvs.push(c);
       // An unresolved formal approval is actionable regardless of lifecycle
       // classification. In particular, worker-owned Codex app-server turns can
@@ -25472,10 +25480,12 @@
       const refs = new Set(_textSearchConvs.map(c => c && c.idea_ticket && c.idea_ticket.ref).filter(Boolean));
       if (!refs.size) return _textSearchConvs;
       const newestByRef = new Map();
+      const { excluded } = splitConversationSearch(_qActive);
       const rowTs = r => Number(r.mtime || r.modified || 0);
       [conversationsData, archiveData].forEach(pool => (Array.isArray(pool) ? pool : []).forEach(r => {
         const ref = r && !r.trashed && r.idea_ticket && r.idea_ticket.ref;
-        if (!ref || !refs.has(ref)) return;
+        if (!ref || !refs.has(ref) || !_sidebarLanes.matches(r, _sidebarTab, true)
+            || searchExcludesConversation(r, excluded)) return;
         const prev = newestByRef.get(ref);
         if (!prev || rowTs(r) > rowTs(prev)) newestByRef.set(ref, r);
       }));
@@ -25502,7 +25512,7 @@
       ? '<div class="conv-repo-search-section" data-role="text-search-section">'
         + '<div class="conv-repo-search-header">'
         + '<span class="conv-repo-search-label">Search results</span>'
-        + '<span class="conv-repo-search-hint">' + _textSearchRows.length + ' matches across all tabs</span>'
+        + '<span class="conv-repo-search-hint">' + _textSearchRows.length + ' in this tab</span>'
         + '</div><div class="conv-repo-search-list">'
         + _textSearchRows.map(c => _renderRow(c)).join('')
         + '</div></div>'
@@ -27872,8 +27882,10 @@
         + '<div data-role="sidebar-load-status" role="status" aria-live="polite">'
         + escapeHtml(_sidebarLoadNotice || 'Sessions inside collapsed groups stay grouped.') + '</div></div>'
       : '';
-    const _convListHtml = _tabBarHtml + _idSearchRowsHtml + _repoSearchRowsHtml
-      + (_ipSearchActive ? _textSearchRowsHtml : _tabBody) + _showMoreRowsHtml;
+    const _searchRowsHtml = _idSearchRowsHtml + _repoSearchRowsHtml + _textSearchRowsHtml;
+    const _convListHtml = _tabBarHtml
+      + (_ipSearchActive ? (_searchRowsHtml || _tabEmpty('matching sessions in this tab')) : _tabBody)
+      + _showMoreRowsHtml;
     const _objectsSplitActive = !_ipSearchActive && _sidebarTab === 'inprogress' && _shouldGroupByObjects;
     $convList.classList.toggle('objects-scroll-split', _objectsSplitActive);
     $convList.classList.toggle('session-workspace', _ticketLifecycleView && !_ipSearchActive);
@@ -28035,7 +28047,7 @@
         const loaded = Math.max(0, next.matched - _sidebarBounded.matched);
         _sidebarLoadNotice = loaded + ' more matching sessions loaded. Expand groups or Archived to see nested sessions.';
         _convListRenderSig = null;
-        renderConversationList(_sidebarFullRows);
+        renderConversationList(_sidebarFullRows, { searchUniverse: opts?.searchUniverse });
         // Point at the result, rather than leaving the viewport on a footer
         // whose replacement can look as though the click did nothing.
         const firstNewVisible = Array.from($convList.querySelectorAll('.conv-item[data-id]'))
@@ -42971,7 +42983,7 @@
       _renderArchiveEmpty('<div class="archive-empty-state">No conversations in this folder.</div>');
       return;
     }
-    if (!rows.length && !hasIndependentContent && !pendingSpawns.size) {
+    if (!rows.length && !searchKey && !hasIndependentContent && !pendingSpawns.size) {
       _renderArchiveEmpty('<div class="archive-empty-state">No conversations match your filter.</div>');
       return;
     }
@@ -43364,6 +43376,7 @@
       renderConversationList(conversationsData, {
         beforeReplace: captureScroll,
         skipReorderAnimation: opts?.skipReorderAnimation,
+        searchUniverse: searchKey ? archiveRows : undefined,
       });
     }
     if (archiveSelectionSwap) {
