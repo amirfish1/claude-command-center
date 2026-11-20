@@ -71,6 +71,31 @@ class ActivityLogReadBackTests(unittest.TestCase):
         self.assertEqual(events[0]["detail"], "n=3")
         self.assertEqual(events[1]["detail"], "n=4")
 
+    def test_tail_preserves_sparse_matches_and_records_spanning_blocks(self):
+        server = self.server
+        prefix = "2026-01-01 00:00:00 UTC  " + f'{"spawn":14}  {"SPAWN":9}'
+        long_detail = "界" * (64 * 1024) + " session=test-id"
+        contents = (
+            prefix + "old reference to test-id\r\n"
+            + (prefix + "unrelated\n") * 3000
+            + prefix + long_detail + "\r\n"
+            + "malformed test-id\n"
+            + prefix + "newest reference to test-id"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "activity.log"
+            log_path.write_bytes(contents.encode("utf-8"))
+            with mock.patch.object(server, "ACTIVITY_LOG_FILE", log_path):
+                self.assertEqual(
+                    [event["detail"] for event in server._read_activity_log("test-id", limit=3)],
+                    ["old reference to test-id", long_detail, "newest reference to test-id"],
+                )
+                self.assertEqual(
+                    [event["detail"] for event in server._read_activity_log(limit=2)],
+                    [long_detail, "newest reference to test-id"],
+                )
+                self.assertEqual(server._read_activity_log("missing-id"), [])
+
     def test_missing_log_file_returns_empty_list(self):
         server = self.server
         with mock.patch.object(server, "ACTIVITY_LOG_FILE", Path("/no/such/file/activity.log")):

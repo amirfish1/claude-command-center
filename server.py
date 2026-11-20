@@ -12407,6 +12407,29 @@ def _parse_activity_log_line(line):
     }
 
 
+def _activity_log_reverse_blocks(log_file):
+    """Read newest-first blocks without splitting a UTF-8 record."""
+    offset = log_file.seek(0, os.SEEK_END)
+    fragments = []
+    while offset:
+        size = min(offset, 64 * 1024)
+        offset -= size
+        log_file.seek(offset)
+        block = log_file.read(size)
+        if offset:
+            prefix, separator, complete = block.partition(b"\n")
+            if not separator:
+                fragments.append(block)
+                continue
+        else:
+            prefix, complete = b"", block
+        if fragments:
+            fragments.append(complete)
+            complete = b"".join(reversed(fragments))
+        yield complete
+        fragments = [prefix]
+
+
 def _read_activity_log(session_id=None, limit=200):
     """Return up to `limit` most recent activity-log lines, oldest first.
 
@@ -12421,15 +12444,25 @@ def _read_activity_log(session_id=None, limit=200):
         limit = max(1, min(int(limit), 2000))
     except (TypeError, ValueError):
         limit = 200
+    needle = str(session_id) if session_id else ""
+    raw_needle = needle.encode("utf-8", errors="surrogatepass")
+    events = []
     try:
-        raw_lines = ACTIVITY_LOG_FILE.read_text(encoding="utf-8").splitlines()
+        with ACTIVITY_LOG_FILE.open("rb") as log_file:
+            for block in _activity_log_reverse_blocks(log_file):
+                if raw_needle and raw_needle not in block:
+                    continue
+                for line in reversed(block.decode("utf-8").splitlines()):
+                    if needle and needle not in line:
+                        continue
+                    event = _parse_activity_log_line(line)
+                    if event is not None:
+                        events.append(event)
+                        if len(events) == limit:
+                            return events[::-1]
     except OSError:
         return []
-    if session_id:
-        needle = str(session_id)
-        raw_lines = [ln for ln in raw_lines if needle in ln]
-    parsed = [p for p in (_parse_activity_log_line(ln) for ln in raw_lines) if p]
-    return parsed[-limit:]
+    return events[::-1]
 
 
 def _resume_ledger_append(event, sid=None, pid=None, **fields):
