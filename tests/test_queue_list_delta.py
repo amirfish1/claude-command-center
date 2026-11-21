@@ -76,6 +76,34 @@ def test_keyless_and_duplicate_rows_always_ship():
     assert sorted(delta["changed"]) == ["#0", "#2"]
 
 
+def test_full_queue_representation_negotiates_and_reuses_fallback(monkeypatch):
+    from ccc_server import list_encoding
+
+    data = {"items": [{"note": "a" * 2048}]}
+    raw = json.dumps(data).encode()
+    calls = []
+
+    def unavailable(body):
+        calls.append(body)
+        return None
+
+    monkeypatch.setattr(list_encoding, "_zstd", unavailable)
+    encoded = {}
+    gzip_response = list_encoding.queue_representation(data, "zstd, gzip", encoded)
+    assert gzip_response[1] == "gzip"
+    assert gzip.decompress(gzip_response[0]) == raw
+    assert list_encoding.queue_representation(data, "zstd, gzip;q=0.5", encoded) is gzip_response
+    assert calls == [raw]
+    assert list_encoding.queue_representation(data, "zstd;q=0, gzip;q=0", encoded) == (raw, None)
+
+    monkeypatch.setattr(list_encoding, "_zstd", lambda body: b"zstd:" + body)
+    encoded = {}
+    gzip_response = list_encoding.queue_representation(data, "zstd;q=0.5, gzip", encoded)
+    assert gzip_response[1] == "gzip"
+    assert list_encoding.queue_representation(data, "gzip, zstd", encoded) == (b"zstd:" + raw, "zstd")
+    assert list_encoding.queue_representation(data, "gzip", encoded) is gzip_response
+
+
 def test_stalled_queue_response_releases_admission(monkeypatch):
     server = _load_server()
     rows = _rows()

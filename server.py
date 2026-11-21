@@ -33772,10 +33772,10 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     # own list, so `is` means "no rebuild since".
                     _ent = (_memo_items, {})
                     _QUEUE_LIST_ENCODED[_ek] = _ent
-                return self.send_json({
+                return self._queue_list_response({
                     "ok": True, "items": items, "count": len(items),
                     "synced_at": synced_at, "version": _ver, "order": _keys,
-                }, encoded=_ent[1], write_timeout=_QUEUE_LIST_WRITE_TIMEOUT, defer_write=True)
+                }, _ent[1])
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/queue/roles":
@@ -48409,7 +48409,14 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             return lambda: self._write_json_response(status, body, enc, etag_val, write_timeout)
         self._write_json_response(status, body, enc, etag_val, write_timeout)
 
-    def _write_json_response(self, status, body, enc, etag_val, write_timeout):
+    def _queue_list_response(self, data, encoded):
+        from ccc_server.list_encoding import queue_representation
+
+        body, encoding = queue_representation(data, self.headers.get("Accept-Encoding", ""), encoded)
+        return lambda: self._write_json_response(
+            200, body, encoding, None, _QUEUE_LIST_WRITE_TIMEOUT, vary_encoding=True)
+
+    def _write_json_response(self, status, body, enc, etag_val, write_timeout, *, vary_encoding=False):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -48419,6 +48426,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             self.send_header("ETag", etag_val)
         if enc:
             self.send_header("Content-Encoding", enc)
+        if enc or vary_encoding:
             self.send_header("Vary", "Accept-Encoding")
         self.end_headers()
         previous_timeout = None

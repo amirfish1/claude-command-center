@@ -5,6 +5,7 @@ import ctypes.util
 from functools import lru_cache
 import gzip
 import hashlib
+import json
 import threading
 
 from .bounded_cache import ByteBudgetCache
@@ -111,6 +112,36 @@ def representation(raw, gzip_body, accept, *, encode_gzip=None, encodings=None):
                 if body is not None:
                     return body, encoding
     return raw, None
+
+
+def queue_representation(payload, accept, encoded):
+    """Negotiate and memoize each encoding of a full queue snapshot."""
+    accepted = static_encoding.accepted_encodings(accept, supported=("zstd", "gzip"))
+    raw = None
+    for encoding in (*accepted, None):
+        if encoding in encoded:
+            if encoded[encoding] is not None:
+                return encoded[encoding]
+            continue
+        if raw is None:
+            cached_raw = encoded.get(None)
+            raw = cached_raw[0] if cached_raw is not None else json.dumps(payload).encode()
+        if len(raw) < 1024:
+            encoding = None
+        if encoding is None:
+            body = raw
+        else:
+            try:
+                body = _zstd(raw) if encoding == "zstd" else gzip.compress(raw, compresslevel=5)
+            except Exception:
+                body = None
+        if body is not None:
+            result = (body, encoding)
+            encoded[encoding] = result
+            return result
+        # An optional encoder can be absent. Avoid rebuilding the raw list
+        # on each poll while this same snapshot has a cached fallback.
+        encoded[encoding] = None
 
 
 def history_representation(payload, accept, validator, *, diagnostics=None, fingerprint=None,
