@@ -47974,7 +47974,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 payload, self.headers.get("Accept-Encoding"),
                 None if is_delta else self.headers.get("If-None-Match"),
                 diagnostics=diagnostics, fingerprint=fingerprint,
-                row_layouts=row_layouts and not is_delta)
+                row_layouts=row_layouts and not is_delta, packed_rows=history[2])
             status = self._send_archive_list_representation(body, encoding, etag)
             return "delta" if is_delta and status == 200 else status
 

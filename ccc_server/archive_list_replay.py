@@ -21,6 +21,9 @@ _RUN_CACHE = ByteBudgetCache(32 * 1024 * 1024, 512)
 _HISTORY_MANIFESTS = ByteBudgetCache(4 * 1024 * 1024, 32)
 _RUN_MAX_ROWS = 256
 _RUN_BOUNDARY_MASK = 63
+# Bound how many packed value arrays a conditional history request retains.
+# Larger responses still use the original run guard and pack only to send.
+_HISTORY_PACK_MAX_ROWS = 32768
 
 
 class _GuardPickler(pickle.Pickler):
@@ -58,35 +61,60 @@ def order_token(ids):
     return hashlib.sha256(json.dumps(ids, separators=(",", ":")).encode()).hexdigest()
 
 
+def pack_row_layouts(rows):
+    """Collect the ordered keys and corresponding values for each row."""
+    layouts = {}
+    packed = []
+    for row in rows:
+        layout = tuple(row)
+        index = layouts.setdefault(layout, len(layouts))
+        packed.append((index, list(row.values())))
+    return list(layouts), packed
+
+
 def prepare_history(payload):
-    """Describe one completed projection for all readers sharing it."""
+    """Build the shared manifest and, when bounded, the reusable row layout."""
     rows = payload["conversations"]
+    packed = layout_digests = None
+    if len(rows) <= _HISTORY_PACK_MAX_ROWS and all(type(row) is dict for row in rows):
+        packed = pack_row_layouts(rows)
+        layout_digests = [payload_fingerprint(layout) if all(type(key) is str for key in layout)
+                          else None for layout in packed[0]]
+        if None in layout_digests:
+            packed = layout_digests = None
     ids, seen, runs = [], set(), []
     start = 0
     for end, row in enumerate(rows, 1):
         sid = row.get("session_id") or row.get("id")
         if not isinstance(sid, str) or not sid or sid in seen:
-            return payload, None
+            return payload, None, packed
         ids.append(sid)
         seen.add(sid)
         if (end - start == _RUN_MAX_ROWS or end == len(rows)
                 or zlib.crc32(sid.encode("utf-8", "surrogatepass")) & _RUN_BOUNDARY_MASK == 0):
-            digest = payload_fingerprint(rows[start:end])
+            if packed is None:
+                content = rows[start:end]
+            else:
+                # Slot numbers change if a shape first appears earlier in
+                # another response. Use the ordered field names' digest.
+                content = [(layout_digests[index], values)
+                           for index, values in packed[1][start:end]]
+            digest = payload_fingerprint(content)
             if digest is None:
-                return payload, None
+                return payload, None, packed
             runs.append((digest, start, end))
             start = end
 
     metadata = payload_fingerprint({key: value for key, value in payload.items() if key != "conversations"})
     if metadata is None:
-        return payload, None
+        return payload, None, packed
     fingerprint = hashlib.sha256(metadata + b"".join(digest for digest, _, _ in runs)).digest()
-    return payload, (ids, runs, fingerprint, order_token(ids))
+    return payload, (ids, runs, fingerprint, order_token(ids)), packed
 
 
 def history_delta(history, scope, nonce, since, saved_order):
     """Apply one client's base and saved order to a prepared history."""
-    payload, manifest = history
+    payload, manifest, _ = history
     if manifest is None:
         return payload, None
     ids, runs, fingerprint, order = manifest

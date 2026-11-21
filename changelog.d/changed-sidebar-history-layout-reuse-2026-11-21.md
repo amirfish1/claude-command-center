@@ -1,0 +1,1 @@
+- Full sidebar loads reuse the same row layout when computing the delta manifest and encoding the response.

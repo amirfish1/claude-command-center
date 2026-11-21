@@ -61,19 +61,8 @@ def representation(raw, gzip_body, accept, *, encode_gzip=None):
     return raw, None
 
 
-def _with_row_layouts(payload):
-    """Encode full history rows with shared, ordered column names."""
-    layouts = {}
-    rows = []
-    for row in payload["conversations"]:
-        layout = tuple(row)
-        index = layouts.setdefault(layout, len(layouts))
-        rows.append((index, list(row.values())))
-    return dict(payload, conversations=rows, row_layouts=list(layouts))
-
-
 def history_representation(payload, accept, validator, *, diagnostics=None, fingerprint=None,
-                           row_layouts=False):
+                           row_layouts=False, packed_rows=None):
     """Reuse encoded bytes after a fresh full-history projection."""
     accepted = static_encoding.accepted_encodings(accept)
     if not accepted:
@@ -90,7 +79,9 @@ def history_representation(payload, accept, validator, *, diagnostics=None, fing
         return (None, None, etag) if validator == etag else cached
 
     if row_layouts:
-        payload = _with_row_layouts(payload)
+        layouts, rows = (packed_rows if packed_rows is not None
+                         else archive_list_replay.pack_row_layouts(payload["conversations"]))
+        payload = dict(payload, conversations=rows, row_layouts=layouts)
     raw = archive_list_replay.encode_payload(payload)
     etag = '"' + hashlib.sha1(raw).hexdigest() + '"'
     if validator == etag:

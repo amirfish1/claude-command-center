@@ -229,6 +229,29 @@ def test_history_delta_preserves_projected_values_and_order(monkeypatch):
     assert replay.history_delta(replay.prepare_history(duplicate), 'scope', 'boot', token, order) == (duplicate, None)
 
 
+def test_history_delta_reuses_rows_when_layout_indexes_move(monkeypatch):
+    from ccc_server import archive_list_replay as replay
+
+    monkeypatch.setattr(replay, '_RUN_MAX_ROWS', 1)
+    monkeypatch.setattr(replay, '_HISTORY_MANIFESTS', replay.ByteBudgetCache(1 << 20, 4))
+    named = {'session_id': 'named', 'title': 'value'}
+    state = {'session_id': 'state', 'status': 'value'}
+    first, _ = replay.history_delta(
+        replay.prepare_history({'conversations': [named, state]}), 'scope', 'boot', '', '')
+    token, order = first['delta_token'], first['order_token']
+
+    delta, _ = replay.history_delta(
+        replay.prepare_history({'conversations': [state, named]}), 'scope', 'boot', token, order)
+    assert delta['ids'] == ['state', 'named']
+    assert delta['conversations'] == []
+
+    renamed_field = {'session_id': 'named', 'label': 'value'}
+    delta, _ = replay.history_delta(
+        replay.prepare_history({'conversations': [renamed_field, state]}), 'scope', 'boot', token, order)
+    assert delta['same_order']
+    assert delta['conversations'] == [renamed_field]
+
+
 def test_unversioned_history_projection_shares_only_overlapping_exact_source(monkeypatch):
     server = importlib.import_module('server')
     waiting = threading.Event()
