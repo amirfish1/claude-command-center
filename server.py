@@ -151,6 +151,7 @@ from ccc_server.response_timing import ResponseTimingMixin
 from ccc_server.app_asset_hints import AppAssetHintsMixin
 from ccc_server.http_read_keepalive import ReadKeepAliveMixin
 from ccc_server.http_admission import ConnectionAdmissionMixin
+from ccc_server.http_read_admission import ReadAdmission, ReadDeferredForRestart
 _cpu_accounting.install_thread_exit_accounting()
 from ccc_server import idea_tickets as _idea_tickets
 from ccc_server import headroom as _headroom
@@ -24629,7 +24630,9 @@ def _launchd_restart_targets_pid(label, expected_pid, timeout=3):
 _LISTEN_FD_ENV = "CCC_INHERITED_LISTEN_FD"
 _RESTART_DRAIN_TIMEOUT_S = 60.0
 _HTTPD_SERVER = None
-_ACCEPT_PAUSED = threading.Event()
+_BACKGROUND_API_READ_LIMIT = 2
+_BG_ROUTE_MAX_KEYS = 256
+_ACCEPT_PAUSED = ReadAdmission(_BACKGROUND_API_READ_LIMIT, _BG_ROUTE_MAX_KEYS)
 _INFLIGHT_LOCK = threading.Lock()
 _INFLIGHT_REQUESTS = {}  # id(handler) -> path; long-lived streams excluded
 _INFLIGHT_READ_SOCKETS = {}
@@ -32669,8 +32672,6 @@ def _car_mode_stop() -> dict:
 
 
 _QUEUE_LIST_ENCODED = {}
-_BACKGROUND_API_READ_LIMIT = 2
-_background_api_read_slots = threading.BoundedSemaphore(_BACKGROUND_API_READ_LIMIT)
 _BACKGROUND_API_READ_PATHS = frozenset({
     "/api/attention",
     "/api/group-chats/active",
@@ -32708,7 +32709,6 @@ def _is_background_api_read(path, client_marked):
     return bool(client_marked or path in _BACKGROUND_API_READ_PATHS)
 
 
-_BG_ROUTE_MAX_KEYS = 256
 
 
 def _normalize_bg_route(path):
@@ -32733,7 +32733,6 @@ def _normalize_bg_route(path):
 # Costs persist across restarts: the boot burst is exactly when they matter.
 _BG_ROUTE_CHEAP_CPU_S = 0.05
 _BG_ROUTE_CPU = {}  # route -> EWMA thread-CPU seconds per request
-_BG_ROUTE_LOCKS = {}
 _BG_ROUTE_GUARD = threading.Lock()
 _BG_ROUTE_CPU_FILE = (
     Path(os.environ["CCC_BG_ROUTE_CPU_FILE"]) if os.environ.get("CCC_BG_ROUTE_CPU_FILE")
@@ -32800,18 +32799,10 @@ def _run_api_request(is_background, callback, route=None):
     """Keep slow dashboard probes from crowding out foreground requests."""
     if not is_background:
         return callback()
-    from ccc_server.http_read_admission import read_slot
     if route is None:
-        with read_slot(_background_api_read_slots, _ACCEPT_PAUSED):
+        with _ACCEPT_PAUSED.slot():
             return callback()
-    with _BG_ROUTE_GUARD:
-        if route not in _BG_ROUTE_LOCKS and len(_BG_ROUTE_LOCKS) >= _BG_ROUTE_MAX_KEYS:
-            for k in list(_BG_ROUTE_LOCKS):
-                if not _BG_ROUTE_LOCKS[k].locked():
-                    _BG_ROUTE_LOCKS.pop(k, None)
-                    break
-        route_lock = _BG_ROUTE_LOCKS.setdefault(route, threading.Lock())
-    with read_slot(route_lock, _ACCEPT_PAUSED):
+    with _ACCEPT_PAUSED.slot(route):
         cheap = _bg_route_is_cheap(route)
         c0 = None
         try:
@@ -32821,7 +32812,7 @@ def _run_api_request(is_background, callback, route=None):
             if route in ("/api/session-status", "/api/system/services") or cheap:
                 c0 = time.thread_time()
                 return callback()
-            with read_slot(_background_api_read_slots, _ACCEPT_PAUSED):
+            with _ACCEPT_PAUSED.slot():
                 c0 = time.thread_time()
                 return callback()
         finally:
@@ -32942,7 +32933,6 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         )
 
     def do_GET(self):
-        from ccc_server.http_read_admission import ReadDeferredForRestart
         if not self._check_proxy_secret():
             return
         path = urllib.parse.urlparse(self.path).path.rstrip("/")

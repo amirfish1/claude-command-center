@@ -6,69 +6,51 @@ import threading
 
 import pytest
 import server
-from ccc_server.http_read_admission import ReadDeferredForRestart
+from ccc_server.http_read_admission import ReadAdmission, ReadDeferredForRestart
 
 
 @pytest.mark.parametrize('gate', ['route', 'slots', 'anonymous'])
 def test_restart_releases_waiting_reads_without_executing_them(monkeypatch, gate):
     waiting = threading.Event()
-    stopping = threading.Event()
-    lock = threading.Lock()
-    lock.acquire()
-
-    class Gate:
-        def acquire(self, **kwargs):
-            waiting.set()
-            return lock.acquire(**kwargs)
-
-        def release(self):
-            lock.release()
-
-        def __enter__(self):
-            self.acquire()
-            return self
-
-        def __exit__(self, *args):
-            self.release()
-
+    stopping = ReadAdmission(1, 1)
     monkeypatch.setattr(server, '_ACCEPT_PAUSED', stopping)
-    monkeypatch.setattr(server, '_BG_ROUTE_LOCKS', {'/queued': Gate()} if gate == 'route' else {})
-    monkeypatch.setattr(server, '_background_api_read_slots',
-                        threading.Semaphore(1) if gate == 'route' else Gate())
     monkeypatch.setattr(server, '_BG_ROUTE_CPU', {})
     monkeypatch.setattr(server, '_save_bg_route_cpu', lambda: None)
     executed = []
-    pool = ThreadPoolExecutor()
-    try:
+    holder_route = '/queued' if gate == 'route' else None
+    request_route = None if gate == 'anonymous' else '/queued'
+    with ThreadPoolExecutor() as pool, stopping.slot(holder_route):
+        held = stopping._routes['/queued'] if holder_route else stopping._shared
+        wait = held.ready.wait
+
+        def wait_for_slot():
+            waiting.set()
+            return wait()
+
+        monkeypatch.setattr(held.ready, 'wait', wait_for_slot)
         future = pool.submit(server._run_api_request, True,
-                             lambda: executed.append(True),
-                             None if gate == 'anonymous' else '/queued')
-        assert waiting.wait(5)
-        stopping.set()
+                             lambda: executed.append(True), request_route)
+        try:
+            assert waiting.wait(5)
+        finally:
+            stopping.set()
+        stopping.clear()
         with pytest.raises(ReadDeferredForRestart):
             future.result(timeout=5)
-        assert lock.locked(), 'another request still owns the admission gate'
-    finally:
-        stopping.set()
-        if lock.locked():
-            lock.release()
-        pool.shutdown()
+        assert held.available == 0, 'another request still owns the admission gate'
     assert not executed
     assert '/queued' not in server._BG_ROUTE_CPU
-    if gate != 'anonymous':
-        assert server._BG_ROUTE_LOCKS['/queued'].acquire(timeout=1)
-        server._BG_ROUTE_LOCKS['/queued'].release()
+    assert server._run_api_request(True, lambda: 'ok', request_route) == 'ok'
 
 
 def test_http_drain_retries_queued_reads_and_finishes_running_read_and_write(monkeypatch):
-    stopping = threading.Event()
+    stopping = ReadAdmission(2, 256)
     reading = threading.Event()
     writing = threading.Event()
     queued = threading.Event()
     finish = threading.Event()
     monkeypatch.setattr(server, '_ACCEPT_PAUSED', stopping)
     monkeypatch.setattr(server, '_INFLIGHT_REQUESTS', {})
-    monkeypatch.setattr(server, '_BG_ROUTE_LOCKS', {})
     monkeypatch.setattr(server, '_BG_ROUTE_CPU', {})
     monkeypatch.setattr(server, '_save_bg_route_cpu', lambda: None)
     executed = []
