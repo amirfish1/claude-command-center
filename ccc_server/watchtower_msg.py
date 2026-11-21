@@ -2005,7 +2005,8 @@ def _inject_text_into_session_router(
     # Only native Codex slash commands require the TUI. Other slash-shaped
     # messages are normal prompts and can use the durable queue.
     if is_codex and slash_command:
-        slash_command = text.strip().split(None, 1)[0] in _core._CODEX_SLASH_NAME_SET
+        _first_tok = text.strip().split(None, 1)[0]
+        slash_command = _first_tok in _core._CODEX_SLASH_NAME_SET
     mode_value = str(mode or "").strip().lower()
     mode = mode_value if mode_value in ("answer", "steer", "send_queue") else "send"
     if (is_codex and compact_in_flight and dashboard_composer and not slash_command
