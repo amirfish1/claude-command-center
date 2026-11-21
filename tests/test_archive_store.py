@@ -81,6 +81,60 @@ def test_history_read_merges_live_rows_at_stored_positions(tmp_path, monkeypatch
     assert store.load_with_overrides(target, 'base', [live], **dict(options, build_id='older')) is None
 
 
+def test_sidebar_lifecycle_overlay_leaves_borrowed_history_unchanged(tmp_path, monkeypatch):
+    import server
+
+    target = tmp_path / 'archive.json'
+    original = data()
+    original.update(schema_version=server._ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
+                    build_id=server._ARCHIVE_RESPONSE_CACHE_BUILD_ID)
+    old, live, parent, pinned = original['entries']['base']['conversations']
+    old.update(archived=False, trashed=False, all_lane_override='')
+    parent['engine'] = 'codex'
+    store.save(target, original, complete=True)
+    reader = store._SidebarHistoryReader()
+    monkeypatch.setattr(store, '_SIDEBAR_HISTORY_READER', reader)
+    monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE_FILE', target)
+    monkeypatch.setattr(server, '_archive_serve_cache', {})
+    monkeypatch.setattr(server, '_archive_response_cache_get', lambda key: original['entries'][key])
+    monkeypatch.setattr(server, '_archive_serve_hot_rows_versioned',
+                        lambda *args, **kwargs: ([live], True, 1))
+    archived, trashed, lanes, deleted = set(), set(), {}, set()
+    monkeypatch.setattr(server, '_load_conversation_lifecycle_sets', lambda: (archived, trashed))
+    monkeypatch.setattr(server, '_load_session_lane_overrides', lambda: lanes)
+    monkeypatch.setattr(server, '_codex_deleted_thread_ids', lambda: deleted)
+
+    def read():
+        rows, _, _ = server._archive_serve_rows_versioned(
+            'base', {}, copy_rows=False, reuse_sidebar_history=True)
+        return rows
+
+    try:
+        first = read()
+        archived.add('old')
+        trashed.add('old')
+        lanes['old'] = 'other'
+        deleted.add('parent')
+        changed = read()
+        assert [row['session_id'] for row in changed] == ['old', 'recent', 'pinned']
+        assert (changed[0]['archived'], changed[0]['trashed'], changed[0]['all_lane_override']) == (
+            True, True, 'other')
+        assert not (first[0]['archived'] or first[0]['trashed'] or first[0]['all_lane_override'])
+
+        archived.clear()
+        trashed.clear()
+        lanes.clear()
+        deleted.clear()
+        restored = read()
+        assert restored == first
+        assert restored[0] is first[0]  # The same SQLite memo survives overlay changes.
+        assert changed[0]['trashed']
+        assert 'archived' not in live
+    finally:
+        with reader.lock:
+            reader._close()
+
+
 def test_sidebar_history_reuses_cold_rows_with_fresh_overrides_and_detects_peer_commits(
         tmp_path, monkeypatch):
     target = tmp_path / 'archive.json'

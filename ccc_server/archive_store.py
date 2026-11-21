@@ -578,7 +578,8 @@ class _SidebarHistoryReader:
             if self.memo is not None and self.memo[0] is marker:
                 self._close()
 
-    def read(self, cache_file, key, current, schema_version, build_id, min_cached_at):
+    def read(self, cache_file, key, current, schema_version, build_id, min_cached_at,
+             *, copy_history=True):
         with self.lock:
             target = database_path(cache_file).resolve()
             try:
@@ -607,7 +608,9 @@ class _SidebarHistoryReader:
                         rows = []
                         for rid, stored in layout:
                             live = current.pop(rid, None)
-                            rows.append(stored.copy() if live is None else live)
+                            if live is None:
+                                live = stored.copy() if copy_history else stored
+                            rows.append(live)
                         rows.extend(current.values())
                         return dict(entry, conversations=rows)
                     self._clear()
@@ -615,7 +618,7 @@ class _SidebarHistoryReader:
                 with conn:
                     loaded = _load_override_entry(
                         conn, key, current, schema_version, build_id, min_cached_at,
-                        capture_layout=True)
+                        capture_layout=True, copy_history=copy_history)
                 if loaded is None:
                     self._close()
                     return None
@@ -639,7 +642,7 @@ _SIDEBAR_HISTORY_READER = _SidebarHistoryReader()
 
 
 def _load_override_entry(con, key, current, schema_version, build_id, min_cached_at,
-                         *, capture_layout=False):
+                         *, capture_layout=False, copy_history=True):
     con.execute('BEGIN')
     header = con.execute('SELECT metadata FROM variants WHERE key=?', (key,)).fetchone()
     if not header:
@@ -683,20 +686,21 @@ def _load_override_entry(con, key, current, schema_version, build_id, min_cached
                     layout = None
                 if layout is not None:
                     layout.append((rid, row))
-                    # Lifecycle overlays edit top-level fields. Nested JSON
-                    # is read-only here and copied by sidebar projection.
-                    row = row.copy()
+                    if copy_history:
+                        row = row.copy()
                 rows.append(row)
     rows.extend(current.values())
     return entry, rows, layout
 
 
 def load_with_overrides(cache_file, key, current_rows, *, schema_version, build_id, min_cached_at,
-                        reuse_sidebar_history=False):
+                        reuse_sidebar_history=False, copy_history=True):
     """Merge current rows at their stored positions without decoding superseded bodies.
 
     Older schemas and identities derived from a row's position still use the
     caller's ordinary full load and merge.
+    With copy_history=False the sidebar reader may borrow stored dictionaries.
+    The caller must treat them as read-only, including during lifecycle overlays.
     """
     current = {}
     for row in current_rows:
@@ -708,7 +712,8 @@ def load_with_overrides(cache_file, key, current_rows, *, schema_version, build_
         return None
     if reuse_sidebar_history:
         return _SIDEBAR_HISTORY_READER.read(
-            cache_file, key, current, schema_version, build_id, min_cached_at)
+            cache_file, key, current, schema_version, build_id, min_cached_at,
+            copy_history=copy_history)
     con = _connect(cache_file)
     try:
         loaded = _load_override_entry(con, key, current, schema_version, build_id, min_cached_at)

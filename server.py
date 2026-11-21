@@ -17316,6 +17316,7 @@ def _archive_response_cache_build_get(key, *, overlay_rows=None, reuse_sidebar_h
                 build_id=_ARCHIVE_RESPONSE_CACHE_BUILD_ID,
                 min_cached_at=float((entry or {}).get("cached_at") or 0),
                 reuse_sidebar_history=reuse_sidebar_history,
+                copy_history=not reuse_sidebar_history,
             )
             if merged is not None:
                 return merged
@@ -20853,8 +20854,8 @@ def _archive_serve_refresh(key, cache_options, serve_generation, started_at):
                 _archive_serve_refreshing.pop(key, None)
 
 
-def _overlay_conversation_lifecycle_flags(rows, *, include_lanes=True):
-    """Re-stamp archived/trashed from the lifecycle sidecars, in place.
+def _overlay_conversation_lifecycle_flags(rows, *, include_lanes=True, copy_on_change=False):
+    """Re-stamp archived/trashed from the lifecycle sidecars.
 
     Lifecycle mutations (archive/trash/merge) clear the in-memory serve cache
     but not the durable response cache, whose rows still carry pre-mutation
@@ -20877,6 +20878,28 @@ def _overlay_conversation_lifecycle_flags(rows, *, include_lanes=True):
             and row.get("engine") == "codex"
             and str(row.get("session_id") or row.get("id") or "") in deleted_codex
         )]
+    if copy_on_change:
+        # The All sidebar borrows decoded history, then projects it into
+        # response-owned dictionaries. Copy only rows affected by sidecars.
+        try:
+            lanes = _load_session_lane_overrides() if include_lanes else {}
+        except Exception:
+            lanes = {}
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                continue
+            sid = row.get("session_id") or row.get("id")
+            if not sid:
+                continue
+            archived, trashed = sid in archived_set, sid in trashed_set
+            lane = lanes.get(str(sid), _default_session_lane(row)) if include_lanes else None
+            if (row.get("archived") is not archived or row.get("trashed") is not trashed
+                    or (include_lanes and row.get("all_lane_override") != lane)):
+                changed = dict(row, archived=archived, trashed=trashed)
+                if include_lanes:
+                    changed["all_lane_override"] = lane
+                rows[index] = changed
+        return rows
     for row in rows or []:
         if not isinstance(row, dict):
             continue
@@ -20901,8 +20924,9 @@ def _archive_serve_rows_versioned(key, cache_options, *, copy_rows=True, force_r
     if window == "all":
         from ccc_server import archive_store
         if archive_store.database_path(_ARCHIVE_RESPONSE_CACHE_FILE).exists():
+            borrow_history = reuse_sidebar_history and not copy_rows
             entry = _archive_response_cache_build_get(
-                key, overlay_rows=rows, reuse_sidebar_history=reuse_sidebar_history)
+                key, overlay_rows=rows, reuse_sidebar_history=borrow_history)
             if entry:
                 # Full-history bodies can still replay against the hot snapshot
                 # version. A new disk publication invalidates its cached body.
@@ -20915,7 +20939,10 @@ def _archive_serve_rows_versioned(key, cache_options, *, copy_rows=True, force_r
                             for field in ("body_raw", "body_gzip", "etag"):
                                 sc.pop(field, None)
                         version = sc.get("ver", 0)
-                return _overlay_conversation_lifecycle_flags(entry["conversations"]), cached, version
+                rows = entry["conversations"]
+                if borrow_history:
+                    return _overlay_conversation_lifecycle_flags(rows, copy_on_change=True), cached, version
+                return _overlay_conversation_lifecycle_flags(rows), cached, version
     if window != "all":
         from ccc_server import archive_store
         if archive_store.database_path(_ARCHIVE_RESPONSE_CACHE_FILE).exists():
