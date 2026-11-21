@@ -19347,6 +19347,11 @@ def _archive_list_source_rows_read(cache_options, *, force_refresh=False, phases
             _pt = now
 
     key = _archive_response_cache_key(**cache_options)
+    packed_options = {}
+    if packed_version is not None:
+        packed_options["packed_version"] = packed_version
+        if phases is not None:
+            packed_options["history_phases"] = phases.setdefault("history", {})
     rows, from_cache, _snap_ver = _archive_serve_rows_versioned(
         key,
         cache_options,
@@ -19355,7 +19360,7 @@ def _archive_list_source_rows_read(cache_options, *, force_refresh=False, phases
         window=window,
         defer_cold=True,
         reuse_sidebar_history=window == "all" and not force_refresh and not any(cache_options.values()),
-        **({"packed_version": packed_version} if packed_version is not None else {}),
+        **packed_options,
     )
     _phase("serve_ms")
     rows, extra = _archive_list_source_overlays(rows, _archive_overlay_existing_ids(rows), _phase)
@@ -21047,11 +21052,26 @@ def _archive_serve_rows(key, cache_options):
     return rows, from_cache
 
 
+@contextlib.contextmanager
+def _archive_history_timing(phases, name):
+    """Keep archive timing local to the request, including fallback paths."""
+    if phases is None:
+        yield
+        return
+    started, cpu = time.perf_counter(), time.thread_time()
+    try:
+        yield
+    finally:
+        phases[name] = {"wall_ms": round((time.perf_counter() - started) * 1000, 1),
+                        "cpu_ms": round((time.thread_time() - cpu) * 1000, 1)}
+
+
 def _archive_serve_rows_versioned(key, cache_options, *, copy_rows=True, force_refresh=False,
                                   window="all", defer_cold=False, reuse_sidebar_history=False,
-                                  packed_version=None):
-    rows, cached, version = _archive_serve_hot_rows_versioned(
-        key, cache_options, copy_rows=copy_rows, force_refresh=force_refresh, defer_cold=defer_cold)
+                                  packed_version=None, history_phases=None):
+    with _archive_history_timing(history_phases, "hot"):
+        rows, cached, version = _archive_serve_hot_rows_versioned(
+            key, cache_options, copy_rows=copy_rows, force_refresh=force_refresh, defer_cold=defer_cold)
     if window == "all":
         from ccc_server import archive_store
         if archive_store.database_path(_ARCHIVE_RESPONSE_CACHE_FILE).exists():
@@ -21061,12 +21081,14 @@ def _archive_serve_rows_versioned(key, cache_options, *, copy_rows=True, force_r
             lifecycle = None
             if packed_version is not None:
                 try:
-                    lifecycle = _conversation_lifecycle_snapshot()
+                    with _archive_history_timing(history_phases, "lifecycle_read"):
+                        lifecycle = _conversation_lifecycle_snapshot()
                 except Exception:
                     packed_version = None
-            entry = _archive_response_cache_build_get(
-                key, overlay_rows=rows, reuse_sidebar_history=borrow_history,
-                **({"packed_version": packed_version} if packed_version is not None else {}))
+            with _archive_history_timing(history_phases, "merge"):
+                entry = _archive_response_cache_build_get(
+                    key, overlay_rows=rows, reuse_sidebar_history=borrow_history,
+                    **({"packed_version": packed_version} if packed_version is not None else {}))
             if entry:
                 # Full-history bodies can still replay against the hot snapshot
                 # version. A new disk publication invalidates its cached body.
@@ -21081,8 +21103,9 @@ def _archive_serve_rows_versioned(key, cache_options, *, copy_rows=True, force_r
                         version = sc.get("ver", 0)
                 rows = entry["conversations"]
                 if borrow_history:
-                    return _overlay_conversation_lifecycle_flags(
-                        rows, copy_on_change=True, snapshot=lifecycle), cached, version
+                    with _archive_history_timing(history_phases, "lifecycle_apply"):
+                        return _overlay_conversation_lifecycle_flags(
+                            rows, copy_on_change=True, snapshot=lifecycle), cached, version
                 return _overlay_conversation_lifecycle_flags(rows), cached, version
     if window != "all":
         from ccc_server import archive_store
@@ -37442,7 +37465,8 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                                                      else None))
                             if check_client is not None:
                                 check_client()
-                            return _list_replay.prepare_history(payload)
+                            with _archive_history_timing(_payload_phases, "manifest"):
+                                return _list_replay.prepare_history(payload)
 
                         if stale_ok:
                             return _archive_list_history_projection(
@@ -48139,15 +48163,16 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                                    history="current" if payload is None else "delta" if is_delta else "full")
             if payload is None:
                 return self._send_archive_list_representation(None, None, '"d-' + since + '"')
-            body, encoding, etag = history_representation(
-                payload, self.headers.get("Accept-Encoding"),
-                None if is_delta else self.headers.get("If-None-Match"),
-                diagnostics=diagnostics, fingerprint=fingerprint,
-                row_layouts=row_layouts and not is_delta, packed_rows=history[2],
-                # Direct local connections can trade extra wire bytes for
-                # lower compression latency.
-                prefer_zstd=(row_layouts and not is_delta and not
-                             phone_access.is_remote_request(self.client_address[0], self.headers)))
+            with _archive_history_timing(diagnostics, "representation"):
+                body, encoding, etag = history_representation(
+                    payload, self.headers.get("Accept-Encoding"),
+                    None if is_delta else self.headers.get("If-None-Match"),
+                    diagnostics=diagnostics, fingerprint=fingerprint,
+                    row_layouts=row_layouts and not is_delta, packed_rows=history[2],
+                    # Direct local connections can trade extra wire bytes for
+                    # lower compression latency.
+                    prefer_zstd=(row_layouts and not is_delta and not
+                                 phone_access.is_remote_request(self.client_address[0], self.headers)))
             status = self._send_archive_list_representation(body, encoding, etag)
             return "delta" if is_delta and status == 200 else status
 
