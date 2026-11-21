@@ -3,7 +3,7 @@ import sqlite3
 from unittest.mock import patch
 
 import server
-from ccc_server import archive_store, continuation_topics
+from ccc_server import archive_sidebar_pages, archive_store, continuation_topics
 
 
 def test_indexed_preview_preserves_order_counts_and_live_context(tmp_path, monkeypatch):
@@ -188,3 +188,20 @@ def test_packed_history_is_exact_after_live_lifecycle_changes(tmp_path, monkeypa
         reader = archive_store._SIDEBAR_HISTORY_READER
         with reader.lock:
             reader._close()
+
+
+def test_packed_history_order_is_exact_at_batch_limit(monkeypatch):
+    with sqlite3.connect(":memory:") as conn:
+        conn.execute("CREATE TABLE rows (variant TEXT, identity TEXT, position INTEGER)")
+        conn.executemany("INSERT INTO rows VALUES (?, ?, ?)", [
+            ("scope", "later", 2),
+            ("scope", "second in lexical order", 1),
+            ("scope", 'first "quoted" ☃', 1),
+            ("other", "unrelated", 0),
+        ])
+        expected = ["second in lexical order", 'first "quoted" ☃', "later"]
+        monkeypatch.setattr(archive_sidebar_pages, "_ORDER_BATCH_ITEMS", 3)
+        assert archive_sidebar_pages._ordered_identities(conn, "scope") == expected
+        assert archive_sidebar_pages._ordered_identities(conn, "missing") == []
+        monkeypatch.setattr(archive_sidebar_pages, "_ORDER_BATCH_ITEMS", 2)
+        assert archive_sidebar_pages._ordered_identities(conn, "scope") == expected

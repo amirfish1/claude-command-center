@@ -5,6 +5,7 @@
 from collections import defaultdict
 import hashlib
 import json
+import sqlite3
 import zlib
 
 from ccc_server.archive_list_replay import pack_row_layouts
@@ -12,6 +13,7 @@ from ccc_server.archive_list_replay import pack_row_layouts
 
 _BUCKETS = 128
 _PAGE_MAX_BYTES = 4 << 20
+_ORDER_BATCH_ITEMS = 32768
 
 
 class StoredRow(dict):
@@ -133,6 +135,25 @@ def _decode_page(payload):
     return len(data) * 4 + len(entries) * 224 + len(payload), rows
 
 
+def _ordered_identities(con, key):
+    sql = "SELECT identity FROM rows WHERE variant=? ORDER BY position,rowid"
+    # Moving the canonical order out of SQLite one row at a time yields the
+    # GIL at each step. Read it in one bounded result under the same snapshot.
+    try:
+        encoded, = con.execute(
+            f"SELECT json_group_array(identity) FROM ({sql} LIMIT ?)",
+            (key, _ORDER_BATCH_ITEMS + 1),
+        ).fetchone()
+    except sqlite3.OperationalError as exc:
+        if str(exc) != "no such function: json_group_array":
+            raise
+    else:
+        identities = json.loads(encoded)
+        if len(identities) <= _ORDER_BATCH_ITEMS:
+            return identities
+    return [rid for rid, in con.execute(sql, (key,))]
+
+
 def read(con, key, cached_at, version, current, max_bytes, page_cache):
     """Load a current projection, borrowing read-only rows from recent pages."""
     if not con.execute("SELECT 1 FROM sqlite_master WHERE name='sidebar_page_generation'").fetchone():
@@ -163,8 +184,8 @@ def read(con, key, cached_at, version, current, max_bytes, page_cache):
     except (IndexError, TypeError, ValueError, zlib.error):
         return None
 
-    ordered = list(con.execute("SELECT identity FROM rows WHERE variant=? ORDER BY position,rowid", (key,)))
-    missing = [rid for rid, in ordered if rid not in current and rid not in decoded]
+    ordered = _ordered_identities(con, key)
+    missing = [rid for rid in ordered if rid not in current and rid not in decoded]
     if len(missing) > 32:
         return None
     if missing:
@@ -176,7 +197,7 @@ def read(con, key, cached_at, version, current, max_bytes, page_cache):
             decoded[rid] = json.loads(body)
     layout = []
     rows = []
-    for rid, in ordered:
+    for rid in ordered:
         hot = current.pop(rid, None)
         stored = None if hot is not None else decoded[rid]
         layout.append((rid, stored))
