@@ -69,6 +69,34 @@ def test_new_row_is_not_misreported_as_database_invalidation(store):
     assert detail == {'hit': False, 'reason': 'new-session'}
 
 
+def test_small_cache_miss_keeps_established_entries_after_fallback_churn(store):
+    rows = [{'session_id': 'root', 'display_name': 'ROOT: task'},
+            {'session_id': 'child', 'continued_from_session_id': 'root'},
+            {'session_id': 'untitled'}]
+    # A standalone session can already be indexed without having appeared
+    # in this dashboard's full projection.
+    topics._connection(store)
+    store.execute("INSERT INTO continuation_topics VALUES ('other', '', 'other', 'OTHER', 0)")
+    store.commit()
+    warm(rows)
+    expected = copy.deepcopy(rows)
+
+    server._conv_meta_cache['unrelated.jsonl'] = {'custom_title': 'Unrelated'}
+    topics.attach_topics([{'session_id': 'other'}], names={})
+    detail = {}
+    topics.attach_topics(rows, names={}, diagnostics=detail)
+
+    assert detail == {'hit': True, 'reason': 'hit'}
+    assert rows == expected
+
+    server._conv_meta_cache['untitled.jsonl'] = {'custom_title': 'FOUND: task'}
+    topics.attach_topics(rows, names={}, diagnostics=detail)
+    assert detail == {'hit': False, 'reason': 'title-discovered'}
+    assert store.execute(
+        "SELECT topic_title FROM continuation_topics WHERE sid='untitled'"
+    ).fetchone()[0] == 'FOUND'
+
+
 @pytest.mark.parametrize('source', ['row', 'metadata', 'native', 'indexed-origin'])
 def test_empty_continuation_title_reuses_cache_until_root_changes(store, monkeypatch, source):
     root = '00000000-0000-0000-0000-000000000001'

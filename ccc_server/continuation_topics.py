@@ -642,9 +642,13 @@ def _store_cache(conn, batch, rows):
     if token is None:
         return
     with _CACHE_LOCK:
-        if _TOPIC_CACHE.get('token') != token:
-            _TOPIC_CACHE['token'] = token
+        previous = _TOPIC_CACHE.get('token')
+        # Like a cache read, keep entries under the same database revision
+        # when only fallback inputs change. Reads recheck entries without
+        # persisted titles against the current inputs.
+        if previous is None or previous[:-1] != token[:-1]:
             _TOPIC_CACHE['entries'] = {}
+        _TOPIC_CACHE['token'] = token
         _TOPIC_CACHE['records'] = dict(batch.records)
         _TOPIC_CACHE['indexed_origins'] = dict(batch.indexed_origins)
         entries = _TOPIC_CACHE['entries']
