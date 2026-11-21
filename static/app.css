@@ -2307,22 +2307,27 @@
   .thinking-run > [hidden] { display: none !important; }
   .thinking-run { cursor: pointer; }
   .activity-run { display: none; }
-  body:not(.conv-compact):not([data-conv-view="verbose"]) .conversations-view .activity-run {
+  body:not([data-conv-view="verbose"]) .conversations-view .activity-run {
     display: block; margin: 6px 0; padding: 0 10px;
   }
-  body:not(.conv-compact):not([data-conv-view="verbose"]) .conversations-view .activity-run-source:not(.activity-run-open) { display: none !important; }
-  body:not(.conv-compact):not([data-conv-view="verbose"]) .event.assistant:has(> .activity-run-source):not(:has(> .activity-run, > .activity-run-open, > .assistant-text)) { display: none !important; }
-  body:not(.conv-compact):not([data-conv-view="verbose"]) .event.assistant.thinking-run-event:not(:has(> .thinking-run)):has(> .activity-run) { display: block !important; }
-  body:not(.conv-compact):not([data-conv-view="verbose"]) .event.assistant.thinking-run-event > .activity-run { display: block !important; }
+  body:not([data-conv-view="verbose"]) .conversations-view .activity-run-source:not(.activity-run-open) { display: none !important; }
+  body:not([data-conv-view="verbose"]) .event.assistant:has(> .activity-run-source):not(:has(> .activity-run, > .activity-run-open, > .assistant-text)) { display: none !important; }
+  body:not([data-conv-view="verbose"]) .event.assistant.thinking-run-event:not(:has(> .thinking-run)):has(> .activity-run) { display: block !important; }
+  body:not([data-conv-view="verbose"]) .event.assistant.thinking-run-event > .activity-run { display: block !important; }
+  .activity-run-orchestration { display: none; }
+  body.conv-compact .activity-run-header { display: flex; align-items: center; }
+  body.conv-compact .activity-run-orchestration:not(:empty) { display: flex; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  body.conv-compact .activity-run-preview { height: 1.5em; -webkit-line-clamp: 1; }
+  body.conv-compact .activity-run.is-expanded > .activity-run-preview { display: none; }
   .activity-run-toggle {
     display: block; min-height: 28px; padding: 0; border: 0; background: transparent;
     color: var(--text-muted); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer;
   }
   .activity-run-toggle::before { content: '\25B8'; margin-inline-end: 6px; }
-  .activity-run.is-expanded > .activity-run-toggle::before { content: '\25BE'; }
+  .activity-run.is-expanded .activity-run-toggle::before { content: '\25BE'; }
   .activity-run-toggle:hover { color: var(--text); }
   .activity-run-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .activity-run.has-error > .activity-run-toggle { color: var(--red); }
+  .activity-run.has-error .activity-run-toggle { color: var(--red); }
   .activity-run-preview {
     height: 3em; line-height: 1.5; overflow: hidden; overflow-wrap: anywhere;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;

@@ -44,9 +44,8 @@ test('real renderers replace consecutive thoughts in a steady slot, then preserv
           const render = blocks => h.renderConversationEvents([{type:'assistant',line:++line,blocks}], paneId, {initialLoad:true});
           const thought = text => ({kind:'thinking',text});
           render([thought('First thought')]);
-          // Normal view folds the entire work sequence. Reveal its history
-          // before exercising the individual thought disclosure beneath it.
-          if (!compact) view.querySelector('.activity-run-toggle').click();
+          // Reveal the work sequence before exercising its thought disclosure.
+          view.querySelector('.activity-run-toggle').click();
           const slot = view.querySelector('.thinking-run'), heading = slot.querySelector('button');
           const before = heading.getBoundingClientRect().top, height = slot.getBoundingClientRect().height;
           render([thought('Earlier paragraph\n\nNewest thought ' + 'with details '.repeat(80))]);
@@ -89,7 +88,7 @@ test('real renderers replace consecutive thoughts in a steady slot, then preserv
         JSON.stringify({width,merged,compact}));
         await page.evaluate(() => {
           const activity = document.querySelector('.activity-run-toggle[aria-expanded="false"]');
-          if (!document.body.classList.contains('conv-compact')) activity?.click();
+          if (!document.querySelector('.thinking-run > button').checkVisibility()) activity?.click();
           document.querySelector('.thinking-run > button').scrollIntoView({block:'center'});
         });
         await page.waitForFunction(() => {
@@ -200,11 +199,14 @@ test('real renderers replace consecutive thoughts in a steady slot, then preserv
           view.replaceChildren();
           let line = 990000;
           const render = block => h.renderConversationEvents([{type:'assistant',line:++line,blocks:[block]}], paneId, {initialLoad:true});
-          const tool = (id, detail) => render({kind:'tool_use',name:'Bash',id,detail,command:'wt find SAMPLE-1'});
+          const tool = (id, detail) => render({kind:'tool_use',name:'Bash',id,detail});
           if (narration) render({kind:'text',text:'Checking the report.'});
-          const findPreview = () => view.querySelector('.cc-run-preview.is-tool-preview');
+          const findPreview = () => view.querySelector('.activity-run-preview');
           tool('compact-first','Read the report');
+          const slot = view.querySelector('.activity-run');
           const first = findPreview()?.textContent;
+          render({kind:'thinking', text:'Compare the report with the recorded activity.'});
+          const thought = findPreview()?.textContent;
           tool('compact-second','Look up the OAuth project owner…');
           const preview = findPreview();
           const before = preview?.getBoundingClientRect();
@@ -215,26 +217,26 @@ test('real renderers replace consecutive thoughts in a steady slot, then preserv
           const stable = !!before && !!after && Math.abs(before.top - after.top) < 1
             && Math.abs(before.height - after.height) < 1 && after.height > 0;
           const description = latest?.textContent.startsWith('Check the latest entries ');
-          const newestOnly = view.querySelectorAll('.cc-run-preview.is-tool-preview').length === 1;
+          const newestOnly = slot === view.querySelector('.activity-run')
+            && view.querySelectorAll('.activity-run-preview').length === 1;
           const overflow = view.scrollWidth > view.clientWidth + 1;
-          const chip = view.querySelector('.cc-run-chip');
-          const group = latest?.parentElement;
-          const disclosure = group?.querySelector('.tool-call-group-header, .kimi-tool-group-head');
-          const oneHeading = !chip || !disclosure?.matches('.tool-call-group-header') || !disclosure.checkVisibility();
-          (chip || disclosure)?.click();
-          const expanded = !latest?.checkVisibility()
-            && [...view.querySelectorAll('.tool-call, .kimi-tool')].every(row=>row.checkVisibility());
-          (chip || group?.querySelector('.cc-run-fold') || disclosure)?.click();
+          const oneHeading = !view.querySelector('.cc-run-chip, .cc-run-preview')
+            && [...view.querySelectorAll('.tool-call-group-header, .kimi-tool-group-head, .thinking-run')].every(el=>!el.checkVisibility());
+          slot.querySelector('button').click();
+          const expanded = !latest.checkVisibility()
+            && [...view.querySelectorAll('.tool-call-group-header, .kimi-tool-group-head, .thinking-run')].every(row=>row.checkVisibility());
+          slot.querySelector('button').click();
           const collapsed = latest?.checkVisibility();
           document.body.classList.remove('conv-compact');
           document.body.dataset.convView = 'normal';
-          const normal = !latest?.checkVisibility() && view.querySelector('.activity-run-preview')?.checkVisibility();
+          const normal = latest?.checkVisibility();
           document.body.classList.add('conv-compact');
           document.body.dataset.convView = 'compact';
-          return {first,second,stable,description,newestOnly,oneHeading,overflow,expanded,collapsed,normal};
+          return {first,thought,second,stable,description,newestOnly,oneHeading,overflow,expanded,collapsed,normal};
         }, {merged, narration});
-        assert.deepEqual(result,{first:'Read the report...',second:'Look up the OAuth project owner...',stable:true,
-          description:true,newestOnly:true,oneHeading:true,overflow:false,expanded:true,collapsed:true,normal:true},
+        assert.deepEqual(result,{first:'Read the report...',thought:'Compare the report with the recorded activity...',
+          second:'Look up the OAuth project owner...',stable:true,description:true,newestOnly:true,
+          oneHeading:true,overflow:false,expanded:true,collapsed:true,normal:true},
           JSON.stringify({width,merged,narration}));
         if (process.env.CCC_THINKING_SCREENSHOTS && narration) {
           await page.screenshot({path:process.env.CCC_THINKING_SCREENSHOTS + '/compact-activity-' + width + '-' + merged + '.png'});

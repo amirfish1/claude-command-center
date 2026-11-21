@@ -120,7 +120,7 @@ test('real conversation renderers update existing chips when a filing result arr
         h.renderConversationEvents([{ type: 'tool_result', tool_use_id: 'filing-' + webui, line: ++line,
           text: 'FILED: APP-42\nWorker dispatched' }], paneId, { initialLoad: true });
         outcomes.push({ before, after: row?.dataset.ccOrch,
-          chips: [...view.querySelectorAll('.cc-orch-chip')].map(c => c.dataset.ccOrch) });
+          chips: [...view.querySelectorAll('.activity-run .cc-orch-chip')].map(c => c.dataset.ccOrch) });
       }
       return outcomes;
     });

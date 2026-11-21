@@ -1872,7 +1872,8 @@
       if (!slot?.classList.contains('activity-run')) {
         slot = document.createElement('div');
         slot.className = 'activity-run';
-        slot.innerHTML = '<button type="button" class="activity-run-toggle" aria-expanded="false">Working</button>'
+        slot.innerHTML = '<div class="activity-run-header"><button type="button" class="activity-run-toggle" aria-expanded="false">Working</button>'
+          + '<span class="activity-run-orchestration"></span></div>'
           + '<div class="activity-run-preview" dir="auto"></div>';
         slot.querySelector('button').addEventListener('click', () => {
           const open = slot.classList.toggle('is-expanded');
@@ -1902,6 +1903,17 @@
       slot.classList.toggle('has-error', failed);
       const title = failed ? 'Tool failed — show activity history' : 'Show activity history';
       if (slot.querySelector('button').title !== title) slot.querySelector('button').title = title;
+      const labels = _ccOrchLabels(members.map(el => ({ el })));
+      const chips = slot.querySelector('.activity-run-orchestration');
+      const visibleLabels = labels.slice(0, 4);
+      if (labels.length > 4) visibleLabels.push('+' + (labels.length - 4));
+      const key = visibleLabels.join('|');
+      if ((chips.dataset.labels || '') !== key) {
+        chips.dataset.labels = key;
+        chips.innerHTML = visibleLabels.map(label =>
+          '<span class="cc-orch-chip" data-cc-orch="' + escapeAttr(label) + '" aria-label="' + escapeAttr(label) + '"></span>'
+        ).join('');
+      }
       members = [];
     };
     const visit = (el) => {
@@ -1909,9 +1921,10 @@
       // consecutive commands into separate Working disclosures.
       if (el.matches('.activity-run, .thinking-run-source, .thinking-block-silent, .line-num, .msg-ts, .actor-chip, .event-model-meta, .event-token-chips, .assistant-message-actions, .kimi-marker, .kimi-answer-meta')) return;
       // Questions, approvals, handoffs and returned images must remain visible.
-      const needsAttention = el.matches('.ccc-video-cleared')
+      const needsAttention = el.matches('.ccc-video-cleared, .acp-needs-approval, .codex-subagent')
         || el.querySelector('.acp-needs-approval, .tool-result-images, .tool-inline-image, .codex-subagent')
         || Array.from(el.querySelectorAll('.kimi-tool-name')).some(node => /^(?:Question|AskUserQuestion|sidekick|run_subagent)$/.test(node.dataset.toolName || node.textContent.trim()))
+        || (el.matches('.tool-call') && toolCallCarriesConversationContext(el))
         || Array.from(el.querySelectorAll('.tool-call')).some(toolCallCarriesConversationContext);
       if (needsAttention && el.matches('.tool-call-group, .kimi-tool-group')) {
         el.classList.remove('collapsed');

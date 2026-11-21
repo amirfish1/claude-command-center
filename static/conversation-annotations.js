@@ -153,7 +153,7 @@
     const stale = new Set(view.querySelectorAll('[data-cc-run]'));
     const staleChips = new Set(view.querySelectorAll('.cc-run-chip'));
     const staleFolds = new Set(view.querySelectorAll('.cc-run-fold, .cc-run-tools, .cc-run-preview'));
-    const staleOrch = new Set(view.querySelectorAll('.cc-orch-chip'));
+    const staleOrch = new Set(view.querySelectorAll('.cc-orch-chip[data-cc-orch-for]'));
     const staleThumbs = new Set(view.querySelectorAll('.cc-run-thumbs'));
     const staleFinals = new Set(view.querySelectorAll('.assistant-text.cc-final'));
     // The last text of each turn (right before the next user message, or
@@ -378,7 +378,9 @@
     // -> array of { el, kind: 'tool'|'think'|'passive'|'break', calls }
     const units = [];
     for (const el of view.children) {
-      if (el.matches('.activity-run, .conv-codex-state, .conv-live-tool-inline, .conv-live-tool-strip')) continue;
+      // The shared disclosure owns this history and its orchestration chips.
+      if (el.matches('.activity-run')) { units.push({ el, kind: 'break' }); continue; }
+      if (el.matches('.activity-run-source, .conv-codex-state, .conv-live-tool-inline, .conv-live-tool-strip')) continue;
       const cl = el.classList;
       if (cl.contains('tool-call-group')) {
         units.push({ el, kind: 'tool', calls: Math.max(1, el.querySelectorAll('.tool-call').length) });
@@ -388,7 +390,8 @@
         // Codex/Kimi merge events into turns. Walk their visible blocks;
         // hidden reconciliation markers and answer chrome are transparent.
         for (const c of el.children) {
-          if (c.matches('.activity-run, .kimi-marker, .kimi-answer-meta, .thinking-run-source')) continue;
+          if (c.matches('.activity-run')) { units.push({ el: c, kind: 'break' }); continue; }
+          if (c.matches('.activity-run-source, .kimi-marker, .kimi-answer-meta, .thinking-run-source')) continue;
           if (c.matches('.acp-needs-approval, :has(.acp-needs-approval)')) {
             units.push({ el: c, kind: 'break' });
           } else if (c.matches('.kimi-tool-group, .kimi-tool')) {
@@ -407,7 +410,8 @@
         if (cl.contains('is-silent-thinking-only')) { units.push({ el, kind: 'passive' }); continue; }
         let found = false;
         for (const c of el.children) {
-          if (c.classList.contains('activity-run')) continue;
+          if (c.matches('.activity-run')) { found = true; units.push({ el: c, kind: 'break' }); continue; }
+          if (c.matches('.activity-run-source')) continue;
           if (c.classList.contains('thinking-run-source')) continue;
           const cc = c.classList;
           if (cc.contains('tool-call-group')) { found = true; units.push({ el: c, kind: 'tool', calls: Math.max(1, c.querySelectorAll('.tool-call').length) }); }
