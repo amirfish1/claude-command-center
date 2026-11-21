@@ -16,7 +16,7 @@ import server
 @pytest.fixture
 def routes(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "_BG_ROUTE_CPU", {})
-    monkeypatch.setattr(server, "_BG_ROUTE_LOCKS", {})
+    monkeypatch.setattr(server, "_ACCEPT_PAUSED", server.ReadAdmission(server._BACKGROUND_API_READ_LIMIT, 256))
     monkeypatch.setattr(server, "_BG_ROUTE_CPU_FILE", tmp_path / "bg_route_cpu.json")
     monkeypatch.setattr(server, "_BG_ROUTE_CPU_STATE", {"dirty": False, "saved_at": 0.0})
     return tmp_path / "bg_route_cpu.json"
