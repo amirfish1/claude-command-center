@@ -69,6 +69,43 @@ def test_new_row_is_not_misreported_as_database_invalidation(store):
     assert detail == {'hit': False, 'reason': 'new-session'}
 
 
+@pytest.mark.parametrize('source', ['row', 'metadata', 'native', 'indexed-origin'])
+def test_empty_continuation_title_reuses_cache_until_root_changes(store, monkeypatch, source):
+    root = '00000000-0000-0000-0000-000000000001'
+    native = {}
+    monkeypatch.setattr(server, '_codex_thread_row', lambda sid: native.get(sid))
+    rows = [{'session_id': root},
+            {'session_id': 'child', 'continued_from_session_id': root}]
+    warm(rows)
+    expected = copy.deepcopy(rows)
+    detail = {}
+    topics.attach_topics(rows, names={}, diagnostics=detail)
+    assert detail == {'hit': True, 'reason': 'hit'}
+    assert rows == expected
+    assert rows[1]['continuation_topic_title'] == ''
+    assert rows[1]['continuation_topic_root_session_id'] == root
+
+    expected_root = root
+    if source == 'row':
+        rows[0]['display_name'] = 'FOUND: task'
+    elif source == 'metadata':
+        server._conv_meta_cache[root + '.jsonl'] = {'custom_title': 'FOUND: task'}
+    elif source == 'native':
+        # Discovery changes the direct lookup without publishing a new title
+        # snapshot, so the cache must still query the unloaded native root.
+        rows.pop(0)
+        native[root] = {'title': 'FOUND: task'}
+    else:
+        expected_root = 'ancestor'
+        store.execute('INSERT INTO session_meta VALUES (?, ?)', (root, expected_root))
+        store.commit()
+        rows.insert(0, {'session_id': expected_root, 'display_name': 'FOUND: task'})
+    topics.attach_topics(rows, names={}, diagnostics=detail)
+    assert detail['hit'] is False
+    assert rows[-1]['continuation_topic_title'] == 'FOUND'
+    assert rows[-1]['continuation_topic_root_session_id'] == expected_root
+
+
 @pytest.mark.parametrize('explicit_first', [False, True])
 def test_equivalent_persisted_edges_reuse_cache_without_sql(store, explicit_first):
     topics.record_continuation('root', 'child', title='ROOT: task')

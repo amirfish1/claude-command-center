@@ -297,6 +297,32 @@ def _origin(row):
     return str(row.get('continued_from_session_id') or row.get('continuation_origin') or '')
 
 
+def _row_title(row, names, sid):
+    return names.get(sid) or row.get('display_name') or row.get('custom_title') or row.get('ai_title')
+
+
+def _external_titles():
+    return {
+        _metadata_session_id(filename): (meta.get('custom_title')
+                                         or meta.get('agent_name') or meta.get('ai_title'))
+        for filename, meta in list(getattr(_core, '_conv_meta_cache', {}).items())
+        if isinstance(meta, dict)
+    }
+
+
+def _external_title(titles, sid):
+    if title := titles.get(sid):
+        return title
+    native = getattr(_core, '_codex_titles_cache', {}).get('data', {}).get(sid, {})
+    return native.get('title') or native.get('agent_nickname')
+
+
+def _native_title(sid):
+    lookup = getattr(_core, '_codex_thread_row', None)
+    native = (lookup(sid) if lookup else None) or {}
+    return native.get('title') or native.get('agent_nickname')
+
+
 class _Batch:
     def __init__(self, conn, rows, names, *, reuse_cached=False):
         self.conn = conn
@@ -368,33 +394,21 @@ class _Batch:
         return self.titles[sid]
 
     def _title(self, sid):
-        row = self.rows.get(sid, {})
-        title = self.names.get(sid) or row.get('display_name') or row.get('custom_title') or row.get('ai_title')
+        title = _row_title(self.rows.get(sid, {}), self.names, sid)
         if title:
             return _topic(title)
         # One in-memory pass per batch, only if an unloaded root needs a title.
         # Never walk directories, load transcripts, or invoke a session search.
         if self.cached_titles is None:
-            self.cached_titles = {}
-            for filename, meta in list(getattr(_core, '_conv_meta_cache', {}).items()):
-                if isinstance(meta, dict):
-                    self.cached_titles[_metadata_session_id(filename)] = (
-                        meta.get('custom_title') or meta.get('agent_name') or meta.get('ai_title'))
-        cached = self.cached_titles.get(sid)
-        if not cached:
-            # Native Codex titles have their own already-batched snapshot.
-            # Consult it in memory; never fetch all native threads per row.
-            native = getattr(_core, '_codex_titles_cache', {}).get('data', {}).get(sid, {})
-            cached = native.get('title') or native.get('agent_nickname')
+            self.cached_titles = _external_titles()
+        cached = _external_title(self.cached_titles, sid)
         if (not cached and self.allow_native_lookup
                 and (self.capture_root_titles or sid in self.ancestors)
                 and _NATIVE_ID_RE.fullmatch(sid)):
             # On a fresh process an archived Codex root may not be in either
             # in-memory cache. This is an indexed id=? lookup, once per root,
             # not the full native-session enumeration used by title refresh.
-            lookup = getattr(_core, '_codex_thread_row', None)
-            native = (lookup(sid) if lookup else None) or {}
-            cached = native.get('title') or native.get('agent_nickname')
+            cached = _native_title(sid)
         return _topic(cached)
 
     def put(self, sid, origin, root, title, user_named=0):
@@ -560,6 +574,7 @@ def _try_attach_from_cache(rows, conn, names, diagnostics=None):
         resolved_names = None
         external_titles = None
         staged = []
+        untitled_roots = set()
         for item in rows:
             sid = _sid(item)
             if not sid:
@@ -570,34 +585,44 @@ def _try_attach_from_cache(rows, conn, names, diagnostics=None):
             accepted_origins, has_persisted_title, root, topic_title = entry
             if _origin(item) not in accepted_origins:
                 return miss('origin-changed')
-            if not has_persisted_title:
+            if root and not topic_title:
+                untitled_roots.add(root)
+            elif not has_persisted_title:
                 if resolved_names is None:
                     resolved_names = _core._load_session_name_overrides() if names is None else names
-                candidate = (
-                    resolved_names.get(sid)
-                    or item.get('display_name')
-                    or item.get('custom_title')
-                    or item.get('ai_title')
-                )
+                candidate = _row_title(item, resolved_names, sid)
                 if not candidate:
                     # Match _Batch._title without native I/O: these cached
                     # standalone rows have no ancestor/root-capture lookup.
                     # Copy items before scanning the concurrently filled map.
                     if external_titles is None:
-                        external_titles = {
-                            _metadata_session_id(filename): (meta.get('custom_title')
-                                                  or meta.get('agent_name')
-                                                  or meta.get('ai_title'))
-                            for filename, meta in list(
-                                getattr(_core, '_conv_meta_cache', {}).items())
-                            if isinstance(meta, dict)
-                        }
-                    native = getattr(_core, '_codex_titles_cache', {}).get('data', {}).get(sid, {})
-                    candidate = (external_titles.get(sid) or native.get('title')
-                                 or native.get('agent_nickname'))
+                        external_titles = _external_titles()
+                    candidate = _external_title(external_titles, sid)
                 if _topic(candidate):
                     return miss('title-discovered')
             staged.append((item, root, topic_title))
+    if untitled_roots:
+        # A titleless continuation still has a canonical root. Validate the
+        # root's current inputs, including the indexed native lookup outside
+        # the cache lock, before applying the cached empty title.
+        root_rows = {sid: item for item in rows if (sid := _sid(item)) in untitled_roots}
+        if resolved_names is None:
+            resolved_names = _core._load_session_name_overrides() if names is None else names
+        for sid in untitled_roots:
+            root_row = root_rows.get(sid, {})
+            if _origin(root_row):
+                return miss('origin-changed')
+            candidate = _row_title(root_row, resolved_names, sid)
+            if not candidate:
+                if external_titles is None:
+                    external_titles = _external_titles()
+                candidate = _external_title(external_titles, sid)
+                if not candidate and _NATIVE_ID_RE.fullmatch(sid):
+                    candidate = _native_title(sid)
+            if _topic(candidate):
+                return miss('title-discovered')
+        if _db_state_token(conn) != token:
+            return miss('database')
     for item, root, topic_title in staged:
         if root:
             item['continuation_topic_title'] = topic_title
@@ -638,8 +663,11 @@ def _store_cache(conn, batch, rows):
             if origin and root:
                 topic_title = item.get('continuation_topic_title') or ''
                 if not topic_title:
-                    entries.pop(sid, None)
-                    continue
+                    canonical = batch.record(root)
+                    if (origin != root or canonical[:3] != ('', root, '')
+                            or batch.indexed_origin(root) or _origin(batch.rows.get(root, {}))):
+                        entries.pop(sid, None)
+                        continue
                 entries[sid] = (accepted_origins, True, root, topic_title)
             else:
                 entries[sid] = (accepted_origins, bool(persisted_title), '', '')
