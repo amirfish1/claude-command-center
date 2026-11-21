@@ -37450,19 +37450,24 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                              and not phone_access.is_remote_request(self.client_address[0], self.headers)
                              else None)
 
+            _packed_history_projection = None
+
             def _timed_payload():
                 _pt0 = time.perf_counter()
                 try:
                     if window == "all" and not body_ver:
                         def prepare_history(check_client=None):
+                            nonlocal _packed_history_projection
                             from ccc_server import archive_store
 
+                            projection = (archive_store.sidebar_history_projection()
+                                          if stale_ok and not any(cache_options.values()) else None)
+                            if packed_version is not None:
+                                _packed_history_projection = projection
                             payload = _archive_list_payload(
                                 rows, window=window, cached=from_cache, phases=_payload_phases,
                                 _retain_templates=False, check_client=check_client,
-                                _history_projection=(archive_store.sidebar_history_projection()
-                                                     if stale_ok and not any(cache_options.values())
-                                                     else None))
+                                _history_projection=projection)
                             if check_client is not None:
                                 check_client()
                             with _archive_history_timing(_payload_phases, "manifest"):
@@ -37493,6 +37498,9 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     order_spans=qs.get("order_spans", ["0"])[0] == "1",
                     check_client=_check_client,
                 )
+            if (_packed_history_projection is not None and _status == 200
+                    and _body_cache_diag.get("history") == "full"):
+                archive_store.renew_sidebar_history_after_full_response(_packed_history_projection)
             _lt2 = time.perf_counter()
             record_diag("list_server", (_lt2 - _lt0) * 1000.0, {
                 "window": window,

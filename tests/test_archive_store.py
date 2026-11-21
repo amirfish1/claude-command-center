@@ -3,6 +3,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 import json
 import sqlite3
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -308,6 +309,41 @@ def test_sidebar_static_projection_keeps_request_overlays_live(tmp_path, monkeyp
     finally:
         with reader.lock:
             reader._close()
+
+
+def test_full_sidebar_response_renews_only_its_current_history_lease(monkeypatch):
+    now = 100.0
+    monkeypatch.setattr(store, 'time', SimpleNamespace(monotonic=lambda: now))
+    reader = store._SidebarHistoryReader()
+    previous = store.SidebarHistoryProjection([])
+    projection = store.SidebarHistoryProjection([])
+    reader.memo = (None, projection)
+    try:
+        reader._arm_expiry()
+        initial_marker = reader.memo[0]
+        now = 110.0
+        reader.renew_after_full_response(previous)
+        assert reader.memo[0] is initial_marker
+
+        reader.renew_after_full_response(projection)
+        renewed_marker = reader.memo[0]
+        assert renewed_marker is not initial_marker
+        assert reader.expires_at == 110.0 + store._SIDEBAR_HISTORY_REUSE_S
+        reader._expire(initial_marker)
+        assert reader.memo[0] is renewed_marker
+
+        now = 115.0
+        reader.renew_after_full_response(projection)
+        assert reader.memo[0] is renewed_marker
+
+        replacement = store.SidebarHistoryProjection([])
+        reader.memo = (renewed_marker, replacement)
+        now = reader.expires_at
+        reader.renew_after_full_response(replacement)
+        assert reader.memo[0] is renewed_marker
+        assert not replacement.full_response_served
+    finally:
+        reader._close()
 
 
 def test_unchanged_cold_rows_are_not_rewritten(tmp_path):

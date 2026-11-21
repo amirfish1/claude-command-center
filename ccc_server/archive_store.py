@@ -579,6 +579,7 @@ class SidebarHistoryProjection:
         # expiry timer replaces the layout during projection.
         self.sources = {id(row): row for _, row in layout if row is not None}
         self.rows = None
+        self.full_response_served = False
 
 
 def _recover_sidebar_history(conn, key, missing, version):
@@ -650,6 +651,17 @@ class _SidebarHistoryReader:
             # The first projection can consume most of the original lease.
             # Renew once so an immediate reload can reuse that work. Reads
             # still check SQLite's data_version and the publication header.
+            self._arm_expiry()
+
+    def renew_after_full_response(self, projection):
+        with self.lock:
+            if (self.memo is None or self.memo[-1] is not projection
+                    or projection.full_response_served or time.monotonic() >= self.expires_at):
+                return
+            # Encoding and sending a full list can use much of the lease.
+            # Give its saved reload one interval without turning polls into
+            # an indefinitely retained decoded archive.
+            projection.full_response_served = True
             self._arm_expiry()
 
     def read(self, cache_file, key, current, schema_version, build_id, min_cached_at,
@@ -911,6 +923,10 @@ def sidebar_history_projection():
 
 def publish_sidebar_history_projection(projection, rows):
     _SIDEBAR_HISTORY_READER.publish_projection(projection, rows)
+
+
+def renew_sidebar_history_after_full_response(projection):
+    _SIDEBAR_HISTORY_READER.renew_after_full_response(projection)
 
 
 def load(cache_file, *, hot=False, key=None, now=None):
