@@ -33931,6 +33931,13 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 fresh_s=10.0, max_stale_s=300.0))
         elif path == "/api/question-tags":
             from ccc_server import question_tags as _question_tags
+            qs = urllib.parse.parse_qs(parsed.query)
+            if qs.get("view") == ["compact"]:
+                raw_detail = qs.get("detail", [""])[0]
+                detail = int(raw_detail) if re.fullmatch(r"[0-9]{1,12}", raw_detail) else None
+                self.send_json(_question_tags.payload(
+                    _wt_list_items_for_requests(), compact=True, detail=detail))
+                return
             accepts_gzip = "gzip" in (self.headers.get("Accept-Encoding", "") or "").lower()
             data, encoded = _question_tags.response(
                 _wt_list_items_for_requests(),

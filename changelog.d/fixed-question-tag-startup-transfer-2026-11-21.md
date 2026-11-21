@@ -1,0 +1,1 @@
+- Keep question chips and ticket status available during startup while loading transcript explanations only when a question or its history is opened.

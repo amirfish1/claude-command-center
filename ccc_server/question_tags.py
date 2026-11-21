@@ -559,7 +559,7 @@ def apply_tickets(questions: list, items: list) -> None:
             q["answered"], q["answered_by"] = True, "ticket"
 
 
-def payload(tickets: list | None = None) -> dict:
+def payload(tickets: list | None = None, *, compact=False, detail=None) -> dict:
     """API payload. Never scans inside the request: a stale index kicks a
     background refresh and is served as-is. `scanning` is true only until the
     first full index exists (cold start); `refreshing` means a rescan is in
@@ -575,6 +575,14 @@ def payload(tickets: list | None = None) -> dict:
     out = build_index()
     if tickets:
         apply_tickets(out["questions"], tickets)
+    if compact:
+        # Chips need identity, routing and status. Transcript text and reminders
+        # belong to the question the user opens, or to an explicit history read.
+        for q in out["questions"]:
+            if q["n"] == detail:
+                continue
+            q["first"] = {k: q["first"][k] for k in ("sid", "ts")}
+            q.pop("mentions")
     out["ok"] = True
     out["scanning"] = not _ready
     out["refreshing"] = scanning_now

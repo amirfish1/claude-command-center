@@ -9,8 +9,8 @@
  * Linked questions keep their question preview chip beside a ticket shortcut;
  * "Needs you" also offers Talk to worker.
  *
- * Self-contained: one MutationObserver, one cached index fetch (refreshed
- * lazily on a chip tap / panel open and every 60s while visible).
+ * Self-contained: one MutationObserver, a compact index refreshed every 60s
+ * while visible, and a detail read when a chip or history is opened.
  */
 (function (root, factory) {
   var api = factory();
@@ -29,7 +29,7 @@
   var HAS_REF_RE = /Q\d/;
   var TARGETS = '.assistant-text, .user-msg, .conv-outcome-step, .wa-preview, .session-state-block';
   var POLL_MS = 60000;
-  var index = { byN: {}, list: [], scanning: false, at: 0 };
+  var index = { byN: {}, list: [], scanning: false };
   var loadGeneration = 0;
   // The owner queue (Decisions). count stays null until a verified read, and
   // keeps its last verified value while a refresh is in flight or unverified.
@@ -228,10 +228,15 @@
     paintNeedsYou();
   }
 
-  function load(force, userInitiated) {
-    if (!force && Date.now() - index.at < 5000) return Promise.resolve(index);
+  function readQuestions(query, userInitiated) {
+    return fetch('/api/question-tags' + query, userInitiated ? {cccPriority:'user'} : undefined)
+      .then(function (r) { return r.json(); });
+  }
+
+  function load(n) {
     var generation = ++loadGeneration;
-    return fetch('/api/question-tags', userInitiated ? {cccPriority:'user'} : undefined).then(function (r) { return r.json(); }).then(function (d) {
+    var query = '?view=compact' + (n == null ? '' : '&detail=' + encodeURIComponent(n));
+    return readQuestions(query, n != null).then(function (d) {
       if (generation !== loadGeneration) return index;
       if (!d || !d.ok) return index;
       var before = index.list.length;
@@ -243,7 +248,6 @@
       if (index.list.length > before && typeof document !== 'undefined') chipify(document.body);
       index.scanning = !!d.scanning;
       index.refreshing = !!d.refreshing;
-      index.at = Date.now();
       paintChips();
       updateQueueControls();
       return index;
@@ -251,7 +255,7 @@
   }
 
   /* ---------------- UI ---------------- */
-  var sheet, activeQuestion, booted = false;
+  var sheet, activeQuestion, historyRequest, booted = false;
 
   function questionName(q) { return q.ticket ? q.tag + ' · ' + q.ticket.ref : q.tag; }
 
@@ -262,8 +266,8 @@
     try {
       if (tab) tab.click();
       else if (window.CCCNavigation && window.CCCNavigation.setTab) window.CCCNavigation.setTab('decisions2');
-      else return load(true).then(showPanel);
-    } catch (_) { return load(true).then(showPanel); }
+      else return openHistory();
+    } catch (_) { return openHistory(); }
   }
 
   // "- [Q9:gap-month] If a member skips..." -> "If a member skips...".
@@ -353,7 +357,7 @@
       if (ev.target === sheet || ev.target.closest('.qtag-close')) { sheet.hidden = true; return; }
       var jump = ev.target.closest('[data-qjump]');
       if (jump) { jumpTo(+jump.getAttribute('data-qjump')); return; }
-      if (ev.target.closest('[data-qlist]')) { showPanel(); return; }
+      if (ev.target.closest('[data-qlist]')) { openHistory(); return; }
       if (ev.target.closest('[data-qqueue]')) { openQueue(); return; }
       var ticket = ev.target.closest('[data-qticket]');
       if (ticket) { sheet.hidden = true; window.cccOpenTicket(ticket.getAttribute('data-qticket')); return; }
@@ -362,7 +366,7 @@
       var add = ev.target.closest('[data-qadd]');
       if (add) { addAnswer(+add.getAttribute('data-qadd')); return; }
       var open = ev.target.closest('[data-qshow]');
-      if (open) { activeQuestion = null; showQuestion(+open.getAttribute('data-qshow')); }
+      if (open) openQuestion(+open.getAttribute('data-qshow'));
     });
     document.body.appendChild(sheet);
     return sheet;
@@ -371,16 +375,17 @@
   // A tag from a message written seconds ago may not be indexed yet: the
   // server rescans in the background, so retry a few times before giving up.
   function lookup(n, attempt, context) {
-    load(true).then(function () {
-      if (context !== activeQuestion) return;
-      if (index.byN[n] || attempt >= 4 || !(index.scanning || index.refreshing)) { showQuestion(n); return; }
+    load(n).then(function () {
+      if (context !== activeQuestion || sheet.hidden) return;
+      var q = index.byN[n];
+      if (q && typeof q.first.text === 'string') { showQuestion(n, false, q); return; }
+      if (attempt >= 4 || (!q && !(index.scanning || index.refreshing))) { showQuestion(n); return; }
       showQuestion(n, true);
       setTimeout(function () { if (!sheet.hidden && context === activeQuestion && sheet.getAttribute('data-qwait') === String(n)) lookup(n, attempt + 1, context); }, 3000);
     });
   }
 
-  function showQuestion(n, waiting) {
-    var q = index.byN[n];
+  function showQuestion(n, waiting, q) {
     var s = ensureSheet();
     s.removeAttribute('data-qhistory');
     var body;
@@ -463,11 +468,10 @@
 
   // Not a to-do list: the record of tagged questions found in session
   // transcripts, split by how they relate to the owner queue.
-  function showPanel() {
-    activeQuestion = null;
+  function showPanel(history) {
     var s = ensureSheet();
     s.setAttribute('data-qhistory', '1');
-    var g = groups(index.list, queue.rows);
+    var g = groups(history && history.questions, queue.rows);
     var live = g.recent.concat(g.ticket).sort(byRecent), old = g.history.sort(byRecent);
     var count = queueCount();
     s.innerHTML = '<div class="qtag-card"><div class="qtag-head"><strong>Question history</strong>'
@@ -481,7 +485,7 @@
         + '<ul class="qtag-list">' + live.map(historyRow).join('') + '</ul>' : '')
       + (old.length ? '<details class="qtag-old"><summary>Older tagged questions (' + old.length + ') — history, not a to-do list</summary>'
         + '<ul class="qtag-list">' + old.map(historyRow).join('') + '</ul></details>' : '')
-      + (!live.length && !old.length ? '<p class="qtag-empty">' + (!index.at || index.scanning ? 'Loading question history…' : 'No unresolved tagged questions outside Decisions.') + '</p>' : '')
+      + (!live.length && !old.length ? '<p class="qtag-empty">' + (!history || history.scanning ? 'Loading question history…' : !history.ok ? 'Could not load question history.' : 'No unresolved tagged questions outside Decisions.') + '</p>' : '')
       + '</div>';
     s.hidden = false;
   }
@@ -582,8 +586,7 @@
       var row = chip.closest('.conv-item[data-session-id]');
       var sid = row ? row.getAttribute('data-session-id')
         : (typeof window.cccFrontSessionId === 'function' ? window.cccFrontSessionId() : '');
-      activeQuestion = {n: +chip.getAttribute('data-qn'), sid: sid};
-      lookup(activeQuestion.n, 0, activeQuestion);
+      openQuestion(+chip.getAttribute('data-qn'), sid);
     }, true); // capture: sidebar rows stop click propagation before it bubbles here
 
     var pending = new Set(), queued = false;
@@ -617,7 +620,7 @@
     });
     mo.observe(document.body, { childList: true, subtree: true, characterData: true });
     chipify(document.body);
-    load(true);
+    load();
     loadQueue();
     // Decisions reports its own count the moment it changes (an answer, a
     // close); keep menu controls current, then confirm against the source.
@@ -626,24 +629,34 @@
       if (Number.isInteger(c) && c >= 0) { queue.count = c; updateQueueControls(); loadQueue(); }
     });
     if (new URLSearchParams(window.location.search).get('question_history') === '1') openHistory();
-    setInterval(function () { if (!document.hidden) { load(true); loadQueue(); } }, POLL_MS);
+    setInterval(function () { if (!document.hidden) { load(); loadQueue(); } }, POLL_MS);
   }
 
   function openHistory() {
+    activeQuestion = null;
+    var history;
+    var request = {};
+    historyRequest = request;
     showPanel();
     var refresh = function () {
-      if (sheet && !sheet.hidden && sheet.hasAttribute('data-qhistory')) showPanel();
+      if (request === historyRequest && !sheet.hidden && sheet.hasAttribute('data-qhistory')) showPanel(history);
     };
-    return Promise.all([load(true, true).then(refresh), loadQueue(true).then(refresh)]);
+    var read = readQuestions('', true).then(function (data) {
+      history = data;
+    }).catch(function () {
+      history = {ok: false};
+    }).then(refresh);
+    return Promise.all([read, loadQueue(true).then(refresh)]);
   }
 
-  function open(n, sid) {
+  function openQuestion(n, sid) {
     activeQuestion = {n: n, sid: sid};
+    showQuestion(n, true);
     lookup(n, 0, activeQuestion);
   }
 
   return {
-    open: open, history: openHistory, queue: openQueue, answerTicket: answerTicket, boot: boot, splitTags: splitTags, openQuestions: openQuestions, chipify: chipify,
+    open: openQuestion, history: openHistory, queue: openQueue, answerTicket: answerTicket, boot: boot, splitTags: splitTags, openQuestions: openQuestions, chipify: chipify,
     classify: classify, groups: groups, queueKeys: queueKeys, plain: plain,
     // Test seams: the verified count and the queue it reads.
     _setQueue: function (count, rows) { queue.count = count; queue.rows = rows || []; },

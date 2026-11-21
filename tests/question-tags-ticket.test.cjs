@@ -13,7 +13,23 @@ async function load(browser, questions, html) {
   await page.setContent(html);
   await page.evaluate(list => {
     window.opened = []; window.focused = []; window.sent = [];
-    window.fetch = async () => ({json: async () => ({ok: true, questions: window.list})});
+    window.questionReads = [];
+    window.fetch = async (url) => {
+      const request = new URL(url, 'https://example.test');
+      if (request.pathname !== '/api/question-tags') return {json: async () => ({ok: true})};
+      questionReads.push(request.search);
+      const detail = Number(request.searchParams.get('detail'));
+      const questions = listFor(request.searchParams.get('view'), detail);
+      return {json: async () => ({ok: true, questions})};
+    };
+    function listFor(view, detail) {
+      if (view !== 'compact') return window.list;
+      return window.list.map(q => {
+        if (q.n === detail) return q;
+        const {first, mentions, ...summary} = q;
+        return {...summary, first: {sid: first.sid, ts: first.ts}};
+      });
+    }
     window.list = list;
     window.cccOpenTicket = ref => { opened.push(ref); return true; };
     window.cccFocusComposer = async sid => { focused.push(sid); return true; };
@@ -37,9 +53,11 @@ test('question preview and ticket navigation each take one tap on desktop and ph
       await page.setViewport({width,height:850});
       assert.equal(await page.$eval('.qtag-chip', c => c.textContent), 'Q9');
       assert.equal(await page.$eval('.qtag-ticket-chip', c => c.textContent), 'OPS-7');
+      assert.deepEqual(await page.evaluate(() => questionReads), ['?view=compact']);
       await page.click('.qtag-chip');
       await page.waitForSelector('.qtag-sheet:not([hidden]) .qtag-text');
       assert.match(await page.$eval('.qtag-text', c => c.textContent), /Options: repair only, or leave unchanged/);
+      assert.deepEqual(await page.evaluate(() => questionReads), ['?view=compact', '?view=compact&detail=9']);
       assert.deepEqual(await page.evaluate(() => opened), [], 'preview must not navigate away to a ticket');
       assert.equal(await page.$('[data-qsend]'), null, 'ticket answers retain the existing ticket flow');
       if (process.env.QUESTION_CHIP_SCREENSHOTS) await page.screenshot({path:process.env.QUESTION_CHIP_SCREENSHOTS+'/'+width+'.png'});

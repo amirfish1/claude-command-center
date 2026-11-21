@@ -382,6 +382,25 @@ class ConcurrencyAndMemoTest(unittest.TestCase):
         del qt._files["a"]
         self.assertEqual(qt.build_index()["questions"], [])
 
+    def test_compact_index_keeps_routing_and_only_requested_transcript_detail(self):
+        qt._files["a"] = {"ev": [
+            ev("assistant", "2026-01-01T00:00:01Z", "[Q7:publish] Full explanation", "ask"),
+            ev("assistant", "2026-01-01T00:00:02Z", "[Q7:publish] Reminder", "reminder"),
+            ev("assistant", "2026-01-01T00:00:03Z", "[Q8:later] Other explanation", "other"),
+        ]}
+        items = [ticket()]
+        full, _ = qt.response(items)
+        compact = qt.payload(items, compact=True, detail=7)
+        self.assertEqual(compact["questions"][0], full["questions"][0])
+        other = compact["questions"][1]
+        self.assertNotIn("text", other["first"])
+        self.assertNotIn("mentions", other)
+        summary = qt.payload(items, compact=True)["questions"][0]
+        self.assertEqual(summary["ticket"], full["questions"][0]["ticket"])
+        self.assertEqual(summary["first"], {"sid": "s1", "ts": "2026-01-01T00:00:01Z"})
+        self.assertNotIn("mentions", summary)
+        self.assertEqual(qt.response(items)[0], full)
+
     def test_response_reuses_encodings_until_ticket_or_scanner_changes(self):
         from unittest import mock
 
