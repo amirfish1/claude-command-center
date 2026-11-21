@@ -484,6 +484,16 @@ class _Batch:
     def resolve(self, sid):
         if sid in self.resolved:
             return self.resolved[sid]
+        origin, root, title, user_named = self.record(sid)
+        if not (origin or _origin(self.rows.get(sid, {})) or self.indexed_origin(sid)):
+            # A standalone session does not need cycle detection or an
+            # ancestry walk. It can still discover a title or become a root.
+            current_title = title or self.title(sid)
+            if root != sid or current_title != title:
+                self.put(sid, '', sid, current_title, user_named)
+            result = (sid, current_title)
+            self.resolved[sid] = result
+            return result
         chain, seen = [], set()
         current = sid
         for _ in range(MAX_HOPS):
