@@ -213,3 +213,18 @@ def test_live_resume_pid_finds_an_acp_process_by_its_log_name():
     with mock.patch.object(eng.subprocess, "run", return_value=done):
         assert eng._antigravity_live_resume_pid(SID) == 41
         assert eng._antigravity_live_resume_pid("44444444-4444-4444-4444-444444444444") is None
+
+
+def test_session_matcher_recognizes_acp_processes_by_log_name():
+    sg = importlib.import_module("ccc_server.session_graph")
+    other = "33333333-3333-3333-3333-333333333333"
+    cmd = f"/usr/bin/agy acp --log-file /x/acp-antigravity-{SID}-20261121T120000.log --dangerously-skip-permissions"
+    assert sg._antigravity_acp_session(cmd) == SID
+    assert sg._command_targets_engine_session(cmd, SID, "antigravity")
+    assert not sg._command_targets_engine_session(cmd, other, "antigravity")
+    # Another session's ACP process in the same repo is not this session's.
+    assert sg._command_targets_other_session(cmd, other, "antigravity")
+    assert not sg._command_targets_other_session(cmd, SID, "antigravity")
+    stream_cmd = f"/usr/bin/agy --conversation {SID} --print= --input-format stream-json"
+    assert sg._antigravity_acp_session(stream_cmd) is None
+    assert sg._command_targets_engine_session(stream_cmd, SID, "antigravity")

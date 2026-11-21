@@ -15,7 +15,7 @@ function between(start, end) {
   assert.ok(last > first, end);
   return source.slice(first, last);
 }
-const lifecycle = functions(['queuedSteerSource', 'sessionSupportsQueuedSteer', 'queuedSteerBlockedReason', 'takeQueuedSendAcknowledgement', 'syncPendingSendsMapForConv', 'bindPendingSendDeliveryId', 'readyQueuedSteerRows', 'appendPendingSendEcho', 'markPendingSendQueued', 'markPendingSendDelivered', 'removePendingSendEcho', 'restorePendingSendEchoes']);
+const lifecycle = functions(['queuedSteerSource', 'antigravityAcpLiveNow', 'sessionSupportsQueuedSteer', 'queuedSteerShowsDisabled', 'queuedSteerBlockedReason', 'takeQueuedSendAcknowledgement', 'syncPendingSendsMapForConv', 'bindPendingSendDeliveryId', 'readyQueuedSteerRows', 'appendPendingSendEcho', 'markPendingSendQueued', 'markPendingSendDelivered', 'removePendingSendEcho', 'restorePendingSendEchoes']);
 const reconciliation = between(
   '        const normed = state._normSend(ev.text);\n        let _reconciledExact',
   '        // Webui panes: collapse a durable user bubble');
@@ -933,3 +933,26 @@ for (const outcome of ['delivered', 'rejected', 'receipt']) {
     assert.deepEqual(result, { requests: 0, held: false, statuses: 0, tray: false });
   });
 }
+
+test('Antigravity queued cards steer only while agy acp serves the session', async () => {
+  const result = await fixture(() => {
+    window.liveStatusMatchesOpenConv = () => true;
+    fixturePane.currentSession = { id: 'session', source: 'antigravity' };
+    let n = 0;
+    const read = () => {
+      const pending = appendPendingSendEcho('Antigravity follow-up ' + (++n), 'session', 'main');
+      markPendingSendQueued(pending, 'Queued');
+      const btn = pending.element.querySelector('[data-steer-queued-message]');
+      return btn ? { disabled: btn.disabled, explainsAcp: /ACP/.test(btn.title) } : null;
+    };
+    window.liveStatus = { forSessionId: 'session', antigravityAcp: false };
+    const off = read();
+    window.liveStatus = { forSessionId: 'session', antigravityAcp: true };
+    const on = read();
+    return { off, on };
+  });
+  assert.deepEqual(result, {
+    off: { disabled: true, explainsAcp: true },
+    on: { disabled: false, explainsAcp: false },
+  });
+});

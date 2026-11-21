@@ -126,11 +126,12 @@
         && state.currentSession.source !== 'codex'
         && state.currentSession.source !== 'kimi'
         && !devinSteerCapableNow()
+        && !(state.currentSession.source === 'antigravity' && state.liveStatus.antigravityAcp === true)
         && !(state.liveStatus.live && state.liveStatus.headlessPresent && !state.liveStatus.tty)) {
       // Claude headless steers via the FIFO interrupt control request; Devin
       // CLI steers over its live `devin acp` connection; every other
       // non-Codex/Kimi surface still has no interrupt channel.
-      showOpToast('Steer needs a live headless, Codex, Kimi, or steer-ready Devin session.', 'error');
+      showOpToast('Steer needs a live headless, Codex, Kimi, steer-ready Devin, or ACP Antigravity session.', 'error');
       return;
     }
     const compactCommand = /^\/compact(?:\s|$)/i.test(text);

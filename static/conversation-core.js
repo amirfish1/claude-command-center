@@ -2974,6 +2974,8 @@
     }, previous ? 0 : 250);
   }
 
+  let _antigravityAcpShown = null;
+
   async function refreshLiveStatus() {
     sharedState._liveStatusPrev = sharedState.liveStatus;
     if (!sharedState.currentSession.id) {
@@ -3106,6 +3108,9 @@
         // the collection acp_steer_ready was resolved from (archiveData,
         // cross-repo, placeholder swaps), so this is the reliable path.
         devinAcpReady: data.devin_acp_ready === true,
+        // An `agy acp` process serves this Antigravity conversation, so a
+        // queued message can steer the running turn (stream-json can't).
+        antigravityAcp: data.antigravity_acp === true,
       };
       // Hysteresis for the Codex Thinking row / Working badge: one null
       // codex_state read mid-turn (server fail-quiet) would otherwise remove
@@ -3277,6 +3282,17 @@
     updateJumpButton();
     (0, sharedState.updateInputBar)();
     syncUserMessageSteerButtons((0, sharedState.getConvViewForPane)((0, sharedState.activePaneId)()) || sharedState.$conversationsView);
+    // Antigravity's queued-card Steer follows antigravityAcp; re-render the
+    // tray only when that flips.
+    if (sharedState.currentSession && sharedState.currentSession.source === 'antigravity') {
+      const agyAcp = antigravityAcpLiveNow();
+      if (agyAcp !== _antigravityAcpShown) {
+        _antigravityAcpShown = agyAcp;
+        const agyPane = (0, sharedState.activePaneId)();
+        const agyView = (0, sharedState.getConvViewForPane)(agyPane);
+        if (agyView) syncQueuedSteerTray(agyView, agyPane, false);
+      }
+    }
     updateLiveToolStrip();
     updateCodexStateBadge();
     updateConvProcessIndicator();
@@ -5821,7 +5837,7 @@
         ? '<button type="button" class="send-queued-steer" data-steer-queued-message'
           + ' data-session-id="' + (0, sharedState.escapeAttr)(pending.sid || '') + '"'
           + ' title="Steer the active turn with this queued message">Steer</button>'
-        : (queuedSource === 'devin-cli'
+        : (queuedSteerShowsDisabled(queuedSource)
           ? '<button type="button" class="send-queued-steer" data-steer-queued-message disabled'
             + ' data-session-id="' + (0, sharedState.escapeAttr)(pending.sid || '') + '"'
             + ' title="' + (0, sharedState.escapeAttr)(queuedSteerBlockedReason(queuedSource)) + '">Steer</button>'
@@ -10372,13 +10388,28 @@
     return engine === 'codex' ? 'codex' : (source || '');
   }
 
+  function antigravityAcpLiveNow() {
+    return !!(liveStatusMatchesOpenConv() && sharedState.liveStatus && sharedState.liveStatus.antigravityAcp === true);
+  }
+
   function sessionSupportsQueuedSteer(source, acpReady) {
     if (source === 'codex' || source === 'kimi' || source === 'grok') return true;
     if (source === 'devin-cli') return !!acpReady || devinSteerCapableNow();
+    if (source === 'antigravity') return antigravityAcpLiveNow();
     return false;
   }
 
+  // Engines whose queued cards show a disabled Steer (with this reason) when
+  // steering isn't possible right now, rather than no button at all.
+  function queuedSteerShowsDisabled(source) {
+    return source === 'devin-cli' || source === 'antigravity';
+  }
+
   function queuedSteerBlockedReason(source) {
+    if (source === 'antigravity') {
+      return 'Steer unavailable: this turn runs on the older Antigravity process, which only reads new messages after the turn ends. '
+        + 'Your next message after this turn switches the session to ACP, which can steer (sessions on Claude or GPT-OSS models stay on the older process).';
+    }
     if (source !== 'devin-cli') return '';
     if (liveStatusMatchesOpenConv() && sharedState.liveStatus && sharedState.liveStatus.devinExternalOwner) {
       return 'Steer unavailable: this Devin session is open in another client (e.g. Devin Desktop). It unlocks when that client lets go.';
@@ -17720,7 +17751,7 @@
           steer.textContent = 'Steer';
           el.appendChild(steer);
         }
-      } else if (queuedSource === 'devin-cli') {
+      } else if (queuedSteerShowsDisabled(queuedSource)) {
         if (!steer) {
           steer = document.createElement('button');
           steer.type = 'button';

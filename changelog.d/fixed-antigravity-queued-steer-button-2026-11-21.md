@@ -1,0 +1,1 @@
+- Antigravity queued messages now show a Steer button. It's enabled when the session runs on `agy acp` (so the button doubles as the "is this on ACP?" indicator), and otherwise shown disabled with a tooltip explaining that the next message switches the session to ACP. The composer's Steer button works for ACP Antigravity sessions too.

@@ -565,8 +565,13 @@
         const devinSteerable = (0, helpers.devinSteerCapableNow)();
         // Codex resolves the active turn on the server and falls back to Send
         // when idle. A stale status snapshot must not prevent that attempt.
+        // Antigravity steers only while an `agy acp` process serves the
+        // conversation (session-status antigravity_acp).
+        const antigravitySteerable = isAntigravity && !!(state.liveStatus
+          && state.liveStatus.antigravityAcp === true
+          && state.currentSession && state.liveStatus.forSessionId === state.currentSession.id);
         const canSteer = canSend && hasSession && !isNewSession && !isBacklogIssue
-          && (isCodex || isKimi || devinSteerable || claudeSteerable);
+          && (isCodex || isKimi || devinSteerable || claudeSteerable || antigravitySteerable);
         activeSteerBtn.classList.toggle('visible', canSteer);
         activeSteerBtn.disabled = !canSteer;
         activeSteerBtn.title = canSteer
@@ -576,7 +581,9 @@
                   ? 'Steer Codex now (send if no turn is running)'
                   : (isDevinCli
                       ? 'Steer this Devin session (attaches a live devin acp connection on first use)'
-                      : 'Interrupt the running tool and send this now')))
+                      : (isAntigravity
+                          ? 'Steer the running Antigravity turn (the agent reads it after its current step)'
+                          : 'Interrupt the running tool and send this now'))))
           : (isCodex
               ? 'No running Codex turn can be steered from CCC; use Send to resume or follow up'
               : (isKimi

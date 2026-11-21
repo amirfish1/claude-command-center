@@ -3742,6 +3742,21 @@ def _command_tokens(command):
         return tuple(command.split())
 
 
+_AGY_ACP_LOG_RE = re.compile(r"acp-antigravity-([0-9a-fA-F-]{36})-")
+
+
+def _antigravity_acp_session(command):
+    """Conversation id of a CCC-started `agy acp` process, else None.
+
+    `agy acp` has no --conversation flag; CCC names its --log-file after the
+    conversation (antigravity_stream.spawn_acp).
+    """
+    if not command or " acp " not in f" {command} ":
+        return None
+    match = _AGY_ACP_LOG_RE.search(command)
+    return match[1] if match else None
+
+
 def _command_targets_engine_session(command, session_id, engine):
     if not command or not session_id:
         return False
@@ -3775,6 +3790,8 @@ def _command_targets_engine_session(command, session_id, engine):
             for idx, tok in enumerate(tokens)
         )
     if engine == "antigravity":
+        if _antigravity_acp_session(command) == session_id:
+            return True
         return any(
             tok == session_id and (
                 "--conversation" in tokens[:idx] or
@@ -3804,6 +3821,9 @@ def _command_targets_other_session(command, session_id, engine):
         re.IGNORECASE,
     )
     if engine == "antigravity":
+        acp_sid = _antigravity_acp_session(command)
+        if acp_sid and acp_sid != session_id:
+            return True
         for idx, tok in enumerate(tokens):
             if tok != session_id and uuid_re.match(tok):
                 if (
@@ -4497,6 +4517,9 @@ def session_live_status(session_id, session_cwd):
         result["tty"] = match.get("tty")
         result["terminal_app"] = match.get("terminal_app")
         result["live"] = True
+        # The UI offers Steer only on a conversation an `agy acp` process
+        # serves; stream-json and `agy -p` processes can't take mid-turn input.
+        result["antigravity_acp"] = _antigravity_acp_session(match.get("command") or "") == session_id
         return result
 
     # Recency check on the .jsonl file (for the "is actively being used" signal)

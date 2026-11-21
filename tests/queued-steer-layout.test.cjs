@@ -30,6 +30,7 @@ async function fixture(width=1100,mode='status-pos-right') {
   window.markPendingSendQueued=(p,label,opts)=>{p.element.classList.remove('pending');p.element.classList.add('send-queued');p.entry.queued=true;};
   (0,eval)(helpers);
   window.sessionSupportsQueuedSteer=function(source){return source==='codex'||source==='kimi'||source==='grok';};
+  window.queuedSteerShowsDisabled=function(source){return source==='devin-cli'||source==='antigravity';};
   window.makeRow=(text,kind='server',time=Date.now())=>{
    const row=document.createElement('div');row.className='event user_text '+(kind==='server'?'pending server-queued':kind==='local'?'pending':'');
    row.dataset.tsEpoch=String(time);
