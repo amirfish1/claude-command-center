@@ -80,10 +80,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
           await page.screenshot({path:path.join(process.env.CCC_COLLAPSE_SCREENSHOTS, `scroll-${top}.png`)});
         }
       }
-      await settled();
-      assert.equal(await page.evaluate(()=>document.body.classList.contains('mobile-home-collapsed')),true);
-      assert.equal(await page.$eval('.new-session-panel',el=>getComputedStyle(el).display),'none');
-      // Reversing the gesture retraces the same positions without jumps.
+      // Reversing the gesture before it rests retraces the same positions.
       for (const top of [120,80,48,24,0]) {
         await scroll(top);
         await page.evaluate(() => new Promise(requestAnimationFrame));
@@ -93,6 +90,23 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
         assert.ok(frame.panel.bottom>=843, 'reveal fills the viewport');
       }
       await settled();
+      assert.equal(await page.evaluate(()=>document.body.classList.contains('mobile-home-collapsed')),false);
+      await scroll(180); await settled();
+      assert.equal(await page.evaluate(()=>document.body.classList.contains('mobile-home-collapsed')),true);
+      assert.equal(await page.$eval('.new-session-panel',el=>getComputedStyle(el).display),'none');
+      // A flick back up from a rested, folded list must not rebuild the folds
+      // mid-scroll (iOS ends momentum on that layout change); the header
+      // unfolds only once the list rests at the top.
+      const folded = await geometry();
+      for (const top of [120,48,0]) {
+        await scroll(top);
+        await page.evaluate(() => new Promise(requestAnimationFrame));
+        assert.equal(await page.$$eval('.mobile-home-folding, .mobile-home-list-moving',els=>els.length),0,'no fold rebuild mid-flick');
+        assert.ok(Math.abs((await geometry()).panel.top-folded.panel.top)<1,'list box holds still mid-flick');
+      }
+      await page.waitForFunction(()=>!document.body.classList.contains('mobile-home-collapsed'));
+      await settled();
+      assert.ok(Math.abs((await geometry()).panel.top-expanded.panel.top)<1,'header unfolds at rest at the top');
       traces.push({width,trace});
       await scroll(180); await settled();
       assert.equal(await page.$eval('.new-session-panel',el=>el.inert),true);
@@ -121,12 +135,13 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
       const nested=document.querySelector('[data-role="current-sessions-scroll"]');
       nested.scrollTop=0;nested.dispatchEvent(new Event('scroll'));
     });
+    await page.waitForFunction(()=>!document.body.classList.contains('mobile-home-collapsed'));
     await settled();
-    assert.equal(await page.evaluate(()=>document.body.classList.contains('mobile-home-collapsed')),false);
     await page.goto(url);
     await scroll(80);
     // Changing the preference mid-transition cleans up all temporary geometry.
     await page.emulateMediaFeatures([{name:'prefers-reduced-motion',value:'reduce'}]);
+    await page.waitForFunction(()=>!document.querySelector('.mobile-home-folding, .mobile-home-list-moving'),{timeout:2000});
     assert.equal(await page.$$eval('.mobile-home-folding, .mobile-home-list-moving',els=>els.length),0);
     await page.goto(url);await scroll(180);
     assert.equal(await page.$$eval('.mobile-home-folding',els=>els.length),0);

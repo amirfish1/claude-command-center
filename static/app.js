@@ -55579,6 +55579,13 @@
     if (next === progress) return;
     const previous = progress;
     progress = next;
+    if (!next && folds.length && performance.now() - lastScrollAt < 160 && !reducedMotion.matches) {
+      // At the top mid-flick: the folds already show the open header, so
+      // keep them until the scroll rests (settle() removes them).
+      for (const {animation} of folds) animation.currentTime = 0;
+      settleWhenIdle();
+      return;
+    }
     if (!next || reducedMotion.matches) {
       finishFolds();
       document.body.classList.toggle('mobile-home-collapsed', next > 0.5);
@@ -55635,8 +55642,38 @@
     }
     for (const el of bands()) el.inert = true;
     for (const {animation} of folds) animation.currentTime = next;
-    if (next === 1) finishFolds();
+    // Tearing the folds down changes the list's box and compositing layers.
+    // iOS ends a momentum scroll when that happens, so wait for rest.
+    if (next === 1) settleWhenIdle();
   };
+  // Endpoint cleanup and the unfold at the top run only once scrolling stops.
+  let lastScrollAt = 0;
+  let idleTimer = 0;
+  let unfoldFrame = 0;
+  let activeScroller = null;
+  const settle = () => {
+    idleTimer = 0;
+    const wait = 160 - (performance.now() - lastScrollAt);
+    if (wait > 0) { idleTimer = setTimeout(settle, wait); return; }
+    if (progress === 1 && folds.length) finishFolds();
+    else if (progress === 0 && folds.length) {
+      finishFolds();
+      document.body.classList.remove('mobile-home-collapsed');
+      for (const el of bands()) el.inert = false;
+    }
+    if (progress === 1 && !folds.length && activeScroller && activeScroller.scrollTop <= 4) unfold();
+  };
+  function settleWhenIdle() { if (!idleTimer) idleTimer = setTimeout(settle, 160); }
+  function unfold() {
+    if (reducedMotion.matches) { setProgress(0); return; }
+    const start = performance.now();
+    const step = now => {
+      const t = Math.min(1, (now - start) / 220);
+      setProgress(1 - (1 - Math.pow(1 - t, 3)));
+      unfoldFrame = t < 1 ? requestAnimationFrame(step) : 0;
+    };
+    unfoldFrame = requestAnimationFrame(step);
+  }
   for (const [kind, label, glyph] of [['search','Search sessions','⌕'], ['new','New session','+']]) {
     const button = document.createElement('button');
     button.type = 'button'; button.className = 'mobile-home-quick mobile-home-' + kind;
@@ -55652,6 +55689,13 @@
     const scroller = event.target;
     if (!scroller.matches('#convList, #simpleHome, #simpleHistory, .conv-archived-list, [data-role="current-sessions-scroll"], .fq-recent-rows')) return;
     if (document.activeElement?.matches('input,textarea,select')) return;
+    lastScrollAt = performance.now();
+    activeScroller = scroller;
+    if (unfoldFrame) { cancelAnimationFrame(unfoldFrame); unfoldFrame = 0; }
+    settleWhenIdle();
+    // Fully folded: don't rebuild the folds during a flick back up (that
+    // stopped the momentum). The header unfolds once the list rests at the top.
+    if (progress === 1 && !folds.length && !reducedMotion.matches) return;
     if (scroller.scrollTop <= 4) setProgress(0);
     else if (progress || scroller.scrollHeight > scroller.clientHeight + 180) {
       setProgress((scroller.scrollTop - 4) / 160);

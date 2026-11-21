@@ -1,0 +1,1 @@
+- Scrolling the session list on phones no longer stops abruptly: the header finishes folding or unfolding only once the scroll comes to rest, so momentum scrolling stays smooth in both directions.
