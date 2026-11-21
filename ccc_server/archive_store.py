@@ -596,12 +596,18 @@ class _SidebarHistoryReader:
                 # data_version is comparable only on this connection. It
                 # detects all intervening commits, even with the same header.
                 version = conn.execute('PRAGMA data_version').fetchone()[0]
-                guard = (version, key, schema_version, build_id, frozenset(current))
+                guard = (version, key, schema_version, build_id)
                 if self.memo is not None:
-                    _, previous, entry, layout = self.memo
-                    if previous == guard and float(entry.get('cached_at') or 0) >= min_cached_at:
-                        rows = [current.pop(slot) if isinstance(slot, str) else slot.copy()
-                                for slot in layout]
+                    _, previous, entry, layout, overridden = self.memo
+                    # A new override can replace a decoded row in its original
+                    # position or append below. If an old override disappeared,
+                    # its stored body may have been skipped on the first read.
+                    if (previous == guard and overridden <= current.keys()
+                            and float(entry.get('cached_at') or 0) >= min_cached_at):
+                        rows = []
+                        for rid, stored in layout:
+                            live = current.pop(rid, None)
+                            rows.append(stored.copy() if live is None else live)
                         rows.extend(current.values())
                         return dict(entry, conversations=rows)
                     self._clear()
@@ -616,7 +622,8 @@ class _SidebarHistoryReader:
                 entry, rows, layout = loaded
                 if layout is not None:
                     marker = object()
-                    self.memo = (marker, guard, entry, layout)
+                    overridden = {rid for rid, stored in layout if stored is None}
+                    self.memo = (marker, guard, entry, layout, overridden)
                     self.expiry = threading.Timer(_SIDEBAR_HISTORY_REUSE_S, self._expire, (marker,))
                     self.expiry.daemon = True
                     self.expiry.start()
@@ -656,7 +663,10 @@ def _load_override_entry(con, key, current, schema_version, build_id, min_cached
         bodies = [body for _, body in batch if body is not None]
         decoded = iter(_decode_full_batch(bodies))
         if layout is not None:
-            weight += 4 * sum(map(len, bodies)) + 128 * len(batch)
+            # Retain ordered identities as well as decoded rows, so new
+            # overrides can be merged without re-reading the whole variant.
+            weight += (4 * sum(map(len, bodies)) + 224 * len(batch)
+                       + 4 * sum(len(rid) for rid, _ in batch))
             if weight > _SIDEBAR_HISTORY_MAX_BYTES:
                 layout = None
         if layout is None:
@@ -666,13 +676,13 @@ def _load_override_entry(con, key, current, schema_version, build_id, min_cached
             if body is None:
                 rows.append(current.pop(rid))
                 if layout is not None:
-                    layout.append(rid)
+                    layout.append((rid, None))
             else:
                 row = next(decoded)
                 if not isinstance(row, dict):
                     layout = None
                 if layout is not None:
-                    layout.append(row)
+                    layout.append((rid, row))
                     # Lifecycle overlays edit top-level fields. Nested JSON
                     # is read-only here and copied by sidebar projection.
                     row = row.copy()

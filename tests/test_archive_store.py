@@ -110,6 +110,14 @@ def test_sidebar_history_reuses_cold_rows_with_fresh_overrides_and_detects_peer_
         assert read([latest]) == [rows[0], latest, *rows[2:]]
         assert decoded == [3]
 
+        # Both an extra session and an override of a previously decoded row
+        # reuse the same layout. Removing them restores the original order.
+        appended = {'session_id': 'appended'}
+        replaced = dict(rows[0], first_message='live replacement')
+        assert read([appended, latest, replaced]) == [replaced, latest, *rows[2:], appended]
+        assert read([latest]) == [rows[0], latest, *rows[2:]]
+        assert decoded == [3]
+
         # A peer can change a body without changing the variant header.
         updated = dict(rows[0], first_message='peer update')
         with sqlite3.connect(store.database_path(target)) as peer:
@@ -117,7 +125,8 @@ def test_sidebar_history_reuses_cold_rows_with_fresh_overrides_and_detects_peer_
         assert read([latest]) == [updated, latest, *rows[2:]]
         assert decoded == [3, 3]
 
-        appended = {'session_id': 'appended'}
+        # The originally skipped body still needs to be read if its live
+        # override disappears.
         assert read([appended, updated]) == [updated, *rows[1:], appended]
         assert decoded == [3, 3, 3]
         reader._expire(reader.memo[0])
