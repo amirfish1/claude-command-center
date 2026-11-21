@@ -80,6 +80,8 @@ def test_stalled_queue_response_releases_admission(monkeypatch):
     server = _load_server()
     rows = _rows()
     rows[0]["note"] = "a" * (1 << 20)
+    admission = server.ReadAdmission(1, 16)
+    monkeypatch.setattr(server, "_ACCEPT_PAUSED", admission)
     monkeypatch.setattr(server, "_ux_fixes_list_items_cached", lambda *_a, **_kw: rows)
     monkeypatch.setattr(server, "_ux_fixes_list_synced_at", lambda *_: 1)
     monkeypatch.setattr(server, "_bg_route_is_cheap", lambda _: False)
@@ -90,6 +92,11 @@ def test_stalled_queue_response_releases_admission(monkeypatch):
         def setup(self):
             self.request.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8192)
             super().setup()
+
+        def _do_GET(self):
+            if self.path == "/api/jobs":
+                return self.send_json({"ok": True})
+            return super()._do_GET()
 
     with server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler) as listener:
         thread = threading.Thread(target=listener.serve_forever, daemon=True)
@@ -104,15 +111,29 @@ def test_stalled_queue_response_releases_admission(monkeypatch):
                     incomplete.begin()
                     assert incomplete.status == 200
                     assert incomplete.length > 1 << 20
+                    # The writer still holds the queue route, while another
+                    # expensive background route can use the shared slot.
+                    with admission._lock:
+                        assert admission._routes["/api/queue/list"].available == 0
+                        assert admission._shared.available == 1
+                    with closing(http.client.HTTPConnection(*listener.server_address, timeout=3)) as jobs:
+                        jobs.request("GET", "/api/jobs")
+                        assert json.loads(jobs.getresponse().read()) == {"ok": True}
                     # Leave the first body unread while a second board polls.
                     with closing(http.client.HTTPConnection(*listener.server_address, timeout=3)) as reader:
                         reader.request("GET", "/api/queue/list", headers={"Accept-Encoding": "gzip"})
                         response = reader.getresponse()
                         assert response.status == 200
                         assert response.getheader("Content-Encoding") == "gzip"
-                        assert json.loads(gzip.decompress(response.read()))["items"] == rows
+                        payload = json.loads(gzip.decompress(response.read()))
+                        assert payload["items"] == rows
                     with pytest.raises(http.client.IncompleteRead):
                         incomplete.read()
+                    with closing(http.client.HTTPConnection(*listener.server_address, timeout=3)) as alias:
+                        alias.request("GET", "/api/ux-fixes/list?since=" + payload["version"])
+                        delta = json.loads(alias.getresponse().read())
+                        assert delta["unchanged"] is True
+                        assert delta["version"] == payload["version"]
         finally:
             listener.shutdown()
             thread.join(timeout=3)

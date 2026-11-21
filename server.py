@@ -32965,8 +32965,8 @@ def _car_mode_stop() -> dict:
 
 
 _QUEUE_LIST_ENCODED = {}
-# A queue response holds a background read slot. Bound the time a
-# non-reading client can keep it, while allowing slower clients to advance.
+_QUEUE_LIST_PATHS = frozenset({"/api/queue/list", "/api/ux-fixes/list"})
+# Bound the time a stalled transfer can occupy the queue's route slot.
 _QUEUE_LIST_WRITE_TIMEOUT = 30.0
 _QUEUE_LIST_WRITE_CHUNK = 64 << 10
 _BACKGROUND_API_READ_PATHS = frozenset({
@@ -33092,13 +33092,19 @@ def _save_bg_route_cpu(force=False):
     return True
 
 
-def _run_api_request(is_background, callback, route=None):
+def _run_api_request(is_background, callback, route=None, *, deferred_write=False):
     """Keep slow dashboard probes from crowding out foreground requests."""
+    def finish(result):
+        if deferred_write and result is not None:
+            return result()
+        return result
+
     if not is_background:
-        return callback()
+        return finish(callback())
     if route is None:
         with _ACCEPT_PAUSED.slot():
-            return callback()
+            result = callback()
+        return finish(result)
     with _ACCEPT_PAUSED.slot(route):
         cheap = _bg_route_is_cheap(route)
         c0 = None
@@ -33108,10 +33114,11 @@ def _run_api_request(is_background, callback, route=None):
             # poll as expensive, but must not queue it behind full queue scans.
             if route in ("/api/session-status", "/api/system/services") or cheap:
                 c0 = time.thread_time()
-                return callback()
-            with _ACCEPT_PAUSED.slot():
-                c0 = time.thread_time()
-                return callback()
+                result = callback()
+            else:
+                with _ACCEPT_PAUSED.slot():
+                    c0 = time.thread_time()
+                    result = callback()
         finally:
             if c0 is not None:
                 try:
@@ -33119,6 +33126,9 @@ def _run_api_request(is_background, callback, route=None):
                     _save_bg_route_cpu()
                 except Exception:
                     pass
+        # Keep the per-route gate during the transfer, but lend the shared
+        # slot to other background reads once the response is encoded.
+        return finish(result)
 
 
 def _spawn_stream_idle_sleep_s(consecutive_empty):
@@ -33242,6 +33252,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             return _run_api_request(
                 is_background, self._do_GET,
                 route=_normalize_bg_route(path) if is_background else None,
+                deferred_write=path in _QUEUE_LIST_PATHS,
             )
         except ReadDeferredForRestart:
             self._send_restart_retry()
@@ -33716,7 +33727,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     "ok": False,
                     "error": "could not generate queue diagnostics",
                 }, 500)
-        elif path == "/api/queue/list" or path == "/api/ux-fixes/list":
+        elif path in _QUEUE_LIST_PATHS:
             # /api/queue/list is the canonical name; /api/ux-fixes/list is the
             # legacy alias kept for compatibility (both serve the same memo).
             qs = urllib.parse.parse_qs(parsed.query)
@@ -33750,8 +33761,8 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     _delta = _queue_list_delta(_scope, _since, items, _ver, _keys, _digests)
                     if _delta is not None:
                         _delta.update({"ok": True, "synced_at": synced_at})
-                        self.send_json(_delta, write_timeout=_QUEUE_LIST_WRITE_TIMEOUT)
-                        return
+                        return self.send_json(_delta, write_timeout=_QUEUE_LIST_WRITE_TIMEOUT,
+                                              defer_write=True)
                 _ek = (status_filter, lane_filter, _slim, synced_at)
                 _ent = _QUEUE_LIST_ENCODED.get(_ek)
                 if _ent is None or _ent[0] is not _memo_items:
@@ -33761,10 +33772,10 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     # own list, so `is` means "no rebuild since".
                     _ent = (_memo_items, {})
                     _QUEUE_LIST_ENCODED[_ek] = _ent
-                self.send_json({
+                return self.send_json({
                     "ok": True, "items": items, "count": len(items),
                     "synced_at": synced_at, "version": _ver, "order": _keys,
-                }, encoded=_ent[1], write_timeout=_QUEUE_LIST_WRITE_TIMEOUT)
+                }, encoded=_ent[1], write_timeout=_QUEUE_LIST_WRITE_TIMEOUT, defer_write=True)
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/queue/roles":
@@ -48343,7 +48354,8 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         except Exception:
             pass
 
-    def send_json(self, data, status=200, etag=False, encoded=None, *, write_timeout=None):
+    def send_json(self, data, status=200, etag=False, encoded=None, *, write_timeout=None,
+                  defer_write=False):
         # Any 5xx is a real server-side error — feed the in-process health
         # counter the dashboard's bottom-left bar reads. Cheap, no disk scan.
         if status >= 500:
@@ -48393,8 +48405,13 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             body, enc = self._maybe_gzip(body, ct)
             if encoded is not None and not etag and status == 200:
                 encoded[_gz_ok] = (body, enc)
+        if defer_write:
+            return lambda: self._write_json_response(status, body, enc, etag_val, write_timeout)
+        self._write_json_response(status, body, enc, etag_val, write_timeout)
+
+    def _write_json_response(self, status, body, enc, etag_val, write_timeout):
         self.send_response(status)
-        self.send_header("Content-Type", ct)
+        self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self._send_server_timing()
         self._send_list_server_timing()
