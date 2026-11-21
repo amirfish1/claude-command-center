@@ -156,7 +156,9 @@ def test_packed_history_is_exact_after_live_lifecycle_changes(tmp_path, monkeypa
 
     try:
         raw = server._overlay_conversation_lifecycle_flags(load(None), copy_on_change=True)
-        packed = server._overlay_conversation_lifecycle_flags(load(version), copy_on_change=True)
+        original_packed = load(version)
+        unchanged = original_packed[2]
+        packed = server._overlay_conversation_lifecycle_flags(original_packed, copy_on_change=True)
         assert len(packed) == 2
         assert isinstance(packed[0], server._archive_sidebar_pages.StoredRow)
         assert packed[0]["all_lane_override"] == "other"
@@ -166,6 +168,13 @@ def test_packed_history_is_exact_after_live_lifecycle_changes(tmp_path, monkeypa
         assert json.dumps(compact) == json.dumps(normal)
         assert compact[0]["last_assistant_preview"] == "A reply"
         assert compact[0]["question_options"] == ["x", "y"]
+
+        cold["last_assistant_text"] = "New publication"
+        assert publish(now + 0.5) == 1
+        refreshed = load(version)
+        assert refreshed[0]["last_assistant_preview"] == "New publication"
+        assert refreshed[1] is hot
+        assert refreshed[2] is unchanged
 
         # A peer modifying a body directly invalidates the current generation,
         # including when the canonical digest and publication timestamp stay put.

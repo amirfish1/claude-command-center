@@ -608,11 +608,13 @@ class _SidebarHistoryReader:
         self.conn = None
         self.identity = None
         self.memo = None
+        self.pages = {}
         self.expiry = None
         self.expires_at = 0.0
 
     def _clear(self):
         self.memo = None
+        self.pages = {}
         if self.expiry is not None:
             self.expiry.cancel()
             self.expiry = None
@@ -672,6 +674,7 @@ class _SidebarHistoryReader:
                 # Writable shallow copies can retain pointers to nested
                 # values. Keep them separate from borrowed, read-only rows.
                 guard = (version, key, schema_version, build_id, copy_history, packed_version)
+                pages = {}
                 if self.memo is not None:
                     _, previous, entry, layout, overridden, _ = self.memo
                     if (previous == guard
@@ -691,12 +694,16 @@ class _SidebarHistoryReader:
                                 rows.append(live)
                             rows.extend(current.values())
                             return dict(entry, conversations=rows)
+                    if (packed_version is not None and previous[1:] == guard[1:]
+                            and time.monotonic() < self.expires_at):
+                        pages = self.pages
                     self._clear()
 
                 with conn:
                     loaded = _load_override_entry(
                         conn, key, current, schema_version, build_id, min_cached_at,
-                        capture_layout=True, copy_history=copy_history, packed_version=packed_version)
+                        capture_layout=True, copy_history=copy_history, packed_version=packed_version,
+                        page_cache=pages)
                 if loaded is None:
                     self._close()
                     return None
@@ -708,6 +715,7 @@ class _SidebarHistoryReader:
                             < SidebarHistoryProjection.max_bytes):
                         projection = SidebarHistoryProjection(layout)
                     self.memo = (None, guard, entry, layout, overridden, projection)
+                    self.pages = pages
                     self._arm_expiry()
                 else:
                     self._close()
@@ -805,7 +813,7 @@ def sidebar_preview_view(cache_file, key, *, schema_version, build_id):
 
 
 def _load_override_entry(con, key, current, schema_version, build_id, min_cached_at,
-                         *, capture_layout=False, copy_history=True, packed_version=None):
+                         *, capture_layout=False, copy_history=True, packed_version=None, page_cache=None):
     con.execute('BEGIN')
     header = con.execute('SELECT metadata FROM variants WHERE key=?', (key,)).fetchone()
     if not header:
@@ -816,14 +824,15 @@ def _load_override_entry(con, key, current, schema_version, build_id, min_cached
             and float(entry.get('cached_at') or 0) >= min_cached_at):
         return None
 
-    if packed_version is not None and capture_layout and not copy_history:
+    if packed_version is not None and page_cache is not None and capture_layout and not copy_history:
         from ccc_server import archive_sidebar_pages
 
         packed = archive_sidebar_pages.read(
             con, key, float(entry.get('cached_at') or 0), packed_version, current,
-            _SIDEBAR_HISTORY_MAX_BYTES)
+            _SIDEBAR_HISTORY_MAX_BYTES, page_cache)
         if packed is not None:
             return entry, *packed
+        page_cache.clear()
 
     # The body and identity are published together. A NULL here marks an
     # override, since stored bodies are non-null. Keep the database's

@@ -122,8 +122,19 @@ def publish(con, key, cached_at, version, hot_ids, project):
                 (key, cached_at, version))
 
 
-def read(con, key, cached_at, version, current, max_bytes):
-    """Load a current projection or let the caller use canonical bodies."""
+def _decode_page(payload):
+    decoder = zlib.decompressobj()
+    data = decoder.decompress(payload, _PAGE_MAX_BYTES + 1)
+    if not decoder.eof or len(data) > _PAGE_MAX_BYTES:
+        raise ValueError("invalid sidebar page size")
+    layouts, entries = json.loads(data)
+    rows = {rid: StoredRow(layouts[shape], fields, cwd)
+            for rid, shape, fields, cwd in entries}
+    return len(data) * 4 + len(entries) * 224 + len(payload), rows
+
+
+def read(con, key, cached_at, version, current, max_bytes, page_cache):
+    """Load a current projection, borrowing read-only rows from recent pages."""
     if not con.execute("SELECT 1 FROM sqlite_master WHERE name='sidebar_page_generation'").fetchone():
         return None
     if not con.execute("""
@@ -131,23 +142,24 @@ def read(con, key, cached_at, version, current, max_bytes):
     """, (key, cached_at, version)).fetchone():
         return None
 
-    decoded = {}
+    decoded, pages = {}, {}
     weight = 0
     try:
         for payload, in con.execute(
             "SELECT payload FROM sidebar_pages WHERE variant=? AND version=?", (key, version),
         ):
-            decoder = zlib.decompressobj()
-            data = decoder.decompress(payload, _PAGE_MAX_BYTES + 1)
-            if not decoder.eof or len(data) > _PAGE_MAX_BYTES:
-                return None
-            layouts, entries = json.loads(data)
-            weight += len(data) * 4 + len(entries) * 224
+            # A peer publication can invalidate the ordered layout while
+            # leaving most pages byte-identical. Validate the new generation
+            # and order in this transaction even when reusing decoded rows.
+            page = page_cache.get(payload)
+            if page is None:
+                page = _decode_page(payload)
+            size, page_rows = page
+            weight += size
             if weight > max_bytes:
                 return None
-            for rid, shape, fields, cwd in entries:
-                if rid not in current:
-                    decoded[rid] = StoredRow(layouts[shape], fields, cwd)
+            pages[payload] = page
+            decoded.update(page_rows)
     except (IndexError, TypeError, ValueError, zlib.error):
         return None
 
@@ -170,4 +182,6 @@ def read(con, key, cached_at, version, current, max_bytes):
         layout.append((rid, stored))
         rows.append(hot if hot is not None else stored)
     rows.extend(current.values())
+    page_cache.clear()
+    page_cache.update(pages)
     return rows, layout
