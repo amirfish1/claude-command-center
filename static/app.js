@@ -33919,6 +33919,7 @@
     const items = [..._uxqItemsCache.items];
     const refs = new Set(items.map(_uxqItemRef));
     for (const item of _workersFallbackTickets) if (!refs.has(item.ref)) { items.push(item); refs.add(item.ref); }
+    _workersOverlayLiveClaims(items);
     // Queue snapshots sync across machines; their recent work is not evidence
     // that any worker on this host participated. Filter before the ten-row cap.
     const localIds = _workersLocalWorkIdentities();
@@ -34045,6 +34046,21 @@
         || _uxqItemRef(a).localeCompare(_uxqItemRef(b), undefined, {numeric:true});
     });
   }
+  // The full ticket list can lag minutes behind on a loaded host, while the
+  // health poll is cheap and carries each live worker's claimed tickets. Trust
+  // a live claim over a list row still showing that ticket as open.
+  function _workersOverlayLiveClaims(items) {
+    const health = (typeof _uxqHealthCache === 'undefined' ? null : _uxqHealthCache) || {};
+    for (const w of health.wt_workers || []) {
+      if (!w || w.alive !== true || w.released_at) continue;
+      for (const claim of w.claimed_tickets || []) {
+        const i = items.findIndex(item => _uxqItemRef(item) === claim.ref);
+        if (i < 0 || items[i].status !== 'open' || items[i].closed_at) continue;
+        items[i] = {...items[i], status:'in_progress', claimed_by:w.worker_id,
+          claimed_session_id:w.session_id || items[i].claimed_session_id, claimed_at:claim.claimed_at || items[i].claimed_at};
+      }
+    }
+  }
   function _workersPendingWorkers(rows = _workersActivityRows(), includeRepresented = false) {
     const health = (typeof _uxqHealthCache === 'undefined' ? null : _uxqHealthCache) || {};
     const represented = new Set();
@@ -34075,6 +34091,10 @@
           .flatMap(id => [...(tickets.get(id) || [])]))];
         const assigned = refs.map(ref => items.get(ref)).filter(Boolean)
           .sort((a, b) => (Date.parse(b.claimed_at || '') || 0) - (Date.parse(a.claimed_at || '') || 0));
+        if (!refs.length) for (const claim of w.claimed_tickets || []) {
+          refs.push(claim.ref);
+          assigned.push(items.get(claim.ref) || {ref:claim.ref, title:claim.title, claimed_at:claim.claimed_at});
+        }
         return {...w, ticket_refs:refs, ticket_items:assigned};
       });
   }

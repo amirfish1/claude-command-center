@@ -1661,6 +1661,42 @@ def _github_sync_status():
     }
 
 
+def _attach_worker_claims(wt_workers, items):
+    """Give each live worker the in-progress tickets it has claimed.
+
+    The Workers view otherwise matches workers to tickets through the full
+    queue list, which can lag minutes behind on a loaded host and leaves a
+    working worker labelled "no listed ticket". This payload is cheap and
+    polled often, so carrying the claim here keeps that row correct.
+    """
+    by_id = {}
+    for w in wt_workers:
+        if not isinstance(w, dict):
+            continue
+        for key in (w.get("worker_id"), w.get("session_id")):
+            key = str(key or "").strip()
+            if key:
+                by_id.setdefault(key, w)
+    if not by_id:
+        return
+    for it in items or []:
+        if not isinstance(it, dict) or it.get("status") != "in_progress" or it.get("closed_at"):
+            continue
+        ref = str(it.get("ref") or it.get("id") or "").split(":")[0]
+        if not ref:
+            continue
+        for key in (it.get("claimed_by"), it.get("claimed_session_id")):
+            w = by_id.get(str(key or "").strip())
+            if w is None:
+                continue
+            claims = w.setdefault("claimed_tickets", [])
+            if not any(c["ref"] == ref for c in claims):
+                title = str(it.get("title") or "").split("\n")[0][:200]
+                claims.append({"ref": ref, "title": title,
+                               "claimed_at": it.get("claimed_at") or ""})
+            break
+
+
 def _build_ux_fixes_health_payload_uncached():
     # One queue read for both builders — list_items() also merges GitHub-backed
     # queues via `gh issue list` subprocesses on cold cache, so calling it twice
@@ -1692,6 +1728,7 @@ def _build_ux_fixes_health_payload_uncached():
         w for w in wt_workers
         if not (isinstance(w, dict) and w.get("released_at"))
     ]
+    _attach_worker_claims(wt_workers, items)
     # Per-queue rollup (durable) for the dashboard's Evergreen section.
     try:
         queues = _core.compute_queues_health(health, wt_workers, items=items)

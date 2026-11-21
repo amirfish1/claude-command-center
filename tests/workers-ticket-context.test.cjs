@@ -113,6 +113,23 @@ test('unlisted worker rows exclude dead, released, and already represented proce
 });
 
 
+test('a live claim names the worker row and overrides a stale open ticket row', () => {
+  const worker = {worker_id:'worker-1',session_id:'session-1',queue:'TEST',alive:true,
+    claimed_tickets:[{ref:'TEST-7',title:'Fix the thing',claimed_at:'2026-01-01T10:00:00Z'}]};
+  const ctx = setup({_uxqHealthCache:{wt_workers:[worker]}});
+  const listed = ctx._workersPendingWorkers([], true);
+  assert.deepEqual(Array.from(listed[0].ticket_refs), ['TEST-7'], 'claim shown before the list catches up');
+  assert.equal(listed[0].ticket_items[0].title, 'Fix the thing');
+  const items = [{ref:'TEST-7',status:'open'}, {ref:'TEST-8',status:'closed',closed_at:'x'}];
+  ctx._workersOverlayLiveClaims(items);
+  assert.equal(items[0].status, 'in_progress');
+  assert.equal(items[0].claimed_by, 'worker-1');
+  assert.equal(ctx._workersPendingWorkers([{item:items[0]}]).length, 0, 'worker merges into its ticket row');
+  ctx._uxqHealthCache.wt_workers = [{...worker, claimed_tickets:[{ref:'TEST-8'}]}];
+  ctx._workersOverlayLiveClaims(items);
+  assert.equal(items[1].status, 'closed', 'a newer close in the list is never reopened');
+});
+
 test('approval questions get scoped binary answers; ambiguous and offline questions do not', () => {
   const ctx = setup();
   const item = {...block, block_question:'[Q42:scope] Approve the queued 48-request focused validation?'};

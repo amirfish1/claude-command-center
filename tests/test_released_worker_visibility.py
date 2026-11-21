@@ -166,3 +166,23 @@ def test_app_js_wires_the_released_toggle_to_the_opt_in_endpoint():
     assert "cccWtReleasedToggle" in app_js
     assert "/api/wt/workers?include_released=1" in app_js
     assert "svc.released_workers_count" in app_js or "released_workers_count" in app_js
+
+
+def test_health_payload_attaches_each_live_workers_claimed_tickets(
+    server, queue_events, monkeypatch
+):
+    monkeypatch.setattr(server, "_wt_read_workers", _workers)
+    monkeypatch.setattr(server._q, "list_items", lambda **kw: [
+        {"ref": "CCC-1", "status": "in_progress", "claimed_by": "ccc-active",
+         "title": "Do work\nmore", "claimed_at": "2026-01-01T00:00:00Z"},
+        {"ref": "CCC-2", "status": "in_progress", "claimed_session_id": "s-active",
+         "title": "By session"},
+        {"ref": "CCC-3", "status": "open", "claimed_by": "ccc-active"},
+        {"ref": "CCC-4", "status": "in_progress", "claimed_by": "ccc-released"},
+    ])
+
+    payload = queue_events._build_ux_fixes_health_payload_uncached()
+
+    (worker,) = payload["wt_workers"]
+    assert [c["ref"] for c in worker["claimed_tickets"]] == ["CCC-1", "CCC-2"]
+    assert worker["claimed_tickets"][0]["title"] == "Do work"
