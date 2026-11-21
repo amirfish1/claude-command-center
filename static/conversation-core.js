@@ -12483,10 +12483,13 @@
     _attachSpeakerTools(speakBtn, audioHost);
     const header = host.querySelector('[data-role="pane-header"]');
     if (audioDock && header) {
-      // Reuse the same controls and handlers as the header appears/disappears
-      // across phone, split-pane and popout layouts.
+      // Keep room for the session title, badges and actions before docking
+      // the 164px playback group inline. The pane can shrink independently
+      // of the viewport when a sidebar, status rail or split is open.
       const placeAudio = () => {
-        const inHeader = getComputedStyle(header).display !== 'none';
+        const headerWidth = header.clientWidth;
+        const inHeader = headerWidth >= 560;
+        audioDock.classList.toggle('is-compact', headerWidth > 0);
         const target = inHeader ? header : toolbar;
         if (audioDock.parentElement !== target) {
           if (inHeader) header.querySelector('[data-role="pane-titlebar"]')?.after(audioDock);

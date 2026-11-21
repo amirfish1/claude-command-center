@@ -54,6 +54,7 @@ const fixture = `
     toolbar.classList.add('is-reader-only');
     toolbar.hidden = !show;
     const dock = toolbar.querySelector('.conv-reader-audio');
+    if (dock) dock.hidden = !show;
     return { height: Math.round(toolbar.getBoundingClientRect().height), dockLeft: dock ? Math.round(dock.getBoundingClientRect().left) : null };
   };
 `;

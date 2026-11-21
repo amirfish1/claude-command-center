@@ -3635,6 +3635,7 @@
     white-space: normal;
     text-overflow: clip;
   }
+  .conv-pane-title.is-expanded { overflow-wrap: anywhere; }
   /* JSONL transcript size badge next to the pane title. Helps the user
      correlate slow first-paint with conversation size. */
   .conv-pane-size {
@@ -36192,12 +36193,12 @@ body.ccc-app-embed.conversation-popout .main > .toolbar {
 }
 .conv-reader-audio > .conv-scroll-speak-btn:disabled { opacity: 0.4; cursor: default; }
 
-/* Share session identity and read-aloud controls on one header row. */
+/* Share one row when there is room. Keep the dock compact near a visible header. */
 .conv-presentation-toolbar.is-reader-only.has-header-audio:not(:has(> .conv-frozen-ask:not([hidden]))) { display: none; }
 .conv-reader-audio[hidden] { display: none; }
-.conv-pane-header > .conv-reader-audio { flex-basis: 164px; height: 44px; }
-.conv-pane-header > .conv-reader-audio > .conv-scroll-speak-btn { left: 6px; top: 6px; width: 32px; height: 32px; }
-.conv-pane-header > .conv-reader-audio > .speaker-tools,
-.conv-pane-header > .conv-reader-audio .speaker-rate-dial { width: 44px; height: 44px; }
-.conv-pane-header > .conv-reader-audio .speaker-dock { top: 0; left: 44px; }
-.conv-pane-header > .conv-reader-audio .speaker-voice-name { left: 44px; max-width: 120px; }
+.conv-reader-audio.is-compact { flex-basis: 164px; height: 44px; }
+.conv-reader-audio.is-compact > .conv-scroll-speak-btn { left: 6px; top: 6px; width: 32px; height: 32px; }
+.conv-reader-audio.is-compact > .speaker-tools,
+.conv-reader-audio.is-compact .speaker-rate-dial { width: 44px; height: 44px; }
+.conv-reader-audio.is-compact .speaker-dock { top: 0; left: 44px; }
+.conv-reader-audio.is-compact .speaker-voice-name { left: 44px; max-width: 120px; }

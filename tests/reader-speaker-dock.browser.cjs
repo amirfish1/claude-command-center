@@ -15,13 +15,13 @@ after(async () => { await browser?.close(); });
 for (const width of [1440, 390]) test(`speaker stays outside transcript at ${width}px with independent pane controls`, async () => {
   const page = await browser.newPage();
   try {
-    await page.setViewport({width, height:850});
+    await page.setViewport({width, height:850, deviceScaleFactor:2});
     await page.setRequestInterception(true);
     page.on('request', req => req.respond({status:200, contentType:'text/html', body:`<style>${css}
       body{margin:0;--surface:#161b22;--bg:#0d1117;--border:#43545a;--text:#c9d1d9}
       main{display:flex;height:800px}.conv-pane{flex:1;min-width:0;display:flex;flex-direction:column}
       .conversations-view{flex:1;min-height:0;overflow:auto}
-      </style><main>${['p1','p2'].slice(0,width<700?1:2).map(id=>`<section class="conv-pane has-last-user-message" data-pane-id="${id}">${header}${toolbar}<div class="conversations-view"><p>Message text remains unobstructed.</p><button data-read-assistant-message>Read answer</button></div></section>`).join('')}</main>`}));
+      </style><main class="conv-split" id="convSplit" data-orientation="${width>700?'vertical':''}">${['p1','p2'].slice(0,width<700?1:2).map(id=>`<section class="conv-pane has-last-user-message" data-pane-id="${id}">${header}${toolbar}<div class="conversations-view"><p>Message text remains unobstructed.</p><button data-read-assistant-message>Read answer</button></div></section>`).join('')}</main>`}));
     await page.goto('http://fixture.test/');
     await page.addScriptTag({content:`
       const sharedState = {_TTS_RATE_MIN:0.5,_TTS_RATE_MAX:2,_ttsRate:1.25,activePaneId:()=> 'p1'};
@@ -55,10 +55,48 @@ for (const width of [1440, 390]) test(`speaker stays outside transcript at ${wid
     }));
     for (const state of states) assert.deepEqual(state,{outside:true,within:true,centered:true,hit:true,featureHidden:true,dragBound:false,inHeader:width>1200,toolbarHidden:width>1200});
     if (width>1200) {
-      await page.setViewport({width:1000,height:850});
-      await page.waitForFunction(()=>!document.querySelector('.conv-pane-header .conv-reader-audio'));
-      await page.setViewport({width,height:850});
-      await page.waitForSelector('.conv-pane-header .conv-reader-audio');
+      // Shrink one desktop split pane without crossing the phone viewport breakpoint.
+      const pane = '[data-pane-id="p1"]';
+      const title = pane + ' [data-role="pane-title"]';
+      await page.$eval(pane, el => {
+        const titleEl = el.querySelector('[data-role="pane-title"]');
+        titleEl.textContent = 'check-the-background-worker-status Investigate the current worker and report the result';
+        titleEl.classList.add('is-expanded');
+        el.querySelector('.conv-scroll-speak-btn').classList.add('speaking');
+        const ticket = el.querySelector('[data-role="pane-ticket"]');
+        ticket.textContent = 'OPS-1234';
+        ticket.hidden = false;
+        el.querySelector('[data-role="pane-category"]').innerHTML = '<span class="conv-pane-cat-icon">W</span>';
+        el.querySelector('[data-role="pane-close"]').style.display = '';
+        const sessionId = el.querySelector('[data-role="pane-session-id"]');
+        sessionId.textContent = '(1234abcd)';
+        sessionId.hidden = false;
+        el.style.flex = '0 0 435px';
+      });
+      await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+      if (process.env.SPEAKER_DOCK_SCREENSHOTS) await page.$(pane).then(el => el.screenshot({path:process.env.SPEAKER_DOCK_SCREENSHOTS+'/narrow-split.png'}));
+      const narrow = await page.$eval(title, el => {
+        const dock = el.closest('.conv-pane').querySelector('.conv-reader-audio');
+        const header = el.closest('.conv-pane-header');
+        const view = el.closest('.conv-pane').querySelector('.conversations-view');
+        const next = dock.querySelector('.speaker-next-sentence');
+        const hit = next.getBoundingClientRect();
+        return {
+          dockUnderHeader: dock.getBoundingClientRect().top >= header.getBoundingClientRect().bottom,
+          dockAboveTranscript: dock.getBoundingClientRect().bottom <= view.getBoundingClientRect().top,
+          nextButtonClickable: !next.disabled && document.elementFromPoint(hit.x + hit.width/2, hit.y + hit.height/2) === next,
+          titleWidth: el.clientWidth,
+          titleOverflows: el.scrollWidth > el.clientWidth,
+          titleLines: Math.round(el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight)),
+        };
+      });
+      assert.ok(narrow.dockUnderHeader && narrow.dockAboveTranscript, 'the dock gets its own row above the transcript');
+      assert.ok(narrow.nextButtonClickable, 'the dock controls remain reachable');
+      assert.ok(narrow.titleWidth >= 160 && !narrow.titleOverflows && narrow.titleLines <= 5, JSON.stringify(narrow));
+      await page.click(pane + ' .speaker-next-sentence');
+      assert.equal(await page.evaluate(()=>window.nextSentence), true);
+      await page.$eval(pane, el => { el.style.flex = ''; });
+      await page.waitForSelector(pane + ' .conv-pane-header .conv-reader-audio');
     }
     await page.click('.conv-reader-audio .conv-scroll-speak-btn');
     assert.equal(await page.evaluate(()=>window.readPane),'p1');
