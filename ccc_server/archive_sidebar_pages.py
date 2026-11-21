@@ -154,7 +154,7 @@ def _ordered_identities(con, key):
     return [rid for rid, in con.execute(sql, (key,))]
 
 
-def read(con, key, cached_at, version, current, max_bytes, page_cache):
+def read(con, key, cached_at, version, current, max_bytes, page_cache, *, check_client=None):
     """Load a current projection, borrowing read-only rows from recent pages."""
     if not con.execute("SELECT 1 FROM sqlite_master WHERE name='sidebar_page_generation'").fetchone():
         return None
@@ -169,6 +169,8 @@ def read(con, key, cached_at, version, current, max_bytes, page_cache):
         for payload, in con.execute(
             "SELECT payload FROM sidebar_pages WHERE variant=? AND version=?", (key, version),
         ):
+            if check_client is not None:
+                check_client()
             # A peer publication can invalidate the ordered layout while
             # leaving most pages byte-identical. Validate the new generation
             # and order in this transaction even when reusing decoded rows.

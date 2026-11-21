@@ -39,13 +39,18 @@ def test_overlap_cleanup_and_next_poll_freshness(monkeypatch, flights, fail_owne
         if len(calls) == 1:
             entered.set()
             assert release.wait(5)
+            kwargs['check_client']()
             if fail_owner:
                 raise ValueError('source unavailable')
         return [{'session_id': str(len(calls))}], True, len(calls)
 
     monkeypatch.setattr(server, '_archive_list_source_rows_read', read)
     with ThreadPoolExecutor(max_workers=2) as pool:
-        owner = pool.submit(server._archive_list_source_rows_cached, {})
+        def disconnected():
+            raise server._ArchiveListClientDisconnected()
+
+        owner = pool.submit(server._archive_list_source_rows_cached, {},
+                            check_client=disconnected)
         assert entered.wait(5)
         observed = ObservedEvent()
         # Replace only the blocked owner's event, before the follower joins.

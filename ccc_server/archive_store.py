@@ -665,8 +665,10 @@ class _SidebarHistoryReader:
             self._arm_expiry()
 
     def read(self, cache_file, key, current, schema_version, build_id, min_cached_at,
-             *, copy_history=True, packed_version=None):
+             *, copy_history=True, packed_version=None, check_client=None):
         with self.lock:
+            if check_client is not None:
+                check_client()
             target = database_path(cache_file).resolve()
             try:
                 stat = target.stat()
@@ -715,7 +717,7 @@ class _SidebarHistoryReader:
                     loaded = _load_override_entry(
                         conn, key, current, schema_version, build_id, min_cached_at,
                         capture_layout=True, copy_history=copy_history, packed_version=packed_version,
-                        page_cache=pages)
+                        page_cache=pages, check_client=check_client)
                 if loaded is None:
                     self._close()
                     return None
@@ -732,7 +734,9 @@ class _SidebarHistoryReader:
                 else:
                     self._close()
                 return dict(entry, conversations=rows)
-            except (ValueError, sqlite3.Error):
+            except Exception:
+                # A stopped or failed read must release its connection and
+                # any memo after the transaction rolls back.
                 self._close()
                 raise
 
@@ -825,7 +829,8 @@ def sidebar_preview_view(cache_file, key, *, schema_version, build_id):
 
 
 def _load_override_entry(con, key, current, schema_version, build_id, min_cached_at,
-                         *, capture_layout=False, copy_history=True, packed_version=None, page_cache=None):
+                         *, capture_layout=False, copy_history=True, packed_version=None,
+                         page_cache=None, check_client=None):
     con.execute('BEGIN')
     header = con.execute('SELECT metadata FROM variants WHERE key=?', (key,)).fetchone()
     if not header:
@@ -841,7 +846,7 @@ def _load_override_entry(con, key, current, schema_version, build_id, min_cached
 
         packed = archive_sidebar_pages.read(
             con, key, float(entry.get('cached_at') or 0), packed_version, current,
-            _SIDEBAR_HISTORY_MAX_BYTES, page_cache)
+            _SIDEBAR_HISTORY_MAX_BYTES, page_cache, check_client=check_client)
         if packed is not None:
             return entry, *packed
         page_cache.clear()
@@ -856,6 +861,8 @@ def _load_override_entry(con, key, current, schema_version, build_id, min_cached
     layout = [] if capture_layout else None
     weight = 0
     while batch := records.fetchmany(192):
+        if check_client is not None:
+            check_client()
         bodies = [body for _, body in batch if body is not None]
         decoded = iter(_decode_full_batch(bodies))
         if layout is not None:
@@ -887,7 +894,8 @@ def _load_override_entry(con, key, current, schema_version, build_id, min_cached
 
 
 def load_with_overrides(cache_file, key, current_rows, *, schema_version, build_id, min_cached_at,
-                        reuse_sidebar_history=False, copy_history=True, packed_version=None):
+                        reuse_sidebar_history=False, copy_history=True, packed_version=None,
+                        check_client=None):
     """Merge current rows at their stored positions without decoding superseded bodies.
 
     Older schemas and identities derived from a row's position still use the
@@ -906,10 +914,11 @@ def load_with_overrides(cache_file, key, current_rows, *, schema_version, build_
     if reuse_sidebar_history:
         return _SIDEBAR_HISTORY_READER.read(
             cache_file, key, current, schema_version, build_id, min_cached_at,
-            copy_history=copy_history, packed_version=packed_version)
+            copy_history=copy_history, packed_version=packed_version, check_client=check_client)
     con = _connect(cache_file)
     try:
-        loaded = _load_override_entry(con, key, current, schema_version, build_id, min_cached_at)
+        loaded = _load_override_entry(
+            con, key, current, schema_version, build_id, min_cached_at, check_client=check_client)
         return dict(loaded[0], conversations=loaded[1]) if loaded is not None else None
     finally:
         con.close()

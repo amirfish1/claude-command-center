@@ -17311,7 +17311,8 @@ def _archive_response_cache_put(key, conversations, signature=None):
             current["conversations"] = archive_store.hot_rows(rows)
 
 
-def _archive_response_cache_build_get(key, *, overlay_rows=None, reuse_sidebar_history=False, packed_version=None):
+def _archive_response_cache_build_get(key, *, overlay_rows=None, reuse_sidebar_history=False,
+                                      packed_version=None, check_client=None):
     """Materialize cold bodies, preserving live replacements for a history read."""
     entry = _archive_response_cache_get(key)
     from ccc_server import archive_store, archive_snapshot
@@ -17326,6 +17327,7 @@ def _archive_response_cache_build_get(key, *, overlay_rows=None, reuse_sidebar_h
                 reuse_sidebar_history=reuse_sidebar_history,
                 copy_history=not reuse_sidebar_history,
                 packed_version=packed_version,
+                check_client=check_client,
             )
             if merged is not None:
                 return merged
@@ -17333,6 +17335,8 @@ def _archive_response_cache_build_get(key, *, overlay_rows=None, reuse_sidebar_h
             # Older SQLite builds can lack JSON1. The ordinary read does not
             # need it and also retains the legacy/corrupt-store fallback.
             pass
+    if check_client is not None:
+        check_client()
     try:
         data = archive_store.load(_ARCHIVE_RESPONSE_CACHE_FILE, key=key)
         if data:
@@ -19287,7 +19291,7 @@ def _archive_list_history_projection(scope, rows, build, phases, check_client=No
 
 
 def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phases=None, window="all",
-                                     packed_version=None):
+                                     packed_version=None, check_client=None):
     """Share a snapshot only with reads already running for the same scope.
 
     Initial and full sidebar requests may overlap. Neither needs a duplicate
@@ -19297,6 +19301,8 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phas
     options = {"force_refresh": force_refresh, "phases": phases, "window": window}
     if packed_version is not None:
         options["packed_version"] = packed_version
+    if check_client is not None:
+        options["check_client"] = check_client
     if force_refresh:
         return _archive_list_source_rows_read(cache_options, **options)
     key = (_archive_response_cache_key(**cache_options), window, packed_version)
@@ -19304,11 +19310,15 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phas
         flight = _ARCHIVE_LIST_SOURCE_FLIGHTS.get(key)
         owner = flight is None
         if owner:
-            flight = {"event": threading.Event(), "value": None}
+            flight = {"event": threading.Event(), "shared": threading.Event(), "value": None}
             _ARCHIVE_LIST_SOURCE_FLIGHTS[key] = flight
+        else:
+            flight["shared"].set()
     if not owner:
         started = time.perf_counter()
         flight["event"].wait()
+        if check_client is not None:
+            check_client()
         if flight["value"] is not None:
             if phases is not None:
                 phases.update(coalesced=True, wait_ms=round(
@@ -19316,6 +19326,13 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phas
             return flight["value"]
         # A failed owner must not strand followers or cache its exception.
         return _archive_list_source_rows_read(cache_options, **options)
+
+    if check_client is not None:
+        def check_owner():
+            if not flight["shared"].is_set():
+                check_client()
+
+        options["check_client"] = check_owner
     try:
         flight["value"] = _archive_list_source_rows_read(cache_options, **options)
         return flight["value"]
@@ -19326,7 +19343,7 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phas
 
 
 def _archive_list_source_rows_read(cache_options, *, force_refresh=False, phases=None, window="all",
-                                   packed_version=None):
+                                   packed_version=None, check_client=None):
     """Read-only full snapshot feeding the projected sidebar list.
 
     The list response immediately projects a small 1d/7d window into fresh
@@ -19352,6 +19369,8 @@ def _archive_list_source_rows_read(cache_options, *, force_refresh=False, phases
         packed_options["packed_version"] = packed_version
         if phases is not None:
             packed_options["history_phases"] = phases.setdefault("history", {})
+    if check_client is not None:
+        packed_options["check_client"] = check_client
     rows, from_cache, _snap_ver = _archive_serve_rows_versioned(
         key,
         cache_options,
@@ -19362,6 +19381,8 @@ def _archive_list_source_rows_read(cache_options, *, force_refresh=False, phases
         reuse_sidebar_history=window == "all" and not force_refresh and not any(cache_options.values()),
         **packed_options,
     )
+    if check_client is not None:
+        check_client()
     _phase("serve_ms")
     rows, extra = _archive_list_source_overlays(rows, _archive_overlay_existing_ids(rows), _phase)
     body_ver = _archive_list_body_ver(key, rows, extra)
@@ -21068,7 +21089,7 @@ def _archive_history_timing(phases, name):
 
 def _archive_serve_rows_versioned(key, cache_options, *, copy_rows=True, force_refresh=False,
                                   window="all", defer_cold=False, reuse_sidebar_history=False,
-                                  packed_version=None, history_phases=None):
+                                  packed_version=None, history_phases=None, check_client=None):
     with _archive_history_timing(history_phases, "hot"):
         rows, cached, version = _archive_serve_hot_rows_versioned(
             key, cache_options, copy_rows=copy_rows, force_refresh=force_refresh, defer_cold=defer_cold)
@@ -21088,7 +21109,10 @@ def _archive_serve_rows_versioned(key, cache_options, *, copy_rows=True, force_r
             with _archive_history_timing(history_phases, "merge"):
                 entry = _archive_response_cache_build_get(
                     key, overlay_rows=rows, reuse_sidebar_history=borrow_history,
-                    **({"packed_version": packed_version} if packed_version is not None else {}))
+                    **({"packed_version": packed_version} if packed_version is not None else {}),
+                    **({"check_client": check_client} if check_client is not None else {}))
+            if check_client is not None:
+                check_client()
             if entry:
                 # Full-history bodies can still replay against the hot snapshot
                 # version. A new disk publication invalidates its cached body.
@@ -37369,13 +37393,25 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     _ARCHIVE_RESPONSE_CACHE_FILE, list_cache_key, _ARCHIVE_SIDEBAR_PACKED_VERSION,
                 ):
                     packed_version = _ARCHIVE_SIDEBAR_PACKED_VERSION
-            rows, from_cache, body_ver = _archive_list_source_rows_cached(
-                cache_options,
-                force_refresh=not stale_ok,
-                phases=_src_phases,
-                window=window,
-                **({"packed_version": packed_version} if packed_version is not None else {}),
-            )
+            check_client = (self._check_archive_list_client
+                            if window == "all" and not initial and stale_ok and since
+                            and self.headers.get("X-CCC-Abort-On-Disconnect") == "1"
+                            and not phone_access.is_remote_request(self.client_address[0], self.headers)
+                            else None)
+            source_options = {"force_refresh": not stale_ok, "phases": _src_phases, "window": window}
+            if packed_version is not None:
+                source_options["packed_version"] = packed_version
+                if check_client is not None:
+                    source_options["check_client"] = check_client
+            try:
+                rows, from_cache, body_ver = _archive_list_source_rows_cached(
+                    cache_options, **source_options)
+            except _ArchiveListClientDisconnected:
+                record_diag("list_server", (time.perf_counter() - _lt0) * 1000.0, {
+                    "window": window, "status": "abandoned", "stale_ok": stale_ok, "src": _src_phases,
+                    "cpu_ms": round((time.thread_time() - _lc0) * 1000.0, 1),
+                })
+                return
             if initial:
                 # No delta token or persisted full-body cache entry can ever
                 # describe this intentionally partial response.
@@ -37444,11 +37480,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     elif _since_diag == "ok":
                         _since_diag = "unmergeable"
 
-            _check_client = (self._check_archive_list_client
-                             if window == "all" and not body_ver and stale_ok and since
-                             and self.headers.get("X-CCC-Abort-On-Disconnect") == "1"
-                             and not phone_access.is_remote_request(self.client_address[0], self.headers)
-                             else None)
+            _check_client = check_client if not body_ver else None
 
             _packed_history_projection = None
 

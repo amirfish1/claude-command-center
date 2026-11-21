@@ -2,6 +2,8 @@ import json
 import sqlite3
 from unittest.mock import patch
 
+import pytest
+
 import server
 from ccc_server import archive_sidebar_pages, archive_store, continuation_topics
 
@@ -149,12 +151,22 @@ def test_packed_history_is_exact_after_live_lifecycle_changes(tmp_path, monkeypa
 
     assert publish(now) == 3
 
-    def load(packed_version):
+    def load(packed_version, *, check_client=None):
         return archive_store.load_with_overrides(path, key, [hot], schema_version=schema,
             build_id=build, min_cached_at=0, reuse_sidebar_history=True, copy_history=False,
-            packed_version=packed_version)["conversations"]
+            packed_version=packed_version, check_client=check_client)["conversations"]
 
     try:
+        pages = iter((None, None))
+
+        def disconnect_during_read():
+            if next(pages, False) is False:
+                raise server._ArchiveListClientDisconnected()
+
+        with pytest.raises(server._ArchiveListClientDisconnected):
+            load(version, check_client=disconnect_during_read)
+        assert archive_store._SIDEBAR_HISTORY_READER.conn is None
+
         raw = server._overlay_conversation_lifecycle_flags(load(None), copy_on_change=True)
         original_packed = load(version)
         unchanged = original_packed[2]
