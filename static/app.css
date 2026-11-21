@@ -35043,6 +35043,88 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
 #convList.session-workspace .conv-attn-chip,
 #convList.session-workspace .conv-ready-close { border-radius: 6px; padding: 5px 9px; font-size: 12px; }
 #convList.session-workspace [data-session-section="finished"] .conv-item { opacity: 1; }
+/* Reclaim the portrait gutter and age slot when the sidebar itself is tight.
+   Numbered portraits double as ticket links, so keep them as text controls. */
+@container sidebar (max-width: 320px) {
+  #convList#convList:not(.workers-dense) .conv-item:not(.is-current-child-row) {
+    --conv-content-left: var(--conv-icon-left);
+  }
+  #convList#convList:not(.workers-dense) .conv-item:not(.is-current-child-row)
+    .conv-main-row .conv-session-icon:not([data-idea-ref]),
+  #convList#convList .conv-item:not(.is-current-child-row) .wa-row .wa-avatar:not([data-idea-ref]),
+  #convList .conv-item .wa-time,
+  #convList .conv-repeat-group-toggle > :is(.conv-session-icon, .conv-repeat-group-rel),
+  #convList#convList:not(.workers-dense) .conv-main-row > .conv-row-end > .conv-rel {
+    display: none;
+  }
+  #convList#convList:not(.workers-dense) .conv-item:not(.is-current-child-row) .conv-idea-avatar[data-idea-ref] {
+    position: static;
+    transform: none;
+    width: auto;
+    height: auto;
+    min-height: 22px;
+    flex: 0 0 auto;
+    padding: 0 5px;
+    margin: 0;
+    align-self: center;
+  }
+  #convList .conv-item:not(.is-current-child-row) .conv-idea-avatar[data-idea-ref] > .conv-avatar-model {
+    display: none;
+  }
+  #convList#convList .conv-item:not(.is-current-child-row) .conv-idea-avatar[data-idea-ref] > .conv-avatar-stack {
+    flex-direction: row;
+    align-items: baseline;
+  }
+  #convList#convList:not(.workers-dense) .conv-item .conv-main-row > .conv-row-end:not(:has(> .conv-decision-report-btn)) {
+    min-width: 0;
+  }
+  #convList#convList:not(.workers-dense) .conv-item:not(.is-current-child-row) .conv-main-row:has(> .conv-auto-switch) {
+    min-height: 0;
+  }
+  #convList#convList:not(.workers-dense) .conv-item:not(.is-current-child-row) .conv-main-row > .conv-auto-switch,
+  #convList#convList:not(.workers-dense) .conv-item:not(.is-current-child-row) .conv-main-row > .conv-avatar-stack > .conv-avatar-ticket {
+    position: static;
+  }
+  #convList#convList:not(.workers-dense) .conv-item:not(.is-current-child-row) .conv-main-row.has-inline-step > .conv-row-end {
+    grid-row: 3;
+    align-self: center;
+  }
+  #convList#convList:not(.workers-dense) .conv-item .conv-main-row.has-inline-step > .conv-row-end:not(:has(> .conv-decision-report-btn)) {
+    min-width: 22px;
+  }
+  #convList#convList:not(.workers-dense) .conv-item:not(.is-current-child-row) .conv-main-row.has-inline-step > .conv-pct-badge {
+    grid-column: 2;
+  }
+  #convList#convList:not(.workers-dense) .conv-item:not(.is-current-child-row) .conv-main-row.has-inline-step > :is(.conv-title, .conv-title-stack) {
+    grid-column: 1 / -1;
+  }
+  #convList#convList:not(.workers-dense) .conv-item:not(.is-current-child-row) .conv-main-row.has-inline-step > .conv-meta-col {
+    grid-column: 1;
+  }
+  #convList#convList:not(.workers-dense) .conv-item:not(.is-current-child-row) .conv-main-row.has-inline-step :is(.conv-idea-avatar[data-idea-ref], .conv-auto-switch, .conv-avatar-ticket) {
+    grid-column: 1;
+    justify-self: start;
+  }
+  #convList#convList:not(.workers-dense) .conv-item:not(.is-current-child-row) .conv-main-row.has-inline-step:has(.conv-idea-avatar[data-idea-ref]) > .conv-auto-switch {
+    grid-column: 2 / -1;
+    grid-row: 4;
+    align-self: center;
+  }
+  #convList .conv-item:not(.is-current-child-row) > .wa-row {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  #convList .conv-item:not(.is-current-child-row) .wa-body {
+    order: -1;
+    flex-basis: 100%;
+  }
+  #convList .conv-item:not(.is-current-child-row) .wa-av-col {
+    width: auto;
+    flex: 0 0 auto;
+    flex-direction: row;
+  }
+}
+
 .session-usage-drawer { flex: 0 0 auto; border-top: 1px solid var(--border); padding: 9px 18px; color: var(--text-muted); font-size: 12px; }
 .session-usage-drawer > summary { cursor: pointer; padding: 4px 0; }
 .session-usage-drawer > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
