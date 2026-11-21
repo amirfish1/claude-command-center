@@ -19099,7 +19099,7 @@ def _archive_list_window_rows(rows, cutoff, idea_tickets_by_sid, parents, *, anc
 
 
 def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _inputs=None,
-                               _retain_templates=True, _row_overlays=None):
+                               _retain_templates=True, _row_overlays=None, check_client=None):
     # Request-local diagnostics distinguish CPU work from GIL/lock waits on
     # the real corpus, without the per-call overhead of a Python profiler.
     phase_wall = time.perf_counter() if phases is not None else 0
@@ -19137,12 +19137,16 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _in
         for row in window_rows
     )
     fields_by_shape = {}
-    projected = [
-        _archive_list_project_row(row, resumes=resumes, parents=parents, _template=template,
-                                  _fields_by_shape=fields_by_shape, _retain_template=_retain_templates)
-        for row, template in zip(window_rows, templates)
-    ]
+    projected = []
+    for position, (row, template) in enumerate(zip(window_rows, templates)):
+        if check_client is not None and position % 256 == 0:
+            check_client()
+        projected.append(_archive_list_project_row(
+            row, resumes=resumes, parents=parents, _template=template,
+            _fields_by_shape=fields_by_shape, _retain_template=_retain_templates))
     phase("rows")
+    if check_client is not None:
+        check_client()
     # Persisted rows may predate a goal change or a title override.
     row_overlays = _archive_list_row_overlays() if _row_overlays is None else _row_overlays
     drivers = _session_graph.driver_snapshot()
@@ -19163,6 +19167,8 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _in
     else:
         continuation_topics.attach_topics(projected, diagnostics=phases.setdefault('topic_cache', {}))
     phase("topics")
+    if check_client is not None:
+        check_client()
     _archive_list_ticket_updates(projected, idea_tickets_by_sid)
     phase("tickets")
     return projected
@@ -19212,28 +19218,41 @@ _ARCHIVE_LIST_HISTORY_FLIGHTS = {}
 _ARCHIVE_LIST_HISTORY_FLIGHTS_LOCK = threading.Lock()
 
 
-def _archive_list_history_projection(scope, rows, build, phases):
+class _ArchiveListClientDisconnected(Exception):
+    pass
+
+
+def _archive_list_history_projection(scope, rows, build, phases, check_client=None):
     """Share a complete All projection and manifest with concurrent readers."""
     key = (scope, id(rows))
     with _ARCHIVE_LIST_HISTORY_FLIGHTS_LOCK:
         flight = _ARCHIVE_LIST_HISTORY_FLIGHTS.get(key)
         owner = flight is None
         if owner:
-            flight = _ARCHIVE_LIST_HISTORY_FLIGHTS[key] = Future()
+            flight = _ARCHIVE_LIST_HISTORY_FLIGHTS[key] = (Future(), threading.Event())
+        future, shared = flight
+        if not owner:
+            shared.set()
     if not owner:
         started = time.perf_counter()
         try:
-            payload = flight.result()
+            payload = future.result()
         except Exception:
-            return build()
+            return build(check_client)
         phases["projection_flight"] = {"wait_ms": round((time.perf_counter() - started) * 1000, 1)}
         return payload
+    def check_owner():
+        # An abandoned socket must not cancel projection for a live follower.
+        # A follower arriving concurrently with cancellation can build itself.
+        if not shared.is_set():
+            check_client()
+
     try:
-        payload = build()
-        flight.set_result(payload)
+        payload = build(check_owner if check_client is not None else None)
+        future.set_result(payload)
         return payload
     except BaseException as exc:
-        flight.set_exception(exc)
+        future.set_exception(exc)
         raise
     finally:
         with _ARCHIVE_LIST_HISTORY_FLIGHTS_LOCK:
@@ -20115,10 +20134,11 @@ def _archive_list_initial_payload(rows, *, window="all", now=None, cached=None, 
 
 
 def _archive_list_payload(rows, *, window="all", now=None, cached=None, phases=None, _inputs=None,
-                          _retain_templates=True, _row_overlays=None):
+                          _retain_templates=True, _row_overlays=None, check_client=None):
     window = _archive_list_window(window)
     projected = _archive_list_project_rows(rows, window=window, now=now, phases=phases, _inputs=_inputs,
-                                           _retain_templates=_retain_templates, _row_overlays=_row_overlays)
+                                           _retain_templates=_retain_templates, _row_overlays=_row_overlays,
+                                           check_client=check_client)
     if window == "all":
         _trace_row_flicker(projected, now=now)
     payload = {
@@ -37212,22 +37232,30 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     elif _since_diag == "ok":
                         _since_diag = "unmergeable"
 
+            _check_client = (self._check_archive_list_client
+                             if window == "all" and not body_ver and stale_ok and since
+                             and self.headers.get("X-CCC-Abort-On-Disconnect") == "1"
+                             and not phone_access.is_remote_request(self.client_address[0], self.headers)
+                             else None)
+
             def _timed_payload():
                 _pt0 = time.perf_counter()
                 try:
-                    def project():
-                        return _archive_list_replay_payload(
-                            rows, _delta, window=window, cached=from_cache, phases=_payload_phases)
-
                     if window == "all" and not body_ver:
-                        def prepare_history():
-                            return _list_replay.prepare_history(project())
+                        def prepare_history(check_client=None):
+                            payload = _archive_list_payload(
+                                rows, window=window, cached=from_cache, phases=_payload_phases,
+                                _retain_templates=False, check_client=check_client)
+                            if check_client is not None:
+                                check_client()
+                            return _list_replay.prepare_history(payload)
 
                         if stale_ok:
                             return _archive_list_history_projection(
-                                list_cache_key, rows, prepare_history, _payload_phases)
+                                list_cache_key, rows, prepare_history, _payload_phases, _check_client)
                         return prepare_history()
-                    payload = project()
+                    payload = _archive_list_replay_payload(
+                        rows, _delta, window=window, cached=from_cache, phases=_payload_phases)
                     if _delta is not None:
                         payload["order_token"] = _archive_list_order_token(
                             [_archive_row_sid(row) for row in payload["conversations"]])
@@ -37244,6 +37272,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     (body_ver, _delta["ctx"]) if _delta is not None else body_ver,
                     diagnostics=_body_cache_diag, since=since, saved_order=saved_order,
                     row_layouts=qs.get("row_layouts", ["0"])[0] == "1",
+                    check_client=_check_client,
                 )
             _lt2 = time.perf_counter()
             record_diag("list_server", (_lt2 - _lt0) * 1000.0, {
@@ -47868,8 +47897,23 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    def _check_archive_list_client(self):
+        # The browser explicitly abandons this conditional read on EOF.
+        # Keep ordinary HTTP half-closed clients on the regular path.
+        try:
+            readable, _, _ = select.select([self.connection], [], [], 0)
+            disconnected = readable and not self.connection.recv(1, socket.MSG_PEEK)
+        except ConnectionError:
+            disconnected = True
+        except (OSError, ValueError):
+            return
+        if disconnected:
+            self.close_connection = True
+            raise _ArchiveListClientDisconnected()
+
     def _send_archive_list_json(self, cache_key, window, from_cache, build_payload, snap_ver,
-                                diagnostics=None, *, since="", saved_order="", row_layouts=False):
+                                diagnostics=None, *, since="", saved_order="", row_layouts=False,
+                                check_client=None):
         """send_json for /api/conversations/list: same etag/304/gzip
         semantics, but the serialized body + sha1 etag + gzip copy are built
         once per (cache key, window, snapshot version) and replayed for every
@@ -47883,8 +47927,16 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         if window == "all" and not snap_ver:
             from ccc_server.list_encoding import history_representation
 
+            try:
+                if check_client is not None:
+                    check_client()
+                history = build_payload()
+                if check_client is not None:
+                    check_client()
+            except _ArchiveListClientDisconnected:
+                return "abandoned"
             payload, fingerprint = _list_replay.history_delta(
-                build_payload(), cache_key, _ARCHIVE_DELTA_NONCE, since, saved_order)
+                history, cache_key, _ARCHIVE_DELTA_NONCE, since, saved_order)
             is_delta = payload is not None and payload.get("delta") is True
             if diagnostics is not None:
                 diagnostics.update(hit=False, reason="unversioned-history", version=snap_ver,

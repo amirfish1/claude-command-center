@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import gzip
 import importlib
 import json
+import socket
 import urllib.error
 import threading
 import time
@@ -243,18 +244,22 @@ def test_unversioned_history_projection_shares_only_overlapping_exact_source(mon
     rows = [{'session_id': 'first'}]
     payload = {'conversations': rows}
 
-    def build():
+    def build(check_client):
         building.set()
         assert finish.wait(5)
+        check_client()
         return payload
 
-    def own_projection():
+    def own_projection(_check_client):
         return {'conversations': []}
+
+    def disconnected_owner():
+        raise server._ArchiveListClientDisconnected()
 
     project = server._archive_list_history_projection
     phases = {}
     with ThreadPoolExecutor(2) as pool:
-        owner = pool.submit(project, 'scope', rows, build, {})
+        owner = pool.submit(project, 'scope', rows, build, {}, disconnected_owner)
         try:
             assert building.wait(5)
             follower = pool.submit(project, 'scope', rows, own_projection, phases)
@@ -266,6 +271,62 @@ def test_unversioned_history_projection_shares_only_overlapping_exact_source(mon
         assert owner.result(timeout=5) is follower.result(timeout=5) is payload
     assert 'projection_flight' in phases
     assert project('scope', rows, own_projection, {}) != payload
+
+
+def test_all_list_disconnect_abandons_only_opted_in_conditional_reads(monkeypatch, tmp_path):
+    import server
+    from ccc_server import continuation_topics
+
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_DISK_DIR', tmp_path)
+    monkeypatch.setattr(server, '_archive_list_source_rows_cached',
+                        lambda *a, **kw: ([{'session_id': 'row'}], True, 0))
+    entered = threading.Event()
+    ready = threading.Event()
+    original = server._archive_list_project_row
+    topic_work = []
+    dispositions = []
+
+    def project(*args, **kwargs):
+        entered.set()
+        assert ready.wait(5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(server, '_archive_list_project_row', project)
+    monkeypatch.setattr(continuation_topics, 'attach_topics',
+                        lambda *a, **kw: topic_work.append(True))
+    monkeypatch.setattr(server, 'record_diag',
+                        lambda kind, ms, detail: dispositions.append(detail['status'])
+                        if kind == 'list_server' else None)
+    httpd = server.http.server.ThreadingHTTPServer(('127.0.0.1', 0), server.CommandCenterHandler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for opted_in in (False, True):
+            entered.clear()
+            ready.clear()
+            with socket.create_connection(httpd.server_address, timeout=5) as client:
+                request = 'GET /api/conversations/list?window=all&stale_ok=1&since=old HTTP/1.1\r\n'
+                request += 'Host: localhost\r\nConnection: close\r\n'
+                if opted_in:
+                    request += 'X-CCC-Abort-On-Disconnect: 1\r\n'
+                client.sendall((request + '\r\n').encode())
+                assert entered.wait(5)
+                client.shutdown(socket.SHUT_WR)
+                ready.set()
+                with client.makefile('rb') as response:
+                    body = response.read()
+                if opted_in:
+                    assert body == b''
+                else:
+                    assert body.split(b' ', 2)[1] == b'200'
+                    assert json.loads(body.split(b'\r\n\r\n', 1)[1])['count'] == 1
+    finally:
+        ready.set()
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+    assert topic_work == [True]
+    assert dispositions == [200, 'abandoned']
 
 
 def test_history_encoding_builds_gzip_only_when_requested_or_needed(monkeypatch):

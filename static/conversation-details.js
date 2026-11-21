@@ -4958,6 +4958,10 @@
         try {
           const init = { signal: controller.signal };
           if (prevEtag) init.headers = { 'If-None-Match': prevEtag };
+          if (deltaToken && !opts.initial && !opts.includePrs && opts.staleOk !== false
+              && params.get('window') === 'all') {
+            (init.headers ||= {})['X-CCC-Abort-On-Disconnect'] = '1';
+          }
           if (!sharedState._archiveBootstrapConsumed && url === sharedState._archiveBootstrapUrl && !prevEtag) {
             sharedState._archiveBootstrapConsumed = true;
             const snapshot = window.__cccArchiveSnapshot;

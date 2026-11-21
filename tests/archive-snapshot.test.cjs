@@ -274,7 +274,9 @@ test('All reload validates a packed UTF-8 base after applying an ordered patch',
         delta:'valid', order:'order'}, {from:'reordered', ids:null, changes:[changed]});
     }, allUrl);
     await waitForSnapshot(page, 'valid', 'header', 'all');
+    const conditional = page.waitForRequest(req => req.url().includes('since=valid'));
     await page.reload({waitUntil:'load'});
+    assert.equal((await conditional).headers()['x-ccc-abort-on-disconnect'],'1');
     const state = await page.evaluate(async () => {
       const h = window.__cccArchiveSnapshot;
       const value = await h.read;
