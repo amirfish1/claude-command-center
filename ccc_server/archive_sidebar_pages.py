@@ -14,6 +14,7 @@ from ccc_server.archive_list_replay import pack_row_layouts
 _BUCKETS = 128
 _PAGE_MAX_BYTES = 4 << 20
 _ORDER_BATCH_ITEMS = 32768
+_MAX_UNPACKED_ROWS = 256
 
 
 class StoredRow(dict):
@@ -193,7 +194,9 @@ def read(con, key, cached_at, version, current, max_bytes, page_cache, *, check_
 
     ordered = _ordered_identities(con, key)
     missing = [rid for rid in ordered if rid not in current and rid not in decoded]
-    if len(missing) > 32:
+    # Publication excludes then-hot rows. Some can age out of the live
+    # snapshot before the next publication, especially during a restart.
+    if len(missing) > _MAX_UNPACKED_ROWS:
         return None
     if missing:
         marks = ",".join("?" for _ in missing)
@@ -201,6 +204,11 @@ def read(con, key, cached_at, version, current, max_bytes, page_cache, *, check_
             f"SELECT identity,body FROM rows WHERE variant=? AND identity IN ({marks})",
             (key, *missing),
         ):
+            if check_client is not None:
+                check_client()
+            weight += 4 * len(body) + 224 + 4 * len(rid)
+            if weight > max_bytes:
+                return None
             decoded[rid] = json.loads(body)
     layout = []
     rows = []

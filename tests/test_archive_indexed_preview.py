@@ -207,6 +207,50 @@ def test_packed_history_is_exact_after_live_lifecycle_changes(tmp_path, monkeypa
             reader._close()
 
 
+def test_packed_history_recovers_rows_that_aged_out_of_hot_snapshot(tmp_path, monkeypatch):
+    path = tmp_path / "archive.json"
+    key = "base"
+    stamp = 2_000_000_000
+    version = server._ARCHIVE_SIDEBAR_PACKED_VERSION
+    expired = [
+        {"session_id": f"recent-{i}", "mtime": stamp - archive_store.HOT_SECONDS,
+         "last_assistant_text": f"Reply {i}"}
+        for i in range(40)
+    ]
+    cold = {"session_id": "history", "mtime": stamp - 2 * archive_store.HOT_SECONDS}
+    hot = {"session_id": "live", "mtime": stamp}
+    rows = [*expired[:20], cold, *expired[20:], hot]
+    archive_store.save(
+        path, {"entries": {key: {"cached_at": stamp, "conversations": rows}}},
+        complete=True, sidebar_key=key, sidebar_pages=(version, server._archive_list_pack_static),
+    )
+
+    current = archive_store.load(path, hot=True, key=key, now=stamp + 1)
+    assert current["entries"][key]["conversations"] == [hot]
+    live = dict(hot, last_assistant_text="New reply")
+    overrides = {archive_store.identity(live): live}
+    page_cache = {}
+    with archive_store._connect(path) as conn:
+        conn.execute("BEGIN")
+        packed, _ = archive_sidebar_pages.read(
+            conn, key, stamp, version, overrides.copy(), 1 << 20, page_cache,
+        )
+        assert [row["session_id"] for row in packed] == [row["session_id"] for row in rows]
+        assert isinstance(packed[20], archive_sidebar_pages.StoredRow)
+        assert packed[:20] + packed[21:-1] == expired
+        assert packed[-1] is live
+
+        packed_bytes = sum(weight for weight, _ in page_cache.values())
+        assert archive_sidebar_pages.read(
+            conn, key, stamp, version, overrides.copy(), packed_bytes, page_cache,
+        ) is None
+
+        monkeypatch.setattr(archive_sidebar_pages, "_MAX_UNPACKED_ROWS", len(expired) - 1)
+        assert archive_sidebar_pages.read(
+            conn, key, stamp, version, overrides.copy(), 1 << 20, page_cache,
+        ) is None
+
+
 def test_packed_history_order_is_exact_at_batch_limit(monkeypatch):
     with sqlite3.connect(":memory:") as conn:
         conn.execute("CREATE TABLE rows (variant TEXT, identity TEXT, position INTEGER)")
