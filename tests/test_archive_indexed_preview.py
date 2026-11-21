@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from unittest.mock import patch
 
 import server
 from ccc_server import archive_store, continuation_topics
@@ -93,6 +94,34 @@ def test_legacy_database_allows_index_fallback(tmp_path, monkeypatch):
                         lambda *args, **kwargs: (rows, True, 1))
     assert server._archive_list_indexed_initial_payload({}, phases={}) is None
 
+
+
+def test_signature_match_backfills_existing_sidebar_generation(tmp_path, monkeypatch):
+    path = tmp_path / "archive.json"
+    result_path = tmp_path / "refresh-result.json"
+    key = server._archive_response_cache_key()
+    version = server._ARCHIVE_SIDEBAR_PACKED_VERSION
+    rows = [{"session_id": "cold", "mtime": 1, "last_assistant_text": "Old reply"}]
+    snapshot = {
+        "schema_version": server._ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
+        "build_id": server._ARCHIVE_RESPONSE_CACHE_BUILD_ID,
+        "entries": {key: {"cached_at": 2_000_000_000, "conversations": rows}},
+    }
+    archive_store.save(path, snapshot, complete=True)
+    before = archive_store.load(path)
+    assert not archive_store.sidebar_pages_available(path, key, version)
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", path)
+    monkeypatch.setattr(server, "_load_conv_meta_cache", lambda: None)
+    monkeypatch.setattr(server, "_archive_compute_rows", lambda *args: (rows, True))
+    monkeypatch.setattr(server, "_ARCHIVE_COMPUTE_LAST_PHASES", {"tier": "match"})
+    monkeypatch.setattr(server, "_WT_DISPLAY_SNAPSHOT_ONLY", False)
+    with patch("ccc_server.cpu_priority.set_background_priority"):
+        assert server._archive_refresh_worker_main("e30=", result_path) == 0
+    assert archive_store.sidebar_pages_available(path, key, version)
+    result, _ = server._read_archive_refresh_result(result_path)
+    assert "sidebar_backfill_ms" in result["phases"]
+    assert archive_store.load(path) == before
+    assert not archive_store.backfill_sidebar_pages(path, key, version, server._archive_list_pack_static)
 
 
 def test_packed_history_is_exact_after_live_lifecycle_changes(tmp_path, monkeypatch):

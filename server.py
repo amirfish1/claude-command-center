@@ -20707,6 +20707,8 @@ def _start_gc_freeze_thread():
 
 def _archive_refresh_worker_main(encoded_options, output_path):
     """Build one archive snapshot in a short-lived, low-priority process."""
+    import sqlite3
+
     global _WT_DISPLAY_SNAPSHOT_ONLY
     _WT_DISPLAY_SNAPSHOT_ONLY = True
     try:
@@ -20739,6 +20741,16 @@ def _archive_refresh_worker_main(encoded_options, output_path):
         from ccc_server import archive_store
         rows = archive_store.hot_rows(rows)
         phases = dict(_ARCHIVE_COMPUTE_LAST_PHASES)
+        if phases.get("tier") == "match" and key == _archive_response_cache_key():
+            started = time.perf_counter()
+            try:
+                if archive_store.backfill_sidebar_pages(
+                    _ARCHIVE_RESPONSE_CACHE_FILE, key,
+                    _ARCHIVE_SIDEBAR_PACKED_VERSION, _archive_list_pack_static,
+                ):
+                    phases["sidebar_backfill_ms"] = round((time.perf_counter() - started) * 1000.0, 1)
+            except (OSError, ValueError, sqlite3.Error) as exc:
+                print(f"  [archive-cache] sidebar backfill deferred: {exc}", file=sys.stderr)
         phases["compute_ms"] = round((time.perf_counter() - _wt0) * 1000.0, 1)
         result = {
             "ok": True,

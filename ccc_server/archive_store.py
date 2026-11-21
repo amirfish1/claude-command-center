@@ -727,16 +727,53 @@ def sidebar_pages_available(cache_file, key, version):
     try:
         con = _connect(cache_file)
         try:
-            return con.execute("""
-                SELECT 1 FROM variants v
-                JOIN sidebar_page_generation b ON b.variant=v.key AND b.cached_at=v.cached_at
-                JOIN sidebar_preview_generation p ON p.variant=v.key AND p.cached_at=v.cached_at
-                WHERE v.key=? AND b.version=?
-            """, (key, version)).fetchone() is not None
+            return _sidebar_pages_current(con, key, version)
         finally:
             con.close()
     except (OSError, sqlite3.Error):
         return False
+
+
+def _sidebar_pages_current(con, key, version):
+    return con.execute("""
+        SELECT 1 FROM variants v
+        JOIN sidebar_page_generation b ON b.variant=v.key AND b.cached_at=v.cached_at
+        JOIN sidebar_preview_generation p ON p.variant=v.key AND p.cached_at=v.cached_at
+        WHERE v.key=? AND b.version=?
+    """, (key, version)).fetchone() is not None
+
+
+def backfill_sidebar_pages(cache_file, key, version, project):
+    """Build the derived indexes for an unchanged, already published archive."""
+    from ccc_server import archive_preview, archive_sidebar_pages
+
+    if not database_path(cache_file).exists() or sidebar_pages_available(cache_file, key, version):
+        return False
+    con = _connect(cache_file, write=True)
+    try:
+        archive_preview.setup(con)
+        archive_sidebar_pages.setup(con)
+        with con:
+            con.execute("BEGIN IMMEDIATE")
+            stored = con.execute("SELECT cached_at FROM variants WHERE key=?", (key,)).fetchone()
+            if stored is None or _sidebar_pages_current(con, key, version):
+                return False
+            stamp, = stored
+            indexed = archive_preview.indexed(con, key)
+            rows = []
+            for rid, body in con.execute(
+                "SELECT identity,body FROM rows WHERE variant=? ORDER BY position,rowid", (key,),
+            ):
+                row = json.loads(body)
+                rows.append(row)
+                if rid not in indexed:
+                    archive_preview.publish(con, key, rid, row)
+            archive_preview.finish_publication(con, key, stamp)
+            hot = {identity(row) for row in hot_rows(rows, now=stamp)}
+            archive_sidebar_pages.publish(con, key, stamp, version, hot, project)
+            return _sidebar_pages_current(con, key, version)
+    finally:
+        con.close()
 
 
 @contextmanager
