@@ -406,6 +406,7 @@ class IdeaTicketsTest(unittest.TestCase):
     def test_backfill_files_oldest_first_and_continuations_join(self):
         it.classify = lambda text: "idea"
         self.registry["a"] = {"spawned_via": "terminal"}
+        self.registry["c"] = {"spawned_via": "terminal"}
         self.transcripts["a"] = {"text": "Build the thing"}
         self.transcripts["b"] = {"text": "You continue", "continued_from": "a"}
         self.transcripts["c"] = {"text": "Other work"}
@@ -418,18 +419,67 @@ class IdeaTicketsTest(unittest.TestCase):
         self.assertEqual(it.load_state()["pending"], {})
         self.assertEqual(it.backfill(["a", "b", "c"])["queued"], 0)  # idempotent
 
-    def test_backfill_skips_worker_continuations(self):
+    def test_backfill_requires_owner_launch_for_new_tickets(self):
         self.transcripts["w1"] = {"text": "You continue the work of session abc (x)."}
         self.transcripts["w2"] = {"text": "You are continuing a task from an earlier Claude session."}
         self.registry["w3"] = {"spawned_via": "watchtower", "cwd": "/tmp"}
         self.transcripts["w3"] = {"text": "Fix the thing"}
-        self.transcripts["idea"] = {"text": "Add a dark mode toggle"}
+        self.registry["idea"] = {"spawned_via": "terminal"}
+        self.transcripts["idea"] = {
+            "text": "You are continuing a task from an earlier session: add a dark mode toggle",
+        }
         it.classify = lambda text, **kw: "idea"
         it.backfill(["w1", "w2", "w3", "idea"])
         self.assertEqual(sorted(it.idea_ticket_rows_map()), ["idea"])
         state = it.load_state()
-        self.assertEqual(state["sessions"]["w1"]["skip"], "worker session")
-        self.assertNotIn("w1", state["pending"])
+        self.assertTrue(it._auto_skip(state["sessions"]["w1"]))
+        self.assertEqual(state["sessions"]["w3"]["skip"], "automated launch")
+        self.assertEqual(state["pending"], {})
+
+    def test_codex_automation_in_ui_pending_and_legacy_backfill(self):
+        root = pathlib.Path(self.tmp.name)
+        rollouts = {}
+        for sid, originator, source in (
+            ("worker", "watchtower_app_worker", "vscode"),
+            ("judge", "codex_exec", "exec"),
+            ("owner", "claude-command-center", "vscode"),
+        ):
+            rollout = root / f"rollout-{sid}.jsonl"
+            rollout.write_text(
+                json.dumps({"type": "session_meta", "payload": {
+                    "originator": originator, "source": source, "cwd": "/tmp",
+                }}) + "\n"
+                + json.dumps({"type": "response_item", "payload": {
+                    "role": "user", "content": [{"type": "input_text", "text": "# AGENTS.md"}],
+                }}) + "\n"
+            )
+            rollouts[sid] = rollout
+        self.core._resolve_codex_rollout_path = rollouts.get
+        it.note_ui_spawn("worker", "ui")
+        it.note_ui_spawn("owner", "ui")
+        it._mutate(lambda state: state["pending"].update(
+            judge={"at": int(it.time.time()), "backfill": True},
+        ))
+        self.registry["judge"] = {"spawned_via": "terminal"}
+        classified = []
+        for sid in rollouts:
+            it.attach_or_file(sid, classify_fn=lambda text: classified.append(text) or "idea",
+                              text_hint="Discuss a new feature")
+        self.assertEqual(classified, ["Discuss a new feature"])
+        self.assertEqual(it.load_state()["pending"], {})
+        self.assertEqual(sorted(it.idea_ticket_rows_map()), ["owner"])
+        self.assertFalse(it.file_ticket("worker", "IDEAS")["ok"])
+        self.assertEqual(len([c for c in self.calls if c[0] == "add"]), 1)
+
+    def test_stale_ui_pending_checks_marker_and_watchtower_ledger(self):
+        root = pathlib.Path(self.tmp.name)
+        (root / "markers" / "routine.json").write_text(json.dumps({"kind": "scheduled"}))
+        self.core._wt_read_session_origins = lambda: {"verifier": {"role": "verifier"}}
+        for sid in ("routine", "verifier"):
+            self._ui_session(sid)
+            self.assertEqual(it.attach_or_file(sid)["reason"], "automated launch")
+        self.assertEqual(it.load_state()["pending"], {})
+        self.assertEqual(self.calls, [])
 
     def test_ui_continuation_still_gets_a_ticket(self):
         self._ui_session("u1", "You are continuing a task from an earlier Codex session.")
@@ -478,27 +528,6 @@ class IdeaTicketsTest(unittest.TestCase):
         self.calls.clear()
         it._tick_closed_sync(1000.0 + it.CLOSED_SYNC_EVERY_S - 1)
         self.assertEqual(self.calls, [])
-
-    def test_backfill_recent_once_tickets_last_two_days_and_runs_once(self):
-        it.classify = lambda text: "idea"
-        now = it.time.time()
-        self.registry["recent"] = {"spawned_via": "terminal"}
-        self.transcripts["recent"] = {"text": "Recent work"}
-        self.registry["old"] = {"spawned_via": "terminal"}
-        self.transcripts["old"] = {"text": "Stale work"}
-        rows = [
-            {"session_id": "recent", "mtime": now - 3600},
-            {"session_id": "old", "mtime": now - (3 * 24 * 3600)},
-            {"session_id": "agent-x", "mtime": now},
-        ]
-        it.backfill_recent_once(rows)
-        self.assertEqual(it.ticket_for_session("recent")["ref"], "IDEAS-1")
-        self.assertIsNone(it.ticket_for_session("old"))
-        # Marker gates re-entry: a second call (even with a fresh candidate)
-        # must not file anything more.
-        rows.append({"session_id": "old", "mtime": now})
-        it.backfill_recent_once(rows)
-        self.assertIsNone(it.ticket_for_session("old"))
 
     def test_late_filer_never_overwrites_a_filed_ticket(self):
         # Two processes sweep the same pending session: the archive-refresh

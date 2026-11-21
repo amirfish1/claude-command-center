@@ -1,9 +1,40 @@
 """UI origin and native session IDs may arrive in either order."""
 
 import json
+from types import SimpleNamespace
+
+import pytest
 
 import server
 from ccc_server import idea_tickets, usage_limit
+
+
+@pytest.mark.parametrize("headers, expected", [
+    ({"Origin": "http://127.0.0.1:8090", "X-CCC-Automated": "false"}, "ui"),
+    ({"Referer": "http://127.0.0.1:8090", "X-CCC-Automated": "false"}, "ui"),
+    ({"Origin": "http://127.0.0.1:8090", "X-CCC-Automated": "true"}, "ui-automated"),
+    ({"Origin": "http://127.0.0.1:8090", "User-Agent": "Python-urllib/3.12"}, "api"),
+    ({"Origin": "http://127.0.0.1:8090", "User-Agent": "ccc-cli"}, "cli"),
+])
+def test_spawn_provenance_requires_dashboard_header(headers, expected):
+    assert server.CommandCenterHandler._extract_spawned_via(
+        SimpleNamespace(headers=headers),
+    ) == expected
+
+
+def test_archive_read_does_not_queue_recent_sessions_for_backfill(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, 'COMMAND_CENTER_STATE_DIR', tmp_path)
+    monkeypatch.setattr(idea_tickets, '_enabled', lambda: True)
+    monkeypatch.setattr(idea_tickets, 'autopilot_rows', lambda rows: None)
+    monkeypatch.setattr(idea_tickets, 'relabel_continued_once', lambda: None)
+    backfills = []
+    monkeypatch.setattr(idea_tickets, 'backfill', backfills.append)
+    server._archive_list_ticket_updates([
+        {'session_id': 'recent-untracked', 'mtime': idea_tickets.time.time(),
+         'last_event_type': 'result'},
+    ], {})
+    assert backfills == []
+    assert idea_tickets.load_state()['pending'] == {}
 
 
 def _registry(monkeypatch, tmp_path, rows):

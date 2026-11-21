@@ -19,7 +19,6 @@ def inputs(monkeypatch):
     monkeypatch.setattr(server._idea_tickets, 'sweep_rows', lambda rows: None)
     monkeypatch.setattr(server._idea_tickets, 'autopilot_rows',
                         lambda rows: state['ticks'].append(copy.deepcopy(rows)))
-    monkeypatch.setattr(server._idea_tickets, 'backfill_recent_once', lambda rows: None)
     monkeypatch.setattr(server._idea_tickets, 'relabel_continued_once', lambda: None)
     monkeypatch.setattr(server, '_archive_list_title_overlays', lambda: state['titles'])
     monkeypatch.setattr(server, '_load_usage_limit_resumes', lambda: state['resume'])

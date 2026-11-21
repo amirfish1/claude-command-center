@@ -24,9 +24,9 @@ writers have adopted the new schema. Migration is never a dashboard boot effect.
 
 Only sessions recorded in ``pending`` at UI spawn time (``note_ui_spawn``,
 called from the one place every spawn route tags its origin) get a NEW ticket
-on their own, so turning the flag on never floods the queues. Older sessions
-get one when the user files it from the row menu (``file_ticket``) or through
-an explicit, bounded ``backfill``.
+on their own. Older sessions can be selected from the row menu
+(``file_ticket``), or explicitly backfilled when their launch is known to be
+from the dashboard or a terminal.
 
 Rows read it through ``idea_ticket_rows_map()`` (one mtime-cached file read
 per list build, a dict lookup per row). Every ``wt`` call runs on a daemon
@@ -53,6 +53,7 @@ except ImportError:  # Windows: in-process lock only
 
 from ccc_server import core as _core
 from ccc_server import local_overrides as _local_overrides
+from ccc_server.session_graph import codex_rollout_exec_meta
 
 FLAG = "idea_tickets"
 STATE_FILE_NAME = "idea-tickets.json"
@@ -465,7 +466,7 @@ def classify(text, *, key=None, opener=None):
 # ── session metadata ───────────────────────────────────────────────────────
 
 def _spawn_meta(sid):
-    """(spawned_via, parent_session_id, cwd) from the registry, then the marker."""
+    """Read launch evidence from the registry and the spawn marker."""
     via = parent = cwd = ""
     try:
         entry = _core._spawn_registry_entry_for_session(sid) or {}
@@ -478,11 +479,15 @@ def _spawn_meta(sid):
         marker = json.loads((Path(_core.SPAWN_MARKERS_DIR) / f"{sid}.json").read_text())
     except (OSError, ValueError):
         marker = {}
-    if isinstance(marker, dict):
-        via = via or str(marker.get("spawned_via") or "")
-        parent = parent or str(marker.get("parent_session_id") or "")
-        cwd = cwd or str(marker.get("cwd") or marker.get("repo_path") or "")
-    return via, parent, cwd
+    if not isinstance(marker, dict):
+        marker = {}
+    marker_via = str(marker.get("spawned_via") or "")
+    parent = parent or str(marker.get("parent_session_id") or "")
+    cwd = cwd or str(marker.get("cwd") or marker.get("repo_path") or "")
+    launch_tags = {value.strip().lower() for value in (
+        via, marker_via, str(marker.get("kind") or ""), str(entry.get("kind") or ""),
+    )}
+    return via or marker_via, parent, cwd, launch_tags
 
 
 def _plugin_side_call(*, row=None, cwd="", jsonl=None):
@@ -764,17 +769,23 @@ def _attach_or_file_safe(sid, continued_from="", parent="", text=""):
             _inflight.discard(sid)
 
 
-# Backfill walks every recent session, so it meets queue workers too. Their
-# continuations are machine work, not operator ideas. A UI continuation the
-# owner started isn't a backfill entry, so it is never judged by this.
-_WORKER_PROMPT_PREFIXES = ("you continue the work of session ",
-                           "you are continuing a task from an earlier ")
+_AUTOMATED_LAUNCHES = {
+    "ui-automated", "worker", "watchtower", "watchtower-model",
+    "routine", "scheduled", "verifier", "reviewer", "subagent",
+}
+_AUTOMATED_CODEX_ORIGINATORS = {"watchtower_app_worker", "codex_exec"}
 
 
-def _worker_session(via, text):
-    via = str(via or "").lower()
-    return ("watchtower" in via or "worker" in via
-            or str(text or "").lstrip().lower().startswith(_WORKER_PROMPT_PREFIXES))
+def _automated_launch(sid, launch_tags, transcript):
+    if launch_tags & _AUTOMATED_LAUNCHES:
+        return True
+    origins = getattr(_core, "_wt_read_session_origins", None)
+    if origins and sid in origins():
+        return True
+    # Rollouts start with stable session_meta, before any AGENTS.md blocks or
+    # prompts. Legacy queue drains and one-shot judges often have no marker.
+    return bool(transcript and Path(transcript).name.startswith("rollout-") and
+                codex_rollout_exec_meta(transcript)["originator"] in _AUTOMATED_CODEX_ORIGINATORS)
 
 
 def attach_or_file(sid, *, classify_fn=None, continued_from_hint="", parent_hint="",
@@ -788,7 +799,7 @@ def attach_or_file(sid, *, classify_fn=None, continued_from_hint="", parent_hint
             continued_from = _core._continued_from_session_id_from_transcript(jsonl) or ""
         except Exception:
             continued_from = ""
-    via, parent, cwd = _spawn_meta(sid)
+    via, parent, cwd, launch_tags = _spawn_meta(sid)
     if _plugin_side_call(cwd=cwd, jsonl=jsonl):
         def _skip_side_call(d):
             d["pending"].pop(sid, None)
@@ -816,14 +827,21 @@ def attach_or_file(sid, *, classify_fn=None, continued_from_hint="", parent_hint
     if sid in state["sessions"]:
         return {"ok": True, "known": True}
 
-    text = _opening_text(sid, jsonl) or str(text_hint or "")
-    if (state["pending"].get(sid) or {}).get("backfill") and _worker_session(via, text):
-        def _skip_worker(d):
+    pending = state["pending"][sid]
+    reason = ""
+    if _automated_launch(sid, launch_tags, jsonl):
+        reason = "automated launch"
+    elif pending.get("backfill") and via not in {"ui", "terminal"}:
+        reason = f"{_AUTO_SKIP_PREFIX} (no owner launch evidence for backfill)"
+    if reason:
+        def _skip_filing(d):
+            if d["pending"].get(sid) != pending or sid in d["sessions"]:
+                return
             d["pending"].pop(sid, None)
-            if sid not in d["sessions"]:
-                d["sessions"][sid] = {"skip": "worker session", "at": int(time.time())}
-        _mutate(_skip_worker)
-        return {"ok": True, "skipped": True}
+            d["sessions"][sid] = {"skip": reason, "at": int(time.time())}
+        _mutate(_skip_filing)
+        return {"ok": True, "skipped": True, "reason": reason}
+    text = _opening_text(sid, jsonl) or str(text_hint or "")
     if not _claim(sid):
         return {"ok": True, "known": True}
     label = (classify_fn or classify)(text)
@@ -869,12 +887,10 @@ def _file_new(sid, queue, text, cwd, *, label=""):
 def file_ticket(sid, queue):
     """Row-menu entry point for a session with no ticket (started before the
     flag, or outside the UI): file one in the queue the user picked."""
-    jsonl = None
-    try:
-        jsonl = _core._find_session_jsonl(sid)
-    except Exception:
-        jsonl = None
-    _via, _parent, cwd = _spawn_meta(sid)
+    jsonl = _session_transcript_path(sid)
+    _via, _parent, cwd, launch_tags = _spawn_meta(sid)
+    if _automated_launch(sid, launch_tags, jsonl) or _plugin_side_call(cwd=cwd, jsonl=jsonl):
+        return {"ok": False, "error": "Automated sessions cannot start idea tickets."}
     text = _opening_text(sid, jsonl)
     if not _claim(sid, over_skip=True):
         ticket = ticket_for_session(sid)
@@ -894,7 +910,7 @@ def backfill(session_ids):
         sid = str(raw or "").strip()
         entry = data["sessions"].get(sid)
         if (not sid or sid.startswith("agent-") or sid in todo
-                or (isinstance(entry, dict) and entry.get("ref"))):
+                or (entry and not _auto_skip(entry))):
             continue
         todo.append(sid)
     if not todo or not _enabled():
@@ -902,7 +918,7 @@ def backfill(session_ids):
 
     def _mark(d):
         for sid in todo:
-            if (d["sessions"].get(sid) or {}).get("skip"):
+            if _auto_skip(d["sessions"].get(sid)):
                 d["sessions"].pop(sid, None)
             if sid not in d["sessions"]:
                 d["pending"].setdefault(sid, {"at": int(time.time()), "backfill": True})
@@ -917,49 +933,6 @@ def backfill(session_ids):
             _attach_or_file_safe(sid)
     threading.Thread(target=_run, daemon=True).start()
     return {"ok": True, "queued": len(todo)}
-
-
-_RECENT_BACKFILL_MARKER_NAME = "idea-tickets-recent-backfill-done"
-_RECENT_BACKFILL_WINDOW_S = 2 * 24 * 3600
-_RECENT_BACKFILL_MAX = 200
-
-
-def _recent_backfill_marker_path():
-    return Path(_core.COMMAND_CENTER_STATE_DIR) / _RECENT_BACKFILL_MARKER_NAME
-
-
-def backfill_recent_once(rows):
-    """First list build after idea_tickets turns on: ticket sessions active
-    in the last 2 days, so upgrading doesn't leave recent work untracked.
-    Reads only the rows the list already built for this call -- no extra
-    scan -- and runs exactly once per machine (a marker file gates it)."""
-    if not _enabled():
-        return
-    marker = _recent_backfill_marker_path()
-    if marker.exists():
-        return
-    try:
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(str(int(time.time())))
-    except OSError:
-        return
-    cutoff = time.time() - _RECENT_BACKFILL_WINDOW_S
-    dated = []
-    for row in rows or []:
-        if not isinstance(row, dict):
-            continue
-        sid = str(row.get("session_id") or row.get("id") or "").strip()
-        if not sid or sid.startswith("agent-"):
-            continue
-        ts = row.get("last_interacted") or row.get("mtime") or row.get("modified") or 0
-        try:
-            ts = float(ts)
-        except (TypeError, ValueError):
-            continue
-        if ts >= cutoff:
-            dated.append((ts, sid))
-    dated.sort(key=lambda pair: pair[0])
-    backfill([sid for _, sid in dated[:_RECENT_BACKFILL_MAX]])
 
 
 _CONTINUED_RELABEL_MARKER_NAME = "idea-tickets-continued-relabel-done"

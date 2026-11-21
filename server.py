@@ -19151,13 +19151,6 @@ def _archive_list_ticket_updates(projected, idea_tickets_by_sid):
         _idea_tickets.autopilot_rows(projected)
     except Exception:
         pass
-    # One-time catch-up for an install where the flag just turned on: ticket
-    # the last 2 days of sessions from these same rows (marker-gated, so this
-    # body only runs once ever per machine).
-    try:
-        _idea_tickets.backfill_recent_once(projected)
-    except Exception:
-        pass
     # One-time relabel: codex successors recorded as "child" before the
     # origin-marker scan learned the rollout format become "continued" and
     # lead-eligible (marker-gated, runs once per machine).
@@ -37916,12 +37909,14 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         ua = (self.headers.get("User-Agent") or "").strip()
         origin = (self.headers.get("Origin") or "").strip()
         referer = (self.headers.get("Referer") or "").strip()
-        automated = (self.headers.get("X-CCC-Automated") or "").strip().lower() == "true"
+        automated = (self.headers.get("X-CCC-Automated") or "").strip().lower()
         if ua == "ccc-cli":
             return "cli"
-        if automated:
+        if automated == "true":
             return "ui-automated"
-        if origin or referer:
+        # The dashboard sets this header on every spawn fetch. Local API
+        # clients can supply Origin for routing without being dashboard clicks.
+        if automated == "false" and (origin or referer):
             return "ui"
         return "api"
 
@@ -42367,28 +42362,9 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                             else:
                                 cwd_resolved = candidate
             worktree_flag = bool(payload.get("worktree"))
-            # Best-effort caller attribution (CCC-1026 follow-up): a same-origin
-            # browser fetch and a page.evaluate() call from an automation tool
-            # (Playwright/Puppeteer driving the dashboard) are indistinguishable
-            # to _check_same_origin — both just look like "the UI". These
-            # headers are the only signal available without caller cooperation:
-            # our own CLI sets its own User-Agent, and navigator.webdriver
-            # (relayed via X-CCC-Automated by static/app.js's spawn fetches) is
-            # the one flag CDP-driven browsers cannot suppress. Still spoofable
-            # by a caller that wants to lie, so treat this as a forensic aid,
-            # not an auth signal.
+            spawned_via = self._extract_spawned_via()
             _ua = (self.headers.get("User-Agent") or "").strip()
             _origin = (self.headers.get("Origin") or "").strip()
-            _referer = (self.headers.get("Referer") or "").strip()
-            _automated = (self.headers.get("X-CCC-Automated") or "").strip().lower() == "true"
-            if _ua == "ccc-cli":
-                spawned_via = "cli"
-            elif _automated:
-                spawned_via = "ui-automated"
-            elif _origin or _referer:
-                spawned_via = "ui"
-            else:
-                spawned_via = "api"
             # Logged unconditionally, before any validation, so a request that
             # never reaches spawn_session_* (missing prompt, bad cwd, unknown
             # engine, ...) still leaves a trace of what was actually submitted.
