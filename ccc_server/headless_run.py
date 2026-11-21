@@ -121,6 +121,13 @@ def _worker_routes(data):
     return routes
 
 
+def _launch_model(engine, model):
+    """Translate versioned Claude picker IDs to Claude Code launch IDs."""
+    if engine == "claude" and re.match(r"^(sonnet|opus|haiku|fable)-\d", model, re.I):
+        return f"claude-{model}"
+    return model
+
+
 def _retryable_worker_failure(result):
     if result.get("subtype") not in ("error", "api_error", "error_during_execution", "engine_unavailable"):
         return False
@@ -765,6 +772,7 @@ def run_headless(
     )
 
     if not worker_defaults:
+        kwargs["model"] = _launch_model(resolved_engine, resolved_model)
         return _dispatch(prompt, resolved_engine, kwargs)
 
     deadline = time.monotonic() + timeout_s
@@ -781,9 +789,7 @@ def run_headless(
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
-        model_id = route.get("model") or ""
-        if selected == "claude" and model_id and not model_id.startswith("claude-"):
-            model_id = f"claude-{model_id}"
+        model_id = _launch_model(selected, route.get("model") or "")
         effort_value = route.get("effort") or ""
         attempt_kwargs = {**kwargs, "model": model_id, "effort": effort_value, "timeout_s": remaining}
         if selected == "codex" and schema_obj is not None:

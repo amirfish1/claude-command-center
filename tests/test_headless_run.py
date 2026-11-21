@@ -100,13 +100,27 @@ class HeadlessRunTests(unittest.TestCase):
             )
             self.assertTrue(res["ok"])
             self.assertEqual(res["engine"], "claude")
-            self.assertEqual(res["model"], "sonnet-5-5")
+            self.assertEqual(res["model"], "claude-sonnet-5-5")
+            self.assertEqual(captured["argv"][captured["argv"].index("--model") + 1], "claude-sonnet-5-5")
             self.assertEqual(res["effort"], "medium")
             self.assertEqual(res["structured_output"], {"ok": True})
             self.assertNotIn("ANTHROPIC_API_KEY", captured["env"])
             self.assertIn("--tools", captured["argv"])
             self.assertEqual(captured["argv"][captured["argv"].index("--tools") + 1], "")
             self.assertIn("--json-schema", captured["argv"])
+
+    def test_claude_model_overrides_use_launch_ids(self):
+        defaults = {"engine": "claude", "models": {"claude": "sonnet-5-5"}}
+        with patch.object(headless_run, "_load_defaults", return_value=(defaults, "file")), \
+                patch.object(headless_run, "_run_claude") as claude:
+            for model, expected in (
+                ("haiku-5-5", "claude-haiku-5-5"),
+                ("claude-haiku-5-5", "claude-haiku-5-5"),
+                ("sonnet", "sonnet"),
+            ):
+                with self.subTest(model=model):
+                    headless_run.run_headless("synthetic", model=model)
+                    self.assertEqual(claude.call_args.kwargs["model"], expected)
 
     def test_codex_dispatch_and_mcp_translation(self):
         captured = {}
