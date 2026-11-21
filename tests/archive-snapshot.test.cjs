@@ -320,6 +320,45 @@ async function waitForSnapshot(page, delta, key = 'last', windowName = '7d') {
   },{},delta,key,windowName);
 }
 
+test('All reload keeps a compact snapshot when a delta overtakes the first save', {timeout:10000}, async () => {
+  const url = '/api/conversations/list?window=all&stale_ok=1';
+  const context = await browser.createBrowserContext(), page = await context.newPage();
+  try {
+    page.setDefaultTimeout(6000);
+    await page.evaluateOnNewDocument(() => localStorage.setItem('ccc-archive-window', 'all'));
+    await page.goto(origin, {waitUntil:'load'});
+    const count = 9000;
+    const expandedBytes = await page.evaluate(({url, count}) => {
+      const repeatedKey = 'field'.repeat(400);
+      const rows = Array.from({length:count}, (_, i) => ({session_id:String(i), [repeatedKey]:i}));
+      const changed = {...rows[0], name:'שלום'};
+      const latest = [...rows.slice(1), changed];
+      const helper = window.__cccArchiveSnapshot;
+      helper.save({url, rows, delta:'old'}, null,
+        [[['session_id', repeatedKey]], rows.map(row => [0, Object.values(row)])]);
+      helper.save({url, rows:latest, delta:'valid'},
+        {from:'old', ids:latest.map(row => row.session_id), changes:[changed]});
+      window.__cccArchiveSettled = true;
+      window.dispatchEvent(new Event('ccc:archive-settled'));
+      return 2 * JSON.stringify(latest).length;
+    }, {url, count});
+    assert(expandedBytes > 32 * 1024 * 1024);
+    await waitForSnapshot(page, 'valid', 'last', 'all');
+    await page.reload({waitUntil:'load'});
+    const restored = await page.evaluate(async count => {
+      const helper = window.__cccArchiveSnapshot;
+      const saved = await helper.read;
+      const idsAndValuesMatch = saved?.rows.every((row, i) => {
+        const id = (i + 1) % count;
+        return row.session_id === String(id) && row['field'.repeat(400)] === id;
+      });
+      return {count:saved?.rows.length, idsAndValuesMatch,
+        name:saved?.rows.at(-1).name, status:(await helper.fetch)?.status};
+    }, count);
+    assert.deepEqual(restored, {count, idsAndValuesMatch:true, name:'שלום', status:304});
+  } finally {await context.close();}
+});
+
 test('All reload validates a packed UTF-8 base after applying an ordered patch', async () => {
   const allUrl = '/api/conversations/list?window=all&stale_ok=1';
   const context = await browser.createBrowserContext(), page = await context.newPage();

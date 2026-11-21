@@ -54,6 +54,23 @@
   const maxPatchRows = 256;
   const maxRows = 30000;
   const rowId = row => row?.session_id || row?.id;
+  const packRows = rows => {
+    const layouts = [], slots = new Map(), encoded = [];
+    for (const row of rows) {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
+      const keys = Object.keys(row);
+      const shape = JSON.stringify(keys);
+      let slot = slots.get(shape);
+      if (slot === undefined) {
+        if (keys.includes('__proto__')) return null;
+        slot = layouts.length;
+        slots.set(shape, slot);
+        layouts.push(keys);
+      }
+      encoded.push([slot, Object.values(row)]);
+    }
+    return [layouts, encoded];
+  };
   const readPackedRows = bytes => {
     if (!(bytes instanceof ArrayBuffer) || !bytes.byteLength || bytes.byteLength > maxBytes) return null;
     const [layouts, encodedRows] = JSON.parse(new TextDecoder('utf-8', {fatal:true}).decode(bytes));
@@ -192,8 +209,9 @@
         };
         const writeFull = () => {
           // The All feed already negotiated shared row layouts. Preserve
-          // those values in UTF-8 to fit the same byte budget as other scopes.
-          const encoded = packed ? new TextEncoder().encode(JSON.stringify(packed)) : null;
+          // that format when a coalesced or oversized delta needs its own base.
+          const layouts = packed || (windowName === 'all' ? packRows(rows) : null);
+          const encoded = layouts ? new TextEncoder().encode(JSON.stringify(layouts)) : null;
           const storage = encoded ? {packedRows:encoded.buffer} : {rowsJson:JSON.stringify(rows)};
           const bytes = encoded ? encoded.byteLength : 2 * storage.rowsJson.length;
           if (bytes > maxBytes) return;
