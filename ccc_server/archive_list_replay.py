@@ -58,13 +58,8 @@ def order_token(ids):
     return hashlib.sha256(json.dumps(ids, separators=(",", ":")).encode()).hexdigest()
 
 
-def history_delta(payload, scope, nonce, since, saved_order):
-    """Compare final history rows when the hot snapshot cannot supply revisions.
-
-    A manifest retains only fingerprints. An unchanged run already exists in
-    the client's base, even if it moved. Send the complete current order and
-    rows from changed runs so removals and insertions can be applied exactly.
-    """
+def prepare_history(payload):
+    """Describe one completed projection for all readers sharing it."""
     rows = payload["conversations"]
     ids, seen, runs = [], set(), []
     start = 0
@@ -86,6 +81,15 @@ def history_delta(payload, scope, nonce, since, saved_order):
     if metadata is None:
         return payload, None
     fingerprint = hashlib.sha256(metadata + b"".join(digest for digest, _, _ in runs)).digest()
+    return payload, (ids, runs, fingerprint, order_token(ids))
+
+
+def history_delta(history, scope, nonce, since, saved_order):
+    """Apply one client's base and saved order to a prepared history."""
+    payload, manifest = history
+    if manifest is None:
+        return payload, None
+    ids, runs, fingerprint, order = manifest
     token = f"{nonce}.history.{fingerprint.hex()}"
     if since == token:
         return None, None
@@ -93,11 +97,11 @@ def history_delta(payload, scope, nonce, since, saved_order):
     previous = _HISTORY_MANIFESTS.get((scope, since)) if since else None
     current = frozenset(digest for digest, _, _ in runs)
     _HISTORY_MANIFESTS.put((scope, token), current, 512 + 128 * len(current))
-    order = order_token(ids)
     # The projection can be shared by concurrent readers of the same source.
     # Tokens and the changed-row slice belong to this response alone.
     payload = dict(payload, order_token=order, delta_token=token)
     if previous is not None and previous.intersection(current):
+        rows = payload["conversations"]
         changed = [row for digest, start, end in runs if digest not in previous for row in rows[start:end]]
         same_order = saved_order == order
         payload.update(conversations=changed, delta=True, since=since, ids=[] if same_order else ids)

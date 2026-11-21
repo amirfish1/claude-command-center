@@ -19190,7 +19190,7 @@ _ARCHIVE_LIST_HISTORY_FLIGHTS_LOCK = threading.Lock()
 
 
 def _archive_list_history_projection(scope, rows, build, phases):
-    """Share a complete All projection only with concurrent readers of these rows."""
+    """Share a complete All projection and manifest with concurrent readers."""
     key = (scope, id(rows))
     with _ARCHIVE_LIST_HISTORY_FLIGHTS_LOCK:
         flight = _ARCHIVE_LIST_HISTORY_FLIGHTS.get(key)
@@ -37197,9 +37197,14 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                         return _archive_list_replay_payload(
                             rows, _delta, window=window, cached=from_cache, phases=_payload_phases)
 
-                    if window == "all" and not body_ver and stale_ok:
-                        return _archive_list_history_projection(
-                            list_cache_key, rows, project, _payload_phases)
+                    if window == "all" and not body_ver:
+                        def prepare_history():
+                            return _list_replay.prepare_history(project())
+
+                        if stale_ok:
+                            return _archive_list_history_projection(
+                                list_cache_key, rows, prepare_history, _payload_phases)
+                        return prepare_history()
                     payload = project()
                     if _delta is not None:
                         payload["order_token"] = _archive_list_order_token(
@@ -47851,7 +47856,8 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         comes from _archive_list_body_ver: the snapshot version when rows are
         exactly the stored snapshot (identity), or (version, overlay content
         hash) when in-memory ACP/Devin overlay rows were appended; 0 disables
-        the body cache and falls back to a fresh build."""
+        the body cache. An unversioned All build supplies the payload and
+        manifest together so overlapping readers can reuse both."""
         if window == "all" and not snap_ver:
             from ccc_server.list_encoding import history_representation
 

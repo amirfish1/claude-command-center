@@ -199,29 +199,33 @@ def test_history_delta_preserves_projected_values_and_order(monkeypatch):
     monkeypatch.setattr(replay, '_RUN_BOUNDARY_MASK', 0xffffffff)
     monkeypatch.setattr(replay, '_HISTORY_MANIFESTS', replay.ByteBudgetCache(1 << 20, 4))
     first = [{'session_id': sid, 'title': sid} for sid in 'abcdef']
-    base, _ = replay.history_delta({'conversations': first}, 'scope', 'boot', '', '')
+    base, _ = replay.history_delta(replay.prepare_history({'conversations': first}),
+                                   'scope', 'boot', '', '')
     token, order = base['delta_token'], base['order_token']
     modified = [*first[:5], dict(first[5], title='new title')]
     shared = {'conversations': modified}
-    delta, _ = replay.history_delta(shared, 'scope', 'boot', token, order)
+    prepared = replay.prepare_history(shared)
+    delta, _ = replay.history_delta(prepared, 'scope', 'boot', token, order)
     assert delta['same_order'] and delta['ids'] == []
     assert delta['conversations'] == modified[-2:]
     assert delta['order_token'] == order and delta['delta_token'] != token
-    full, _ = replay.history_delta(shared, 'scope', 'boot', '', '')
+    full, _ = replay.history_delta(prepared, 'scope', 'boot', '', '')
     assert shared == {'conversations': modified}
     assert 'delta' not in full and full['conversations'] == modified
+    assert replay.history_delta(prepared, 'scope', 'boot', full['delta_token'], '') == (None, None)
 
     reordered = modified[2:4] + [{'session_id': 'new'}] + modified[4:]
-    delta, _ = replay.history_delta({'conversations': reordered}, 'scope', 'boot', token, order)
+    prepared = replay.prepare_history({'conversations': reordered})
+    delta, _ = replay.history_delta(prepared, 'scope', 'boot', token, order)
     assert delta['ids'] == [row['session_id'] for row in reordered]
     by_id = {row['session_id']: row for row in [*first, *delta['conversations']]}
     assert [by_id[sid] for sid in delta['ids']] == reordered
     assert delta['order_token'] != order
 
-    full, _ = replay.history_delta({'conversations': reordered}, 'other-scope', 'boot', token, order)
+    full, _ = replay.history_delta(prepared, 'other-scope', 'boot', token, order)
     assert 'delta' not in full and full['conversations'] == reordered
     duplicate = {'conversations': [*first, first[0]]}
-    assert replay.history_delta(duplicate, 'scope', 'boot', token, order) == (duplicate, None)
+    assert replay.history_delta(replay.prepare_history(duplicate), 'scope', 'boot', token, order) == (duplicate, None)
 
 
 def test_unversioned_history_projection_shares_only_overlapping_exact_source(monkeypatch):
