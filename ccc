@@ -1806,6 +1806,7 @@ RESTART_STATE_FILE = os.path.expanduser("~/.claude/command-center/restart-deboun
 RESTART_DEBOUNCE_S = int(os.environ.get("CCC_RESTART_DEBOUNCE_S") or 1800)
 _RESTART_RETRY_S = 60
 _RESTART_MAX_RETRIES = 10
+_RESTART_RUNNER_SOURCE = "_CCC_RESTART_RUNNER_SOURCE"
 _RESTART_PATHS = {"all": "/api/restart/all", "dashboard": "/api/restart", "worker": "/api/restart/worker"}
 _WORKER_RESTART_REFUSALS = frozenset({
     "codex_gate_unsupported", "codex_restart_in_progress",
@@ -1841,13 +1842,25 @@ def _restart_state_update(fn):
         return result
 
 
+def _restart_runner_command(base, due):
+    # Follow the installed CLI path across upgrades that replace a symlink.
+    return [sys.executable, os.path.abspath(__file__), "--server", base,
+            "restart", "--run-pending", "--due", str(int(due))]
+
+
+def _restart_runner_source():
+    source = os.stat(__file__)
+    return f"{source.st_dev}:{source.st_ino}:{source.st_size}:{source.st_mtime_ns}:{source.st_ctime_ns}"
+
+
 def _spawn_restart_runner(base, due):
     """Detached `ccc restart --run-pending` that sleeps until `due`; its pid."""
-    cmd = [sys.executable, os.path.realpath(__file__), "--server", base,
-           "restart", "--run-pending", "--due", str(int(due))]
+    env = dict(os.environ)
+    env[_RESTART_RUNNER_SOURCE] = _restart_runner_source()
     log = os.path.expanduser("~/.claude/command-center/restart-debounce.log")
     with open(log, "a") as out:
-        return subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=out,
+        return subprocess.Popen(_restart_runner_command(base, due), env=env,
+                                stdin=subprocess.DEVNULL, stdout=out, stderr=out,
                                 start_new_session=True, close_fds=True).pid
 
 
@@ -2129,6 +2142,7 @@ def _run_pending_restart(base, due):
     """Detached runner: sleep to the due time, then fire the merged restart."""
     import time
     me = os.getpid()
+    loaded_source = os.environ.get(_RESTART_RUNNER_SOURCE) or _restart_runner_source()
     while True:
         state = _restart_state_update(lambda s: dict(s))
         if state.get("runner_pid") != me:
@@ -2143,6 +2157,18 @@ def _run_pending_restart(base, due):
         wait_s = float(pending.get("due") or due or 0) - time.time()
         if wait_s > 0:
             time.sleep(min(wait_s, 5))
+            continue
+        # Refresh between attempts, before taking a reservation. Exec keeps
+        # the owning PID, endpoint and queued state while loading current code.
+        try:
+            source = _restart_runner_source()
+            if source != loaded_source:
+                env = dict(os.environ)
+                env[_RESTART_RUNNER_SOURCE] = source
+                os.execve(sys.executable, _restart_runner_command(base, due), env)
+        except OSError as exc:
+            print(f"ccc restart: CLI reload unavailable, will retry: {exc}", file=sys.stderr)
+            time.sleep(_RESTART_RETRY_S)
             continue
         slot = _reserve_restart(base, runner=True)
         if slot.get("stop"):

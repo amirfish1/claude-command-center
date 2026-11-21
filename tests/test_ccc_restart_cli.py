@@ -35,6 +35,7 @@ def _load_ccc_cli():
 
 class _Stub(http.server.BaseHTTPRequestHandler):
     posts = []
+    callers = []
     pid = 1000
     refuse = 0  # answer this many restart POSTs with 409 first
 
@@ -57,7 +58,8 @@ class _Stub(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
-        self.rfile.read(n)
+        payload = json.loads(self.rfile.read(n))
+        _Stub.callers.append(payload["audit_caller"]["pid"])
         if _Stub.refuse > 0:
             _Stub.refuse -= 1
             _Stub.posts.append(("409", self.path))
@@ -71,7 +73,7 @@ class _Stub(http.server.BaseHTTPRequestHandler):
 
 class CccRestartCliTests(unittest.TestCase):
     def setUp(self):
-        _Stub.posts, _Stub.refuse, _Stub.pid = [], 0, 1000
+        _Stub.posts, _Stub.callers, _Stub.refuse, _Stub.pid = [], [], 0, 1000
         self.srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Stub)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.base = f"http://127.0.0.1:{self.srv.server_address[1]}"
@@ -154,6 +156,37 @@ class CccRestartCliTests(unittest.TestCase):
         r = self.ccc("worker")
         self.assertEqual(r.returncode, 1)
         self.assertIn("failed", r.stderr)
+
+    def test_pending_runner_loads_upgraded_cli_before_dispatch(self):
+        self.env["CCC_RESTART_DEBOUNCE_S"] = "1800"
+        candidate = Path(self.home) / "ccc"
+        original = Path(CCC).read_text()
+        candidate.write_text(original)
+        command = [sys.executable, str(candidate), "--server", self.base, "restart", "worker"]
+        for _ in range(2):
+            result = subprocess.run(command, env=self.env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+        cli = _load_ccc_cli()
+        cli.RESTART_STATE_FILE = str(Path(self.home) / ".claude/command-center/restart-debounce.json")
+        runner = cli._restart_state_update(lambda state: state["runner_pid"])
+
+        upgraded = candidate.with_suffix(".new")
+        upgraded.write_text(original.replace('"/api/restart/worker"', '"/api/restart/upgraded-worker"'))
+        upgraded.replace(candidate)
+
+        # Advance the test clock past the batching window on disk so the
+        # detached process makes its attempt immediately.
+        def elapse_window(state):
+            state["last_restart"] = time.time() - 1801
+            state["pending"]["due"] = time.time()
+
+        cli._restart_state_update(elapse_window)
+        self.assertEqual(self.wait_posts(2, timeout=10), [
+            ("200", "/api/restart/worker"),
+            ("200", "/api/restart/upgraded-worker"),
+        ])
+        self.assertEqual(_Stub.callers[-1], runner)
 
     def test_loaded_thread_refusals_outlast_retry_limit_then_restart_once(self):
         # Exercise the actual runner and HTTP requests, with only its wait
