@@ -74,3 +74,45 @@ def test_bounded_inventory_preserves_peer_payload_and_stable_ties(tmp_path, monk
     monkeypatch.setattr(server, '_archive_inventory_rows_cached', method)
     monkeypatch.setattr(server, '_archive_all_rows_cached', lambda *a:pytest.fail('full history materialized'))
     assert fleet._federation_sessions_inventory(limit)['sessions'] == expected
+
+
+def test_oversized_inventory_reuses_packed_rows_until_next_publication(tmp_path, monkeypatch):
+    from ccc_server import fleet
+    from ccc_server.bounded_cache import ByteBudgetCache
+
+    target = tmp_path / 'archive.json'
+    key = 'base'
+    rows = [
+        {'session_id': sid, 'engine': 'codex', 'mtime': mtime,
+         'display_name': 'x' * 400, 'model': {'nested': ['value']}}
+        for sid, mtime in [('first', 20), ('live', 40), ('second', 20), ('deleted', 30)]
+    ]
+    snapshot = {'schema_version': 1, 'build_id': '1',
+                'entries': {key: {'cached_at': 1, 'conversations': rows}}}
+    archive_store.save(target, snapshot, complete=True)
+    monkeypatch.setattr(archive_store, '_INVENTORY_CACHE', ByteBudgetCache(4096, 2))
+    read_generation = archive_store._read_inventory_generation
+    reads = []
+
+    def tracked_read(*args):
+        reads.append(1)
+        return read_generation(*args)
+
+    monkeypatch.setattr(archive_store, '_read_inventory_generation', tracked_read)
+    options = dict(schema_version=1, limit=2, activity_key=fleet._federation_row_activity,
+                   skip_identities={archive_store.identity(rows[1])}, deleted_codex={'deleted'})
+    first = archive_store.load_inventory(target, key, **options)
+    assert [row['session_id'] for row in first['conversations']] == ['first', 'second']
+    first['conversations'][0]['model']['nested'].append('local edit')
+    repeat = archive_store.load_inventory(target, key, **options)
+    assert repeat['conversations'][0]['model'] == {'nested': ['value']}
+    assert repeat['positions'] == first['positions']
+    assert len(reads) == 1
+
+    snapshot['entries'][key]['cached_at'] = 2
+    rows[2]['mtime'] = 25
+    archive_store.save(target, snapshot, complete=True)
+    updated = archive_store.load_inventory(target, key, **options)
+    assert [row['session_id'] for row in updated['conversations']] == ['second', 'first']
+    assert updated['cached_at'] == 2
+    assert len(reads) == 2

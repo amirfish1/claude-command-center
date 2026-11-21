@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import sqlite3
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -426,12 +427,23 @@ def _read_inventory_generation(con, key, cache_key, activity_key):
     bodies = con.execute('''SELECT i.identity,i.body FROM rows r JOIN session_inventory i
         ON i.variant=r.variant AND i.identity=r.identity
         WHERE r.variant=? ORDER BY r.position''', (key,)).fetchall()
-    decoded = [(rid, json.loads(body)) for rid, body in bodies]
-    positions = {rid: index for index, (rid, _) in enumerate(decoded)}
-    if activity_key is not None:
-        decoded.sort(key=lambda item: activity_key(item[1]), reverse=True)
-    cached = (tuple(decoded), positions)
-    _INVENTORY_CACHE.put(cache_key, cached, sum(len(rid) + len(body) for rid, body in bodies) * 4)
+    positions = {rid: index for index, (rid, _) in enumerate(bodies)}
+    weight = sum(len(rid) + len(body) for rid, body in bodies) * 4
+    packed = activity_key is not None and weight > _INVENTORY_CACHE.max_bytes
+    if packed:
+        # A decoded generation can outgrow the cache even though peer polls
+        # only need a small slice. Keep the original JSON with its exact
+        # order, and decode eligible rows on demand. Account for the strings,
+        # tuples and position map under the same cache limit.
+        bodies.sort(key=lambda item: activity_key(json.loads(item[1])), reverse=True)
+        ordered = bodies
+        weight = sum(sys.getsizeof(rid) + sys.getsizeof(body) + 192 for rid, body in bodies)
+    else:
+        ordered = [(rid, json.loads(body)) for rid, body in bodies]
+        if activity_key is not None:
+            ordered.sort(key=lambda item: activity_key(item[1]), reverse=True)
+    cached = (tuple(ordered), positions, packed)
+    _INVENTORY_CACHE.put(cache_key, cached, weight)
     return cached
 
 
@@ -492,17 +504,22 @@ def load_inventory(cache_file, key, *, schema_version, build_id=None,
         # Callers may enrich rows; no mutable cache member escapes. Ordinary
         # inventory fields are scalar, but preserve unusual nested model data.
         import copy
+        ordered, positions, packed = cached
         identities, rows = [], []
-        for identity, row in cached[0]:
-            if identity in skip_identities or (row.get('engine') == 'codex'
+        for identity, stored_row in ordered:
+            if identity in skip_identities:
+                continue
+            row = json.loads(stored_row) if packed else stored_row
+            if (row.get('engine') == 'codex'
                     and str(row.get('session_id') or row.get('id') or '') in deleted_codex):
                 continue
             identities.append(identity)
-            rows.append({name: copy.deepcopy(value) if isinstance(value, (dict, list)) else value
-                         for name, value in row.items()})
+            rows.append(row if packed else {
+                name: copy.deepcopy(value) if isinstance(value, (dict, list)) else value
+                for name, value in row.items()})
             if limit is not None and len(rows) >= limit:
                 break
-        positions = {rid: cached[1][rid] for rid in (*identities, *skip_identities) if rid in cached[1]}
+        positions = {rid: positions[rid] for rid in (*identities, *skip_identities) if rid in positions}
         return {'cached_at': metadata[0], 'identities': tuple(identities),
                 'positions': positions, 'conversations': rows}
     finally:
