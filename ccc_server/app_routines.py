@@ -215,6 +215,94 @@ def load_state(folder):
     return state
 
 
+# The builder agent's session can be continued in a new one ("Continue in a
+# new session", usage-limit auto-resume, an engine switch). The app keeps
+# pointing at whatever session is newest in that chain, so the side pane
+# follows it. The lineage comes from the server's cached session identity
+# map (spawn registry + conversation rows); a reverse index is rebuilt only
+# when that map object changes.
+_MAX_SUCCESSOR_HOPS = 25
+_successor_cache = {"map": None, "index": {}}
+_successor_lock = threading.Lock()
+
+
+def _identity_map():
+    try:
+        from ccc_server import core as _core
+        return _core._census_identity_map() or {}
+    except Exception:
+        return {}  # no server loaded (unit tests, tooling): no forwarding
+
+
+def _successor_index(identity=None):
+    """origin sid -> [successor sids] from `continued_from_session_id`."""
+    ident = _identity_map() if identity is None else identity
+    with _successor_lock:
+        if _successor_cache["map"] is ident:
+            return _successor_cache["index"]
+        index = {}
+        for sid, row in ident.items():
+            origin = str((row or {}).get("continued_from_session_id") or "").strip()
+            if origin and sid and origin != sid:
+                index.setdefault(origin, []).append(sid)
+        _successor_cache.update(map=ident, index=index)
+        return index
+
+
+def _newest(sids):
+    if len(sids) == 1:
+        return sids[0]
+    try:
+        from ccc_server import core as _core
+        return max(sids, key=lambda s: _core._session_mtime_epoch(s) or 0)
+    except Exception:
+        return sorted(sids)[-1]
+
+
+def latest_successor(sid, identity=None):
+    """The newest session in `sid`'s continuation chain (or `sid` itself)."""
+    if not sid:
+        return sid
+    index = _successor_index(identity)
+    seen, cur = {sid}, sid
+    for _ in range(_MAX_SUCCESSOR_HOPS):
+        nxt = [s for s in index.get(cur, ()) if s not in seen]
+        if not nxt:
+            break
+        cur = _newest(nxt)
+        seen.add(cur)
+    return cur
+
+
+def current_agent(folder, state=None, identity=None):
+    """The app's agent record, moved forward to its latest successor.
+
+    A move is written back to ccc-state.json, so the app keeps the newest
+    session even after the lineage source forgets the old link."""
+    state = load_state(folder) if state is None else state
+    agent = state.get("agent") if isinstance(state.get("agent"), dict) else None
+    sid = (agent or {}).get("session_id") or ""
+    if not sid:
+        return agent
+    latest = latest_successor(sid, identity)
+    if not latest or latest == sid:
+        return agent
+    with _lock:
+        fresh = load_state(folder)
+        rec = fresh.get("agent") if isinstance(fresh.get("agent"), dict) else None
+        if rec and rec.get("session_id") == sid:
+            earlier = [s for s in (rec.get("earlier_session_ids") or []) if isinstance(s, str)]
+            rec = dict(rec, session_id=latest, earlier_session_ids=(earlier + [sid])[-20:],
+                       forwarded_at=time.time())
+            fresh["agent"] = rec
+            try:
+                _write_json_atomic(Path(folder) / STATE_NAME, fresh)
+            except OSError:
+                pass
+        state["agent"] = rec
+    return rec
+
+
 def _update_routine_state(folder, rid, **fields):
     with _lock:
         state = load_state(folder)
@@ -285,7 +373,7 @@ def describe(app_id, apps_dir=None, now=None):
             "next_run": next_run(sched, st.get("last_run"), now, meta.get("tz")) if enabled else None,
             "history": st.get("history") or [],
         })
-    agent = state.get("agent") if isinstance(state.get("agent"), dict) else None
+    agent = current_agent(folder, state)
     return {"ok": True, "app": app_id, "label": str(meta.get("label") or app_id),
             "agent": agent, "routines": rows, "suggestions": load_suggestions(meta),
             "stamp": files_stamp(folder)}
@@ -589,7 +677,7 @@ def ensure_agent(app_id, port, fresh=False, apps_dir=None, docs_path=""):
     if folder is None:
         return {"ok": False, "error": "unknown app"}, 404
     state = load_state(folder)
-    agent = state.get("agent") if isinstance(state.get("agent"), dict) else None
+    agent = current_agent(folder, state)
     if agent and agent.get("session_id") and not fresh:
         return {"ok": True, "session_id": agent["session_id"], "existing": True}, 200
     label = str(load_routines(folder)[1].get("label") or app_id)

@@ -1,0 +1,1 @@
+- An app's agent pane now follows its agent into the newest continued session (for example after switching engines), instead of reopening the original one.

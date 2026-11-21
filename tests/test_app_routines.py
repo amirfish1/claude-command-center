@@ -223,3 +223,52 @@ class AgentDefaultsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AgentSuccessorTests(unittest.TestCase):
+    """The app's agent follows its continuation chain to the newest session."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.folder = make_app(self.tmp.name, [])
+        (self.folder / ar.STATE_NAME).write_text(json.dumps(
+            {"agent": {"session_id": "old-session-1", "started_at": 1}}))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def ident(self, **links):
+        return {sid: {"continued_from_session_id": origin} for sid, origin in links.items()}
+
+    def test_chain_resolves_to_newest(self):
+        ident = self.ident(**{"mid-session-2": "old-session-1", "neon-session-3": "mid-session-2",
+                              "unrelated-9": "someone-else"})
+        self.assertEqual(ar.latest_successor("old-session-1", ident), "neon-session-3")
+        self.assertEqual(ar.latest_successor("neon-session-3", ident), "neon-session-3")
+
+    def test_cycle_terminates(self):
+        ident = self.ident(**{"a-session-1": "b-session-2", "b-session-2": "a-session-1"})
+        self.assertIn(ar.latest_successor("a-session-1", ident), {"a-session-1", "b-session-2"})
+
+    def test_current_agent_forwards_and_persists(self):
+        ident = self.ident(**{"mid-session-2": "old-session-1", "neon-session-3": "mid-session-2"})
+        agent = ar.current_agent(self.folder, identity=ident)
+        self.assertEqual(agent["session_id"], "neon-session-3")
+        self.assertEqual(agent["earlier_session_ids"], ["old-session-1"])
+        saved = json.loads((self.folder / ar.STATE_NAME).read_text())["agent"]
+        self.assertEqual(saved["session_id"], "neon-session-3")
+        self.assertEqual(saved["started_at"], 1)
+        # Once persisted, a lineage source that forgot the link changes nothing.
+        self.assertEqual(ar.current_agent(self.folder, identity={})["session_id"], "neon-session-3")
+
+    def test_describe_and_ensure_agent_use_successor(self):
+        ident = self.ident(**{"neon-session-3": "old-session-1"})
+        with patch.object(ar, "_identity_map", return_value=ident):
+            info = ar.describe("demo", self.tmp.name)
+            self.assertEqual(info["agent"]["session_id"], "neon-session-3")
+            res, status = ar.ensure_agent("demo", 1, apps_dir=self.tmp.name)
+        self.assertEqual((status, res["session_id"], res["existing"]), (200, "neon-session-3", True))
+
+    def test_no_lineage_leaves_agent_alone(self):
+        with patch.object(ar, "_identity_map", return_value={}):
+            self.assertEqual(ar.describe("demo", self.tmp.name)["agent"]["session_id"], "old-session-1")

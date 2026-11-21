@@ -32699,7 +32699,7 @@ def _load_application_html(name, *, conversation_document=False):
         folder = app_routines.app_dir(name, USER_APPS_DIR)
         agent_id = None
         if folder is not None:
-            agent = app_routines.load_state(folder).get("agent")
+            agent = app_routines.current_agent(folder)
             agent_id = (agent.get("session_id") or "") if isinstance(agent, dict) else ""
         from ccc_server import app_initial_reads
         from ccc_server.app_kit_delivery import script_url
