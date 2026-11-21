@@ -3130,6 +3130,8 @@
     return true;
   }
 
+  const closeAttempts = new Map();
+
   async function _uxqOpenItemDetail(ref) {
     let fallback = (0, sharedState._uxqItemForRef)(ref);
     // A slim list row (closed ticket, prose trimmed by ?slim=1) must NEVER
@@ -3140,7 +3142,9 @@
     if (fallback && fallback._slim) {
       let full = null;
       try {
-        const cres = await fetch('/api/ux-fixes/item?cached=1&ref=' + encodeURIComponent(ref), { cache: 'no-store' });
+        const cres = await fetch('/api/ux-fixes/item?cached=1&ref=' + encodeURIComponent(ref), {
+          cache: 'no-store', cccPriority: 'user',
+        });
         const cdata = await cres.json().catch(() => ({}));
         if (cres.ok && cdata.ok && cdata.item && !cdata.item._slim) full = cdata.item;
       } catch (_) {}
@@ -3152,8 +3156,13 @@
     // 10s+ or fail outright during GraphQL quota storms — the user should
     // never wait on it just to read a ticket they can already see.
     if (fallback) _uxqOpenItemModal(fallback);
+    const fallbackModal = fallback && document.getElementById('uxqItemModal');
+    const attempt = closeAttempts.get(ref);
+    const wasClosing = attempt?.pending;
     try {
-      const res = await fetch('/api/ux-fixes/item?ref=' + encodeURIComponent(ref), { cache: 'no-store' });
+      const res = await fetch('/api/ux-fixes/item?ref=' + encodeURIComponent(ref), {
+        cache: 'no-store', cccPriority: 'user',
+      });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok && data.item) {
         if (!fallback) {
@@ -3163,7 +3172,8 @@
         // Hydrate only if this ticket's modal is still open and the user
         // hasn't started typing into it — a rebuild would wipe their input.
         const modal = document.getElementById('uxqItemModal');
-        if (!modal || (0, sharedState._uxqItemRef)(data.item) !== ref) return;
+        if (!modal || modal !== fallbackModal || (0, sharedState._uxqItemRef)(data.item) !== ref
+            || (wasClosing && !attempt.pending)) return;
         if (modal.contains(document.activeElement)
             && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) return;
         const typed = Array.from(modal.querySelectorAll('input, textarea'))
@@ -3359,7 +3369,7 @@
     catch (_) { return sharedState._uxqAnswerDrafts.get(ref) || ''; }
   }
 
-  function _uxqAnswerNotice(ref, message) {
+  function _uxqTicketNotice(ref, message) {
     const toast = (0, sharedState.showOpToast)((0, sharedState.escapeHtml)(ref + ': ' + message), 'warning', {
       label: 'Review ticket', ttlMs: 86400000,
       onClick: () => window.cccOpenTicket(ref),
@@ -3391,7 +3401,7 @@
       sharedState._workersAnswersPending.add(ref);
       // Release the dialog before waiting for queue writes or worker delivery.
       close();
-      const notice = _uxqAnswerNotice(ref, 'Sending answer in the background…');
+      const notice = _uxqTicketNotice(ref, 'Sending answer in the background…');
       void (async () => {
         let confirmed = false;
         try {
@@ -3411,14 +3421,14 @@
             (0, hostServices._renderQueuePanel)();
           } catch (_) { /* a refresh failure cannot undo a recorded answer */ }
           if (data.delivery && data.delivery.ok === false) {
-            _uxqAnswerNotice(ref, 'Answer recorded; worker notification could not be confirmed. Check Activity before sending again.');
+            _uxqTicketNotice(ref, 'Answer recorded; worker notification could not be confirmed. Check Activity before sending again.');
           } else {
             (0, sharedState.showOpToast)((0, sharedState.escapeHtml)(ref + (data.images_stripped
               ? ': Answer recorded; images were omitted for this GitHub ticket.'
               : ': Answer recorded.')), 'success');
           }
         } catch (error) {
-          _uxqAnswerNotice(ref, 'Answer not confirmed: ' + (error.message || error)
+          _uxqTicketNotice(ref, 'Answer not confirmed: ' + (error.message || error)
             + '. Your text is saved. Check Activity before retrying.');
         } finally {
           notice?.remove();
@@ -3541,7 +3551,7 @@
     // Match the compact Queue row: request work only for an unclaimed open
     // ticket. A queued request stays reversible until WatchTower claims it.
     const hasActiveClaim = !!(item.claimed_by || item.claimed_at);
-    const canRequestRun = status === 'open' && !hasActiveClaim;
+    const canRequestRun = status === 'open' && !hasActiveClaim && !closeAttempts.get(ref)?.pending;
     const runQueued = canRequestRun && !!item.run_requested;
     const runBusy = sharedState._uxqRunBusyRefs.has(ref);
     // List rows carry `history` but not `timeline`; the modal opens from the
@@ -4007,12 +4017,14 @@
         + '<div class="uxq-reopen-row">'
         + '<button type="button" class="ann-btn ann-primary uxq-td-mark-closed-confirm">Mark as closed</button>'
         + '</div>'
+        + '<div class="uxq-td-answer-hint" data-close-status role="status"></div>'
         + '</div>'
       : '';
 
     // Build modal DOM
     const modal = document.createElement('div');
     modal.id = 'uxqItemModal';
+    modal.dataset.ticketRef = ref;
     modal.className = 'uxq-td-overlay';
     modal.innerHTML =
       '<div class="uxq-td-card" role="dialog" aria-modal="true" aria-label="Ticket ' + (0, sharedState.escapeAttr)(ref) + '">'
@@ -4267,30 +4279,72 @@
     const markClosedInput = modal.querySelector('.uxq-td-mark-closed-input');
     const markClosedBtn = modal.querySelector('.uxq-td-mark-closed-confirm');
     if (markClosedBtn) {
+      const previous = closeAttempts.get(ref);
+      if (previous) {
+        markClosedInput.value = previous.draft;
+        markClosedInput.disabled = markClosedBtn.disabled = previous.pending;
+        markClosedBtn.textContent = previous.pending ? 'Closing…' : 'Mark as closed';
+        modal.querySelector('[data-close-status]').textContent = previous.message;
+      }
+
       const doMarkClosed = async () => {
-        markClosedBtn.disabled = true;
+        if (markClosedBtn.disabled || closeAttempts.get(ref)?.pending) return;
+        const draft = markClosedInput.value;
+        const attempt = { draft, pending: true, message: 'Closing in the background…' };
+        closeAttempts.set(ref, attempt);
+        close();
+        const notice = _uxqTicketNotice(ref, attempt.message);
+        let d;
         try {
+          const body = JSON.stringify({ ref, note: draft.trim() });
           const res = await fetch('/api/ux-fixes/close', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ref, note: (markClosedInput ? markClosedInput.value.trim() : '') }),
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+            keepalive: new TextEncoder().encode(body).length < 60000,
+            cccRetryHandled: true,
           });
-          const d = await res.json().catch(() => ({}));
-          if (res.ok && d.ok) {
-            (0, sharedState.showOpToast)('Ticket closed', 'success');
-            sharedState._uxqHealthCache.ts = 0;
-            if (_uxqReplaceCachedItem(d.item)) {
-              (0, hostServices._renderQueuePanel)({ allowStale: true }); close();
-            } else {
-              sharedState._uxqItemsCache.ts = 0;
-              (0, hostServices._renderQueuePanel)(); close();
-            }
-          } else {
-            (0, sharedState.showOpToast)('Close failed: ' + (d.error || res.status), 'error');
-            markClosedBtn.disabled = false;
+          d = await res.json();
+          if (!res.ok || d.ok === false) {
+            throw new Error(d.error || ('HTTP ' + res.status));
           }
-        } catch (e) {
-          (0, sharedState.showOpToast)('Close failed: ' + e, 'error');
-          markClosedBtn.disabled = false;
+          if (!d.ok || d.item?.ref !== ref || !d.item.status) {
+            throw new Error('No ticket status in the response.');
+          }
+        } catch (error) {
+          attempt.message = 'Close unconfirmed. Check Activity before trying again. ' + error.message;
+          d = null;
+        } finally {
+          attempt.pending = false;
+          notice?.remove();
+        }
+        const status = d?.item.status;
+        const confirmed = status === 'closed' || status === 'in_review';
+        if (confirmed) {
+          closeAttempts.delete(ref);
+          attempt.message = status === 'closed' ? 'Ticket closed' : 'Sent for review';
+          (0, sharedState.showOpToast)((0, sharedState.escapeHtml)(ref + ': ' + attempt.message), 'success');
+        } else {
+          if (d) attempt.message = 'Ticket is still open. ' + (d.item.gate_feedback || 'Check Activity for details.');
+          _uxqTicketNotice(ref, attempt.message);
+        }
+        // The user may have opened this ticket again while the close ran.
+        const current = document.getElementById('uxqItemModal');
+        if (current?.dataset.ticketRef === ref) {
+          const button = current.querySelector('.uxq-td-mark-closed-confirm');
+          if (button) {
+            button.disabled = confirmed;
+            button.textContent = confirmed ? attempt.message : 'Mark as closed';
+            current.querySelector('.uxq-td-mark-closed-input').disabled = confirmed;
+            current.querySelector('[data-close-status]').textContent = attempt.message;
+          }
+        }
+        if (d) {
+          sharedState._uxqHealthCache.ts = 0;
+          if (_uxqReplaceCachedItem(d.item)) {
+            (0, hostServices._renderQueuePanel)({ allowStale: true });
+          } else {
+            sharedState._uxqItemsCache.ts = 0;
+            (0, hostServices._renderQueuePanel)();
+          }
         }
       };
       markClosedBtn.addEventListener('click', doMarkClosed);
@@ -4532,7 +4586,7 @@
     const groups = {
       "conversation-bootstrap.js": { popoutConversationIdForRow },
       "conversation-services.js": { restoreLastViewOrConversation, conversationRowsContainId, restoreLastConversation, _signalSnapshot, stampFreshSessionsAsBorn, renderPopoutMissingConversation, maybeSelectPopoutConversation, carryFlowPendingSpawnNode, followPendingSpawnTicket, loadConversationList, persistFlowNodePositions, reconcilePendingNewSessionObjectAssignments, gcFallbackName, gcDisplayName, gcInitials, extractHash, buildAgentFallbackNames, getParticipantColor, formatWaitingOn, updateGcInfoBar, showUpdatedJustNowTick, startReplay, renderReplayControls, stepReplayBack, exitReplayMode, _gcReplayClearHero, _gcReplayCreateHero, _gcReplayMessagePauseMs, _gcReplayHoldThenLandHero, _gcReplayLandHero, _gcReplayHumanStep, _gcReplayParseWhen, _mergeReplayQueueEvents, _renderReplayQueueEvent, playNextReplayStep, _gcReplayReceiptsHtml, _gcReplayAlertsHtml, _gcMentionClose, _gcMentionParticipants, _gcMentionDetectToken, _gcMentionRefresh, _gcMentionCommit, _gcMentionMenuHandleKeydown, wireGcMentionAutocomplete, markSystemBlockquotes, gcExtractPingedNames, renderGroupChatMarkdown, openGcParticipantPicker, openGroupChatReader, _gcExpandHashIds, replaceParticipantMentions, updateOrchestratorPanel, gcParseChatTimestamp, gcRelativeTime, gcTimeChip, _gcShowNewPostsPill, pollGroupChatReader, sendHumanGcPost, getActiveGroupChatPillEl, gcEpochMs, gcTriggerMs, gcSortMs, gcShouldShowActivePill, activeGroupChatPillTarget, updateActiveGroupChatPill, markActiveGroupChatTrigger, _gcChatsKey, pollGcActive, setGroupChatPaused, addSessionToGroupChat, renameGroupChatParticipant, _hasSid },
-      "conversation-views.js": { _uxqSyncTicketMeta, _uxqReviewLabel, _uxqWorkerSid, _uxqGateName, _uxqChecksHtml, _uxqWithMachine, _uxqReplaceCachedItem, _uxqOpenItemDetail, _uxqItemPrompt, _uxqLoadLinkedConversation, _uxqItemTitle, _uxqSaveField, _uxqRelTime, _uxqExtractImages, _uxqCloseNoteModal, _uxqOpenNoteModal, _uxqInitTicketZoom, _uxqAnswerDraft, _uxqAnswerNotice, _uxqWireTicketAnswer, _uxqSessionActivityHtml, _uxqBindSessionActivity, _uxqOpenItemModal }
+      "conversation-views.js": { _uxqSyncTicketMeta, _uxqReviewLabel, _uxqWorkerSid, _uxqGateName, _uxqChecksHtml, _uxqWithMachine, _uxqReplaceCachedItem, _uxqOpenItemDetail, _uxqItemPrompt, _uxqLoadLinkedConversation, _uxqItemTitle, _uxqSaveField, _uxqRelTime, _uxqExtractImages, _uxqCloseNoteModal, _uxqOpenNoteModal, _uxqInitTicketZoom, _uxqAnswerDraft, _uxqTicketNotice, _uxqWireTicketAnswer, _uxqSessionActivityHtml, _uxqBindSessionActivity, _uxqOpenItemModal }
     };
     return owner ? groups[owner] : Object.assign({}, ...Object.values(groups));
   }

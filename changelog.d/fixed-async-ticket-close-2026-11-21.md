@@ -1,0 +1,1 @@
+Ticket detail views return to the queue while WatchTower closes the ticket. The dashboard reports the confirmed result, prevents repeat submissions while a close is pending, and keeps the resolution draft if the close cannot be confirmed.

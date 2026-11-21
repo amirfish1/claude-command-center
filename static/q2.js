@@ -16,6 +16,20 @@
   var CLOSED_CAP = 50;
   var NEW_TICKET_GLOW_MS = 4500;
   var filedTickets = {};
+  var closeAttempts = new Map();
+  var closeResults = new Map();
+
+  // The queue list can still be serving an older snapshot after a write.
+  function preferCloseResult(item) {
+    var result = item && closeResults.get(item.ref);
+    if (!result) return item;
+    var itemAt = touchedAt(item);
+    var resultAt = touchedAt(result);
+    if (itemAt < resultAt || (itemAt === resultAt && item.status !== result.status)) {
+      return result;
+    }
+    return item;
+  }
   function rememberFiledTicket(item) {
     if (item && item.ref) filedTickets[item.ref] = {item: item, until: Date.now() + 60000};
   }
@@ -781,12 +795,17 @@
     return res.json();
   }
 
+  var nextRefresh = 0;
+  var appliedRefresh = 0;
   async function refresh() {
+    var request = ++nextRefresh;
     try {
       var results = await Promise.all([
         getJson('/api/queue/status'),
         getJson('/api/queue/list?slim=1'),
       ]);
+      if (request < appliedRefresh) return;
+      appliedRefresh = request;
       state.queues = (results[0] && results[0].queues) || [];
       // Per-project health rows carry WHY a queue is stuck (is there a fixer at
       // all, is it alive, has it closed anything lately). The queue rows only
@@ -799,7 +818,11 @@
         .filter(function (w) { return w && w.alive !== false; }));
       state.pastWorkers = (results[0] && results[0].past_workers) || [];
       state.workerSessionMap = (results[0] && results[0].worker_session_map) || {};
-      state.items = mergeFiledTickets((results[1] && results[1].items) || []);
+      state.items = mergeFiledTickets((results[1] && results[1].items) || []).map(function (item) {
+        var current = preferCloseResult(item);
+        if (current === item) closeResults.delete(item.ref);
+        return current;
+      });
       state.offline = false;
       state.loaded = true;
     } catch (e) {
@@ -850,6 +873,7 @@
 
   async function loadDetail(ref) {
     if (!ref) { state.detail = null; renderDetail(); return; }
+    var panel = $('q2Detail');
     // Paint the cached list row instantly, then hydrate. The item endpoint
     // shells to `gh issue view` for GitHub-backed queues, which can take
     // 10s+ (or die) during GraphQL quota storms — a ticket the list already
@@ -866,16 +890,17 @@
     if (cached && cached._slim) {
       try {
         var full = await getJson('/api/ux-fixes/item?cached=1&ref=' + encodeURIComponent(ref));
-        if (state.ref !== ref) return;
-        if (full && full.item) { state.detail = full.item; renderDetail(); }
+        if (state.ref !== ref || $('q2Detail') !== panel || state.detail !== cached) return;
+        if (full && full.item) { state.detail = preferCloseResult(full.item); renderDetail(); }
       } catch (_) { /* live hydrate below still runs */ }
     }
+    var before = state.detail;
     try {
       var data = await getJson('/api/ux-fixes/item?ref=' + encodeURIComponent(ref));
-      if (state.ref !== ref) return;  // user moved on while this was in flight
-      if (data && data.item) state.detail = data.item;
+      if (state.ref !== ref || $('q2Detail') !== panel || state.detail !== before) return;
+      if (data && data.item) state.detail = data.stale ? preferCloseResult(data.item) : data.item;
     } catch (e) {
-      if (state.ref !== ref) return;
+      if (state.ref !== ref || $('q2Detail') !== panel) return;
     }
     state.detailFailed = !state.detail;
     renderDetail();
@@ -2391,6 +2416,8 @@
   function ticketRow(it) {
     var st = statusOf(it);
     var ref = it.ref || '';
+    var attempt = closeAttempts.get(ref);
+    var closing = attempt && attempt.pending;
     var title = titleOf(it).split('\n')[0];
     var att = st !== 'closed' ? attentionOf(it) : null;
     // A blocked worker has already left, and an answer in flight already
@@ -2409,7 +2436,7 @@
     var age = relTime(ageSrc);
     // Only an idle, open ticket can be "run now": a closed one has nothing to
     // do and a live-claimed one is already being worked.
-    var canRun = st !== 'closed' && !isLiveWip(it);
+    var canRun = st !== 'closed' && !closing && !isLiveWip(it);
     // run_requested is its own state, distinct from plain "open": the ticket
     // is sitting idle until WatchTower's reconciler picks it up. Only surface
     // it where it can actually mean something (an idle, runnable row) --
@@ -2417,10 +2444,10 @@
     // a question only a human can answer, and blocked on it. The stale run
     // request is still true but no longer the thing to tell someone; showing
     // "run requested" here reads as if nothing had happened yet.
-    var queued = isRunQueued(it, att);
+    var queued = !closing && isRunQueued(it, att);
     // A block someone else must clear reads "waiting", never "needs input".
     var rowSt = (st === 'blocked' && att && !att.owner && att.key !== 'gate') ? 'waiting' : st;
-    var dotTitle = unresolved ? 'closed, unresolved follow-up'
+    var dotTitle = closing ? 'Closing…' : unresolved ? 'closed, unresolved follow-up'
       : unverified ? 'claimed by ' + withMachine(it.claimed_by, it.claimed_machine) + ', liveness unverified'
       : (stale && st !== 'blocked') ? 'stale claim, no live worker is on this'
       : queued ? 'launching\u2026'
@@ -2448,7 +2475,7 @@
     // to the claiming worker, so a stale/unverified claim still wins there;
     // in plan, verify or review the builder being gone is expected.
     var claimIssue = (stale && st !== 'blocked') || unverified;
-    var stageText = (sp && !sp.queued && st !== 'closed' && !queued && !(claimIssue && sp.current === 'build')
+    var stageText = (!closing && sp && !sp.queued && st !== 'closed' && !queued && !(claimIssue && sp.current === 'build')
         && !(att && att.tone === 'answer'))
       ? stageNowText(it, sp, true) : '';
     var stuckAtStage = sp ? stageStuck(it, sp) : false;
@@ -2973,6 +3000,7 @@
     }
 
     var st = statusOf(item);
+    var closeAttempt = closeAttempts.get(item.ref);
     var parts = splitFirstSentence(titleOf(item));
     // _github_body is the full issue body; `text` can be a truncated copy.
     var prompt = String(item._github_body || item.text || '').trim();
@@ -3055,7 +3083,8 @@
       if (state.arm !== key || !spec) return '';
       return '<section class="q2-sec q2-armed">'
         + '<textarea class="q2-input" data-q2-input="' + esc(spec[2]) + '" rows="2" autofocus'
-        + ' placeholder="' + esc(spec[0]) + '" aria-label="' + esc(spec[1]) + '"></textarea>'
+        + ' placeholder="' + esc(spec[0]) + '" aria-label="' + esc(spec[1]) + '">'
+        + (closeAttempt && closeAttempt.act === key ? esc(closeAttempt.draft) : '') + '</textarea>'
         + '<div class="q2-actrow">'
         + '<button type="button" class="q2-btn" data-q2-arm="">Cancel</button>'
         + '<button type="button" class="q2-btn q2-btn-primary" data-q2-act="' + esc(spec[2]) + '">'
@@ -3084,8 +3113,11 @@
       + '</div>'
       + armedForm('review_reject')
       + '</section>';
-    var resolveActionsHtml = inReview ? reviewActionsHtml : closed ? '' :
+    var resolveActionsHtml = closeAttempt && closeAttempt.pending
+      ? '<section class="q2-sec" role="status">Closing in the background…</section>'
+      : inReview ? reviewActionsHtml : closed ? '' :
       '<section class="q2-sec q2-resolve-actions">'
+      + (closeAttempt ? '<div class="q2-dim" role="status">' + esc(closeAttempt.message) + '</div>' : '')
       + '<div class="q2-resolve-row">'
       + '<button type="button" class="q2-btn' + (state.arm === 'close_completed' ? ' is-armed' : '') + '"'
       + ' data-q2-arm="close_completed">Close as completed</button>'
@@ -3354,12 +3386,12 @@
     return el ? String(el.value || '').trim() : '';
   }
 
-  async function postJson(url, payload) {
-    var res = await fetch(url, {
+  async function postJson(url, payload, options) {
+    var res = await fetch(url, Object.assign({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-    });
+    }, options));
     var data = await res.json().catch(function () { return {}; });
     if (!res.ok || data.ok === false) throw new Error(data.error || ('HTTP ' + res.status));
     return data;
@@ -3407,9 +3439,58 @@
     }
   }
 
+  async function closeTicket(ref, act) {
+    var previous = closeAttempts.get(ref);
+    if ((previous && previous.pending) || !state.detail
+        || state.detail.status === 'closed' || state.detail.status === 'in_review') return;
+    var input = document.querySelector('[data-q2-input="' + act + '"]');
+    var draft = input ? input.value : '';
+    var summary = act === 'close_completed' ? 'Completed' : 'Not relevant';
+    var text = draft.trim();
+    var payload = { ref: ref, note: summary + (text ? ': ' + text : '') };
+    var attempt = { act: act, draft: draft, pending: true, message: '' };
+    closeAttempts.set(ref, attempt);
+    closeModal();
+    note('Closing ' + ref + ' in the background…', 'pending');
+
+    var item;
+    try {
+      var data = await postJson('/api/ux-fixes/close', payload, {
+        keepalive: new TextEncoder().encode(JSON.stringify(payload)).length < 60000,
+        cccRetryHandled: true,
+      });
+      if (!data.ok || !data.item || data.item.ref !== ref || !data.item.status) {
+        throw new Error('No ticket status in the response.');
+      }
+      item = data.item;
+    } catch (error) {
+      attempt.message = 'Close unconfirmed. Check Activity before trying again. ' + error.message;
+    }
+    attempt.pending = false;
+    if (item) {
+      closeResults.set(ref, item);
+      state.items = state.items.map(function (row) { return row.ref === ref ? item : row; });
+      if (state.ref === ref) state.detail = item;
+    }
+    if (item && (item.status === 'closed' || item.status === 'in_review')) {
+      closeAttempts.delete(ref);
+      note(ref + (item.status === 'closed' ? ' closed' : ' sent for review'), 'success');
+    } else {
+      if (item) attempt.message = 'Ticket is still open. ' + (item.gate_feedback || 'Check Activity for details.');
+      note(ref + ': ' + attempt.message);
+    }
+    renderTickets();
+    if (state.ref === ref) renderDetail();
+  }
+
   async function detailAction(act, btn) {
     var ref = state.ref;
     if (!ref) return;
+
+    if (act === 'close_completed' || act === 'close_not_relevant') {
+      await closeTicket(ref, act);
+      return;
+    }
 
     if (act === 'latest') {
       var host = $('q2Detail');
@@ -3493,24 +3574,9 @@
       return;
     }
 
-    // Field names are the SERVER's, not guesses. answer/close/reopen were sent
-    // as answer/summary/reason and every one was rejected ("ref and text
-    // required"); only comment happened to match. Verified against
-    // server.py:52747 (answer.text), :52943 (close.note), :52890 (reopen.note),
-    // :52913 (comment.text).
-    // Outcome tags prefix the resolution note so "closed as not relevant" is
-    // legible later in the timeline, not just a generic "Closed" event —
-    // there is no separate outcome field on the ticket, just the resolution
-    // text (see /api/ux-fixes/close in server.py).
     var plan = {
       answer:  ['/api/ux-fixes/answer',  { ref: ref, text: detailInput('answer') },  true,  'Answer sent',    'Sending…'],
       comment: ['/api/ux-fixes/comment', { ref: ref, text: detailInput('comment') }, true,  'Comment added',  'Adding…'],
-      close_completed: ['/api/ux-fixes/close', { ref: ref,
-        note: 'Completed' + (detailInput('close_completed') ? ': ' + detailInput('close_completed') : '') },
-        false, 'Closed as completed', 'Closing…'],
-      close_not_relevant: ['/api/ux-fixes/close', { ref: ref,
-        note: 'Not relevant' + (detailInput('close_not_relevant') ? ': ' + detailInput('close_not_relevant') : '') },
-        false, 'Closed as not relevant', 'Closing…'],
       reopen:  ['/api/ux-fixes/reopen',  { ref: ref, note: detailInput('reopen') },  false, 'Ticket reopened', 'Reopening…'],
       review_accept: ['/api/ux-fixes/accept', { ref: ref }, false, 'Accepted', 'Accepting…'],
       review_reject: ['/api/ux-fixes/reject', { ref: ref, reason: detailInput('review_reject') }, true, 'Rejected', 'Rejecting…'],

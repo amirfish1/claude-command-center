@@ -13,7 +13,8 @@ function fn(name) {
 const helpers = ['esc', 'projectKey', 'hasClaimMetadata', 'hasLiveClaim', 'isStaleClaim',
   'isUnverifiedClaim', 'statusOf', 'isLiveWip', 'attentionOf', 'isRunQueued', 'ticketRow'];
 const state = { workers: [], queues: [], ref: '', viewAll: false };
-const { ticketRow, isStaleClaim, isRunQueued, statusOf } = new Function('window', 'state', `
+const closeAttempts = new Map();
+const { ticketRow, isStaleClaim, isRunQueued, statusOf } = new Function('window', 'state', 'closeAttempts', `
   const titleOf = it => it.title || it.ref;
   const unresolvedNotes = () => [];
   const relTime = () => '1m ago';
@@ -26,7 +27,7 @@ const { ticketRow, isStaleClaim, isRunQueued, statusOf } = new Function('window'
   const ticketChips = it => '<span>' + (attentionOf(it)?.label || '') + '</span>';
   ${helpers.map(fn).join('\n')}
   return { ticketRow, isStaleClaim, isRunQueued, statusOf };
-`)({ QueueAttention: QA }, state);
+`)({ QueueAttention: QA }, state, closeAttempts);
 const item = extra => ({ ref: 'DEMO-1', project: 'DEMO', status: 'open',
   title: 'Scheduled check', ...extra });
 const future = () => new Date(Date.now() + 86400000).toISOString();
@@ -74,4 +75,17 @@ test('closed and review records never inherit stale-claim warnings', () => {
     const it = item({ status, updated_at: '2026-01-01T00:00:00Z', claimed_by: 'old-worker' });
     assert.equal(isStaleClaim(it), false);
   }
+});
+
+test('a pending close takes precedence over the row run control', () => {
+  const it = item({ run_requested: true });
+  closeAttempts.set(it.ref, { pending: true });
+  try {
+    const html = ticketRow(it);
+    assert.match(html, /Closing…/);
+    assert.doesNotMatch(html, /data-q2-run=|is-run-requested|Launching/);
+  } finally {
+    closeAttempts.delete(it.ref);
+  }
+  assert.match(ticketRow(it), /data-q2-run=/);
 });

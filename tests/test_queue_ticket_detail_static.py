@@ -43,7 +43,7 @@ def test_ticket_detail_offers_the_existing_queued_run_action_for_open_tickets():
     modal = app_js[start:end]
 
     assert "const hasActiveClaim = !!(item.claimed_by || item.claimed_at);" in modal
-    assert "const canRequestRun = status === 'open' && !hasActiveClaim;" in modal
+    assert "const canRequestRun = status === 'open' && !hasActiveClaim && !closeAttempts.get(ref)?.pending;" in modal
     assert "_isStaleClaim(item)" not in modal
     assert "data-ux-run" in modal
     assert "Run now" in modal
