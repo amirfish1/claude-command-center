@@ -145,6 +145,32 @@ def test_bulk_projection_uses_one_cache_read_and_validates_current_rows(monkeypa
     assert rows[0]['question_options'] == ['a']
 
 
+def test_packed_rows_skip_template_lookup_without_shifting_raw_templates(monkeypatch):
+    cache = server.ByteBudgetCache(1 << 20, 20)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_ROW_TEMPLATES', cache)
+    get_many = cache.get_many
+    looked_up = []
+
+    def capture(keys):
+        looked_up.extend(keys)
+        return get_many(looked_up)
+
+    monkeypatch.setattr(cache, 'get_many', capture)
+    first = {'session_id': 'first', 'display_name': 'First'}
+    last = {'session_id': 'last', 'display_name': 'Last', 'question_options': ['second']}
+    for row in (first, last):
+        server._archive_list_project_row(row, resumes={}, parents={})
+    packed = server._archive_sidebar_pages.StoredRow(
+        ('session_id', 'display_name'), ('packed', 'Packed'), None)
+    rows = [first, packed, last]
+
+    projected = server._archive_list_project_rows(rows, _inputs=({}, {}, {}, rows))
+
+    assert looked_up == [(None, 'first'), (None, 'last')]
+    assert [row['display_name'] for row in projected] == ['First', 'Packed', 'Last']
+    assert projected[-1]['question_options'] == ['second']
+
+
 def test_unversioned_full_history_keeps_scoped_templates(monkeypatch):
     cache = server.ByteBudgetCache(1 << 20, 1)
     monkeypatch.setattr(server, '_ARCHIVE_LIST_ROW_TEMPLATES', cache)

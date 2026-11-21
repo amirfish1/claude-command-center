@@ -19026,9 +19026,10 @@ def _archive_list_project_row(row, *, resumes=None, parents=None,
             if parent:
                 out["parent_session_id"] = parent
         out.update(_driver.fields(out, parent_session_id=out.get("parent_session_id")))
-        resume_at = usage_limit_resume_at_for_session(sid, resumes=resumes)
-        if resume_at:
-            out["usage_limit_resume_at"] = resume_at
+        if resumes is None or resumes:
+            resume_at = usage_limit_resume_at_for_session(sid, resumes=resumes)
+            if resume_at:
+                out["usage_limit_resume_at"] = resume_at
     return out
 
 
@@ -19130,12 +19131,12 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _in
     phase("window")
     # Concurrent full-list builders otherwise hand the cache lock between
     # threads once per row. Hold request-local references to immutable
-    # templates, validating each against its current row as usual.
-    templates = _ARCHIVE_LIST_ROW_TEMPLATES.get_many(
-        (row.get("source"), row.get("session_id") or row.get("id"))
-        if row.get("session_id") or row.get("id") else id(row)
-        for row in window_rows
-    )
+    # templates, validating each against its current row as usual. Packed rows
+    # already contain the static projection and never consult this cache.
+    templates = iter(_ARCHIVE_LIST_ROW_TEMPLATES.get_many(
+        (row.get("source"), sid) if (sid := row.get("session_id") or row.get("id")) else id(row)
+        for row in window_rows if not isinstance(row, _archive_sidebar_pages.StoredRow)
+    ))
     fields_by_shape = {}
     projected = []
     prepared = _history_projection.rows if _history_projection is not None else None
@@ -19144,14 +19145,15 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _in
     remaining = (_history_projection.max_bytes - _history_projection.source_row_bytes * len(sources)
                  if pending is not None else 0)
     hits = 0
-    for position, (row, template) in enumerate(zip(window_rows, templates)):
+    for position, row in enumerate(window_rows):
         if check_client is not None and position % 256 == 0:
             check_client()
-        static = None
         if isinstance(row, _archive_sidebar_pages.StoredRow):
-            static = row
+            static, template = row, None
             hits += 1
-        elif _history_projection is not None:
+        else:
+            static, template = None, next(templates)
+        if static is None and _history_projection is not None:
             row_id = id(row)
             static = prepared.get(row_id) if prepared is not None else None
             if static is not None:
