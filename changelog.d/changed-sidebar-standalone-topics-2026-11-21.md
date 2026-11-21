@@ -1,1 +1,0 @@
-- Reduced sidebar topic processing for sessions without continuation ancestry.

@@ -1,1 +1,0 @@
-A sidebar dragged narrow (under 320px) now lays out for its real width: usage rows no longer overlap, New session and Ticket share one line with search below, session titles get the full row, and the footer stays inside the column.

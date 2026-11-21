@@ -1,1 +1,0 @@
-- Share the first session inventory read across concurrent peer requests so it does not slow other dashboard requests after startup.

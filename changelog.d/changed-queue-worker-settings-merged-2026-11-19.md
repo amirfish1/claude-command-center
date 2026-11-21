@@ -1,1 +1,0 @@
-Queue worker engine/model/effort (plus fallback and headroom) now lives in the single queue settings dialog: a "Runs on" line and top-used combo chips replace the separate worker-settings editor, with full model/effort pickers under Custom.

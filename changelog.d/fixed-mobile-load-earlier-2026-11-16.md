@@ -1,1 +1,0 @@
-- Made "Load earlier messages" on phones about five times faster: the page no longer re-styles the hidden session list and the whole document on every update while you read a conversation.

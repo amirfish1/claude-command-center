@@ -1,1 +1,0 @@
-Start large app bundles from the final response's preload headers so early downloads do not delay the document headers on shared HTTP/2 connections. Smaller extension bundles still preload during page preparation.

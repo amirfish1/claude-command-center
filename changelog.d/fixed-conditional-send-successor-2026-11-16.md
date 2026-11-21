@@ -1,1 +1,0 @@
-Conditional sends to an older session reuse its existing continuation, including before transcript indexing catches up, instead of starting parallel successors. Preserve normal message delivery, queue controls and sender attribution.

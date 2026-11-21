@@ -1,1 +1,0 @@
-- Open a queue's worker settings without resolving every other queue's launch configuration first.

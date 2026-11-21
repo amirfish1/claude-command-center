@@ -1,1 +1,0 @@
-Routine combined restarts let the dashboard update when Codex delays the worker restart. The worker releases unused, saved Codex subscriptions through native idle cleanup and keeps the live-turn safety check. Server Status flags restart requests that keep retrying.

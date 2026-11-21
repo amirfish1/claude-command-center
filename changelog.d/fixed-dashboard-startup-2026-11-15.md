@@ -1,1 +1,0 @@
-- Space optional dashboard startup reads, serve CI and model discovery from snapshots while refreshing, and batch remaining decision and session-index reads.

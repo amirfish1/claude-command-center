@@ -1,1 +1,0 @@
-- Reloading the All sessions sidebar can reuse prepared history for longer after a slow list load.

@@ -1,1 +1,0 @@
-- Support immutable Python worker/control bootstrap with pinned dependency source, explicit kernel identity visibility, and a shared custom state directory; native execution remains disabled in these profiles.

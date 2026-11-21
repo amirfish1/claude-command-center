@@ -1,1 +1,0 @@
-- Run the diagnostic worker import fingerprint in the existing background helper so cold maintenance checks do not block dashboard requests with Python import scanning. Disabled or older helpers retain the local fallback and existing restart decisions.

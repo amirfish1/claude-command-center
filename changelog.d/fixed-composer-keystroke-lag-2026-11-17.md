@@ -1,1 +1,0 @@
-Eliminated multi-hundred-millisecond composer keystroke stalls by stopping a self-triggering Workers recent-work sidebar render loop, deferring background sidebar and queue-board rebuilds while typing, skipping layout-forcing single-line textarea autosize reflows, and fast-pathing body mutation observers.

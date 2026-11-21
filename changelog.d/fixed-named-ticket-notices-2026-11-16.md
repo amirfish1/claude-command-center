@@ -1,1 +1,0 @@
-- Named WatchTower ticket notices retain their readable names while alert grouping, queue routing and delivery supersession use the stable ticket number.

@@ -1,1 +1,0 @@
-- Avoid fetching the Codex worker's complete thread-state map when reading a cached Claude conversation; retain invalidation for queued inputs and discovered Codex state or captures.

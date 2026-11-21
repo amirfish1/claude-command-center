@@ -1,1 +1,0 @@
-- Show terminal Antigravity conversations automatically while the archive snapshot is still refreshing.

@@ -1,1 +1,0 @@
-- Reduce CPU use during usage stats and repository ranking refreshes by skipping transcript records that cannot contribute a user or assistant turn.

@@ -1,1 +1,0 @@
-- Added a live TTS server CPU/load metric (`×/core` and CPU cores used) to the bottom-left host pressure pill and popup panel so text-to-speech synthesis load is directly comparable against overall host CPU load.

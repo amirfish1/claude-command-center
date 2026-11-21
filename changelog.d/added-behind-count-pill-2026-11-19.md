@@ -1,1 +1,0 @@
-- Dev-clone (main update channel) installs now show an "Update · N commits behind" pill when HEAD is behind origin/main, using a 30-minute git-fetch cache; the update modal shows the behind count and a compare link, and the "…" menu always shows the origin/main sync state.

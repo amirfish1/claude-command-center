@@ -1,1 +1,0 @@
-- Read recent activity from the end of the log so dashboard polls stay responsive as the log grows.

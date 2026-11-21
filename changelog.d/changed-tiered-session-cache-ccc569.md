@@ -1,1 +1,0 @@
-Keep recent session rows in memory and older history in a transactional per-row store, preserving pinned sessions and topic parents. Forward cache-version changes retain usable rows while detached refresh runs; empty and freshness-requested archive HTTP reads no longer wait for a full transcript rebuild.

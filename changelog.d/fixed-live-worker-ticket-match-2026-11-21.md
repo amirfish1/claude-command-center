@@ -1,1 +1,0 @@
-- Workers view: a live worker now shows the ticket it claimed straight away, instead of "no listed ticket" next to the same ticket still marked Open while the full ticket list catches up on a busy machine.

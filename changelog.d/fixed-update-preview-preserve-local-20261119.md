@@ -1,1 +1,0 @@
-Fixed the update dialog showing old feature announcements as new changes. Main-channel installs now preview the actual incoming commits, and updates preserve unrelated local work while refusing to overwrite conflicting files.

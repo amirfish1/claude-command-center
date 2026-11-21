@@ -1,1 +1,0 @@
-- Keep cross-session reports in one quiet, readable container; prevent compact view from clipping report previews or expanded details.

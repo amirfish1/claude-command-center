@@ -1,1 +1,0 @@
-- Session-row reports now return a durable receipt promptly while ticket filing continues in the background. Retrying a saved submission reuses its ticket identity, including after a dashboard restart.

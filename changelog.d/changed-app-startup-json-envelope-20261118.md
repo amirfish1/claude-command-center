@@ -1,1 +1,0 @@
-- Allow explicitly declared startup JSON reads up to 128 KiB per value and 256 KiB combined, retaining the 16-read limit and canonical payloads so medium-sized reads can avoid an extra startup request.

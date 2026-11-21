@@ -1,1 +1,0 @@
-- Stop scanning large Devin transcripts for commit, push, and pull request indicators once all three indicators are known.

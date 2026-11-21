@@ -1,1 +1,0 @@
-- Skip transcript and engine resolution while preparing an app page when no cached transcript could be embedded; existing cached transcripts retain their freshness checks.

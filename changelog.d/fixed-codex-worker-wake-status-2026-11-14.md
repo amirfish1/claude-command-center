@@ -1,1 +1,0 @@
-Codex progress now reads wake acknowledgments from the worker's shared ledger, so accepted turns show as thinking instead of remaining on “Waiting for delivery.” Earlier turns cannot falsely acknowledge a newer send.

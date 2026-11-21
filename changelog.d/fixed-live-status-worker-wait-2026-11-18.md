@@ -1,1 +1,0 @@
-- Bound worker queries during live-status refreshes so a busy Codex worker cannot stall the sidebar's status build for several seconds. Action requests retain their normal deadlines.

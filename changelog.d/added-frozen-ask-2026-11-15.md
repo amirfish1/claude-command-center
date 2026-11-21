@@ -1,1 +1,0 @@
-- Scrolling up in a conversation now keeps the message you asked frozen at the top of the transcript (the first message of the session when no message of yours is loaded). Click it to jump to that message; it clears when you return to the end.

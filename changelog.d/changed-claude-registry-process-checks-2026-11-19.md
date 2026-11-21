@@ -1,1 +1,0 @@
-- Reduced dashboard work during Claude session discovery by checking process identity only for PIDs in the session registry.

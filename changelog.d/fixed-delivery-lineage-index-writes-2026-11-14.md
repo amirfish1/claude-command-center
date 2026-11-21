@@ -1,1 +1,0 @@
-- Keep message forwarding responsive during session-index updates by reading committed continuation lineage without running schema migrations or corpus refreshes on the delivery path.

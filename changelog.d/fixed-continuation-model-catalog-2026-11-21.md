@@ -1,1 +1,0 @@
-- Keep the Continue in a new session model dropdown in sync with the New Session catalog, even when the catalog loads after the dialog opens.

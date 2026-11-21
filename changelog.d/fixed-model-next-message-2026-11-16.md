@@ -1,1 +1,0 @@
-Headless Claude model changes now wait for the current turn to finish and replace the old process before delivering the next message. Pending choices are labeled in the model picker and session strip.

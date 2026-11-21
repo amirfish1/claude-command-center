@@ -1,1 +1,0 @@
-- `uv run pytest` no longer fails dependency resolution on Python 3.9: the ACP extra is now limited to Python 3.10 and newer.

@@ -1,1 +1,0 @@
-- Coalesce settings ownership annotations within each frame and scan nested settings roots once, reducing startup work while retaining accessible descriptions.

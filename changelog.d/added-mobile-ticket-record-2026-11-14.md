@@ -1,1 +1,0 @@
-- Hold the draggable mobile microphone shortcut to record a ticket, then release to review its transcript before submitting. Web recording uses local server transcription; the button remembers its position and dragging cancels capture.

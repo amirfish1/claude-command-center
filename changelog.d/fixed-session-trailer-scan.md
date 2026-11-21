@@ -1,1 +1,0 @@
-- Skip session-state trailer scans for ordinary text to reduce CPU during session-list rebuilds.

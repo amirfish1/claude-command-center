@@ -1,1 +1,0 @@
-Live-session status now shares a bounded worker-read budget when reconciling dashboard-owned sessions after a helper reply, preventing repeated worker timeouts from stalling the snapshot. Aggregate phase timings identify any remaining reconciliation delays.

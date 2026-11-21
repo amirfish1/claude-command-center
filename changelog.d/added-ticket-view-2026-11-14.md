@@ -1,1 +1,0 @@
-Ticket view: a switch in the sidebar ⋮ menu that folds the All, Features and Small bugs tabs into Workers, where their tickets are listed alongside worker tickets. Available while the idea tickets preview is on.

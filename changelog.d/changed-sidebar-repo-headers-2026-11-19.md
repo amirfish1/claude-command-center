@@ -1,1 +1,0 @@
-Refined sidebar repository/project group headers with a borderless sticky layout, aligned geometric disclosure chevron, crisp 18px repository emblem, integrated count pill, subtle trailing hairline, and hover/focus-revealed action bar for light, dark, and narrow sidebar layouts.
