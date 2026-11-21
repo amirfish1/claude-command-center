@@ -1363,6 +1363,7 @@
                clicks go through its document-level delegate. -->
           <span class="conv-view-seg mobile-view-seg" role="radiogroup" aria-label="Transcript view"><button type="button" data-conv-view="compact" role="radio" aria-checked="false">Compact</button><button type="button" data-conv-view="normal" role="radio" aria-checked="true">Normal</button></span>
           <button type="button" class="mobile-actions-item" data-simple-action="questions" role="menuitem" data-qtag-menu hidden>Open questions</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="locate" role="menuitem" hidden>Locate in session view</button>
           <button type="button" class="mobile-actions-item" data-simple-action="stop" role="menuitem"><span aria-hidden="true">&#9724;&nbsp;</span>Stop this task</button>
           <!-- Lifecycle/queue moves for the OPEN session; each shows only when
                it applies (_syncSessionMenuItems in app.js). -->
@@ -1451,6 +1452,7 @@
             <button type="button" class="conv-pane-session-btn" data-role="pane-session-btn"
                     title="Session actions" aria-label="Session actions" aria-haspopup="menu" aria-expanded="false">&#8942;</button>
             <div class="conv-pane-session-menu" data-role="pane-session-menu" role="menu" hidden>
+              <button type="button" class="conv-pane-more-item" data-simple-action="locate" role="menuitem" hidden>Locate in session view</button>
               <button type="button" class="conv-pane-more-item" data-simple-action="rename" role="menuitem" title="Rename session (or double-click its name)">&#9998; Rename</button>
               <button type="button" class="conv-pane-more-item" data-simple-action="archive" role="menuitem" hidden>&#128230; Archive</button>
               <button type="button" class="conv-pane-more-item" data-simple-action="unarchive" role="menuitem" hidden>&#8617; Unarchive</button>

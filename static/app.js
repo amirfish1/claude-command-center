@@ -10792,7 +10792,14 @@
   // the whole conversation group from any one member.
 
   // Shared conversation-interactions.js: _showArchivedUndoToast.
-  // Show only the lifecycle/queue items that apply to the open session.
+  function _sessionLocationId(el) {
+    if (CONV_POPOUT_MODE || FLOW_POPOUT_MODE || isSimpleMode()) return '';
+    const paneId = el.closest('.conv-pane[data-pane-id]')?.dataset.paneId;
+    const id = paneId ? paneByPaneId(paneId)?.conversationId : currentConversation;
+    return id && !/^(?:backlog-issue-|xrepo-issue-|spawning-|__)/.test(id) ? id : '';
+  }
+
+  // Show only the actions that apply to the open session.
   function _syncSessionMenuItems(menu) {
     const row = _openConversationRow();
     const show = (action, on) => {
@@ -10801,6 +10808,7 @@
     };
     const isSession = !!row && !String(row.id || '').startsWith('backlog-issue-')
       && !String(row.id || '').startsWith('xrepo-issue-');
+    show('locate', !!_sessionLocationId(menu));
     const explicitlyArchived = row && row.idea_ticket ? (row.explicitly_archived ?? row.idea_ticket.explicitly_archived) : row && row.archived;
     show('archive', isSession && !explicitlyArchived && !row.trashed);
     // Ticket sessions only ever say "Archived": Unarchive clears Trash too.
@@ -10877,6 +10885,8 @@
         });
       } else if (action === 'questions') {
         window.cccQuestionTags?.queue();
+      } else if (action === 'locate') {
+        locateSessionInSidebar(_sessionLocationId(menu));
       } else if (action === 'stop') {
         _simpleStopTask();
       } else if (action === 'font-minus') {
@@ -10943,7 +10953,9 @@
       _closePaneSessionMenus(null);
       if (!item) return;
       const action = item.getAttribute('data-simple-action');
-      if (action === 'copy-session-id' || action === 'copy-repo-path') {
+      if (action === 'locate') {
+        locateSessionInSidebar(_sessionLocationId(item));
+      } else if (action === 'copy-session-id' || action === 'copy-repo-path') {
         const el = item.querySelector('[data-role="menu-session-id"], [data-role="menu-repo-path"]');
         const value = (el && el.textContent) || '';
         const label = action === 'copy-session-id' ? 'session id' : 'repo path';
@@ -42407,11 +42419,84 @@
       .find(row => row.dataset.id === convId) || null;
   }
 
-  function scrollConversationRowIntoView(convId, block = 'nearest') {
-    requestAnimationFrame(() => {
-      const row = _findConversationRowElement(convId);
-      if (row) row.scrollIntoView({ block, inline: 'nearest' });
-    });
+  async function locateSessionInSidebar(id) {
+    if (!id) return;
+    if (kanbanView || isFlowView()) {
+      setSidebarViewMode('list');
+      updateKanbanToggle();
+      renderArchiveList($convSearch.value, { force: true });
+    }
+    setConvListCollapsed(false);
+    mobileShowMain(false);
+    mobileShowConv(false);
+
+    const sid = sessionIdByConv[id] || id;
+    const findRow = () => _findConversationRowElement(id)
+      || $convList.querySelector('.conv-item[data-session-id="' + CSS.escape(sid) + '"]');
+    const reveal = () => {
+      const row = findRow();
+      if (!row?.getClientRects().length) return false;
+      requestAnimationFrame(() => {
+        const current = findRow();
+        if (!current?.getClientRects().length) return;
+        current.scrollIntoView({ block: 'center', inline: 'nearest' });
+        current.tabIndex = -1;
+        current.focus({ preventScroll: true });
+        current.classList.add('session-locate-highlight');
+        setTimeout(() => current.classList.remove('session-locate-highlight'), 2500);
+      });
+      return true;
+    };
+    if (reveal()) return;
+
+    const setSearch = value => {
+      $convSearch.value = value;
+      updateConversationSearchClear();
+      setConversationSearchLoading(false, value);
+    };
+    const selectTab = tab => {
+      window.CCCNavigation.setTab(tab);
+      _setSharedQueuePanelHost('rail');
+      _mobileLastSessionTab = tab;
+      _syncMobileBottomNav();
+    };
+    const tabs = () => Array.from($convList.querySelectorAll('.conv-tab[data-conv-tab]'), el => el.dataset.convTab);
+    const locateTab = (rows, search) => {
+      const row = rows.find(c => c.id === id || (c.session_id || c.id) === sid);
+      if (!row) return '';
+      const lanes = _sidebarLaneModel(rows);
+      const current = normalizeSidebarTabKey(window.CCCNavigation.getTab());
+      const available = tabs().filter(tab => !['queues', 'jobs', 'decisions', 'decisions2', 'issues'].includes(tab));
+      if (!available.includes('archived')) available.push('archived');
+      return [current, ...available].find(tab => available.includes(tab) && lanes.matches(row, tab, search)) || '';
+    };
+    const rows = _archiveRowsWithBacklog();
+    const tab = locateTab(rows, false);
+    if (tab) {
+      setSearch('');
+      selectTab(tab);
+      renderArchiveList('', { force: true, skipRestore: true });
+      if (reveal()) return;
+    }
+
+    // Exact identity search exposes sessions inside collapsed groups or
+    // beyond the list's time window and row limit.
+    setSearch(sid);
+    const searchTab = locateTab(rows, true);
+    if (searchTab) selectTab(searchTab);
+    renderArchiveList(sid, { force: true, skipRestore: true });
+    if (reveal()) return;
+    if (!searchTab && archiveDataWindow !== 'all') {
+      await refreshArchiveData({ staleOk: true, window: 'all' });
+      if ($convSearch.value !== sid) return;
+      const loadedTab = locateTab(_archiveRowsWithBacklog(), true);
+      if (loadedTab) {
+        selectTab(loadedTab);
+        renderArchiveList(sid, { force: true, skipRestore: true });
+        if (reveal()) return;
+      }
+    }
+    showOpToast('This session is unavailable in the session list.', 'error');
   }
 
   // A capture taken at scrollTop 0 with no visible anchor row (the boot
