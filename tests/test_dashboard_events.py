@@ -268,11 +268,12 @@ def test_external_queue_signature_change_publishes_unified_invalidation(monkeypa
 
     hub = DashboardEventHub(capacity=8, boot_id="watch-test")
     monkeypatch.setattr(server, "_dashboard_events", hub)
-    monkeypatch.setattr(server, "_dashboard_queue_signature", lambda: (2, 1, 0))
+    monkeypatch.setattr(server, "_dashboard_queue_signature", lambda: (2, 1, 0, None, 0))
 
-    current = server._dashboard_queue_watch_tick((1, 1, 0))
+    current, worker_rows = server._dashboard_queue_watch_tick((1, 1, 0, None, 0), [])
 
-    assert current == (2, 1, 0)
+    assert current == (2, 1, 0, None, 0)
+    assert worker_rows == []
     events = hub.snapshot_since(0, boot_id="watch-test").events
     assert events[-1]["invalidate"] == [
         {"resource": "queue", "reason": "external-change"}

@@ -292,17 +292,28 @@ def _dashboard_queue_signature():
     )
 
 
-def _dashboard_queue_watch_tick(previous):
+def _dashboard_queue_watch_tick(previous, previous_worker_rows):
     current = _dashboard_queue_signature()
+    worker_rows = previous_worker_rows
+    if previous is None or current[3] != previous[3]:
+        try:
+            workers = _wt_read_workers(include_activity=False)
+            worker_rows = _archive_overlay_wt_worker_sessions([], workers=workers)
+        except Exception:
+            worker_rows = None
     if previous is not None and current != previous:
         # workers.json (index 3) is rewritten on every worker heartbeat; it
         # carries no ticket content, so it must not make boards refetch the
         # ticket list (CCC-142).
         if current[:3] == previous[:3] and current[4:] == previous[4:]:
-            _invalidate_dashboard("workers", reason="worker-heartbeat")
+            # Health fields change on every heartbeat. The sidebar only needs
+            # to reread history when a worker could change a placeholder row.
+            unchanged = worker_rows is not None and worker_rows == previous_worker_rows
+            _invalidate_dashboard("workers", reason=(
+                "worker-health-only" if unchanged else "worker-heartbeat"))
         else:
             _invalidate_dashboard("queue", reason="external-change")
-    return current
+    return current, worker_rows
 
 
 def _dashboard_session_watch_tick(previous):
@@ -686,7 +697,7 @@ def _dashboard_event_watch_loop():
         gh_queue_watch_enter()
     except Exception:
         pass
-    previous_queue = _dashboard_queue_signature()
+    previous_queue, previous_worker_rows = _dashboard_queue_watch_tick(None, None)
     try:
         previous_sessions = _dashboard_session_watch_tick(None)
     except Exception:
@@ -707,7 +718,8 @@ def _dashboard_event_watch_loop():
                 if _dashboard_event_watch_subscribers <= 0:
                     return
             time.sleep(1.0)
-            previous_queue = _dashboard_queue_watch_tick(previous_queue)
+            previous_queue, previous_worker_rows = _dashboard_queue_watch_tick(
+                previous_queue, previous_worker_rows)
             previous_sessions = _dashboard_session_watch_tick(previous_sessions)
             if previous_transcripts is not None and time.time() >= next_transcript_check:
                 next_transcript_check = time.time() + _SMALL_ARCHIVE_WATCH_INTERVAL_S
@@ -19560,9 +19572,10 @@ def _archive_live_wt_workers():
         _ARCHIVE_WT_WORKERS_LOCK.release()
 
 
-def _archive_overlay_wt_worker_sessions(rows, *, existing_ids=None):
+def _archive_overlay_wt_worker_sessions(rows, *, existing_ids=None, workers=None):
     """Missing live worker sessions, until their real archive rows arrive."""
-    workers = _archive_live_wt_workers()
+    if workers is None:
+        workers = _archive_live_wt_workers()
     if not workers:
         return []
     existing = _archive_overlay_existing_ids(rows) if existing_ids is None else existing_ids

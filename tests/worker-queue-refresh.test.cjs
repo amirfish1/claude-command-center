@@ -4,6 +4,43 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const source = require('./legacy-dashboard-source.cjs');
+
+test('worker health-only events refresh queue health without rereading the sidebar', async () => {
+  let workers = 0;
+  let archive = 0;
+  const context = vm.createContext({
+    _dashboardEventState: { invalidations: new Map(), seq: 0, bootId: 'boot' },
+    _persistDashboardEventCursor: () => {},
+    _uxqItemsPromise: null, _wtWorkersPromise: null,
+    _uxqHealthAppliedSeq: 0, _uxqHealthReqSeq: 0, _wtWorkersVersion: 0,
+    _uxqItemsCache: { ts: 1 }, _uxqHealthCache: { ts: 1 }, _wtWorkersCache: { ts: 1 },
+    _queuePanelIsVisible: () => true,
+    _fetchUxqHealth: () => Promise.resolve({}),
+    _fetchWtWorkers: () => { workers++; return Promise.resolve([]); },
+    _renderQueuePanel: () => {},
+    refreshArchiveData: () => Promise.resolve(),
+    setTimeout: () => { archive++; return archive; },
+    queueMicrotask,
+  });
+  const start = source.indexOf('  function scheduleDashboardInvalidation(');
+  const end = source.indexOf('  function connectDashboardEvents(', start);
+  vm.runInContext(source.slice(start, end), context);
+  function heartbeat(seq, reason) {
+    context.applyDashboardEvent({
+      schema: 1, seq, boot_id: 'boot', topic: 'invalidate',
+      invalidate: [{ resource: 'workers', reason }],
+    });
+    return new Promise(resolve => setImmediate(resolve));
+  }
+  await heartbeat(1, 'worker-health-only');
+  assert.equal(workers, 1);
+  assert.equal(context._uxqItemsCache.ts, 1);
+  assert.equal(archive, 0);
+  await heartbeat(2, 'worker-heartbeat');
+  assert.equal(workers, 2);
+  assert.equal(archive, 1);
+});
+
 test('queue event bursts coalesce into one delayed archive refresh', async () => {
   let refreshes = 0;
   const timers = [];

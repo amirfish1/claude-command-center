@@ -41915,6 +41915,12 @@
     const pending = Array.from(_dashboardEventState.invalidations.values());
     _dashboardEventState.invalidations.clear();
     const resources = new Set(pending.map(item => item.resource));
+    const ticketsChanged = resources.has('queue');
+    const workersChanged = resources.has('workers') || resources.has('worker-health-only');
+    if (ticketsChanged || resources.has('workers')) {
+      // Worker registrations and claims can precede their transcript rows.
+      resources.add('archive');
+    }
     const ae = typeof document !== 'undefined' && document && document.activeElement;
     const typingInComposer = !!ae
       && !(typeof ae.closest === 'function' && ae.closest('#queuePanel'))
@@ -41924,24 +41930,17 @@
       && typeof _lastTextKeyTs === 'number'
       && Date.now() - _lastTextKeyTs < 1500;
     if (typingInComposer) {
-      if (resources.has('queue') || resources.has('workers')) {
-        if (resources.has('queue')) _uxqItemsCache.ts = 0;
+      if (ticketsChanged || workersChanged) {
+        if (ticketsChanged) _uxqItemsCache.ts = 0;
         _uxqHealthCache.ts = 0;
         _wtWorkersCache.ts = 0;
-        resources.add('archive');
       }
       const deferred = _dashboardEventState.deferredTypingResources
         || (_dashboardEventState.deferredTypingResources = new Set());
       for (const r of resources) deferred.add(r);
       return;
     }
-    if (resources.has('queue') || resources.has('workers')) {
-      // 'workers' = only workers.json changed (worker heartbeats): refresh
-      // worker health, never the ticket list (CCC-142).
-      const ticketsChanged = resources.has('queue');
-      // Worker registration/claims can precede the transcript archive. The
-      // list endpoint overlays those live sessions, so refresh it with queues.
-      resources.add('archive');
+    if (ticketsChanged || workersChanged) {
       const inFlightQueueRead = _uxqItemsPromise;
       const inFlightWorkerRead = _wtWorkersPromise;
       // Do NOT bump _uxqItemsVersion here. This is a passive invalidation, not
@@ -42043,7 +42042,11 @@
       scheduleDashboardInvalidation('sessions', event.entity && event.entity.id);
     }
     (Array.isArray(event.invalidate) ? event.invalidate : []).forEach(item => {
-      if (item && item.resource) scheduleDashboardInvalidation(item.resource, item.id);
+      if (item && item.resource) {
+        const resource = item.resource === 'workers' && item.reason === 'worker-health-only'
+          ? 'worker-health-only' : item.resource;
+        scheduleDashboardInvalidation(resource, item.id);
+      }
     });
     _persistDashboardEventCursor();
     return true;

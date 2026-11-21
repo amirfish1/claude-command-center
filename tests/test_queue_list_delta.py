@@ -68,16 +68,35 @@ def test_keyless_and_duplicate_rows_always_ship():
     assert sorted(delta["changed"]) == ["#0", "#2"]
 
 
-def test_worker_heartbeat_does_not_invalidate_tickets(monkeypatch):
+def test_worker_heartbeat_invalidates_only_changed_worker_data(monkeypatch):
     server = _load_server()
     sent = []
     monkeypatch.setattr(server, "_invalidate_dashboard",
-                        lambda resource, **kw: sent.append(resource))
-    base = (("store", 1), None, ("config", 1), ("workers", 1), 0)
-    beat = base[:3] + (("workers", 2),) + base[4:]
-    monkeypatch.setattr(server, "_dashboard_queue_signature", lambda: beat)
-    server._dashboard_queue_watch_tick(base)
-    store = (("store", 2),) + beat[1:]
-    monkeypatch.setattr(server, "_dashboard_queue_signature", lambda: store)
-    server._dashboard_queue_watch_tick(beat)
-    assert sent == ["workers", "queue"]
+                        lambda resource, *, reason: sent.append((resource, reason)))
+    monkeypatch.setattr(server, "_load_conversation_lifecycle_sets", lambda: (set(), set()))
+    monkeypatch.setattr(server, "_wt_read_config", lambda: {})
+    record = {"alive": True, "pid": 123, "session_id": "session-a", "started_at": 1234,
+              "queue": "TEST", "engine": "claude", "idle_seconds": 2}
+    monkeypatch.setattr(server, "_wt_read_workers", lambda *, include_activity: [dict(record)])
+    signature = (("store", 1), None, ("config", 1), ("workers", 1), 0)
+    monkeypatch.setattr(server, "_dashboard_queue_signature", lambda: signature)
+    state = server._dashboard_queue_watch_tick(None, None)
+
+    record.update(heartbeat_at=1235, idle_seconds=10)
+    signature = signature[:3] + (("workers", 2),) + signature[4:]
+    state = server._dashboard_queue_watch_tick(*state)
+
+    record["idle_seconds"] = 65
+    signature = signature[:3] + (("workers", 3),) + signature[4:]
+    state = server._dashboard_queue_watch_tick(*state)
+
+    record["released_at"] = 1236
+    signature = signature[:3] + (("workers", 4),) + signature[4:]
+    state = server._dashboard_queue_watch_tick(*state)
+
+    signature = (("store", 2),) + signature[1:]
+    server._dashboard_queue_watch_tick(*state)
+    assert sent == [
+        ("workers", "worker-health-only"), ("workers", "worker-heartbeat"),
+        ("workers", "worker-heartbeat"), ("queue", "external-change"),
+    ]
