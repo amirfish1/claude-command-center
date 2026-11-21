@@ -270,6 +270,13 @@
 
   function openMediaLightbox(src, opts) {
     if (!src) return;
+    if (!(opts && opts.forceModal)
+        && typeof _canUseStatusRailViewer === 'function'
+        && typeof openArtifactInStatusRail === 'function'
+        && _canUseStatusRailViewer()) {
+      openArtifactInStatusRail(src, opts);
+      return;
+    }
     const kind = (opts && opts.kind) || 'image';
     const title = (opts && opts.title) || '';
     const lb = _ensureMediaLightbox();
@@ -347,7 +354,227 @@
     return /\.(?:html|htm)$/i.test(clean);
   }
 
-  function openFilePathInMediaLightbox(filePath, label, ctx) {
+  function _canUseStatusRailViewer() {
+    const rail = document.getElementById('statusRail');
+    const viewer = document.getElementById('statusRailFileViewer');
+    const bodyEl = document.getElementById('fileViewerBody');
+    const body = document.body;
+    if (!rail || !viewer || !bodyEl || !body) return false;
+    if (!body.classList.contains('status-pos-right')) return false;
+    if (body.classList.contains('ccc-app-embed')) return false;
+    const forced = body.classList.contains('popout-rail-forced');
+    if (!forced && window.innerWidth <= 1200) return false;
+    if (!forced && typeof sharedState.isMobile === 'function' && (0, sharedState.isMobile)()) return false;
+    const pane = rail.closest('.conv-pane');
+    if (pane) {
+      const rect = pane.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return false;
+    }
+    return true;
+  }
+
+  function _cleanupFileViewerMedia(bodyEl) {
+    if (!bodyEl) return;
+    if (bodyEl._fvResizeObserver) {
+      try { bodyEl._fvResizeObserver.disconnect(); } catch (_) {}
+      bodyEl._fvResizeObserver = null;
+    }
+    const vid = bodyEl.querySelector('video');
+    if (vid) {
+      try { vid.pause(); vid.removeAttribute('src'); vid.load(); } catch (_) {}
+    }
+    const frame = bodyEl.querySelector('iframe');
+    if (frame) {
+      try { frame.src = 'about:blank'; } catch (_) {}
+    }
+  }
+
+  function _setFileViewerImageZoom(bodyEl, scale) {
+    if (!bodyEl) return;
+    const stage = bodyEl.querySelector('.file-viewer-media-stage.is-image');
+    const img = stage && stage.querySelector('img');
+    if (!stage || !img || !img.naturalWidth) return;
+    const availW = Math.max(80, stage.clientWidth - 20);
+    const availH = Math.max(80, stage.clientHeight - 20);
+    const fit = Math.min(1, availW / img.naturalWidth, availH / img.naturalHeight);
+    const next = scale === 0 ? fit : Math.max(fit, Math.min(8, scale));
+    const centerX = stage.scrollWidth > stage.clientWidth ? (stage.scrollLeft + stage.clientWidth / 2) / stage.scrollWidth : 0.5;
+    const centerY = stage.scrollHeight > stage.clientHeight ? (stage.scrollTop + stage.clientHeight / 2) / stage.scrollHeight : 0.5;
+    stage.dataset.fvZoom = scale === 0 ? '0' : String(next);
+    img.style.width = Math.round(img.naturalWidth * next) + 'px';
+    img.style.height = Math.round(img.naturalHeight * next) + 'px';
+    img.dataset.scale = String(next);
+    const actualBtn = bodyEl.querySelector('[data-fv-zoom="actual"]');
+    const outBtn = bodyEl.querySelector('[data-fv-zoom="out"]');
+    const inBtn = bodyEl.querySelector('[data-fv-zoom="in"]');
+    if (actualBtn) actualBtn.textContent = Math.round(next * 100) + '%';
+    if (outBtn) outBtn.disabled = next <= fit + 0.001;
+    if (inBtn) inBtn.disabled = next >= 8;
+    stage.scrollLeft = scale === 0 ? 0 : Math.max(0, centerX * stage.scrollWidth - stage.clientWidth / 2);
+    stage.scrollTop = scale === 0 ? 0 : Math.max(0, centerY * stage.scrollHeight - stage.clientHeight / 2);
+  }
+
+  function openArtifactInStatusRail(src, opts) {
+    if (!src) return false;
+    const rail = document.getElementById('statusRail');
+    const viewer = document.getElementById('statusRailFileViewer');
+    const bodyEl = document.getElementById('fileViewerBody');
+    if (!rail || !viewer || !bodyEl) return false;
+
+    const kind = (opts && opts.kind) || 'image';
+    const title = (opts && opts.title) || '';
+    const filePath = (opts && opts.filePath) || '';
+    const noPreview = Boolean(opts && opts.noPreview);
+    const isImage = kind !== 'video' && kind !== 'frame';
+    const fullSrc = src;
+    const displaySrc = (isImage && !noPreview) ? (_mediaPreviewUrl(src) || src) : src;
+
+    _cleanupFileViewerMedia(bodyEl);
+
+    const titleEl = document.getElementById('fileViewerTitle');
+    const filenameEl = document.getElementById('fileViewerFilename');
+    const dlBtn = document.getElementById('fileViewerDownloadBtn');
+    const fsBtn = document.getElementById('fileViewerFullscreenBtn');
+    const extBtn = document.getElementById('fileViewerOpenExternalBtn');
+
+    if (titleEl) {
+      if (kind === 'video') titleEl.textContent = 'Video Preview';
+      else if (kind === 'frame') titleEl.textContent = _isPdfPath(filePath || title) ? 'PDF Preview' : 'Artifact Preview';
+      else titleEl.textContent = 'Image Preview';
+    }
+    if (filenameEl) filenameEl.textContent = title || filePath.split('/').pop() || 'Artifact';
+
+    viewer.setAttribute('data-viewer-kind', kind);
+    viewer.setAttribute('data-current-src', fullSrc);
+    viewer.setAttribute('data-viewer-no-preview', noPreview ? '1' : '');
+    if (filePath) viewer.setAttribute('data-current-path', filePath);
+    else viewer.removeAttribute('data-current-path');
+
+    if (dlBtn) {
+      dlBtn.href = fullSrc;
+      dlBtn.setAttribute('download', title || '');
+      dlBtn.hidden = false;
+    }
+    if (fsBtn) fsBtn.hidden = false;
+    if (extBtn) extBtn.hidden = !filePath;
+
+    bodyEl.className = 'file-viewer-body is-media-viewer is-media-' + kind;
+
+    if (kind === 'video') {
+      bodyEl.innerHTML = '<div class="file-viewer-media-stage is-video"><video class="file-viewer-video" controls autoplay playsinline></video></div>';
+      const vid = bodyEl.querySelector('video');
+      if (vid) vid.src = displaySrc;
+    } else if (kind === 'frame') {
+      bodyEl.innerHTML = '<iframe class="file-viewer-frame" title="' + (0, sharedState.escapeAttr)(title || 'Artifact preview') + '"></iframe>';
+      const frame = bodyEl.querySelector('iframe');
+      if (frame) frame.src = displaySrc;
+    } else {
+      const hasFullUpgrade = displaySrc !== fullSrc;
+      bodyEl.innerHTML =
+        '<div class="file-viewer-media-bar" role="group" aria-label="Image zoom">'
+        + '<button type="button" class="file-viewer-zoom-btn" data-fv-zoom="out" aria-label="Zoom out">\u2212</button>'
+        + '<button type="button" class="file-viewer-zoom-btn" data-fv-zoom="actual" aria-label="Actual size (100%)" title="Actual size (100%)">100%</button>'
+        + '<button type="button" class="file-viewer-zoom-btn" data-fv-zoom="in" aria-label="Zoom in">+</button>'
+        + '<button type="button" class="file-viewer-zoom-btn" data-fv-zoom="fit">Fit</button>'
+        + '<button type="button" class="file-viewer-zoom-btn file-viewer-full-btn"' + (hasFullUpgrade ? '' : ' hidden') + ' title="Load the original image">Full size</button>'
+        + '</div>'
+        + '<div class="file-viewer-media-stage is-image"><img alt="' + (0, sharedState.escapeAttr)(title || 'Image preview') + '"></div>';
+      const stage = bodyEl.querySelector('.file-viewer-media-stage');
+      if (stage) stage.dataset.fvZoom = '0';
+      const img = stage && stage.querySelector('img');
+      const fullBtn = bodyEl.querySelector('.file-viewer-full-btn');
+      if (img) {
+        img.addEventListener('load', () => {
+          if (img.isConnected) _setFileViewerImageZoom(bodyEl, 0);
+        });
+        img.src = displaySrc;
+      }
+      if (stage && typeof ResizeObserver === 'function') {
+        const ro = new ResizeObserver(() => {
+          if (stage.isConnected && stage.dataset.fvZoom === '0') _setFileViewerImageZoom(bodyEl, 0);
+        });
+        ro.observe(stage);
+        bodyEl._fvResizeObserver = ro;
+      }
+      if (fullBtn && img) {
+        fullBtn.addEventListener('click', () => {
+          fullBtn.disabled = true;
+          fullBtn.textContent = 'Loading\u2026';
+          img.addEventListener('load', () => {
+            fullBtn.hidden = true;
+            viewer.setAttribute('data-viewer-no-preview', '1');
+            _setFileViewerImageZoom(bodyEl, 0);
+          }, { once: true });
+          img.addEventListener('error', () => { fullBtn.disabled = false; fullBtn.textContent = 'Full size'; }, { once: true });
+          img.src = fullSrc;
+        });
+      }
+      bodyEl.querySelectorAll('[data-fv-zoom]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const action = btn.getAttribute('data-fv-zoom');
+          const scale = Number(img && img.dataset.scale) || 1;
+          _setFileViewerImageZoom(bodyEl, action === 'fit' ? 0 : action === 'actual' ? 1 : scale * (action === 'in' ? 1.5 : 1 / 1.5));
+        });
+      });
+    }
+
+    if (typeof window._cccExpandStatusRailForFileViewer === 'function') window._cccExpandStatusRailForFileViewer();
+    rail.classList.add('file-viewer-active');
+    if (isImage) {
+      requestAnimationFrame(() => _setFileViewerImageZoom(bodyEl, 0));
+    }
+    return true;
+  }
+
+  async function loadTextIntoFileViewer(url, label, filePath) {
+    const r = await fetch(url, { cache: 'no-store', cccPriority: 'user' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const text = await r.text();
+    const rail = document.getElementById('statusRail');
+    const bodyEl = document.getElementById('fileViewerBody');
+    const titleEl = document.getElementById('fileViewerTitle');
+    const filenameEl = document.getElementById('fileViewerFilename');
+    const viewer = document.getElementById('statusRailFileViewer');
+    const dlBtn = document.getElementById('fileViewerDownloadBtn');
+    const fsBtn = document.getElementById('fileViewerFullscreenBtn');
+    const extBtn = document.getElementById('fileViewerOpenExternalBtn');
+    if (bodyEl) {
+      _cleanupFileViewerMedia(bodyEl);
+      bodyEl.className = 'file-viewer-body is-text-viewer';
+      const pre = document.createElement('pre');
+      pre.className = 'file-viewer-code';
+      pre.textContent = text;
+      bodyEl.replaceChildren(pre);
+    }
+    if (titleEl) titleEl.textContent = 'File Preview';
+    if (filenameEl) filenameEl.textContent = label || (filePath ? filePath.split('/').pop() : 'File');
+    if (viewer) {
+      viewer.setAttribute('data-viewer-kind', 'text');
+      viewer.setAttribute('data-current-src', url);
+      viewer.removeAttribute('data-viewer-no-preview');
+      if (filePath) viewer.setAttribute('data-current-path', filePath);
+      else viewer.removeAttribute('data-current-path');
+    }
+    if (dlBtn) {
+      dlBtn.href = url;
+      dlBtn.setAttribute('download', label || '');
+      dlBtn.hidden = false;
+    }
+    if (fsBtn) fsBtn.hidden = true;
+    if (extBtn) extBtn.hidden = !filePath;
+    if (typeof window._cccExpandStatusRailForFileViewer === 'function') window._cccExpandStatusRailForFileViewer();
+    if (rail) rail.classList.add('file-viewer-active');
+  }
+
+  function openArtifactViewer(src, opts) {
+    if (!src) return;
+    if (!(opts && opts.forceModal) && _canUseStatusRailViewer()) {
+      if (openArtifactInStatusRail(src, opts)) return;
+    }
+    openMediaLightbox(src, opts);
+  }
+
+  function openFilePathInMediaLightbox(filePath, label, ctx, opts) {
     const isCccPasted = /\/\.claude\/(?:command-center\/)?pasted-images\/paste-/.test(filePath);
     let href;
     if (isCccPasted) {
@@ -371,7 +598,7 @@
         ? 'frame'
         : 'image';
     const cleanName = label || String(filePath).split(/[?#]/)[0].replace(/:\d+(?::\d+)?$/, '').split('/').pop() || filePath;
-    openMediaLightbox(href, { kind, title: cleanName });
+    openArtifactViewer(href, { ...(opts || {}), kind, title: cleanName, filePath });
   }
 
   function mobileShowMain(on) {
@@ -1427,9 +1654,15 @@
     if (!res.ok) throw new Error(res.error || 'load failed');
     const rail = document.getElementById('statusRail');
     const bodyEl = document.getElementById('fileViewerBody');
+    const titleEl = document.getElementById('fileViewerTitle');
     const filenameEl = document.getElementById('fileViewerFilename');
     const viewer = document.getElementById('statusRailFileViewer');
+    const dlBtn = document.getElementById('fileViewerDownloadBtn');
+    const fsBtn = document.getElementById('fileViewerFullscreenBtn');
+    const extBtn = document.getElementById('fileViewerOpenExternalBtn');
     if (bodyEl) {
+      _cleanupFileViewerMedia(bodyEl);
+      bodyEl.className = 'file-viewer-body markdown-body assistant-text';
       bodyEl.innerHTML = typeof sharedState.renderMarkdown === 'function' ? (0, sharedState.renderMarkdown)(res.content) : res.content;
       // Rewrite <img src=…> to route through /api/local-image so relative
       // paths (./screenshot.png), bare names, and absolute filesystem paths
@@ -1446,8 +1679,17 @@
         img.src = '/api/local-image?path=' + encodeURIComponent(abs);
       });
     }
+    if (titleEl) titleEl.textContent = 'File Preview';
     if (filenameEl && label != null) filenameEl.textContent = label;
-    if (viewer) viewer.setAttribute('data-current-path', target);
+    if (viewer) {
+      viewer.setAttribute('data-viewer-kind', 'markdown');
+      viewer.setAttribute('data-current-path', target);
+      viewer.removeAttribute('data-current-src');
+      viewer.removeAttribute('data-viewer-no-preview');
+    }
+    if (dlBtn) dlBtn.hidden = true;
+    if (fsBtn) fsBtn.hidden = true;
+    if (extBtn) extBtn.hidden = false;
     if (typeof window._cccExpandStatusRailForFileViewer === 'function') window._cccExpandStatusRailForFileViewer();
     if (rail) rail.classList.add('file-viewer-active');
   }
@@ -1614,7 +1856,17 @@
       div.appendChild(labelEl);
       div.addEventListener('click', async (e) => {
         if (e.target.classList.contains('ffc-row-target')) return; // don't double-trigger on path-copy
+        if (_isMarkdownPath(row.target) && _canUseStatusRailViewer()) {
+          try {
+            closeFfcModal();
+            await loadMarkdownIntoFileViewer(row.target, row.label);
+          } catch (err) {
+            ffcShowRowToast(div, err.message || 'load failed');
+          }
+          return;
+        }
         if (_isVideoPath(row.target) || _isHtmlDocPath(row.target) || _isImageOrPdfPath(row.target)) {
+          if (_canUseStatusRailViewer()) closeFfcModal();
           openFilePathInMediaLightbox(row.target, row.label, sharedState.currentSession);
           return;
         }
@@ -4003,7 +4255,7 @@
     for (let i = 0; i < list.length; i++) if (test(list[i])) return true;
     return false;
   }
-    return { ffcInvalidate, syncConversationNavigationFocus, mountNewSessionChrome, updateSubagentsPanel, updateOrchestrationPane, _restoreCwdControlsToInputBar, mobileShowForCurrentMode, _simpleOnConversationOpen, syncCodexAccountUi, syncAntigravityAccountUi, renderNewSessionObjectContext, _refreshTokenEconomizerAnnotation, ffcRefreshForCurrent, ffcUpdateSidebar, refreshPresentationForPane, _reconcileAnnotationsForPane, renderSpawnStatsPanel, pollLocalhost, orchContext, orchPaintFamilyRows, orchRefreshRegistry, orchContinuationHtml, orchReplayClock, orchCollectLanes, orchLanesAt, orchNodeHtml, orchDrawEdges, mobileShowConv, mobileShowMain, isSimpleMode, _simpleHideHome, _simpleUpdateUsageLine, _simpleUpdateConvTitle, _simpleSyncTechStrip, _paintTokenEconomizerAnnotation, ffcFetch, ffcEnsurePill, _syncFilesPanelChrome, _ffcRecencyLine, renderSidebarFileRow, presentationSessionIdForPane, presentationConversationIdForPane, presentationModeForSession, presentationFeatureEnabled, normalizePresentationMode, syncPresentationToolbar, disconnectPresentationProjection, disconnectPresentationResizeObserver, buildPresentationDeck, presentationRefreshIndex, firstSlideOfLatestPresentationTurn, ensurePresentationProjection, renderMode3BootstrapState, ensurePresentationResizeObserver, _annotationsForSession, _findTextRangeInElement, _annotationSearchRoots, _wrapRangeInAnnotationMark, _insertAnnotationNote, copyTextValue, localhostContext, _localhostCtxKeyOf, setLocalhostPill, localhostUrl, localhostCommand, orchResolveRoot, orchApplyFamilyRows, rememberSidebarFamilyParents, orchLaneMetaRemember, orchFlattenTree, orchLane, orchLaneMetaAll, orchAppendManualLanes, orchReportTimes, orchSpawnTimeFor, getUiMode, _syncSimpleHomeVisibility, _simpleMemoryBannerEnabled, _simpleMemoryPhrase, _simpleMemoryPercent, _tokenEconomizerAnnotationHtml, openFfcModal, _isMarkdownPath, loadMarkdownIntoFileViewer, sidebarShowFileToast, _isVideoPath, _isHtmlDocPath, _isImageOrPdfPath, openFilePathInMediaLightbox, presentationModeState, removePresentationProjectionEntry, presentationPageBudget, presentationTurns, mode3SlidesForTurn, paginatePresentationItemsMeasured, paginatePresentationItems, buildPresentationSlide, presentationProjectionSignature, presentationSourceRoot, presentationRootRefreshesDeck, schedulePresentationProjectionFlush, presentationRootsAfterLatestAnswer, requestMode3Bootstrap, _annotationBlockAnchor, orchSyncFamilyDisclosure, orchParseSpawnedAt, orchLaneMetaGet, orchLaneName, orchLaneStatus, _simpleHomeRefresh, _simpleRefreshScreen, ffcRenderRow, _ffcEscHandler, _isPdfPath, openMediaLightbox, presentationPromptText, presentationAnswerBlocks, presentationClone, presentationBlockWeight, buildMode3Slide, presentationItemGroups, paginatePresentationGroups, presentationCandidateFits, buildPresentationDetails, flushPresentationProjection, _subagentClustersExpandedSet, _subagentClustersCollapsedSet, _subagentClustersSaveExpandedSet, _subagentClustersSaveCollapsedSet, orchLiveActivityForLane, orchSpawnExited, _simpleStartArchiveProgress, _simpleIsNyaDismissed, _simpleNyaCardHtml, _simpleRefreshQueueAlerts, applyOptimisticOverrides, _simpleIsWorkingRow, _simpleFetchArchiveStatus, _simpleTaskCardHtml, _simpleWorkingStatusLine, _simpleRenderHistory, _simpleRenderAutomations, _simpleRenderAutomationDetail, _simpleSyncSettingsScreen, ffcEscapeHtml, ffcShowRowToast, closeFfcModal, _ensureMediaLightbox, _mediaPreviewUrl, setMediaLightboxZoom, presentationListItems, mode3Text, mode3StringList, ensurePresentationMeasureSurface, presentationCloneForProjection, _simpleStopArchiveProgress, _simpleLoadNyaDismissed, _simpleNyaKindLabel, _simpleQueueAlertCardHtml, _simpleIsUnseenFinished, _simpleMemoryLine, _simpleBaseName, _simpleHistoryApply, _simpleAutomationCardHtml, _simpleAutomationStatusLine, _simplePlainAge, _simpleQueueItemCardHtml, getVoiceMobileBtnPref, closeMediaLightbox, _simpleLoadSeenMtimes, _simpleHistoryStatusLine, _simplePlainAgeIso, _bodyHasAny };
+    return { ffcInvalidate, syncConversationNavigationFocus, mountNewSessionChrome, updateSubagentsPanel, updateOrchestrationPane, _restoreCwdControlsToInputBar, mobileShowForCurrentMode, _simpleOnConversationOpen, syncCodexAccountUi, syncAntigravityAccountUi, renderNewSessionObjectContext, _refreshTokenEconomizerAnnotation, ffcRefreshForCurrent, ffcUpdateSidebar, refreshPresentationForPane, _reconcileAnnotationsForPane, renderSpawnStatsPanel, pollLocalhost, orchContext, orchPaintFamilyRows, orchRefreshRegistry, orchContinuationHtml, orchReplayClock, orchCollectLanes, orchLanesAt, orchNodeHtml, orchDrawEdges, mobileShowConv, mobileShowMain, isSimpleMode, _simpleHideHome, _simpleUpdateUsageLine, _simpleUpdateConvTitle, _simpleSyncTechStrip, _paintTokenEconomizerAnnotation, ffcFetch, ffcEnsurePill, _syncFilesPanelChrome, _ffcRecencyLine, renderSidebarFileRow, presentationSessionIdForPane, presentationConversationIdForPane, presentationModeForSession, presentationFeatureEnabled, normalizePresentationMode, syncPresentationToolbar, disconnectPresentationProjection, disconnectPresentationResizeObserver, buildPresentationDeck, presentationRefreshIndex, firstSlideOfLatestPresentationTurn, ensurePresentationProjection, renderMode3BootstrapState, ensurePresentationResizeObserver, _annotationsForSession, _findTextRangeInElement, _annotationSearchRoots, _wrapRangeInAnnotationMark, _insertAnnotationNote, copyTextValue, localhostContext, _localhostCtxKeyOf, setLocalhostPill, localhostUrl, localhostCommand, orchResolveRoot, orchApplyFamilyRows, rememberSidebarFamilyParents, orchLaneMetaRemember, orchFlattenTree, orchLane, orchLaneMetaAll, orchAppendManualLanes, orchReportTimes, orchSpawnTimeFor, getUiMode, _syncSimpleHomeVisibility, _simpleMemoryBannerEnabled, _simpleMemoryPhrase, _simpleMemoryPercent, _tokenEconomizerAnnotationHtml, openFfcModal, _isMarkdownPath, loadMarkdownIntoFileViewer, loadTextIntoFileViewer, sidebarShowFileToast, _isVideoPath, _isHtmlDocPath, _isImageOrPdfPath, openFilePathInMediaLightbox, openArtifactViewer, openArtifactInStatusRail, _canUseStatusRailViewer, presentationModeState, removePresentationProjectionEntry, presentationPageBudget, presentationTurns, mode3SlidesForTurn, paginatePresentationItemsMeasured, paginatePresentationItems, buildPresentationSlide, presentationProjectionSignature, presentationSourceRoot, presentationRootRefreshesDeck, schedulePresentationProjectionFlush, presentationRootsAfterLatestAnswer, requestMode3Bootstrap, _annotationBlockAnchor, orchSyncFamilyDisclosure, orchParseSpawnedAt, orchLaneMetaGet, orchLaneName, orchLaneStatus, _simpleHomeRefresh, _simpleRefreshScreen, ffcRenderRow, _ffcEscHandler, _isPdfPath, openMediaLightbox, presentationPromptText, presentationAnswerBlocks, presentationClone, presentationBlockWeight, buildMode3Slide, presentationItemGroups, paginatePresentationGroups, presentationCandidateFits, buildPresentationDetails, flushPresentationProjection, _subagentClustersExpandedSet, _subagentClustersCollapsedSet, _subagentClustersSaveExpandedSet, _subagentClustersSaveCollapsedSet, orchLiveActivityForLane, orchSpawnExited, _simpleStartArchiveProgress, _simpleIsNyaDismissed, _simpleNyaCardHtml, _simpleRefreshQueueAlerts, applyOptimisticOverrides, _simpleIsWorkingRow, _simpleFetchArchiveStatus, _simpleTaskCardHtml, _simpleWorkingStatusLine, _simpleRenderHistory, _simpleRenderAutomations, _simpleRenderAutomationDetail, _simpleSyncSettingsScreen, ffcEscapeHtml, ffcShowRowToast, closeFfcModal, _ensureMediaLightbox, _mediaPreviewUrl, setMediaLightboxZoom, presentationListItems, mode3Text, mode3StringList, ensurePresentationMeasureSurface, presentationCloneForProjection, _simpleStopArchiveProgress, _simpleLoadNyaDismissed, _simpleNyaKindLabel, _simpleQueueAlertCardHtml, _simpleIsUnseenFinished, _simpleMemoryLine, _simpleBaseName, _simpleHistoryApply, _simpleAutomationCardHtml, _simpleAutomationStatusLine, _simplePlainAge, _simpleQueueItemCardHtml, getVoiceMobileBtnPref, closeMediaLightbox, _simpleLoadSeenMtimes, _simpleHistoryStatusLine, _simplePlainAgeIso, _bodyHasAny };
   }
   root.CCCConversationChrome = Object.freeze({ createController });
 })(typeof window === 'undefined' ? globalThis : window);

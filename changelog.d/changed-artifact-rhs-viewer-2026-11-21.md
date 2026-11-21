@@ -1,0 +1,1 @@
+- Opening session artifacts (images, videos, PDFs, HTML previews, and Markdown links) on desktop now displays them in the right-hand status rail (`#statusRailFileViewer`) alongside the active session instead of a full-screen pop-up, with a full-screen button and automatic mobile lightbox fallback.

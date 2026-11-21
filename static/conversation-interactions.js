@@ -2506,10 +2506,17 @@ document.addEventListener('click', (ev) => {
       }
       return;
     }
+    const _openArtifact = (src, opts) => {
+      if (typeof sharedState.openArtifactViewer === 'function') {
+        (0, sharedState.openArtifactViewer)(src, opts);
+      } else {
+        (0, sharedState.openMediaLightbox)(src, opts);
+      }
+    };
     const shotLink = ev.target.closest('a.uxq-td-img-wrap, .ann-ux-preview-shot a');
     if (shotLink && shotLink.getAttribute('href')) {
       ev.preventDefault();
-      (0, sharedState.openMediaLightbox)(shotLink.href, { kind: 'image', title: 'screenshot.png' });
+      _openArtifact(shotLink.href, { kind: 'image', title: 'screenshot.png' });
       return;
     }
     // CCC-286: (+) enlarge button on tool-result image thumbnails.
@@ -2518,7 +2525,7 @@ document.addEventListener('click', (ev) => {
       ev.preventDefault();
       const gallery = zoomBtn.closest('.conversation-media-gallery');
       if (gallery && gallery.matches(':popover-open')) gallery.hidePopover();
-      (0, sharedState.openMediaLightbox)(zoomBtn.getAttribute('data-zoom-src'), { kind: 'image', title: zoomBtn.getAttribute('data-zoom-title') || 'image.png' });
+      _openArtifact(zoomBtn.getAttribute('data-zoom-src'), { kind: 'image', title: zoomBtn.getAttribute('data-zoom-title') || 'image.png' });
       return;
     }
     const img = ev.target.closest('img.msg-image');
@@ -2526,7 +2533,7 @@ document.addEventListener('click', (ev) => {
       ev.preventDefault();
       const gallery = img.closest('.conversation-media-gallery');
       if (gallery && gallery.matches(':popover-open')) gallery.hidePopover();
-      (0, sharedState.openMediaLightbox)(img.dataset.fullSrc || img.src, { kind: 'image', title: img.alt || 'image.png' });
+      _openArtifact(img.dataset.fullSrc || img.src, { kind: 'image', title: img.alt || 'image.png' });
       return;
     }
   });
@@ -2565,6 +2572,15 @@ document.addEventListener('keydown', (ev) => {
     if (ev.key === 'Escape' && sharedState._imgLightbox && sharedState._imgLightbox.classList.contains('open')) {
       (0, sharedState.closeMediaLightbox)();
       return;
+    }
+    if (ev.key === 'Escape') {
+      const rail = document.getElementById('statusRail');
+      const active = document.activeElement;
+      const inEditable = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable);
+      if (!inEditable && rail && rail.classList.contains('file-viewer-active') && typeof sharedState.closeStatusRailFileViewer === 'function') {
+        (0, sharedState.closeStatusRailFileViewer)();
+        return;
+      }
     }
     if ((ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') && !ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.shiftKey
         && sharedState._imgLightbox && sharedState._imgLightbox.classList.contains('open')) {
@@ -2639,13 +2655,35 @@ document.addEventListener('click', async (ev) => {
       return;
     }
     if ((0, sharedState._isVideoPath)(p) || (0, sharedState._isHtmlDocPath)(p) || (0, sharedState._isImageOrPdfPath)(p)) {
-      // Open video/HTML/image/PDF links in the in-page media lightbox (with a
-      // ← Back toolbar and history state) instead of navigating a same-origin
-      // <a target="_blank"> to /api/media, which replaces the standalone PWA
-      // view on mobile with a raw file and no way back to the main view.
+      // Open video/HTML/image/PDF links in the right-hand rail viewer on desktop
+      // (falling back to the in-page media lightbox on mobile) so the session
+      // stays visible on the left while viewing the artifact on the right.
       const ctx = _pathLinkSessionContext(a);
       (0, sharedState.openFilePathInMediaLightbox)((_bareMediaBaseDir(a, p) || '') + p, '', ctx);
       return;
+    }
+    if ((0, sharedState._isMarkdownPath)(p)
+        && typeof sharedState._canUseStatusRailViewer === 'function'
+        && (0, sharedState._canUseStatusRailViewer)()
+        && typeof sharedState.loadMarkdownIntoFileViewer === 'function') {
+      const ctx = _pathLinkSessionContext(a);
+      const cleanPath = String(p).replace(/^file:\/\//i, '').split(/[?#]/)[0].replace(/:\d+(?::\d+)?$/, '');
+      let resolvedPath = cleanPath;
+      if (!resolvedPath.startsWith('/')) {
+        const baseDir = (ctx && (ctx.cwd || ctx.repoPath || ctx.repo_path))
+          || (typeof sharedState.activeConvRepoPath === 'function' && (0, sharedState.activeConvRepoPath)())
+          || '';
+        if (baseDir) resolvedPath = baseDir.replace(/\/+$/, '') + '/' + resolvedPath.replace(/^\.\//, '');
+      }
+      if (resolvedPath.startsWith('/')) {
+        try {
+          const cleanName = resolvedPath.split('/').pop() || resolvedPath;
+          await (0, sharedState.loadMarkdownIntoFileViewer)(resolvedPath, cleanName);
+          return;
+        } catch (_) {
+          // Fall through to /api/open if the file couldn't be read directly.
+        }
+      }
     }
     a.style.opacity = '0.5';
     try {
@@ -2957,9 +2995,48 @@ document.addEventListener('keydown', (ev) => {
     return withRepoPath(payload, (0, sharedState.rowRepoPath)(row));
   }
 
-  function handleOpenUnavailable(data, fallbackPath) {
+  async function handleOpenUnavailable(data, fallbackPath) {
     const p = (data && data.path) || fallbackPath || '';
-    if (p) openFolderViewer(p);
+    if (!p) return;
+    if (typeof sharedState._canUseStatusRailViewer === 'function' && (0, sharedState._canUseStatusRailViewer)()) {
+      const cleanName = String(p).split(/[?#]/)[0].split('/').pop() || p;
+      if ((0, sharedState._isMarkdownPath)(p) && typeof sharedState.loadMarkdownIntoFileViewer === 'function') {
+        try {
+          await (0, sharedState.loadMarkdownIntoFileViewer)(p, cleanName);
+          return;
+        } catch (_) {}
+      }
+      if ((0, sharedState._isVideoPath)(p) || (0, sharedState._isHtmlDocPath)(p) || (0, sharedState._isImageOrPdfPath)(p)) {
+        (0, sharedState.openFilePathInMediaLightbox)(p, cleanName, sharedState.currentSession);
+        return;
+      }
+      try {
+        const res = await fetch('/api/fs/browse?path=' + encodeURIComponent(p), { cache: 'no-store', cccPriority: 'user' });
+        const d = await res.json();
+        if (d && d.ok && d.selected && Array.isArray(d.files)) {
+          const picked = d.files.find(x => x.name === d.selected);
+          if (picked) {
+            if (picked.category === 'markdown' && typeof sharedState.loadMarkdownIntoFileViewer === 'function') {
+              await (0, sharedState.loadMarkdownIntoFileViewer)(picked.path, picked.name);
+              return;
+            }
+            if (picked.category === 'images' || picked.category === 'videos' || picked.category === 'pdfs' || picked.category === 'html') {
+              (0, sharedState.openFilePathInMediaLightbox)(picked.path, picked.name, sharedState.currentSession);
+              return;
+            }
+            if (picked.category === 'text' && typeof sharedState.loadTextIntoFileViewer === 'function') {
+              const u = new URL('/api/media', window.location.origin);
+              u.searchParams.set('path', picked.path);
+              const repo = d.media_repo_path || (typeof sharedState.activeConvRepoPath === 'function' && (0, sharedState.activeConvRepoPath)()) || '';
+              if (repo) u.searchParams.set('repo_path', repo);
+              await (0, sharedState.loadTextIntoFileViewer)(u.href, picked.name, picked.path);
+              return;
+            }
+          }
+        }
+      } catch (_) {}
+    }
+    openFolderViewer(p);
   }
 
   function _ffvSize(n) {
@@ -3012,7 +3089,7 @@ document.addEventListener('keydown', (ev) => {
           ev.preventDefault();
           const cat = $fs.getAttribute('data-ffv-fullscreen');
           const kind = cat === 'videos' ? 'video' : (cat === 'pdfs' || cat === 'html' || cat === 'text' || cat === 'markdown') ? 'frame' : 'image';
-          (0, sharedState.openMediaLightbox)(url, { kind, title: f.name });
+          (0, sharedState.openMediaLightbox)(url, { kind, title: f.name, forceModal: true });
         });
       }
       $list.querySelectorAll('.ffv-row').forEach(r => r.classList.toggle('sel', r.getAttribute('data-path') === f.path));

@@ -13200,14 +13200,42 @@
       rail.classList.remove('file-viewer-active');
     }
     if (typeof window._cccRestoreStatusRailAfterFileViewer === 'function') window._cccRestoreStatusRailAfterFileViewer();
+    const viewer = document.getElementById('statusRailFileViewer');
+    if (viewer) {
+      viewer.removeAttribute('data-current-path');
+      viewer.removeAttribute('data-current-src');
+      viewer.removeAttribute('data-viewer-kind');
+      viewer.removeAttribute('data-viewer-no-preview');
+    }
     const bodyEl = document.getElementById('fileViewerBody');
     if (bodyEl) {
+      if (bodyEl._fvResizeObserver) {
+        try { bodyEl._fvResizeObserver.disconnect(); } catch (_) {}
+        bodyEl._fvResizeObserver = null;
+      }
+      const vid = bodyEl.querySelector('video');
+      if (vid) {
+        try { vid.pause(); vid.removeAttribute('src'); vid.load(); } catch (_) {}
+      }
+      const frame = bodyEl.querySelector('iframe');
+      if (frame) {
+        try { frame.src = 'about:blank'; } catch (_) {}
+      }
       bodyEl.innerHTML = '';
+      bodyEl.className = 'file-viewer-body markdown-body assistant-text';
     }
+    const titleEl = document.getElementById('fileViewerTitle');
+    if (titleEl) titleEl.textContent = 'File Preview';
     const filenameEl = document.getElementById('fileViewerFilename');
     if (filenameEl) {
       filenameEl.textContent = '';
     }
+    const dlBtn = document.getElementById('fileViewerDownloadBtn');
+    if (dlBtn) dlBtn.hidden = true;
+    const fsBtn = document.getElementById('fileViewerFullscreenBtn');
+    if (fsBtn) fsBtn.hidden = true;
+    const extBtn = document.getElementById('fileViewerOpenExternalBtn');
+    if (extBtn) extBtn.hidden = false;
   }
 
   function setLiveBadgeVisible(visible) {

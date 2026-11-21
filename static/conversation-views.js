@@ -2083,13 +2083,61 @@ onDashboardDocumentReady(() => {
         }
       });
     }
+    const $fileViewerFullscreen = document.getElementById('fileViewerFullscreenBtn');
+    if ($fileViewerFullscreen) {
+      $fileViewerFullscreen.addEventListener('click', () => {
+        const viewer = document.getElementById('statusRailFileViewer');
+        const src = viewer && viewer.getAttribute('data-current-src');
+        if (!src) return;
+        const kind = (viewer && viewer.getAttribute('data-viewer-kind')) || 'image';
+        const title = (document.getElementById('fileViewerFilename') || {}).textContent || '';
+        const noPreview = viewer.getAttribute('data-viewer-no-preview') === '1';
+        const vid = viewer.querySelector('video');
+        if (vid) { try { vid.pause(); } catch (_) {} }
+        if (typeof sharedState.openMediaLightbox === 'function') {
+          (0, sharedState.openMediaLightbox)(src, { kind, title, noPreview, forceModal: true });
+        }
+      });
+    }
     const $fileViewerRefresh = document.getElementById('fileViewerRefreshBtn');
     if ($fileViewerRefresh) {
       $fileViewerRefresh.addEventListener('click', async () => {
         const viewer = document.getElementById('statusRailFileViewer');
+        const kind = (viewer && viewer.getAttribute('data-viewer-kind')) || 'markdown';
         const path = viewer && viewer.getAttribute('data-current-path');
-        if (!path) return;
+        const src = viewer && viewer.getAttribute('data-current-src');
         const label = (document.getElementById('fileViewerFilename') || {}).textContent || null;
+        if (kind === 'text' && src && typeof sharedState.loadTextIntoFileViewer === 'function') {
+          $fileViewerRefresh.disabled = true;
+          $fileViewerRefresh.classList.add('is-spinning');
+          try {
+            await (0, sharedState.loadTextIntoFileViewer)(src, label || '', path || '');
+          } catch (err) {
+            (0, sharedState.showOpToast)('Refresh failed: ' + (err && err.message || 'network error'), 'error');
+          } finally {
+            $fileViewerRefresh.disabled = false;
+            $fileViewerRefresh.classList.remove('is-spinning');
+          }
+          return;
+        }
+        if (kind !== 'markdown' && src) {
+          let busted = src;
+          try {
+            const u = new URL(src, window.location.origin);
+            u.searchParams.set('_r', String(Date.now()));
+            busted = u.href;
+          } catch (_) {}
+          if (typeof sharedState.openArtifactInStatusRail === 'function') {
+            (0, sharedState.openArtifactInStatusRail)(busted, {
+              kind,
+              title: label || '',
+              filePath: path || '',
+              noPreview: viewer.getAttribute('data-viewer-no-preview') === '1',
+            });
+          }
+          return;
+        }
+        if (!path) return;
         $fileViewerRefresh.disabled = true;
         $fileViewerRefresh.classList.add('is-spinning');
         try {
@@ -2136,6 +2184,7 @@ onDashboardDocumentReady(() => {
     };
     let fileViewerPreviousRailWidth = null;
     let fileViewerPreviousRailStoredWidth = null;
+    let fileViewerPreviousRailCollapsed = null;
     // Resizing/collapsing the rail re-flows the conversation reader (its pane
     // gets wider/narrower → text re-wraps → content height changes), which
     // drifts the reading position under a fixed scrollTop. Capture each open
@@ -2172,20 +2221,29 @@ onDashboardDocumentReady(() => {
     };
     const _expandStatusRailForFileViewer = () => {
       if (!$statusRail || !document.body.classList.contains('status-pos-right')) return;
-      if (fileViewerPreviousRailWidth == null) {
-        fileViewerPreviousRailWidth = $statusRail.getBoundingClientRect().width || _savedStatusRailWidth();
+      const alreadyExpanded = fileViewerPreviousRailWidth != null;
+      if (!alreadyExpanded) {
+        fileViewerPreviousRailCollapsed = document.body.classList.contains('status-rail-collapsed');
+        fileViewerPreviousRailWidth = fileViewerPreviousRailCollapsed
+          ? _savedStatusRailWidth()
+          : ($statusRail.getBoundingClientRect().width || _savedStatusRailWidth());
         try { fileViewerPreviousRailStoredWidth = localStorage.getItem('ccc-status-rail-width'); } catch (_) { fileViewerPreviousRailStoredWidth = null; }
       }
       _setStatusRailCollapsed(false, false);
-      _setStatusRailWidth(fileViewerPreviousRailWidth * FILE_VIEWER_RAIL_EXPAND_FACTOR, false);
+      if (!alreadyExpanded) {
+        _setStatusRailWidth(fileViewerPreviousRailWidth * FILE_VIEWER_RAIL_EXPAND_FACTOR, false);
+      }
     };
     const _restoreStatusRailAfterFileViewer = () => {
       if (fileViewerPreviousRailWidth == null) return;
       const previousWidth = fileViewerPreviousRailWidth;
       const previousStoredWidth = fileViewerPreviousRailStoredWidth;
+      const previousCollapsed = fileViewerPreviousRailCollapsed;
       fileViewerPreviousRailWidth = null;
       fileViewerPreviousRailStoredWidth = null;
+      fileViewerPreviousRailCollapsed = null;
       _setStatusRailWidth(previousWidth, false);
+      if (previousCollapsed) _setStatusRailCollapsed(true, false);
       try {
         if (previousStoredWidth == null) localStorage.removeItem('ccc-status-rail-width');
         else localStorage.setItem('ccc-status-rail-width', previousStoredWidth);
