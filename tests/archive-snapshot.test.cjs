@@ -74,7 +74,7 @@ test('a fresh early full body needs no saved base and bypasses the preview fence
   assert.deepEqual(Array.from(result), rows);
   assert.equal(validated,1);
   assert.equal(f.reads.length,0,'a fresh full boot response is consumed only once');
-  assert.equal(f.state._archiveAllDelta.get(fullUrl),'fresh');
+  assert.equal(f.state._archiveAllDelta.get(fullUrl).token,'fresh');
   assert.equal(f.context.window.__cccArchiveProgress,undefined,'only the renderer marks completeness');
 });
 
@@ -89,7 +89,7 @@ test('All history requests reconstruct ordered rows from shared layouts before c
     const loaded = await f.context.loadArchiveAll({window:'all', onValidated:() => validated++});
     assert.equal(JSON.stringify(loaded),JSON.stringify(rows));
     assert.equal(f.state._archiveAllData.get(allUrl),loaded);
-    assert.equal(f.state._archiveAllDelta.get(allUrl),'history');
+    assert.equal(f.state._archiveAllDelta.get(allUrl).token,'history');
     assert.equal(validated,1);
     assert.deepEqual(f.reads.map(read => read.url),early ? [] : [allUrl + '&row_layouts=1']);
     assert.deepEqual(Array.from(f.savedLayouts[0]),[body.row_layouts,body.conversations]);
@@ -117,13 +117,43 @@ test('a saved-order delta merges against its validated base and persists the ful
   assert.equal(f.reads.length,0);
 });
 
+test('same-document polls use the current base order and update it after a reorder', async () => {
+  const firstOrder = 'a'.repeat(64);
+  const secondOrder = 'b'.repeat(64);
+  const f = setup({snapshot:{url:fullUrl},
+    response:reply({conversations:rows, delta_token:'first', order_token:firstOrder})});
+  await f.context.loadArchiveAll();
+  const replies = [
+    reply({delta:true, since:'first', ids:['older','recent'], order_token:secondOrder,
+      conversations:[], delta_token:'second'}),
+    reply({delta:true, since:'second', ids:[], same_order:true, order_token:secondOrder,
+      count:2, conversations:[{session_id:'older', modified:42}], delta_token:'third'}),
+    reply({conversations:rows, delta_token:'fourth', order_token:firstOrder}),
+  ];
+  f.context.backgroundApiFetch = async url => {
+    f.reads.push({url});
+    return replies.shift();
+  };
+  await f.context.loadArchiveAll();
+  assert.equal(f.reads[1].url, fullUrl + '&since=first&saved_order=' + firstOrder);
+  const result = await f.context.loadArchiveAll();
+  assert.equal(f.reads[2].url, fullUrl + '&since=second&saved_order=' + secondOrder);
+  assert.deepEqual(Array.from(result, row => row.session_id), ['older','recent']);
+  assert.equal(result[0].modified, 42);
+  assert.equal(f.savedDeltas[2].ids, null);
+
+  f.state._archiveAllData.set(fullUrl, rows.slice());
+  await f.context.loadArchiveAll();
+  assert.equal(f.reads[3].url, fullUrl, 'a different row base cannot use the old delta token');
+});
+
 test('304 reuses the exact validated rows; an expired server token replaces the full base', async () => {
   const snapshot = {url:fullUrl, rows, delta:'old', etag:'"old"'};
   const same = setup({snapshot, early:Promise.resolve(reply(null,304))});
   assert.deepEqual(Array.from(await same.context.loadArchiveAll()),rows);
   const changed = setup({snapshot, early:Promise.resolve(reply({conversations:[{session_id:'replacement'}],delta_token:'new'}))});
   assert.deepEqual(Array.from(await changed.context.loadArchiveAll(), r=>r.session_id),['replacement']);
-  assert.equal(changed.state._archiveAllDelta.get(fullUrl),'new');
+  assert.equal(changed.state._archiveAllDelta.get(fullUrl).token,'new');
 });
 
 test('an unmergeable early delta restores the preview before awaiting a full resync', async () => {
@@ -177,7 +207,7 @@ test('parsed full and delta replies validate before a pending preview paint with
     const result=await f.context.loadArchiveAll({afterPaint:new Promise(()=>{}),onValidated:()=>validated++});
     assert.deepEqual(Array.from(result,r=>r.session_id),body.ids||['replacement']);
     assert.equal(validated,1);
-    assert.equal(f.state._archiveAllDelta.get(fullUrl),'new');
+    assert.equal(f.state._archiveAllDelta.get(fullUrl).token,'new');
   }
   const bad=reply(null);
   bad._cccArchiveParsedBody=Promise.resolve({wrong:'shape'});

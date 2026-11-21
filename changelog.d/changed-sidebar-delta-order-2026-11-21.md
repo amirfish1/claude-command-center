@@ -1,0 +1,1 @@
+- Sidebar refreshes transfer fewer bytes when the session order stays the same.

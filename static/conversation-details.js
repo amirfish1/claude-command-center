@@ -4934,18 +4934,22 @@
     };
     const p = (async () => {
       try {
-        let savedRows;
         if (!opts.initial && !opts.includePrs && !sharedState._archiveAllData.has(url)) {
           const snapshot = await window.__cccArchiveSnapshot?.read;
           if (snapshot?.url === url && !sharedState._archiveAllData.has(url)) {
-            savedRows = snapshot.rows;
             sharedState._archiveAllData.set(url, snapshot.rows);
             if (snapshot.etag) sharedState._archiveAllEtag.set(url, snapshot.etag);
-            if (snapshot.delta) sharedState._archiveAllDelta.set(url, snapshot.delta);
+            if (snapshot.delta) sharedState._archiveAllDelta.set(url, {
+              rows: snapshot.rows, token: snapshot.delta, order: snapshot.order,
+            });
           }
         }
         const prevEtag = sharedState._archiveAllEtag.get(url);
-        const deltaToken = Array.isArray(sharedState._archiveAllData.get(url)) ? sharedState._archiveAllDelta.get(url) : null;
+        const requestBase = sharedState._archiveAllData.get(url);
+        const deltaBase = sharedState._archiveAllDelta.get(url);
+        // The token and order proof describe this particular array of rows.
+        const deltaToken = Array.isArray(requestBase) && deltaBase?.rows === requestBase ? deltaBase.token : null;
+        const baseOrder = deltaToken && /^[0-9a-f]{64}$/.test(deltaBase.order) ? deltaBase.order : '';
         // Hard timeout: without one, a wedged request (accepted connection,
         // response never arrives) hangs this promise forever — and every
         // caller dedups onto it (_archiveAllInflight, _archiveRefreshPromise),
@@ -4954,7 +4958,7 @@
         const timeoutId = setTimeout(() => {
           try { controller.abort(); } catch (_) {}
         }, sharedState.ARCHIVE_ALL_FETCH_TIMEOUT_MS);
-        let r;
+        let r, requestedOrder = '';
         try {
           const init = { signal: controller.signal };
           if (prevEtag) init.headers = { 'If-None-Match': prevEtag };
@@ -4979,7 +4983,11 @@
           if (!r && window.__cccArchiveSnapshot && !window.__cccArchiveSnapshot.consumed && url === window.__cccArchiveSnapshot.url) {
             window.__cccArchiveSnapshot.consumed = true;
             r = await window.__cccArchiveSnapshot.fetch;
-            if (r) _perfFetchUrl = r.url || url;
+            if (r) {
+              _perfFetchUrl = r.url || url;
+              // Only boot can attest that an early response used this saved order.
+              requestedOrder = r._cccArchiveSavedOrder === baseOrder ? baseOrder : '';
+            }
           }
           // No preview request was sent when the early complete response won.
           // The normal full loader still validates and applies that response.
@@ -4987,6 +4995,8 @@
               && url === sharedState._archiveBootstrapUrl) return null;
           if (!r) {
             _perfFetchUrl = deltaToken ? requestUrl + '&since=' + encodeURIComponent(deltaToken) : requestUrl;
+            requestedOrder = baseOrder;
+            if (requestedOrder) _perfFetchUrl += '&saved_order=' + requestedOrder;
             r = await backgroundApiFetch(_perfFetchUrl, init);
           }
           if (controller.signal.aborted) throw controller.signal.reason;
@@ -5046,8 +5056,7 @@
         let _merged = null;
         if (d && d.delta) {
           const baseRows = sharedState._archiveAllData.get(url);
-          const savedOrder = baseRows === savedRows && d.since === deltaToken
-            ? r._cccArchiveSavedOrder : null;
+          const savedOrder = baseRows === requestBase && d.since === deltaToken ? requestedOrder : null;
           _merged = _mergeArchiveListDelta(baseRows, d, savedOrder);
           if (!_merged) {
             // Ids we never had: resync with one full body.
@@ -5105,12 +5114,14 @@
         // validates it from here on.
         if (_merged) sharedState._archiveAllEtag.delete(url);
         else if (etag) sharedState._archiveAllEtag.set(url, etag);
-        if (d.delta_token) sharedState._archiveAllDelta.set(url, d.delta_token);
+        if (d.delta_token) sharedState._archiveAllDelta.set(url, {
+          rows: convs, token: d.delta_token, order: d.order_token,
+        });
         else sharedState._archiveAllDelta.delete(url);
         if (!opts.includePrs && !opts.initial) {
           _scheduleArchiveSidebarCache(convs, params.get('window'));
           window.__cccArchiveSnapshot?.save({url, rows:convs,
-            etag:sharedState._archiveAllEtag.get(url), delta:sharedState._archiveAllDelta.get(url),
+            etag:sharedState._archiveAllEtag.get(url), delta:d.delta_token,
             order:d.order_token},
             _merged ? {from: deltaToken,
               ids:d.same_order ? null : d.ids,
