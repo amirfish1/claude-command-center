@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const app = require('./legacy-dashboard-source.cjs');
+const {functionSource} = require('./conversation-source.cjs');
 const constants = app.slice(app.indexOf('  const F2_LAUNCH_ENGINES ='), app.indexOf('  // Fallback ladder only.'));
 const helpers = app.slice(app.indexOf('  function f2AllLaunchEngines('), app.indexOf('  // One alternative, one pill.'));
 
@@ -11,14 +12,25 @@ test('continuation offers all session launch engines with their own models and e
     SPAWN_DEFAULT_ENGINES: ['claude', 'codex', 'cursor', 'antigravity', 'kilo', 'hermes', 'kimi', 'opencode', 'devin', 'grok'],
     spawnEngineLabel: engine => engine.toUpperCase(),
     spawnDefaultsState: { disabled_engines: ['kimi', 'kilo', 'opencode'] },
-    MODEL_OPTIONS_BY_ENGINE: { cursor: [{ id: 'auto', label: 'Auto' }], grok: [{ id: 'grok-test', label: 'Grok test' }] },
+    MODEL_OPTIONS_BY_ENGINE: {
+      claude: [{ id: 'sonnet-5' }, { id: 'sonnet-5-5' }, { id: 'opus-5-5', available: false }],
+      cursor: [{ id: 'auto', label: 'Auto' }],
+      grok: [{ id: 'grok-test', label: 'Grok test' }],
+    },
     effortLevelsForEngine: engine => engine === 'grok' ? [{ id: 'high', label: 'High' }] : [],
   });
   vm.runInContext(constants + helpers, context);
+  vm.runInContext([
+    'const sharedState = globalThis;',
+    ...['modelOptionsForSpawnEngine', 'normalizeSpawnDefaultEngine', '_normalizeModelId'].map(name => functionSource(name)),
+  ].join('\n'), context);
   const evaluate = expression => JSON.parse(vm.runInContext(`JSON.stringify(${expression})`, context));
   assert.deepEqual(evaluate('f2LaunchEngines().map(e => e.id)'), ['claude', 'codex', 'cursor', 'antigravity', 'hermes', 'devin', 'grok']);
   assert.deepEqual(evaluate('f2ModelsForEngine("cursor")'), [{ id: 'auto', label: 'Auto' }]);
   assert.deepEqual(evaluate('f2ModelsForEngine("grok")'), [{ id: 'grok-test', label: 'Grok test' }]);
+  assert.deepEqual(evaluate('f2ModelsForEngine("claude").map(model => model.id)'), ['sonnet-5-5']);
+  assert.deepEqual(evaluate('f2ModelsForEngine("claude", "sonnet-5").map(model => model.id)'), ['sonnet-5', 'sonnet-5-5']);
+  assert.equal(evaluate('f2ResolveLaunchModel(f2ModelsForEngine("claude"), "sonnet-4-6")'), 'sonnet-5-5');
   assert.deepEqual(evaluate('f2EffortsForEngine("cursor")'), []);
   assert.deepEqual(evaluate('f2EffortsForEngine("grok")'), [{ id: 'high', label: 'High' }]);
 });
