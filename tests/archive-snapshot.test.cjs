@@ -91,7 +91,7 @@ test('All history requests reconstruct ordered rows from shared layouts before c
     assert.equal(f.state._archiveAllData.get(allUrl),loaded);
     assert.equal(f.state._archiveAllDelta.get(allUrl).token,'history');
     assert.equal(validated,1);
-    assert.deepEqual(f.reads.map(read => read.url),early ? [] : [allUrl + '&row_layouts=1']);
+    assert.deepEqual(f.reads.map(read => read.url),early ? [] : [allUrl + '&row_layouts=1&order_spans=1']);
     assert.deepEqual(Array.from(f.savedLayouts[0]),[body.row_layouts,body.conversations]);
   }
   const invalid = setup({response:reply({row_layouts:[['__proto__']], conversations:[[0, [{}]]]})});
@@ -145,6 +145,46 @@ test('same-document polls use the current base order and update it after a reord
   f.state._archiveAllData.set(fullUrl, rows.slice());
   await f.context.loadArchiveAll();
   assert.equal(f.reads[3].url, fullUrl, 'a different row base cannot use the old delta token');
+});
+
+test('an All order delta reconstructs slices and survives the next saved-order poll', async () => {
+  const allUrl = '/api/conversations/list?window=all&stale_ok=1';
+  const order = 'a'.repeat(64);
+  const nextOrder = 'b'.repeat(64);
+  const base = {url:allUrl, rows:[...rows, {session_id:'removed'}], delta:'old', order};
+  const changed = {session_id:'new'};
+  const updated = {session_id:'recent', modified:42};
+  const delta = {
+    delta:true, since:'old', ids:[], base_order:order, order_token:nextOrder,
+    order_spans:[[1,1], 'new', [0,1]], count:3, delta_token:'new',
+    conversations:[changed, updated],
+  };
+  for (const body of [delta, {...delta, base_order:nextOrder},
+    {...delta, order_spans:[[0,2], [0,1]]},
+    {...delta, order_spans:[[1,1], 'unknown', [0,1]]},
+    {...delta, order_spans:[[1,3]]},
+  ]) {
+    const early = reply(body);
+    early._cccArchiveSavedOrder = order;
+    const f = setup({snapshot:base, early:Promise.resolve(early),
+      response:reply({conversations:rows})});
+    const result = await f.context.loadArchiveAll({window:'all'});
+    if (body !== delta) {
+      assert.deepEqual(Array.from(result),rows);
+      assert.equal(f.reads.length,1,'an invalid patch triggers one full resync');
+      assert.equal(f.savedDeltas[0],null);
+      continue;
+    }
+    assert.deepEqual(Array.from(result),[rows[1],changed,updated]);
+    assert.deepEqual(Array.from(f.savedDeltas[0].ids),['older','new','recent']);
+    assert.equal(f.reads.length,0);
+    f.context.backgroundApiFetch = async url => {
+      assert.match(url,/order_spans=1&since=new&saved_order=b{64}$/);
+      return reply(null,304);
+    };
+    assert.deepEqual(Array.from(await f.context.loadArchiveAll({window:'all'})),
+      [rows[1],changed,updated]);
+  }
 });
 
 test('304 reuses the exact validated rows; an expired server token replaces the full base', async () => {
@@ -355,7 +395,7 @@ test('a fresh profile prefetches a parsed full response while retaining its rece
   } finally {await context.close();}
 });
 
-test('All startup opts in to row layouts for the complete response only', async () => {
+test('All startup opts in to compact layouts and order for the complete response only', async () => {
   const context = await browser.createBrowserContext(), page = await context.newPage();
   try {
     await page.evaluateOnNewDocument(() => localStorage.setItem('ccc-archive-window', 'all'));
@@ -368,8 +408,10 @@ test('All startup opts in to row layouts for the complete response only', async 
     assert.equal(recent.get('window'),'all');
     assert.equal(recent.get('initial'),'1');
     assert.equal(recent.has('row_layouts'),false);
+    assert.equal(recent.has('order_spans'),false);
     assert.equal(complete.get('window'),'all');
     assert.equal(complete.get('row_layouts'),'1');
+    assert.equal(complete.get('order_spans'),'1');
     assert.equal(complete.has('initial'),false);
   } finally {await context.close();}
 });

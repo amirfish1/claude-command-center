@@ -4827,6 +4827,35 @@
       byId.set(String(id), row);
     }
     if (sameOrder) return [...byId.values()];
+    if (Object.hasOwn(d, 'order_spans')) {
+      // Offsets only describe the exact pre-delta array validated by the server.
+      if (d.ids.length || !savedOrder || d.base_order !== savedOrder
+          || !Array.isArray(d.order_spans) || d.order_spans.length > 256
+          || !Number.isSafeInteger(d.count) || d.count < 0
+          || d.count > prev.length + d.conversations.length) return null;
+      const rows = [], seen = new Set();
+      const append = id => {
+        if (!byId.has(id) || seen.has(id) || rows.length >= d.count) return false;
+        seen.add(id);
+        rows.push(byId.get(id));
+        return true;
+      };
+      for (const span of d.order_spans) {
+        if (typeof span === 'string') {
+          if (!append(span)) return null;
+          continue;
+        }
+        if (!Array.isArray(span) || span.length !== 2) return null;
+        const [start, count] = span;
+        if (!Number.isSafeInteger(start) || !Number.isSafeInteger(count)
+            || start < 0 || count < 1 || start + count > prev.length) return null;
+        for (let i = start; i < start + count; i++) {
+          const row = prev[i];
+          if (!row || !append(String(row.session_id || row.id || ''))) return null;
+        }
+      }
+      return rows.length === d.count ? rows : null;
+    }
     const out = new Array(d.ids.length);
     for (let i = 0; i < d.ids.length; i++) {
       const row = byId.get(String(d.ids[i]));
@@ -4852,7 +4881,7 @@
     if (opts.initial) params.set('initial', '1');
     const url = '/api/conversations/list' + (params.toString() ? '?' + params.toString() : '');
     const requestUrl = !opts.initial && !opts.includePrs && params.get('window') === 'all'
-      ? url + '&row_layouts=1' : url;
+      ? url + '&row_layouts=1&order_spans=1' : url;
     const pending = sharedState._archiveAllInflight.get(url);
     if (pending) return pending;
     let _perfT0 = performance.now();
@@ -5124,7 +5153,8 @@
             etag:sharedState._archiveAllEtag.get(url), delta:d.delta_token,
             order:d.order_token},
             _merged ? {from: deltaToken,
-              ids:d.same_order ? null : d.ids,
+              ids:d.same_order ? null : Object.hasOwn(d, 'order_spans')
+                ? _merged.map(row => String(row.session_id || row.id)) : d.ids,
               changes: d.conversations} : null,
             !_merged && !d.delta && raw.row_layouts ? [raw.row_layouts, raw.conversations] : null);
         }

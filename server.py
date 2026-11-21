@@ -37299,6 +37299,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     (body_ver, _delta["ctx"]) if _delta is not None else body_ver,
                     diagnostics=_body_cache_diag, since=since, saved_order=saved_order,
                     row_layouts=qs.get("row_layouts", ["0"])[0] == "1",
+                    order_spans=qs.get("order_spans", ["0"])[0] == "1",
                     check_client=_check_client,
                 )
             _lt2 = time.perf_counter()
@@ -47940,7 +47941,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
 
     def _send_archive_list_json(self, cache_key, window, from_cache, build_payload, snap_ver,
                                 diagnostics=None, *, since="", saved_order="", row_layouts=False,
-                                check_client=None):
+                                order_spans=False, check_client=None):
         """send_json for /api/conversations/list: same etag/304/gzip
         semantics, but the serialized body + sha1 etag + gzip copy are built
         once per (cache key, window, snapshot version) and replayed for every
@@ -47963,7 +47964,8 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             except _ArchiveListClientDisconnected:
                 return "abandoned"
             payload, fingerprint = _list_replay.history_delta(
-                history, cache_key, _ARCHIVE_DELTA_NONCE, since, saved_order)
+                history, cache_key, _ARCHIVE_DELTA_NONCE, since, saved_order,
+                order_spans=order_spans)
             is_delta = payload is not None and payload.get("delta") is True
             if diagnostics is not None:
                 diagnostics.update(hit=False, reason="unversioned-history", version=snap_ver,

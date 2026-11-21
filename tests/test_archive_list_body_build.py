@@ -128,14 +128,15 @@ def test_body_cache_diagnostics_track_actual_key_and_unversioned_bypass(monkeypa
 
 
 def test_history_encoding_reuses_bytes_after_fresh_projection(monkeypatch, tmp_path):
-    from ccc_server import list_encoding
+    from ccc_server import archive_list_replay as replay, list_encoding
 
     server = importlib.import_module('server')
     monkeypatch.setattr(server, '_ARCHIVE_LIST_DISK_DIR', tmp_path)
     monkeypatch.setattr(list_encoding, '_HISTORY_CACHE', server.ByteBudgetCache(1 << 20, 4))
     row = {'session_id': 'archive-row', 'first_message': 'history ' * 200}
+    rows = [row]
     monkeypatch.setattr(server, '_archive_list_source_rows_cached',
-                        lambda *a, **kw: ([dict(row)], True, 0))
+                        lambda *a, **kw: ([dict(item) for item in rows], True, 0))
     diagnostics = []
     monkeypatch.setattr(server, 'record_diag',
                         lambda kind, ms, detail: diagnostics.append(detail)
@@ -145,10 +146,12 @@ def test_history_encoding_reuses_bytes_after_fresh_projection(monkeypatch, tmp_p
     thread.start()
     url = f'http://127.0.0.1:{httpd.server_address[1]}/api/conversations/list?window=all&stale_ok=1'
 
-    def read(encoding='gzip', validator='', since='', row_layouts=False):
+    def read(encoding='gzip', validator='', since='', row_layouts=False, order=None):
         target = url + ('&since=' + since if since else '')
         if row_layouts:
             target += '&row_layouts=1'
+        if order is not None:
+            target += '&order_spans=1&saved_order=' + order
         request = urllib.request.Request(target, headers={'Accept-Encoding': encoding,
                                                           'If-None-Match': validator})
         try:
@@ -182,16 +185,28 @@ def test_history_encoding_reuses_bytes_after_fresh_projection(monkeypatch, tmp_p
         assert read(encoding='identity') == (200, None, changed[2], gzip.decompress(changed[3]))
         active_token = json.loads(gzip.decompress(changed[3]))['delta_token']
         assert read(since=active_token) == (304, None, '"d-' + active_token + '"', b'')
+
+        assert [entry['body_cache'].get('encoding_hit') for entry in diagnostics] == [
+            False, True, True, False, True, True, True, False, False, None,
+        ]
+        assert all(entry['projection']['rows'] for entry in diagnostics)
+
+        monkeypatch.setattr(replay, '_RUN_MAX_ROWS', 1)
+        monkeypatch.setattr(replay, '_HISTORY_ORDERS', replay.ByteBudgetCache(1 << 20, 4))
+        rows[:] = [{'session_id': 'archive-row-' + str(i)} for i in range(100)]
+        response = read(encoding='identity', order='')
+        base = json.loads(response[3])
+        rows.insert(27, {'session_id': 'joined'})
+        response = read(encoding='identity', since=base['delta_token'], order=base['order_token'])
+        assert response[0] == 200
+        patch = json.loads(response[3])
+        assert patch['ids'] == [] and patch['base_order'] == base['order_token']
+        assert patch['order_spans'] == [[0, 27], 'joined', [27, 73]]
+        assert [item['session_id'] for item in patch['conversations']] == ['joined']
     finally:
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=5)
-
-    assert [entry['body_cache'].get('encoding_hit') for entry in diagnostics] == [
-        False, True, True, False, True, True, True, False, False, None,
-    ]
-    assert all(entry['projection']['rows'] for entry in diagnostics)
-
 
 def test_history_delta_preserves_projected_values_and_order(monkeypatch):
     from ccc_server import archive_list_replay as replay
@@ -250,6 +265,41 @@ def test_history_delta_reuses_rows_when_layout_indexes_move(monkeypatch):
         replay.prepare_history({'conversations': [renamed_field, state]}), 'scope', 'boot', token, order)
     assert delta['same_order']
     assert delta['conversations'] == [renamed_field]
+
+
+def test_history_delta_sends_order_spans_only_for_the_retained_base(monkeypatch):
+    from ccc_server import archive_list_replay as replay
+
+    monkeypatch.setattr(replay, '_RUN_MAX_ROWS', 1)
+    monkeypatch.setattr(replay, '_HISTORY_MANIFESTS', replay.ByteBudgetCache(1 << 20, 4))
+    monkeypatch.setattr(replay, '_HISTORY_ORDERS', replay.ByteBudgetCache(1 << 20, 4))
+    rows = [{'session_id': str(n)} for n in range(100)]
+    base, _ = replay.history_delta(
+        replay.prepare_history({'conversations': rows}), 'scope', 'boot', '', '',
+        order_spans=True)
+    token, order = base['delta_token'], base['order_token']
+    reordered = rows[51:] + [{'session_id': 'added'}] + rows[:50]
+    prepared = replay.prepare_history({'conversations': reordered})
+    delta, _ = replay.history_delta(prepared, 'scope', 'boot', token, order, order_spans=True)
+    assert delta['ids'] == []
+    assert delta['base_order'] == order and delta['order_token'] != order
+    assert delta['order_spans'] == [[51, 49], 'added', [0, 50]]
+    assert delta['conversations'] == [{'session_id': 'added'}]
+
+    expected_ids = [row['session_id'] for row in reordered]
+    for saved, enabled in [(order, False), ('unknown', True)]:
+        fallback, _ = replay.history_delta(
+            prepared, 'scope', 'boot', token, saved, order_spans=enabled)
+        assert fallback['ids'] == expected_ids and 'order_spans' not in fallback
+        assert fallback['delta_token'] == delta['delta_token']
+    reverse, _ = replay.history_delta(
+        replay.prepare_history({'conversations': rows[::-1]}),
+        'scope', 'boot', token, order, order_spans=True)
+    assert reverse['ids'] == [row['session_id'] for row in rows[::-1]]
+    assert 'order_spans' not in reverse
+    replay._HISTORY_ORDERS.clear()
+    fallback, _ = replay.history_delta(prepared, 'scope', 'boot', token, order, order_spans=True)
+    assert fallback['ids'] == expected_ids and 'order_spans' not in fallback
 
 
 def test_unversioned_history_projection_shares_only_overlapping_exact_source(monkeypatch):

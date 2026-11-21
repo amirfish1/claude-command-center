@@ -86,6 +86,7 @@ def test_handler_validators_lengths_and_vary(monkeypatch):
 
     class Handler:
         _send_archive_list_body = server.CommandCenterHandler._send_archive_list_body
+        _send_archive_list_representation = server.CommandCenterHandler._send_archive_list_representation
         def __init__(self, accept, etag=None):
             self.headers = Message()
             self.headers["Accept-Encoding"] = accept

@@ -19,6 +19,9 @@ from ccc_server.bounded_cache import ByteBudgetCache
 # runs reusable across those versions, bounded independently of full bodies.
 _RUN_CACHE = ByteBudgetCache(32 * 1024 * 1024, 512)
 _HISTORY_MANIFESTS = ByteBudgetCache(4 * 1024 * 1024, 32)
+# Multiple manifests can share an order. Keep IDs under a separate budget
+# so retaining them never evicts the run guards needed for ordinary deltas.
+_HISTORY_ORDERS = ByteBudgetCache(8 * 1024 * 1024, 16)
 _RUN_MAX_ROWS = 256
 _RUN_BOUNDARY_MASK = 63
 # Bound how many packed value arrays a conditional history request retains.
@@ -112,7 +115,25 @@ def prepare_history(payload):
     return payload, (ids, runs, fingerprint, order_token(ids)), packed
 
 
-def history_delta(history, scope, nonce, since, saved_order):
+def _order_spans(previous_ids, ids):
+    """Describe current order with slices of the saved order and new IDs."""
+    positions = {sid: index for index, sid in enumerate(previous_ids)}
+    spans = []
+    for sid in ids:
+        index = positions.get(sid)
+        last = spans[-1] if spans else None
+        if index is None:
+            spans.append(sid)
+        elif isinstance(last, list) and index == last[0] + last[1]:
+            last[1] += 1
+        else:
+            spans.append([index, 1])
+        if len(spans) > 256:
+            return None
+    return spans if len(spans) * 4 < len(ids) else None
+
+
+def history_delta(history, scope, nonce, since, saved_order, *, order_spans=False):
     """Apply one client's base and saved order to a prepared history."""
     payload, manifest, _ = history
     if manifest is None:
@@ -124,17 +145,30 @@ def history_delta(history, scope, nonce, since, saved_order):
 
     previous = _HISTORY_MANIFESTS.get((scope, since)) if since else None
     current = frozenset(digest for digest, _, _ in runs)
-    _HISTORY_MANIFESTS.put((scope, token), current, 512 + 128 * len(current))
+    previous_runs, previous_order = previous if previous is not None else ((), None)
+    _HISTORY_MANIFESTS.put((scope, token), (current, order), 512 + 128 * len(current))
+    retain_order = order_spans and len(ids) <= _HISTORY_PACK_MAX_ROWS
+    previous_ids = None
+    if retain_order:
+        if saved_order == previous_order and saved_order != order:
+            previous_ids = _HISTORY_ORDERS.get((scope, saved_order))
+        order_key = (scope, order)
+        if _HISTORY_ORDERS.get(order_key) is None:
+            _HISTORY_ORDERS.put(order_key, ids, 512 + sum(64 + 4 * len(sid) for sid in ids))
     # The projection can be shared by concurrent readers of the same source.
     # Tokens and the changed-row slice belong to this response alone.
     payload = dict(payload, order_token=order, delta_token=token)
-    if previous is not None and previous.intersection(current):
+    if not current.isdisjoint(previous_runs):
         rows = payload["conversations"]
-        changed = [row for digest, start, end in runs if digest not in previous for row in rows[start:end]]
+        changed = [row for digest, start, end in runs if digest not in previous_runs for row in rows[start:end]]
         same_order = saved_order == order
         payload.update(conversations=changed, delta=True, since=since, ids=[] if same_order else ids)
         if same_order:
             payload["same_order"] = True
+        elif previous_ids is not None:
+            spans = _order_spans(previous_ids, ids)
+            if spans is not None:
+                payload.update(ids=[], order_spans=spans, base_order=saved_order)
         return payload, None
     # Domain-separate the assembled manifest from the plain payload guard.
     return payload, (nonce, fingerprint)
