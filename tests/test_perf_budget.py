@@ -330,6 +330,7 @@ def test_archive_list_source_avoids_copying_full_snapshot(monkeypatch):
         force_refresh=False,
         window="all",
         defer_cold=False,
+        reuse_sidebar_history=False,
     ):
         assert defer_cold
         calls.append((key, options, copy_rows, force_refresh))

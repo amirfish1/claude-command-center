@@ -546,7 +546,143 @@ def _decode_full_bodies(cursor):
     return rows
 
 
-def load_with_overrides(cache_file, key, current_rows, *, schema_version, build_id, min_cached_at):
+_SIDEBAR_HISTORY_MAX_BYTES = 256 << 20
+_SIDEBAR_HISTORY_REUSE_S = 20
+
+
+class _SidebarHistoryReader:
+    """Keep one decoded cold layout for overlapping sidebar loads and reloads."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.conn = None
+        self.identity = None
+        self.memo = None
+        self.expiry = None
+
+    def _clear(self):
+        self.memo = None
+        if self.expiry is not None:
+            self.expiry.cancel()
+            self.expiry = None
+
+    def _close(self):
+        self._clear()
+        if self.conn is not None:
+            self.conn.close()
+            self.conn = None
+        self.identity = None
+
+    def _expire(self, marker):
+        with self.lock:
+            if self.memo is not None and self.memo[0] is marker:
+                self._close()
+
+    def read(self, cache_file, key, current, schema_version, build_id, min_cached_at):
+        with self.lock:
+            target = database_path(cache_file).resolve()
+            try:
+                stat = target.stat()
+            except FileNotFoundError:
+                self._close()
+                return None
+            identity = (target, stat.st_dev, stat.st_ino)
+            if identity != self.identity:
+                self._close()
+                self.conn = _connect(cache_file, shared_reader=True)
+                self.identity = identity
+            conn = self.conn
+            try:
+                # data_version is comparable only on this connection. It
+                # detects all intervening commits, even with the same header.
+                version = conn.execute('PRAGMA data_version').fetchone()[0]
+                guard = (version, key, schema_version, build_id, frozenset(current))
+                if self.memo is not None:
+                    _, previous, entry, layout = self.memo
+                    if previous == guard and float(entry.get('cached_at') or 0) >= min_cached_at:
+                        rows = [current.pop(slot) if isinstance(slot, str) else slot.copy()
+                                for slot in layout]
+                        rows.extend(current.values())
+                        return dict(entry, conversations=rows)
+                    self._clear()
+
+                with conn:
+                    loaded = _load_override_entry(
+                        conn, key, current, schema_version, build_id, min_cached_at,
+                        capture_layout=True)
+                if loaded is None:
+                    self._close()
+                    return None
+                entry, rows, layout = loaded
+                if layout is not None:
+                    marker = object()
+                    self.memo = (marker, guard, entry, layout)
+                    self.expiry = threading.Timer(_SIDEBAR_HISTORY_REUSE_S, self._expire, (marker,))
+                    self.expiry.daemon = True
+                    self.expiry.start()
+                else:
+                    self._close()
+                return dict(entry, conversations=rows)
+            except (ValueError, sqlite3.Error):
+                self._close()
+                raise
+
+
+_SIDEBAR_HISTORY_READER = _SidebarHistoryReader()
+
+
+def _load_override_entry(con, key, current, schema_version, build_id, min_cached_at,
+                         *, capture_layout=False):
+    con.execute('BEGIN')
+    header = con.execute('SELECT metadata FROM variants WHERE key=?', (key,)).fetchone()
+    if not header:
+        return None
+    metadata = json.loads(header[0])
+    entry = metadata['entry']
+    if not (metadata.get('schema_version') == schema_version and metadata.get('build_id') == build_id
+            and float(entry.get('cached_at') or 0) >= min_cached_at):
+        return None
+
+    # The body and identity are published together. A NULL here marks an
+    # override, since stored bodies are non-null. Keep the database's
+    # ordering even when the live snapshot ranks those rows differently.
+    records = con.execute('''SELECT identity,
+        CASE WHEN identity IN (SELECT value FROM json_each(?)) THEN NULL ELSE body END
+        FROM rows WHERE variant=? ORDER BY position''', (json.dumps(list(current)), key))
+    rows = []
+    layout = [] if capture_layout else None
+    weight = 0
+    while batch := records.fetchmany(192):
+        bodies = [body for _, body in batch if body is not None]
+        decoded = iter(_decode_full_batch(bodies))
+        if layout is not None:
+            weight += 4 * sum(map(len, bodies)) + 128 * len(batch)
+            if weight > _SIDEBAR_HISTORY_MAX_BYTES:
+                layout = None
+        if layout is None:
+            rows.extend(current.pop(rid) if body is None else next(decoded) for rid, body in batch)
+            continue
+        for rid, body in batch:
+            if body is None:
+                rows.append(current.pop(rid))
+                if layout is not None:
+                    layout.append(rid)
+            else:
+                row = next(decoded)
+                if not isinstance(row, dict):
+                    layout = None
+                if layout is not None:
+                    layout.append(row)
+                    # Lifecycle overlays edit top-level fields. Nested JSON
+                    # is read-only here and copied by sidebar projection.
+                    row = row.copy()
+                rows.append(row)
+    rows.extend(current.values())
+    return entry, rows, layout
+
+
+def load_with_overrides(cache_file, key, current_rows, *, schema_version, build_id, min_cached_at,
+                        reuse_sidebar_history=False):
     """Merge current rows at their stored positions without decoding superseded bodies.
 
     Older schemas and identities derived from a row's position still use the
@@ -560,30 +696,13 @@ def load_with_overrides(cache_file, key, current_rows, *, schema_version, build_
         current[identity(row)] = row
     if not database_path(cache_file).exists():
         return None
+    if reuse_sidebar_history:
+        return _SIDEBAR_HISTORY_READER.read(
+            cache_file, key, current, schema_version, build_id, min_cached_at)
     con = _connect(cache_file)
     try:
-        con.execute('BEGIN')
-        header = con.execute('SELECT metadata FROM variants WHERE key=?', (key,)).fetchone()
-        if not header:
-            return None
-        metadata = json.loads(header[0])
-        entry = metadata['entry']
-        if not (metadata.get('schema_version') == schema_version and metadata.get('build_id') == build_id
-                and float(entry.get('cached_at') or 0) >= min_cached_at):
-            return None
-
-        # The body and identity are published together. A NULL here marks an
-        # override, since stored bodies are non-null. Keep the database's
-        # ordering even when the live snapshot ranks those rows differently.
-        records = con.execute('''SELECT identity,
-            CASE WHEN identity IN (SELECT value FROM json_each(?)) THEN NULL ELSE body END
-            FROM rows WHERE variant=? ORDER BY position''', (json.dumps(list(current)), key))
-        rows = []
-        while batch := records.fetchmany(192):
-            decoded = iter(_decode_full_batch([body for _, body in batch if body is not None]))
-            rows.extend(current.pop(rid) if body is None else next(decoded) for rid, body in batch)
-        rows.extend(current.values())
-        return dict(entry, conversations=rows)
+        loaded = _load_override_entry(con, key, current, schema_version, build_id, min_cached_at)
+        return dict(loaded[0], conversations=loaded[1]) if loaded is not None else None
     finally:
         con.close()
 

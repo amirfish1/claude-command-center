@@ -81,6 +81,54 @@ def test_history_read_merges_live_rows_at_stored_positions(tmp_path, monkeypatch
     assert store.load_with_overrides(target, 'base', [live], **dict(options, build_id='older')) is None
 
 
+def test_sidebar_history_reuses_cold_rows_with_fresh_overrides_and_detects_peer_commits(
+        tmp_path, monkeypatch):
+    target = tmp_path / 'archive.json'
+    original = data()
+    rows = original['entries']['base']['conversations']
+    store.save(target, original, complete=True)
+    reader = store._SidebarHistoryReader()
+    monkeypatch.setattr(store, '_SIDEBAR_HISTORY_READER', reader)
+    decode = store._decode_full_batch
+    decoded = []
+
+    def track(bodies):
+        decoded.append(len(bodies))
+        return decode(bodies)
+
+    monkeypatch.setattr(store, '_decode_full_batch', track)
+    options = dict(schema_version=original['schema_version'], build_id=original['build_id'],
+                   min_cached_at=10, reuse_sidebar_history=True)
+
+    def read(live):
+        return store.load_with_overrides(target, 'base', live, **options)['conversations']
+
+    try:
+        latest = dict(rows[1], first_message='fresh')
+        first = read([rows[1]])
+        first[0]['archived'] = True
+        assert read([latest]) == [rows[0], latest, *rows[2:]]
+        assert decoded == [3]
+
+        # A peer can change a body without changing the variant header.
+        updated = dict(rows[0], first_message='peer update')
+        with sqlite3.connect(store.database_path(target)) as peer:
+            peer.execute("UPDATE rows SET body=? WHERE sid='old'", (json.dumps(updated),))
+        assert read([latest]) == [updated, latest, *rows[2:]]
+        assert decoded == [3, 3]
+
+        appended = {'session_id': 'appended'}
+        assert read([appended, updated]) == [updated, *rows[1:], appended]
+        assert decoded == [3, 3, 3]
+        reader._expire(reader.memo[0])
+        assert reader.conn is None and reader.memo is None
+        assert read([latest]) == [updated, latest, *rows[2:]]
+        assert decoded == [3, 3, 3, 3]
+    finally:
+        with reader.lock:
+            reader._close()
+
+
 def test_unchanged_cold_rows_are_not_rewritten(tmp_path):
     target = tmp_path / 'archive.json'
     store.save(target, data(), complete=True)

@@ -17303,7 +17303,7 @@ def _archive_response_cache_put(key, conversations, signature=None):
             current["conversations"] = archive_store.hot_rows(rows)
 
 
-def _archive_response_cache_build_get(key, *, overlay_rows=None):
+def _archive_response_cache_build_get(key, *, overlay_rows=None, reuse_sidebar_history=False):
     """Materialize cold bodies, preserving live replacements for a history read."""
     entry = _archive_response_cache_get(key)
     from ccc_server import archive_store, archive_snapshot
@@ -17315,6 +17315,7 @@ def _archive_response_cache_build_get(key, *, overlay_rows=None):
                 schema_version=_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
                 build_id=_ARCHIVE_RESPONSE_CACHE_BUILD_ID,
                 min_cached_at=float((entry or {}).get("cached_at") or 0),
+                reuse_sidebar_history=reuse_sidebar_history,
             )
             if merged is not None:
                 return merged
@@ -19305,6 +19306,7 @@ def _archive_list_source_rows_read(cache_options, *, force_refresh=False, phases
         force_refresh=force_refresh,
         window=window,
         defer_cold=True,
+        reuse_sidebar_history=window == "all" and not force_refresh and not any(cache_options.values()),
     )
     _phase("serve_ms")
     # Every gap filler sees the same snapshot plus preceding overlays. Build
@@ -20873,13 +20875,14 @@ def _archive_serve_rows(key, cache_options):
 
 
 def _archive_serve_rows_versioned(key, cache_options, *, copy_rows=True, force_refresh=False,
-                                  window="all", defer_cold=False):
+                                  window="all", defer_cold=False, reuse_sidebar_history=False):
     rows, cached, version = _archive_serve_hot_rows_versioned(
         key, cache_options, copy_rows=copy_rows, force_refresh=force_refresh, defer_cold=defer_cold)
     if window == "all":
         from ccc_server import archive_store
         if archive_store.database_path(_ARCHIVE_RESPONSE_CACHE_FILE).exists():
-            entry = _archive_response_cache_build_get(key, overlay_rows=rows)
+            entry = _archive_response_cache_build_get(
+                key, overlay_rows=rows, reuse_sidebar_history=reuse_sidebar_history)
             if entry:
                 # Full-history bodies can still replay against the hot snapshot
                 # version. A new disk publication invalidates its cached body.
