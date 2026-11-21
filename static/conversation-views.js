@@ -2063,6 +2063,11 @@ onDashboardDocumentReady(() => {
       $fileViewerOpenExt.addEventListener('click', async () => {
         const viewer = document.getElementById('statusRailFileViewer');
         const path = viewer && viewer.getAttribute('data-current-path');
+        const externalUrl = viewer && viewer.getAttribute('data-external-url');
+        if (!path && externalUrl) {
+          window.open(externalUrl, '_blank', 'noopener,noreferrer');
+          return;
+        }
         if (!path) return;
         const sid = (sharedState.currentSession && sharedState.currentSession.id) || '';
         $fileViewerOpenExt.disabled = true;
@@ -2185,6 +2190,8 @@ onDashboardDocumentReady(() => {
     let fileViewerPreviousRailWidth = null;
     let fileViewerPreviousRailStoredWidth = null;
     let fileViewerPreviousRailCollapsed = null;
+    let fileViewerPreviousConvListCollapsed = null;
+    let fileViewerPreviousConvListStored = null;
     // Resizing/collapsing the rail re-flows the conversation reader (its pane
     // gets wider/narrower → text re-wraps → content height changes), which
     // drifts the reading position under a fixed scrollTop. Capture each open
@@ -2224,14 +2231,31 @@ onDashboardDocumentReady(() => {
       const alreadyExpanded = fileViewerPreviousRailWidth != null;
       if (!alreadyExpanded) {
         fileViewerPreviousRailCollapsed = document.body.classList.contains('status-rail-collapsed');
+        fileViewerPreviousConvListCollapsed = document.body.classList.contains('conv-list-collapsed');
+        try { fileViewerPreviousConvListStored = localStorage.getItem('ccc-conv-list-collapsed'); } catch (_) { fileViewerPreviousConvListStored = null; }
         fileViewerPreviousRailWidth = fileViewerPreviousRailCollapsed
           ? _savedStatusRailWidth()
           : ($statusRail.getBoundingClientRect().width || _savedStatusRailWidth());
         try { fileViewerPreviousRailStoredWidth = localStorage.getItem('ccc-status-rail-width'); } catch (_) { fileViewerPreviousRailStoredWidth = null; }
       }
+      if (!document.body.classList.contains('conv-list-collapsed')) {
+        _preserveReadersAcross(() => {
+          document.body.classList.add('conv-list-collapsed');
+        });
+        const $collapseBtn = document.getElementById('convListCollapseBtn');
+        if ($collapseBtn) $collapseBtn.setAttribute('aria-expanded', 'false');
+      }
       _setStatusRailCollapsed(false, false);
       if (!alreadyExpanded) {
         _setStatusRailWidth(fileViewerPreviousRailWidth * FILE_VIEWER_RAIL_EXPAND_FACTOR, false);
+        const pane = document.querySelector('.conv-pane.is-active')
+          || document.querySelector('.conv-pane[data-pane-id="' + (0, sharedState.activePaneId)() + '"]')
+          || document.querySelector('.conv-pane');
+        const paneWidth = pane ? pane.getBoundingClientRect().width : window.innerWidth;
+        const halfSplit = Math.round(paneWidth * 0.48);
+        if (halfSplit > fileViewerPreviousRailWidth * FILE_VIEWER_RAIL_EXPAND_FACTOR) {
+          _setStatusRailWidth(halfSplit, false);
+        }
       }
     };
     const _restoreStatusRailAfterFileViewer = () => {
@@ -2239,9 +2263,22 @@ onDashboardDocumentReady(() => {
       const previousWidth = fileViewerPreviousRailWidth;
       const previousStoredWidth = fileViewerPreviousRailStoredWidth;
       const previousCollapsed = fileViewerPreviousRailCollapsed;
+      const previousConvListCollapsed = fileViewerPreviousConvListCollapsed;
+      const previousConvListStored = fileViewerPreviousConvListStored;
       fileViewerPreviousRailWidth = null;
       fileViewerPreviousRailStoredWidth = null;
       fileViewerPreviousRailCollapsed = null;
+      fileViewerPreviousConvListCollapsed = null;
+      fileViewerPreviousConvListStored = null;
+      let currentConvListStored = null;
+      try { currentConvListStored = localStorage.getItem('ccc-conv-list-collapsed'); } catch (_) {}
+      if (previousConvListCollapsed === false && currentConvListStored === previousConvListStored) {
+        _preserveReadersAcross(() => {
+          document.body.classList.remove('conv-list-collapsed');
+        });
+        const $collapseBtn = document.getElementById('convListCollapseBtn');
+        if ($collapseBtn) $collapseBtn.setAttribute('aria-expanded', 'true');
+      }
       _setStatusRailWidth(previousWidth, false);
       if (previousCollapsed) _setStatusRailCollapsed(true, false);
       try {

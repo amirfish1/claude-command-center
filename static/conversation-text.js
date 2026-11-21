@@ -866,6 +866,18 @@
     return clean === '/api' || clean.startsWith('/api/');
   }
 
+  const INLINE_CODE_WEB_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|org|net|edu|gov|io|ai|co|app|dev|xyz|me|us|uk|ca|de|fr|au|jp|in|br|nl|se|ch|es|it|info|biz|tech|cloud|site|online|store|page|vercel\.app|pages\.dev|netlify\.app|fly\.dev|railway\.app|onrender\.com|ts\.net)(?::\d{1,5})?(?:\/[^\s<>"'`]*)?$/i;
+  const INLINE_CODE_LOCALHOST_RE = /^(?:localhost|127\.0\.0\.1):\d{1,5}(?:\/[^\s<>"'`]*)?$/i;
+
+  function _inlineCodeWebUrl(token) {
+    const target = normalizeMarkdownLinkTarget(token);
+    if (!target || _isPlaceholderPathToken(target) || target.indexOf('@') !== -1) return '';
+    if (/^https?:\/\//i.test(target)) return '';
+    if (INLINE_CODE_LOCALHOST_RE.test(target)) return 'http://' + target;
+    if (INLINE_CODE_WEB_HOST_RE.test(target)) return 'https://' + target;
+    return '';
+  }
+
   function _shouldLinkifyInlineCodePath(token) {
     const target = normalizeMarkdownLinkTarget(token);
     if (!INLINE_CODE_PATH_RE.test(target)) return false;
@@ -949,10 +961,14 @@
     // Expand pasted images before other markdown formatting so their paths
     // don't get wrapped in backticks or a-tags by later rules.
     s = linkifyPastedImages(s);
-    // Inline code `x` (also make paths inside code clickable)
+    // Inline code `x` (also make paths and web domains inside code clickable)
     s = s.replace(/`([^`]+)`/g, (m, inner) => {
       if (_shouldLinkifyInlineCodePath(inner)) {
         return '<code class="md-code">' + linkifyPath(inner) + '</code>';
+      }
+      const webUrl = _inlineCodeWebUrl(inner);
+      if (webUrl) {
+        return '<code class="md-code"><a href="' + escapeAttr(webUrl) + '" target="_blank" rel="noopener" class="web-preview-link">' + inner + '</a></code>';
       }
       // Mixed inline content (e.g. `see http://… for details`) — link
       // any http(s) URLs inside. `inner` is the captured group from the
@@ -1091,6 +1107,7 @@
     INLINE_CODE_PATH_RE,
     _isPlaceholderPathToken,
     _isInternalApiPathToken,
+    _inlineCodeWebUrl,
     _shouldLinkifyInlineCodePath,
     highlightCode,
     renderCodeBlock,

@@ -1714,6 +1714,7 @@
       get _isVideoPath() { return _isVideoPath; },
       get _isHtmlDocPath() { return _isHtmlDocPath; },
       get _isImageOrPdfPath() { return _isImageOrPdfPath; },
+      get _isPdfPath() { return _isPdfPath; },
       get openFilePathInMediaLightbox() { return openFilePathInMediaLightbox; },
       get _isMarkdownPath() { return _isMarkdownPath; },
       get _openConversationRow() { return _openConversationRow; },

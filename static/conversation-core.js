@@ -13237,6 +13237,7 @@
       viewer.removeAttribute('data-current-src');
       viewer.removeAttribute('data-viewer-kind');
       viewer.removeAttribute('data-viewer-no-preview');
+      viewer.removeAttribute('data-external-url');
     }
     const bodyEl = document.getElementById('fileViewerBody');
     if (bodyEl) {

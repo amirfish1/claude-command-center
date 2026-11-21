@@ -55,3 +55,19 @@ test('a URL in an explicit link label does not create a second anchor', () => {
   assert.equal((html.match(/<a\b/g) || []).length, 1);
   assert.match(html, /<a href="https:\/\/example\.com\/target"/);
 });
+
+test('inline code bare web domains and localhost ports linkify for sidebar preview without matching code identifiers', () => {
+  const renderer = createRenderer({});
+  assert.match(
+    renderer.renderInline('home on `example.com` already'),
+    /<code class="md-code"><a href="https:\/\/example\.com" target="_blank" rel="noopener" class="web-preview-link">example\.com<\/a><\/code>/
+  );
+  assert.match(
+    renderer.renderInline('check `sub.example.ai/pricing` and `localhost:3000/app`'),
+    /href="https:\/\/sub\.example\.ai\/pricing".*href="http:\/\/localhost:3000\/app"/
+  );
+  // Code identifiers and bare filenames must remain plain code.
+  assert.equal(renderer.renderInline('`window.location`'), '<code class="md-code">window.location</code>');
+  assert.equal(renderer.renderInline('`server.py`'), '<code class="md-code">server.py</code>');
+  assert.equal(renderer.renderInline('`user@example.com`'), '<code class="md-code">user@example.com</code>');
+});

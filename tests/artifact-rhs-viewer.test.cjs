@@ -139,6 +139,27 @@ test('Artifacts open in the RHS status rail on desktop and fall back to lightbox
     assert.equal(videoCheck.title, 'Video Preview');
     assert.equal(videoCheck.extHidden, true, 'Open external hides when no local filePath is present');
 
+    // 3b. External web URL opens as Web Preview with Open in new tab enabled and Download hidden.
+    await page.evaluate(() => {
+      window.ctrl.openArtifactViewer('https://example.com/about', { kind: 'frame', title: 'example.com', externalUrl: 'https://example.com/about' });
+    });
+    const webCheck = await page.evaluate(() => ({
+      hasIframe: Boolean(document.querySelector('#fileViewerBody iframe.file-viewer-frame')),
+      title: document.getElementById('fileViewerTitle').textContent,
+      filename: document.getElementById('fileViewerFilename').textContent,
+      dlHidden: document.getElementById('fileViewerDownloadBtn').hidden,
+      extHidden: document.getElementById('fileViewerOpenExternalBtn').hidden,
+      extTitle: document.getElementById('fileViewerOpenExternalBtn').title,
+      extAttr: document.getElementById('statusRailFileViewer').getAttribute('data-external-url'),
+    }));
+    assert.equal(webCheck.hasIframe, true);
+    assert.equal(webCheck.title, 'Web Preview');
+    assert.equal(webCheck.filename, 'example.com');
+    assert.equal(webCheck.dlHidden, true, 'Live website preview hides file Download button');
+    assert.equal(webCheck.extHidden, false, 'Live website preview shows Open in new tab button');
+    assert.equal(webCheck.extTitle, 'Open in new tab');
+    assert.equal(webCheck.extAttr, 'https://example.com/about');
+
     // 4. Mobile falls back to lightbox modal.
     await page.evaluate((src) => {
       window._mockMobile = true;
@@ -151,4 +172,11 @@ test('Artifacts open in the RHS status rail on desktop and fall back to lightbox
   } finally {
     await browser.close();
   }
+});
+
+test('Opening the RHS preview auto-collapses the LHS session list and restores it on close', async () => {
+  const viewsJs = fs.readFileSync(require.resolve('../static/conversation-views.js'), 'utf8');
+  assert.match(viewsJs, /fileViewerPreviousConvListCollapsed = document\.body\.classList\.contains\('conv-list-collapsed'\)/);
+  assert.match(viewsJs, /document\.body\.classList\.add\('conv-list-collapsed'\)/);
+  assert.match(viewsJs, /document\.body\.classList\.remove\('conv-list-collapsed'\)/);
 });

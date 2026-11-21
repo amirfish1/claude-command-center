@@ -2536,6 +2536,34 @@ document.addEventListener('click', (ev) => {
       _openArtifact(img.dataset.fullSrc || img.src, { kind: 'image', title: img.alt || 'image.png' });
       return;
     }
+    const webLink = ev.target.closest('.conversations-view a[href], .conv-sticky-header a[href]');
+    if (webLink
+        && !ev.metaKey && !ev.ctrlKey && !ev.shiftKey && !ev.altKey && ev.button === 0
+        && !webLink.classList.contains('path-link')
+        && !webLink.classList.contains('session-ref-chip')
+        && !webLink.classList.contains('watchtower-ticket-link')
+        && !webLink.hasAttribute('download')
+        && typeof sharedState._canUseStatusRailViewer === 'function'
+        && (0, sharedState._canUseStatusRailViewer)()) {
+      const rawHref = webLink.getAttribute('href') || '';
+      if (/^https?:\/\//i.test(rawHref)) {
+        let blocked = false;
+        try {
+          const host = new URL(rawHref).hostname.toLowerCase();
+          blocked = /(?:^|\.)(?:github\.com|githubusercontent\.com|docs\.google\.com|drive\.google\.com|mail\.google\.com|calendar\.google\.com|accounts\.google\.com|slack\.com|discord\.com|discord\.gg|x\.com|twitter\.com|linkedin\.com|facebook\.com|instagram\.com|figma\.com|notion\.so|linear\.app)$/i.test(host);
+        } catch (_) {}
+        if (!blocked) {
+          ev.preventDefault();
+          const isVid = typeof sharedState._isVideoPath === 'function' && (0, sharedState._isVideoPath)(rawHref);
+          const isPdf = typeof sharedState._isPdfPath === 'function' && (0, sharedState._isPdfPath)(rawHref);
+          const isImg = !isPdf && typeof sharedState._isImageOrPdfPath === 'function' && (0, sharedState._isImageOrPdfPath)(rawHref);
+          const kind = isVid ? 'video' : (isImg ? 'image' : 'frame');
+          const label = (webLink.textContent || '').trim() || rawHref.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+          _openArtifact(rawHref, { kind, title: label, externalUrl: rawHref });
+          return;
+        }
+      }
+    }
   });
   }
 
@@ -2640,6 +2668,17 @@ document.addEventListener('click', async (ev) => {
     if (_isWebRoutePath(p)) {
       const base = sharedState._vercelDeployUrl || '';  // empty → relative to current origin
       const target = base ? base + p : p;
+      if (!ev.metaKey && !ev.ctrlKey && !ev.shiftKey && base
+          && typeof sharedState._canUseStatusRailViewer === 'function'
+          && (0, sharedState._canUseStatusRailViewer)()
+          && typeof sharedState.openArtifactViewer === 'function') {
+        (0, sharedState.openArtifactViewer)(target, {
+          kind: 'frame',
+          title: target.replace(/^https?:\/\//i, ''),
+          externalUrl: target,
+        });
+        return;
+      }
       // Synthesise an <a target="_blank"> click instead of window.open().
       // window.open() got eaten by Safari's popup blocker because the call
       // sat behind an async stack; a real anchor click in user-gesture

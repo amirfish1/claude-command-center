@@ -349,6 +349,15 @@
     return /\.pdf$/i.test(clean);
   }
 
+  function _isFrameBlockedUrl(href) {
+    try {
+      const host = new URL(href, window.location.origin).hostname.toLowerCase();
+      return /(?:^|\.)(?:github\.com|githubusercontent\.com|docs\.google\.com|drive\.google\.com|mail\.google\.com|calendar\.google\.com|accounts\.google\.com|slack\.com|discord\.com|discord\.gg|x\.com|twitter\.com|linkedin\.com|facebook\.com|instagram\.com|figma\.com|notion\.so|linear\.app)$/i.test(host);
+    } catch (_) {
+      return false;
+    }
+  }
+
   function _isHtmlDocPath(p) {
     const clean = String(p || '').split(/[?#]/)[0].replace(/:\d+(?::\d+)?$/, '');
     return /\.(?:html|htm)$/i.test(clean);
@@ -428,6 +437,10 @@
     const isImage = kind !== 'video' && kind !== 'frame';
     const fullSrc = src;
     const displaySrc = (isImage && !noPreview) ? (_mediaPreviewUrl(src) || src) : src;
+    const externalUrl = (opts && opts.externalUrl)
+      || ((!filePath && /^https?:\/\//i.test(fullSrc) && !fullSrc.startsWith(window.location.origin + '/api/')) ? fullSrc : '');
+    const isPdf = _isPdfPath(filePath || title || fullSrc);
+    const isLiveWebsite = Boolean(externalUrl && kind === 'frame' && !isPdf);
 
     _cleanupFileViewerMedia(bodyEl);
 
@@ -439,24 +452,36 @@
 
     if (titleEl) {
       if (kind === 'video') titleEl.textContent = 'Video Preview';
-      else if (kind === 'frame') titleEl.textContent = _isPdfPath(filePath || title) ? 'PDF Preview' : 'Artifact Preview';
+      else if (kind === 'frame') titleEl.textContent = isPdf ? 'PDF Preview' : (isLiveWebsite ? 'Web Preview' : 'Artifact Preview');
       else titleEl.textContent = 'Image Preview';
     }
-    if (filenameEl) filenameEl.textContent = title || filePath.split('/').pop() || 'Artifact';
+    if (filenameEl) {
+      const fallbackLabel = externalUrl
+        ? externalUrl.replace(/^https?:\/\//i, '').replace(/\/$/, '')
+        : (filePath.split('/').pop() || 'Artifact');
+      filenameEl.textContent = title || fallbackLabel;
+    }
 
     viewer.setAttribute('data-viewer-kind', kind);
     viewer.setAttribute('data-current-src', fullSrc);
     viewer.setAttribute('data-viewer-no-preview', noPreview ? '1' : '');
     if (filePath) viewer.setAttribute('data-current-path', filePath);
     else viewer.removeAttribute('data-current-path');
+    if (externalUrl) viewer.setAttribute('data-external-url', externalUrl);
+    else viewer.removeAttribute('data-external-url');
 
     if (dlBtn) {
       dlBtn.href = fullSrc;
       dlBtn.setAttribute('download', title || '');
-      dlBtn.hidden = false;
+      dlBtn.hidden = isLiveWebsite;
     }
     if (fsBtn) fsBtn.hidden = false;
-    if (extBtn) extBtn.hidden = !filePath;
+    if (extBtn) {
+      extBtn.hidden = !filePath && !externalUrl;
+      const extTitle = externalUrl && !filePath ? 'Open in new tab' : 'Open in default app';
+      extBtn.title = extTitle;
+      extBtn.setAttribute('aria-label', extTitle);
+    }
 
     bodyEl.className = 'file-viewer-body is-media-viewer is-media-' + kind;
 
@@ -1686,10 +1711,15 @@
       viewer.setAttribute('data-current-path', target);
       viewer.removeAttribute('data-current-src');
       viewer.removeAttribute('data-viewer-no-preview');
+      viewer.removeAttribute('data-external-url');
     }
     if (dlBtn) dlBtn.hidden = true;
     if (fsBtn) fsBtn.hidden = true;
-    if (extBtn) extBtn.hidden = false;
+    if (extBtn) {
+      extBtn.hidden = false;
+      extBtn.title = 'Open in default app';
+      extBtn.setAttribute('aria-label', 'Open in default app');
+    }
     if (typeof window._cccExpandStatusRailForFileViewer === 'function') window._cccExpandStatusRailForFileViewer();
     if (rail) rail.classList.add('file-viewer-active');
   }
@@ -1770,10 +1800,18 @@
 
     rowEl.appendChild(info);
 
-    // Row click handles reveal-file or URL redirect
+    // Row click handles reveal-file or URL preview
     if (row.kind === 'url') {
       rowEl.addEventListener('click', (e) => {
         if (e.target.closest('.sidebar-file-path')) return;
+        if (!e.metaKey && !e.ctrlKey && !e.shiftKey && _canUseStatusRailViewer() && !_isFrameBlockedUrl(row.target)) {
+          openArtifactViewer(row.target, {
+            kind: 'frame',
+            title: row.label || row.target.replace(/^https?:\/\//i, ''),
+            externalUrl: row.target,
+          });
+          return;
+        }
         window.open(row.target, '_blank', 'noopener,noreferrer');
       });
     } else {
@@ -1850,6 +1888,17 @@
       a.rel = 'noopener noreferrer';
       a.style.color = 'inherit';
       a.style.textDecoration = 'none';
+      a.addEventListener('click', (e) => {
+        if (!e.metaKey && !e.ctrlKey && !e.shiftKey && _canUseStatusRailViewer() && !_isFrameBlockedUrl(row.target)) {
+          e.preventDefault();
+          closeFfcModal();
+          openArtifactViewer(row.target, {
+            kind: 'frame',
+            title: row.label || row.target.replace(/^https?:\/\//i, ''),
+            externalUrl: row.target,
+          });
+        }
+      });
       a.appendChild(labelEl);
       div.appendChild(a);
     } else {
