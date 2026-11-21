@@ -19,7 +19,7 @@
   const startRecent = () => {
     if (started || skipped) return;
     started = true;
-    clearTimeout(recentTimer);
+    if (recentTimer !== undefined) clearTimeout(recentTimer);
     const controller = recentController = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 45000);
     const start = recentStart = performance.now();
@@ -52,7 +52,24 @@
   const maxBytes = 32 * 1024 * 1024;
   const maxPatchBytes = 1024 * 1024;
   const maxPatchRows = 256;
+  const maxRows = 30000;
   const rowId = row => row?.session_id || row?.id;
+  const readPackedRows = bytes => {
+    if (!(bytes instanceof ArrayBuffer) || !bytes.byteLength || bytes.byteLength > maxBytes) return null;
+    const [layouts, encodedRows] = JSON.parse(new TextDecoder('utf-8', {fatal:true}).decode(bytes));
+    if (!Array.isArray(layouts) || !Array.isArray(encodedRows) || encodedRows.length > maxRows
+        || layouts.some(keys => !Array.isArray(keys)
+          || keys.some(key => typeof key !== 'string' || key === '__proto__'))) return null;
+    return encodedRows.map(encoded => {
+      const keys = Array.isArray(encoded) && Number.isInteger(encoded[0]) && layouts[encoded[0]];
+      if (!keys || !Array.isArray(encoded[1]) || keys.length !== encoded[1].length) {
+        throw new Error('Invalid saved archive row');
+      }
+      const row = {};
+      for (let i = 0; i < keys.length; i++) row[keys[i]] = encoded[1][i];
+      return row;
+    });
+  };
   let dbPromise;
   const open = () => dbPromise || (dbPromise = new Promise(resolve => {
     let done = false;
@@ -102,7 +119,13 @@
           if (!validHeader(value)) { finish(null); return; }
           // Text avoids IndexedDB's recursive structured clone of every row.
           // Older object snapshots remain readable during a rolling update.
-          if (typeof value.rowsJson === 'string') {
+          if (Object.hasOwn(value, 'packedRows')) {
+            try {
+              const {packedRows, ...metadata} = value;
+              const rows = packedRows?.byteLength === value.bytes ? readPackedRows(packedRows) : null;
+              value = rows ? {...metadata, rows} : null;
+            } catch (_) { value = null; }
+          } else if (typeof value.rowsJson === 'string') {
             try {
               const {rowsJson, ...metadata} = value;
               value = rowsJson.length * 2 <= maxBytes
@@ -117,7 +140,7 @@
           // The latest header dates a patched snapshot. Its base may have
           // been written much earlier, when the last full response arrived.
           if (validHeader(hasPatch ? {...value, at: savedHeader.at} : value) && Array.isArray(value.rows)
-            && value.rows.length <= 30000
+            && value.rows.length <= maxRows
             && value.rows.every(row => row && typeof row === 'object' && !Array.isArray(row)
               && typeof rowId(row) === 'string')) {
             if (hasPatch) {
@@ -126,8 +149,9 @@
                 const patch = JSON.parse(patchJson);
                 const byId = new Map(value.rows.map(row => [rowId(row), row]));
                 for (const row of patch.changes) byId.set(rowId(row), row);
-                const rows = patch.ids.map(id => byId.get(id));
-                value = rows.length <= 30000 && rows.every(row => typeof rowId(row) === 'string')
+                const ids = patch.ids === null ? value.rows.map(rowId) : patch.ids;
+                const rows = ids.map(id => byId.get(id));
+                value = rows.length <= maxRows && rows.every(row => typeof rowId(row) === 'string')
                   ? {...metadata, rows} : null;
               } catch (_) { value = null; }
             }
@@ -144,15 +168,15 @@
     if (!baseAvailable) startRecent();
   });
   let pending = null, scheduled = false;
-  const save = (value, delta = null) => {
+  const save = (value, delta = null, packed = null) => {
     try { if (localStorage.getItem('ccc-conv-cache') === '0') return; } catch (_) { return; }
-    if (value.url !== fullUrl || !Array.isArray(value.rows) || value.rows.length > 30000) return;
-    pending = {value, delta};
+    if (value.url !== fullUrl || !Array.isArray(value.rows) || value.rows.length > maxRows) return;
+    pending = {value, delta, packed};
     if (scheduled) return;
     scheduled = true;
     const run = async () => {
       scheduled = false;
-      const {value, delta} = pending; pending = null;
+      const {value, delta, packed} = pending; pending = null;
       try {
         const db = await open();
         if (!db) return;
@@ -167,10 +191,13 @@
           };
         };
         const writeFull = () => {
-          const rowsJson = JSON.stringify(rows);
-          const bytes = 2 * rowsJson.length;
+          // The All feed already negotiated shared row layouts. Preserve
+          // those values in UTF-8 to fit the same byte budget as other scopes.
+          const encoded = packed ? new TextEncoder().encode(JSON.stringify(packed)) : null;
+          const storage = encoded ? {packedRows:encoded.buffer} : {rowsJson:JSON.stringify(rows)};
+          const bytes = encoded ? encoded.byteLength : 2 * storage.rowsJson.length;
           if (bytes > maxBytes) return;
-          store.put({...metadata, rowsJson, bytes, at}, 'last');
+          store.put({...metadata, ...storage, bytes, at}, 'last');
           store.put({...metadata, bytes, at}, 'header');
           markSaved();
         };
@@ -183,15 +210,19 @@
         const head = store.get('header');
         head.onsuccess = () => {
           const old = head.result;
-          if (validHeader(old) && old.delta === delta.from) {
+          if (validHeader(old) && old.delta === delta.from
+              && (delta.ids !== null || old.order === metadata.order)) {
             try {
               const previous = old.patchJson ? JSON.parse(old.patchJson) : null;
               const changes = new Map((previous?.changes || []).map(row => [rowId(row), row]));
               for (const row of delta.changes) changes.set(rowId(row), row);
-              const present = new Set(delta.ids);
-              const changedRows = [...changes.values()].filter(row => present.has(rowId(row)));
+              // An order-preserving delta can keep the base's order or the
+              // last explicit patch order without writing every ID again.
+              const ids = delta.ids === null ? previous?.ids ?? null : delta.ids;
+              const present = ids === null ? null : new Set(ids);
+              const changedRows = [...changes.values()].filter(row => !present || present.has(rowId(row)));
               if (changedRows.length > maxPatchRows) { writeFull(); return; }
-              const patchJson = JSON.stringify({ids: delta.ids, changes: changedRows});
+              const patchJson = JSON.stringify({ids, changes: changedRows});
               const baseBytes = old.baseBytes || old.bytes;
               const bytes = baseBytes + 2 * patchJson.length;
               if (bytes <= maxBytes && 2 * patchJson.length <= maxPatchBytes) {

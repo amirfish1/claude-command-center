@@ -5036,7 +5036,8 @@
           await opts.afterPaint;
           _perfPaintWaitMs = performance.now() - waitStart;
         }
-        let d = decodeRows(await (r._cccArchiveParsedBody || r.json()));
+        let raw = await (r._cccArchiveParsedBody || r.json());
+        let d = decodeRows(raw);
         _perfBodyMs = performance.now() - _perfHdrAt - _perfPaintWaitMs;
         let _merged = null;
         if (d && d.delta) {
@@ -5059,7 +5060,8 @@
             }
             etag = r2.headers.get('ETag');
             _perfLen = parseInt(r2.headers.get('content-length') || '0', 10) || 0;
-            d = decodeRows(await r2.json());
+            raw = await r2.json();
+            d = decodeRows(raw);
           }
         }
         try {
@@ -5107,8 +5109,9 @@
             etag:sharedState._archiveAllEtag.get(url), delta:sharedState._archiveAllDelta.get(url),
             order:d.order_token},
             _merged ? {from: deltaToken,
-              ids:d.same_order ? convs.map(row => row.session_id || row.id) : d.ids,
-              changes: d.conversations} : null);
+              ids:d.same_order ? null : d.ids,
+              changes: d.conversations} : null,
+            !_merged && !d.delta && raw.row_layouts ? [raw.row_layouts, raw.conversations] : null);
         }
         if (typeof opts.onValidated === 'function') opts.onValidated();
         if (typeof opts.onPage === 'function') opts.onPage(d);

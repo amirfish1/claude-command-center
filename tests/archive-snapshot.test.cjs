@@ -12,17 +12,19 @@ const fullUrl = '/api/conversations/list?window=7d&stale_ok=1';
 const rows = [{session_id:'recent', nested:{items:[1]}}, {session_id:'older'}];
 
 function setup({snapshot, response, early} = {}) {
-  const reads = [], saves = [], savedDeltas = [];
+  const reads = [], saves = [], savedDeltas = [], savedLayouts = [];
   const state = {_archiveAllInflight:new Map(), _archiveAllData:new Map(),
     _archiveAllEtag:new Map(), _archiveAllDelta:new Map(), ARCHIVE_ALL_FETCH_TIMEOUT_MS:45000};
   const cache = snapshot ? {url:snapshot.url, read:Promise.resolve(snapshot),
-    fetch:early, save(value, delta) {saves.push(value); savedDeltas.push(delta);}} : undefined;
+    fetch:early, save(value, delta, packed) {
+      saves.push(value); savedDeltas.push(delta); savedLayouts.push(packed);
+    }} : undefined;
   const context = {sharedState:state, window:{__cccArchiveSnapshot:cache},
     performance, URLSearchParams, AbortController, setTimeout:()=>0, clearTimeout(){},
     _archiveWindow:()=> '7d', _clientLog(){}, _scheduleArchiveSidebarCache(){},
     backgroundApiFetch:async(url, init) => { reads.push({url, init}); return response; }};
   vm.createContext(context); vm.runInContext(archive, context);
-  return {context, state, reads, saves, savedDeltas};
+  return {context, state, reads, saves, savedDeltas, savedLayouts};
 }
 function reply(body, status=200) {
   return {ok:status===200, status, headers:{get:()=>null}, json:async()=>body};
@@ -81,13 +83,8 @@ test('All history requests reconstruct ordered rows from shared layouts before c
   const body = {row_layouts:[['session_id', 'nested'], ['session_id']],
     conversations:[[0, ['recent', {items:[1]}]], [1, ['older']]], delta_token:'history'};
   for (const early of [false, true]) {
-    const f = setup({response:reply(body)});
-    if (early) {
-      f.context.window.__cccArchiveSnapshot = {
-        url:allUrl, read:Promise.resolve(null),
-        fetch:Promise.resolve(reply(body)), save() {},
-      };
-    }
+    const f = setup({response:reply(body), snapshot:{url:allUrl},
+      early:early ? Promise.resolve(reply(body)) : undefined});
     let validated = 0;
     const loaded = await f.context.loadArchiveAll({window:'all', onValidated:() => validated++});
     assert.equal(JSON.stringify(loaded),JSON.stringify(rows));
@@ -95,6 +92,7 @@ test('All history requests reconstruct ordered rows from shared layouts before c
     assert.equal(f.state._archiveAllDelta.get(allUrl),'history');
     assert.equal(validated,1);
     assert.deepEqual(f.reads.map(read => read.url),early ? [] : [allUrl + '&row_layouts=1']);
+    assert.deepEqual(Array.from(f.savedLayouts[0]),[body.row_layouts,body.conversations]);
   }
   const invalid = setup({response:reply({row_layouts:[['__proto__']], conversations:[[0, [{}]]]})});
   assert.equal(await invalid.context.loadArchiveAll({window:'all'}),null);
@@ -115,7 +113,7 @@ test('a saved-order delta merges against its validated base and persists the ful
   assert.deepEqual(Array.from(result, row => row.session_id), rows.map(row => row.session_id));
   assert.equal(result[0].modified,42);
   assert.equal(f.saves[0].order,order);
-  assert.deepEqual(Array.from(f.savedDeltas[0].ids), rows.map(row => row.session_id));
+  assert.equal(f.savedDeltas[0].ids,null);
   assert.equal(f.reads.length,0);
 });
 
@@ -244,13 +242,47 @@ before(async () => {
 });
 after(async () => {await browser?.close();await new Promise(r=>server.close(r));});
 
-async function waitForSnapshot(page, delta, key = 'last') {
-  await page.waitForFunction(async (delta, key)=>{
+async function waitForSnapshot(page, delta, key = 'last', windowName = '7d') {
+  await page.waitForFunction(async (delta, key, windowName)=>{
     const db=await new Promise(resolve=>{const r=indexedDB.open('ccc-archive-response',1);r.onsuccess=()=>resolve(r.result);});
-    try {return await new Promise(resolve=>{const r=db.transaction('snapshot').objectStore('snapshot').get(key);r.onsuccess=()=>resolve(r.result?.delta===delta && !!localStorage.getItem('ccc-archive-response-at:7d'));});}
+    try {return await new Promise(resolve=>{const r=db.transaction('snapshot').objectStore('snapshot').get(key);r.onsuccess=()=>resolve(r.result?.delta===delta && !!localStorage.getItem('ccc-archive-response-at:'+windowName));});}
     finally {db.close();}
-  },{},delta,key);
+  },{},delta,key,windowName);
 }
+
+test('All reload validates a packed UTF-8 base after applying an ordered patch', async () => {
+  const allUrl = '/api/conversations/list?window=all&stale_ok=1';
+  const context = await browser.createBrowserContext(), page = await context.newPage();
+  try {
+    await page.evaluateOnNewDocument(() => localStorage.setItem('ccc-archive-window', 'all'));
+    await page.goto(origin, {waitUntil:'load'});
+    await page.evaluate(({url, rows}) => {
+      window.__cccArchiveSettled = true;
+      window.__cccArchiveSnapshot.save({url, rows, delta:'old'}, null,
+        [[['session_id', 'nested'], ['session_id']], [[0, ['recent', {items:[1]}]], [1, ['older']]]]);
+    }, {url:allUrl, rows});
+    await waitForSnapshot(page, 'old', 'last', 'all');
+    await page.evaluate(url => {
+      const changed = {session_id:'recent', name:'שלום'};
+      window.__cccArchiveSnapshot.save({url, rows:[{session_id:'older'},changed], delta:'reordered', order:'order'},
+        {from:'old', ids:['older','recent'], changes:[changed]});
+    }, allUrl);
+    await waitForSnapshot(page, 'reordered', 'header', 'all');
+    await page.evaluate(url => {
+      const changed = {session_id:'older', name:'updated'};
+      window.__cccArchiveSnapshot.save({url, rows:[changed,{session_id:'recent',name:'שלום'}],
+        delta:'valid', order:'order'}, {from:'reordered', ids:null, changes:[changed]});
+    }, allUrl);
+    await waitForSnapshot(page, 'valid', 'header', 'all');
+    await page.reload({waitUntil:'load'});
+    const state = await page.evaluate(async () => {
+      const h = window.__cccArchiveSnapshot;
+      const value = await h.read;
+      return {rows:value?.rows, status:(await h.fetch)?.status};
+    });
+    assert.deepEqual(state,{rows:[{session_id:'older',name:'updated'},{session_id:'recent',name:'שלום'}],status:304});
+  } finally {await context.close();}
+});
 
 async function seed(page,delta) {
   await page.evaluate(({url,rows,delta})=>{
