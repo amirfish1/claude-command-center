@@ -2,7 +2,7 @@
 import time
 
 import server
-from ccc_server import archive_store
+from ccc_server import antigravity, archive_store
 
 
 def test_late_cold_parent_keeps_replay_and_delta_tracking(tmp_path, monkeypatch):
@@ -36,6 +36,7 @@ def test_late_cold_parent_keeps_replay_and_delta_tracking(tmp_path, monkeypatch)
                  '_archive_overlay_devin_cli_sessions', '_archive_overlay_wt_worker_sessions',
                  '_archive_overlay_claude_registry_sessions'):
         monkeypatch.setattr(server, name, lambda rows, **kw: [])
+    monkeypatch.setattr(antigravity, 'archive_terminal_overlay', lambda rows, **kw: [])
 
     rows, cached, version = server._archive_list_source_rows_cached({}, window='1d')
     assert [r['session_id'] for r in rows] == ['child', 'parent']

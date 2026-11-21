@@ -616,6 +616,38 @@ def test_precise_token_without_thread_connection_reuses_peer_revision(store, mon
     assert topics._db_state_token() != before
 
 
+def test_topic_cache_reuses_projection_with_preopened_ship_index(store, monkeypatch):
+    from contextlib import closing
+    from types import SimpleNamespace
+
+    store.execute('PRAGMA journal_mode=WAL')
+    topics.attach_topics([row('root', 'ROOT: task'), row('child', origin='root')], names={})
+    filename = store.execute('PRAGMA database_list').fetchone()[2]
+    monkeypatch.setattr(topics._sg, '_get_connection', topics._ORIG_GET_CONNECTION)
+
+    with closing(sqlite3.connect(filename)) as reader:
+        reader.execute('SELECT sid FROM session_meta').fetchall()
+        monkeypatch.setattr(topics._sg, '_tls', SimpleNamespace(conn=reader))
+        child = row('child')
+        diagnostics = {}
+        topics.attach_topics([child], names={}, diagnostics=diagnostics)
+        assert diagnostics == {'hit': True, 'reason': 'hit'}
+        assert child['continuation_topic_title'] == 'ROOT'
+        assert reader.total_changes == 0
+
+    with closing(sqlite3.connect(filename)) as reader:
+        monkeypatch.setattr(topics._sg, '_tls', SimpleNamespace(conn=reader))
+        new_child = row('new-child', origin='child')
+        diagnostics = {}
+        topics.attach_topics([row('child'), new_child], names={}, diagnostics=diagnostics)
+        assert diagnostics == {'hit': False, 'reason': 'new-session'}
+        assert new_child['continuation_topic_root_session_id'] == 'root'
+        assert reader.execute(
+            'SELECT origin, root_sid FROM continuation_topics WHERE sid=?',
+            ('new-child',),
+        ).fetchone() == ('child', 'root')
+
+
 def test_topic_cache_discovers_new_indexed_origin_after_peer_write(store):
     topics.attach_topics([row('root', 'ROOT: task'), row('standalone', 'CHILD: task')], names={})
     store.execute("INSERT INTO session_meta VALUES ('standalone', '')")

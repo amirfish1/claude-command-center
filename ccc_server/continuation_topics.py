@@ -324,9 +324,10 @@ def _native_title(sid):
 
 
 class _Batch:
-    def __init__(self, conn, rows, names, *, reuse_cached=False):
+    def __init__(self, conn, rows, names, *, reuse_cached=False, rows_by_sid=None):
         self.conn = conn
-        self.rows = {_sid(row): row for row in rows if _sid(row)}
+        self.rows = (rows_by_sid if rows_by_sid is not None else
+                     {sid: row for row in rows if (sid := _sid(row))})
         self.names = names
         self.records = {}
         self.resolved = {}
@@ -560,7 +561,7 @@ def _project_topics(batch, rows):
             row.pop('continuation_topic_session_id', None)
 
 
-def _try_attach_from_cache(rows, conn, names, diagnostics=None):
+def _try_attach_from_cache(rows, conn, names, diagnostics=None, *, rows_by_sid=None):
     def miss(reason, changed=()):
         if diagnostics is not None:
             diagnostics.update(hit=False, reason=reason)
@@ -581,6 +582,8 @@ def _try_attach_from_cache(rows, conn, names, diagnostics=None):
         entries = _TOPIC_CACHE.get('entries') or {}
         if not entries:
             return miss('empty')
+        if rows_by_sid is not None and not (rows_by_sid.keys() <= entries.keys()):
+            return miss('new-session')
         resolved_names = None
         external_titles = None
         staged = []
@@ -699,12 +702,25 @@ def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnos
     rows = [row for row in rows if isinstance(row, dict)]
     if not rows:
         return
-    if not wait_for_writer and _try_attach_from_cache(rows, conn, names, diagnostics):
+    rows_by_sid = None
+    if conn is None and not wait_for_writer and _sg._get_connection is _ORIG_GET_CONNECTION:
+        thread_conn = getattr(_sg._tls, 'conn', None)
+        if thread_conn is not None:
+            with _CACHE_LOCK:
+                initialized = _INITIALIZED_CONNS.get(id(thread_conn))
+            if initialized is None or initialized[0] is not thread_conn:
+                # A dashboard request may have opened the ship index before
+                # reading topics. Register that connection before checking the
+                # cache. Share its ID map with the resolver if new rows miss.
+                rows_by_sid = {sid: row for row in rows if (sid := _sid(row))}
+                conn = _connection(thread_conn)
+    if not wait_for_writer and _try_attach_from_cache(
+            rows, conn, names, diagnostics, rows_by_sid=rows_by_sid):
         return
     conn = _connection(conn)
     names = _core._load_session_name_overrides() if names is None else names
     read_version = (conn.total_changes, conn.execute('PRAGMA data_version').fetchone()[0])
-    batch = _Batch(conn, rows, names, reuse_cached=not wait_for_writer)
+    batch = _Batch(conn, rows, names, reuse_cached=not wait_for_writer, rows_by_sid=rows_by_sid)
     batch.capture_root_titles = wait_for_writer
     # Native title reads may perform I/O. Never do them while holding the
     # shared index's writer lock, including on a cold archive projection.
