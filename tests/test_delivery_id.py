@@ -273,6 +273,39 @@ def test_typed_continue_queues_during_codex_compaction_and_drains_once(queue_env
     assert _queued_events(SID) == []
 
 
+def test_dashboard_compaction_persists_followup_before_liveness_lookup(queue_env, monkeypatch):
+    from ccc_server import compact
+
+    monkeypatch.setattr(server, "_is_codex_session", lambda sid: sid == SID)
+    monkeypatch.setattr(server, "_pending_writer_compatibility_status", lambda: {"ok": True})
+    monkeypatch.setattr(server, "_inject_budget_check", lambda *args: None)
+    monkeypatch.setattr(server, "_is_auto_resume_opted_in", lambda sid: False)
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("A follow-up during dashboard compaction must go straight to disk")
+
+    monkeypatch.setattr(server, "session_live_status", unexpected)
+    monkeypatch.setattr(server, "_control_plane_engine_call", unexpected)
+
+    def compact_with_followup(sid, **kwargs):
+        sent = server._inject_text_into_session(
+            sid, "continue", source="composer", idempotency_key="inject:dashboard-compact",
+        )
+        assert sent["ok"] and sent["queued"]
+        assert sent["effect"] == "queued"
+        server._pending_resume_queue.clear()
+        server._load_pending_inputs()
+        assert [(row["text"], row["delivery_id"]) for row in _queued_events(sid)] == [
+            ("continue", sent["delivery_id"]),
+        ]
+        assert server._pump_codex_resume_queue(sid, _backstop=True)["waiting"] == "busy"
+        return {"ok": True}
+
+    monkeypatch.setattr(compact, "_compact_session_context_impl", compact_with_followup)
+    assert server.compact_session_context(SID)["ok"]
+    assert not server._compact_request_in_flight(SID)
+
+
 def test_account_worker_hop_keeps_the_queued_card_id(queue_env, monkeypatch):
     import contextvars
     from types import SimpleNamespace

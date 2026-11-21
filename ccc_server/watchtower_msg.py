@@ -1906,6 +1906,18 @@ def _deliver_pending_claude_model(session_id, text, status, from_queue=False):
     return result
 
 
+def _reject_over_budget_inject(session_id, text, source):
+    blocked = _core._inject_budget_check(session_id, text, source)
+    if blocked is not None:
+        _core._log_activity(
+            "inject", "BLOCKED",
+            f"session={session_id} source={source} reason={blocked['reason']} "
+            f"count={blocked['count']}/{blocked['limit']} "
+            f'text="{_core._activity_log_preview(text)}"',
+        )
+    return blocked
+
+
 @_serialize_session_delivery
 def _inject_text_into_session_router(
     session_id,
@@ -1979,18 +1991,31 @@ def _inject_text_into_session_router(
     # before engine detection so a Kimi nudge cannot fall through to a Claude
     # resume and fail with an unrelated ``repo_required`` error.
     session_id = _core._canonical_kimi_session_id(session_id)
+    compact_in_flight = _core._compact_request_in_flight(session_id)
     is_codex = _core._is_codex_session(session_id)
     codex_send_options = {"idempotency_key": idempotency_key} if idempotency_key else {}
-    if (is_codex and source == "composer" and not wt_origin and not peer_sender_sid
-            and _core._is_unattended_auto_continue(text)):
+    dashboard_composer = source == "composer" and not wt_origin and not peer_sender_sid
+    if is_codex and dashboard_composer and _core._is_unattended_auto_continue(text):
         # The HTTP handler has already verified the dashboard composer.
         # Preserve that evidence through the worker even with envelopes off.
         codex_send_options["composer_attr"] = attr or attribution.dashboard_human(session_id, text)
     compact_command = bool(_core._COMPACT_TRIGGER_RE.match(text))
     clear_command = bool(_core._CLEAR_TRIGGER_RE.match(text))
     slash_command = bool(_core._SLASH_COMMAND_TRIGGER_RE.match(text))
+    # Only native Codex slash commands require the TUI. Other slash-shaped
+    # messages are normal prompts and can use the durable queue.
+    if is_codex and slash_command:
+        slash_command = text.strip().split(None, 1)[0] in _core._CODEX_SLASH_NAME_SET
     mode_value = str(mode or "").strip().lower()
     mode = mode_value if mode_value in ("answer", "steer", "send_queue") else "send"
+    if (is_codex and compact_in_flight and dashboard_composer and not slash_command
+            and mode in ("send", "send_queue") and not _from_terminal_queue):
+        blocked = _reject_over_budget_inject(session_id, text, source)
+        if blocked is not None:
+            return blocked
+        return _core.resume_session_codex(
+            session_id, text, queue_for_compaction=True, **codex_send_options,
+        )
     # One liveness snapshot for this attempt. The terminal-queue watcher
     # hands in the probe it already gated on, so the gate and this routing
     # see the same status/spawn/tool-child instead of re-probing a beat
@@ -2083,17 +2108,10 @@ def _inject_text_into_session_router(
     # first offered), so counting every re-park tick as a fresh "repeat" trips
     # the breaker on a message that never landed once — and the watcher treats
     # `blocked` as terminal, silently dropping the queued text (CCC-1175).
-    _blocked = None
     if not _from_terminal_queue:
-        _blocked = _core._inject_budget_check(session_id, text, source)
-    if _blocked is not None:
-        _core._log_activity(
-            "inject", "BLOCKED",
-            f"session={session_id} source={source} reason={_blocked['reason']} "
-            f"count={_blocked['count']}/{_blocked['limit']} "
-            f"text=\"{_core._activity_log_preview(text)}\"",
-        )
-        return _blocked
+        blocked = _reject_over_budget_inject(session_id, text, source)
+        if blocked is not None:
+            return blocked
     # A saved headless model choice takes precedence over every warm transport
     # (including peer delivery and interrupt/steer). The resume path checks a
     # fresh turn boundary and waits for process exit before its first write.
@@ -2122,14 +2140,6 @@ def _inject_text_into_session_router(
         )
         if uds_result is not None:
             return uds_result
-    # Codex: only its OWN TUI commands need a live interactive terminal.
-    # Slash-shaped text that isn't one (e.g. /group-chat-checkin from the
-    # group-chat flow) is just prompt text — route it through the normal
-    # resume path instead of bouncing "requires live TUI" (CCC-107).
-    if is_codex and slash_command:
-        _first_tok = text.strip().split(None, 1)[0]
-        if _first_tok not in _core._CODEX_SLASH_NAME_SET:
-            slash_command = False
     if is_codex and slash_command:
         if status.get("live") and has_tty:
             if not _from_terminal_queue and _core._terminal_input_queue_has_pending(session_id):

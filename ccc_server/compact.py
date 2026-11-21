@@ -755,6 +755,11 @@ def clear_session_context(session_id, *, terminal_app=None, initial_message=None
     }
 
 
+def _compact_request_in_flight(session_id):
+    with _core._COMPACT_INFLIGHT_LOCK:
+        return session_id in _core._COMPACT_INFLIGHT_SESSIONS
+
+
 def compact_session_context(session_id, *, terminal_app=None, _from_terminal_queue=False):
     """Run Claude Code's `/compact` for a session, picking the right surface.
 
@@ -797,7 +802,8 @@ def compact_session_context(session_id, *, terminal_app=None, _from_terminal_que
         )
     finally:
         with _core._COMPACT_INFLIGHT_LOCK:
-            _core._COMPACT_INFLIGHT_SESSIONS.pop(sid, None)
+            if _core._COMPACT_INFLIGHT_SESSIONS.get(sid) == now:
+                _core._COMPACT_INFLIGHT_SESSIONS.pop(sid)
 
 
 _PRESET_REFUSED = "compact_preset_resume_failed"

@@ -4192,6 +4192,8 @@ def _resume_queue_engine_busy(sid):
         # the same conversation.
         return True
     if _core._is_codex_session(sid):
+        if _core._compact_request_in_flight(sid):
+            return True
         # A live headless `codex exec` holds Codex's single-writer lock for its
         # whole run; any thread/resume or thread/read from our app-server fails
         # "already has an active writer" and the 60s retry repeats that for the

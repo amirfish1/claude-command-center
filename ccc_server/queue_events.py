@@ -2834,7 +2834,7 @@ def resume_session_codex(
     queued_steer_transaction_protocol=None,
     queued_delivery_transaction_protocol=0,
     replace_queued_id=None,
-    _steer_fallback=False, composer_attr=None,
+    _steer_fallback=False, composer_attr=None, queue_for_compaction=False,
 ):
     """Resume a dormant Codex thread with a new prompt through the app-server.
 
@@ -2861,6 +2861,15 @@ def resume_session_codex(
                     "pending input"
                 ),
             }
+        if queue_for_compaction:
+            # Use the same queue the worker drains. By the time ordinary
+            # routing reaches the app-server, the compact turn may have
+            # finished and the engine may accept the send as a new turn.
+            return _core._queue_codex_resume(
+                session_id, _core._strip_ccc_session_state_instruction(text),
+                reason="Waiting for Codex compaction to finish",
+                composer_attr=composer_attr,
+            )
         routed = _core._control_plane_engine_call(
             "codex", "resume", {
                 "session_id": session_id,
