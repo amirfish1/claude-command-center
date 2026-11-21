@@ -422,6 +422,36 @@ def test_history_encoding_builds_gzip_only_when_requested_or_needed(monkeypatch)
     assert len(gzip_calls) == 1
 
 
+def test_history_zstd_requires_local_packed_response_and_client_acceptance(monkeypatch):
+    from ccc_server import list_encoding
+
+    monkeypatch.setattr(list_encoding, '_HISTORY_CACHE', list_encoding.ByteBudgetCache(1 << 20, 4))
+    monkeypatch.setattr(list_encoding, '_brotli', lambda raw: b'encoded br')
+    zstd = list_encoding._zstd
+    monkeypatch.setattr(list_encoding, '_zstd', lambda raw: b'encoded zstd')
+    payload = {'conversations': [{'first_message': 'history ' * 200}]}
+    accept = 'gzip, br, zstd'
+
+    def read(header=accept, *, local=True, packed=True):
+        return list_encoding.history_representation(
+            payload, header, None, row_layouts=packed, prefer_zstd=local)[:2]
+
+    assert read() == (b'encoded zstd', 'zstd')
+    assert read(local=False) == (b'encoded br', 'br')
+    assert read(packed=False) == (b'encoded br', 'br')
+    assert read('gzip, br, zstd;q=0') == (b'encoded br', 'br')
+    assert read('gzip, br, zstd;q=0.5') == (b'encoded br', 'br')
+    monkeypatch.setattr(list_encoding, '_zstd_encoder', lambda: None)
+    monkeypatch.setattr(list_encoding, '_zstd', zstd)
+    monkeypatch.setattr(list_encoding, '_brotli', lambda raw: None)
+    payload['updated'] = True
+    body, encoding = read()
+    assert encoding == 'gzip'
+    decoded = json.loads(gzip.decompress(body))
+    assert decoded['conversations'] == [[0, [payload['conversations'][0]['first_message']]]]
+    assert decoded['row_layouts'] == [['first_message']]
+
+
 def test_projection_diagnostics_do_not_change_the_payload():
     server = importlib.import_module('server')
     rows = [{'session_id': 'diagnostic-row', 'display_name': 'Title',

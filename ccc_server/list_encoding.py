@@ -1,5 +1,8 @@
 """Optional compression of canonical list JSON without changing its payload."""
 
+import ctypes
+import ctypes.util
+from functools import lru_cache
 import gzip
 import hashlib
 import threading
@@ -12,6 +15,53 @@ _CACHE = ByteBudgetCache(8 << 20, 32)
 _HISTORY_CACHE = ByteBudgetCache(12 << 20, 4)
 _LOCK = threading.Lock()
 _FLIGHTS = {}
+
+
+@lru_cache(maxsize=1)
+def _zstd_encoder():
+    try:
+        name = ctypes.util.find_library("zstd")
+        if not name:
+            return None
+        library = ctypes.CDLL(name)
+        size, ptr, integer = ctypes.c_size_t, ctypes.c_void_p, ctypes.c_int
+        for symbol, result, args in (
+            ("createCCtx", ptr, ()),
+            ("freeCCtx", size, (ptr,)),
+            ("compressBound", size, (size,)),
+            ("isError", ctypes.c_uint, (size,)),
+            ("CCtx_setParameter", size, (ptr, integer, integer)),
+            ("compress2", size, (ptr, ptr, size, ptr, size)),
+        ):
+            function = getattr(library, "ZSTD_" + symbol)
+            function.argtypes = args
+            function.restype = result
+        return library
+    except (AttributeError, OSError):
+        return None
+
+
+def _zstd(raw):
+    library = _zstd_encoder()
+    if library is None:
+        return None
+    context = library.ZSTD_createCCtx()
+    if not context:
+        return None
+    try:
+        # ZSTD_c_compressionLevel and ZSTD_c_windowLog. RFC 9659 caps the
+        # window at 8 MiB for HTTP content encoding.
+        for parameter, value in ((100, 3), (101, 23)):
+            if library.ZSTD_isError(library.ZSTD_CCtx_setParameter(context, parameter, value)):
+                return None
+        capacity = library.ZSTD_compressBound(len(raw))
+        if not capacity or library.ZSTD_isError(capacity):
+            return None
+        output = ctypes.create_string_buffer(capacity)
+        length = library.ZSTD_compress2(context, output, capacity, raw, len(raw))
+        return None if library.ZSTD_isError(length) else output[:length]
+    finally:
+        library.ZSTD_freeCCtx(context)
 
 
 def _brotli(raw):
@@ -42,29 +92,32 @@ def _brotli(raw):
                 del _FLIGHTS[key]
 
 
-def representation(raw, gzip_body, accept, *, encode_gzip=None):
+def representation(raw, gzip_body, accept, *, encode_gzip=None, encodings=None):
     """Choose a supported representation, preserving gzip on optional failure."""
     if len(raw) >= 1024:
-        for encoding in static_encoding.accepted_encodings(accept):
+        if encodings is None:
+            encodings = static_encoding.accepted_encodings(accept)
+        for encoding in encodings:
             if encoding == "gzip":
                 if gzip_body is not None:
                     return gzip_body, "gzip"
                 if encode_gzip is not None:
                     return encode_gzip(), "gzip"
-            if encoding == "br":
+            else:
                 try:
-                    body = _brotli(raw)
+                    body = _zstd(raw) if encoding == "zstd" else _brotli(raw)
                 except Exception:
                     body = None
                 if body is not None:
-                    return body, "br"
+                    return body, encoding
     return raw, None
 
 
 def history_representation(payload, accept, validator, *, diagnostics=None, fingerprint=None,
-                           row_layouts=False, packed_rows=None):
+                           row_layouts=False, packed_rows=None, prefer_zstd=False):
     """Reuse encoded bytes after a fresh full-history projection."""
-    accepted = static_encoding.accepted_encodings(accept)
+    supported = ("zstd", "br", "gzip") if row_layouts and prefer_zstd else ("br", "gzip")
+    accepted = static_encoding.accepted_encodings(accept, supported=supported)
     if not accepted:
         fingerprint = None
     elif fingerprint is None:
@@ -91,7 +144,7 @@ def history_representation(payload, accept, validator, *, diagnostics=None, fing
         return (archive_list_replay.encode_gzip_payload(payload, raw)
                 or gzip.compress(raw, compresslevel=1))
 
-    body, encoding = representation(raw, None, accept, encode_gzip=encode_gzip)
+    body, encoding = representation(raw, None, accept, encode_gzip=encode_gzip, encodings=accepted)
     if fingerprint is not None and encoding:
         _HISTORY_CACHE.put(key, (body, encoding, etag), len(body) + 256)
     return body, encoding, etag

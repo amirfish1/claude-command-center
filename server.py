@@ -48018,7 +48018,11 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 payload, self.headers.get("Accept-Encoding"),
                 None if is_delta else self.headers.get("If-None-Match"),
                 diagnostics=diagnostics, fingerprint=fingerprint,
-                row_layouts=row_layouts and not is_delta, packed_rows=history[2])
+                row_layouts=row_layouts and not is_delta, packed_rows=history[2],
+                # Direct local connections can trade extra wire bytes for
+                # lower compression latency.
+                prefer_zstd=(row_layouts and not is_delta and not
+                             phone_access.is_remote_request(self.client_address[0], self.headers)))
             status = self._send_archive_list_representation(body, encoding, etag)
             return "delta" if is_delta and status == 200 else status
 

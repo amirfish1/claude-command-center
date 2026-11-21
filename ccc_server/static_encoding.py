@@ -41,7 +41,7 @@ def brotli(body, *, quality=6, window_bits=22):
     return output[:length.value]
 
 
-def accepted_encodings(header):
+def accepted_encodings(header, *, supported=("br", "gzip")):
     """Supported encodings in client preference order, respecting q=0."""
     weights = {}
     for item in (header or "").lower().split(","):
@@ -57,6 +57,6 @@ def accepted_encodings(header):
                 except ValueError:
                     weight = 0.0
         weights[token] = weight
-    return tuple(sorted((encoding for encoding in ("br", "gzip")
+    return tuple(sorted((encoding for encoding in supported
                          if weights.get(encoding, weights.get("*", 0)) > 0),
                         key=lambda encoding: -weights.get(encoding, weights.get("*", 0))))
