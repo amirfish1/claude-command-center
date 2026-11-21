@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -203,6 +204,58 @@ def test_packed_history_is_exact_after_live_lifecycle_changes(tmp_path, monkeypa
         assert load(version)[0]["last_assistant_preview"] == "Peer reply"
     finally:
         reader = archive_store._SIDEBAR_HISTORY_READER
+        with reader.lock:
+            reader._close()
+
+
+def test_late_packed_sidebar_read_renews_its_layout_once(tmp_path, monkeypatch):
+    cache_file = tmp_path / "archive.json"
+    stamp = 2_000_000_000
+    packed_version = server._ARCHIVE_SIDEBAR_PACKED_VERSION
+    cold = {"session_id": "cold", "mtime": 10}
+    hot = {"session_id": "hot", "mtime": stamp}
+    archive_store.save(cache_file, {
+        "schema_version": 1,
+        "build_id": "1",
+        "entries": {"base": {"cached_at": stamp, "conversations": [cold, hot]}},
+    }, complete=True, sidebar_key="base",
+        sidebar_pages=(packed_version, server._archive_list_pack_static))
+
+    reader = archive_store._SidebarHistoryReader()
+    now = 100.0
+    monkeypatch.setattr(archive_store, "time", SimpleNamespace(monotonic=lambda: now))
+
+    def read(live):
+        return reader.read(
+            cache_file, "base", {archive_store.identity(live): live}, 1, "1", stamp,
+            copy_history=False, packed_version=packed_version,
+        )["conversations"]
+
+    try:
+        stored_cold, _ = read(hot)
+        assert isinstance(stored_cold, archive_sidebar_pages.StoredRow)
+        initial_marker = reader.memo[0]
+        now = 105.0
+        assert read(hot)[0] is stored_cold
+        assert reader.memo[0] is initial_marker
+
+        now = 115.0
+        updated_hot = dict(hot, first_message="updated")
+        assert read(updated_hot) == [stored_cold, updated_hot]
+        assert reader.expires_at == now + archive_store._SIDEBAR_HISTORY_REUSE_S
+        renewal_marker = reader.memo[0]
+        reader._expire(initial_marker)
+        assert reader.memo[0] is renewal_marker
+
+        now = 130.0
+        assert read(updated_hot)[0] is stored_cold
+        assert reader.memo[0] is renewal_marker
+
+        now = reader.expires_at
+        reader._expire(renewal_marker)
+        assert reader.conn is None and not reader.pages
+        assert read(hot)[0] is not stored_cold
+    finally:
         with reader.lock:
             reader._close()
 

@@ -612,10 +612,12 @@ class _SidebarHistoryReader:
         self.pages = {}
         self.expiry = None
         self.expires_at = 0.0
+        self.packed_poll_renewed = False
 
     def _clear(self):
         self.memo = None
         self.pages = {}
+        self.packed_poll_renewed = False
         if self.expiry is not None:
             self.expiry.cancel()
             self.expiry = None
@@ -707,6 +709,14 @@ class _SidebarHistoryReader:
                                     live = stored.copy() if copy_history else stored
                                 rows.append(live)
                             rows.extend(current.values())
+                            if self.pages and not self.packed_poll_renewed:
+                                remaining = self.expires_at - time.monotonic()
+                                if 0 < remaining <= _SIDEBAR_HISTORY_REUSE_S / 2:
+                                    # One late reuse can cover the next active
+                                    # sidebar poll without repeated renewals
+                                    # retaining this layout indefinitely.
+                                    self.packed_poll_renewed = True
+                                    self._arm_expiry()
                             return dict(entry, conversations=rows)
                     if (packed_version is not None and previous[1:] == guard[1:]
                             and time.monotonic() < self.expires_at):
