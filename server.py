@@ -32965,6 +32965,10 @@ def _car_mode_stop() -> dict:
 
 
 _QUEUE_LIST_ENCODED = {}
+# A queue response holds a background read slot. Bound the time a
+# non-reading client can keep it, while allowing slower clients to advance.
+_QUEUE_LIST_WRITE_TIMEOUT = 30.0
+_QUEUE_LIST_WRITE_CHUNK = 64 << 10
 _BACKGROUND_API_READ_PATHS = frozenset({
     "/api/attention",
     "/api/group-chats/active",
@@ -33746,7 +33750,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     _delta = _queue_list_delta(_scope, _since, items, _ver, _keys, _digests)
                     if _delta is not None:
                         _delta.update({"ok": True, "synced_at": synced_at})
-                        self.send_json(_delta)
+                        self.send_json(_delta, write_timeout=_QUEUE_LIST_WRITE_TIMEOUT)
                         return
                 _ek = (status_filter, lane_filter, _slim, synced_at)
                 _ent = _QUEUE_LIST_ENCODED.get(_ek)
@@ -33760,7 +33764,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 self.send_json({
                     "ok": True, "items": items, "count": len(items),
                     "synced_at": synced_at, "version": _ver, "order": _keys,
-                }, encoded=_ent[1])
+                }, encoded=_ent[1], write_timeout=_QUEUE_LIST_WRITE_TIMEOUT)
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/queue/roles":
@@ -48339,7 +48343,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         except Exception:
             pass
 
-    def send_json(self, data, status=200, etag=False, encoded=None):
+    def send_json(self, data, status=200, etag=False, encoded=None, *, write_timeout=None):
         # Any 5xx is a real server-side error — feed the in-process health
         # counter the dashboard's bottom-left bar reads. Cheap, no disk scan.
         if status >= 500:
@@ -48400,14 +48404,35 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             self.send_header("Content-Encoding", enc)
             self.send_header("Vary", "Accept-Encoding")
         self.end_headers()
+        previous_timeout = None
+        if write_timeout is not None:
+            previous_timeout = self.connection.gettimeout()
+            self.connection.settimeout(write_timeout if previous_timeout is None
+                                       else min(write_timeout, previous_timeout))
         try:
-            self.wfile.write(body)
+            if write_timeout is None:
+                self.wfile.write(body)
+            else:
+                # sendall's timeout covers a whole write. A client that keeps
+                # reading a large response can take more than one interval.
+                view = memoryview(body)
+                for start in range(0, len(view), _QUEUE_LIST_WRITE_CHUNK):
+                    self.wfile.write(view[start:start + _QUEUE_LIST_WRITE_CHUNK])
+        except TimeoutError:
+            if write_timeout is None:
+                raise
+            # Content-Length already went out. Close the incomplete response
+            # so a client can detect the interruption and retry.
+            self.close_connection = True
         except (BrokenPipeError, ConnectionResetError):
             # Client (browser) disconnected mid-response — typically a hard
             # reload or tab close cancelling an in-flight /api/sessions.
             # Not a real error; the noisy traceback was just the stdlib
             # http.server's default behaviour. Swallow it.
             pass
+        finally:
+            if write_timeout is not None:
+                self.connection.settimeout(previous_timeout)
 
     def _send_restart_retry(self):
         body = b'{"ok":false,"restarting":true,"error":"Server restarting"}'

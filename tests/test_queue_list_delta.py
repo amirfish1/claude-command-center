@@ -5,8 +5,16 @@ that sends the version it holds gets only changed tickets plus the ref order,
 and worker heartbeats (workers.json rewrites) never ask boards to refetch
 tickets. Synthetic rows only.
 """
+from contextlib import closing
+import gzip
+import http.client
 import importlib
+import json
+import socket
 import sys
+import threading
+
+import pytest
 
 
 def _load_server():
@@ -66,6 +74,48 @@ def test_keyless_and_duplicate_rows_always_ship():
     v2, keys2, d2 = server._queue_list_version(scope, rows2, rows2)
     delta = server._queue_list_delta(scope, v1, rows2, v2, keys2, d2)
     assert sorted(delta["changed"]) == ["#0", "#2"]
+
+
+def test_stalled_queue_response_releases_admission(monkeypatch):
+    server = _load_server()
+    rows = _rows()
+    rows[0]["note"] = "a" * (1 << 20)
+    monkeypatch.setattr(server, "_ux_fixes_list_items_cached", lambda *_a, **_kw: rows)
+    monkeypatch.setattr(server, "_ux_fixes_list_synced_at", lambda *_: 1)
+    monkeypatch.setattr(server, "_bg_route_is_cheap", lambda _: False)
+    monkeypatch.setattr(server, "_save_bg_route_cpu", lambda: None)
+    monkeypatch.setattr(server, "_QUEUE_LIST_WRITE_TIMEOUT", 0.4)
+
+    class Handler(server.CommandCenterHandler):
+        def setup(self):
+            self.request.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8192)
+            super().setup()
+
+    with server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler) as listener:
+        thread = threading.Thread(target=listener.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with socket.socket() as stalled:
+                stalled.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8192)
+                stalled.settimeout(3)
+                stalled.connect(listener.server_address)
+                stalled.sendall(b"GET /api/queue/list HTTP/1.0\r\n\r\n")
+                with closing(http.client.HTTPResponse(stalled)) as incomplete:
+                    incomplete.begin()
+                    assert incomplete.status == 200
+                    assert incomplete.length > 1 << 20
+                    # Leave the first body unread while a second board polls.
+                    with closing(http.client.HTTPConnection(*listener.server_address, timeout=3)) as reader:
+                        reader.request("GET", "/api/queue/list", headers={"Accept-Encoding": "gzip"})
+                        response = reader.getresponse()
+                        assert response.status == 200
+                        assert response.getheader("Content-Encoding") == "gzip"
+                        assert json.loads(gzip.decompress(response.read()))["items"] == rows
+                    with pytest.raises(http.client.IncompleteRead):
+                        incomplete.read()
+        finally:
+            listener.shutdown()
+            thread.join(timeout=3)
 
 
 def test_worker_heartbeat_invalidates_only_changed_worker_data(monkeypatch):
