@@ -1,5 +1,6 @@
 """CCC-142: the /list body is built once per snapshot, and projected rows
 never share mutable containers with the cached snapshot."""
+from concurrent.futures import ThreadPoolExecutor
 import gzip
 import importlib
 import json
@@ -201,10 +202,14 @@ def test_history_delta_preserves_projected_values_and_order(monkeypatch):
     base, _ = replay.history_delta({'conversations': first}, 'scope', 'boot', '', '')
     token, order = base['delta_token'], base['order_token']
     modified = [*first[:5], dict(first[5], title='new title')]
-    delta, _ = replay.history_delta({'conversations': modified}, 'scope', 'boot', token, order)
+    shared = {'conversations': modified}
+    delta, _ = replay.history_delta(shared, 'scope', 'boot', token, order)
     assert delta['same_order'] and delta['ids'] == []
     assert delta['conversations'] == modified[-2:]
     assert delta['order_token'] == order and delta['delta_token'] != token
+    full, _ = replay.history_delta(shared, 'scope', 'boot', '', '')
+    assert shared == {'conversations': modified}
+    assert 'delta' not in full and full['conversations'] == modified
 
     reordered = modified[2:4] + [{'session_id': 'new'}] + modified[4:]
     delta, _ = replay.history_delta({'conversations': reordered}, 'scope', 'boot', token, order)
@@ -217,6 +222,46 @@ def test_history_delta_preserves_projected_values_and_order(monkeypatch):
     assert 'delta' not in full and full['conversations'] == reordered
     duplicate = {'conversations': [*first, first[0]]}
     assert replay.history_delta(duplicate, 'scope', 'boot', token, order) == (duplicate, None)
+
+
+def test_unversioned_history_projection_shares_only_overlapping_exact_source(monkeypatch):
+    server = importlib.import_module('server')
+    waiting = threading.Event()
+    building = threading.Event()
+    finish = threading.Event()
+
+    class ObservableFuture(server.Future):
+        def result(self):
+            waiting.set()
+            return super().result()
+
+    monkeypatch.setattr(server, 'Future', ObservableFuture)
+    rows = [{'session_id': 'first'}]
+    payload = {'conversations': rows}
+
+    def build():
+        building.set()
+        assert finish.wait(5)
+        return payload
+
+    def own_projection():
+        return {'conversations': []}
+
+    project = server._archive_list_history_projection
+    phases = {}
+    with ThreadPoolExecutor(2) as pool:
+        owner = pool.submit(project, 'scope', rows, build, {})
+        try:
+            assert building.wait(5)
+            follower = pool.submit(project, 'scope', rows, own_projection, phases)
+            assert waiting.wait(5)
+            assert project('other', rows, own_projection, {}) != payload
+            assert project('scope', list(rows), own_projection, {}) != payload
+        finally:
+            finish.set()
+        assert owner.result(timeout=5) is follower.result(timeout=5) is payload
+    assert 'projection_flight' in phases
+    assert project('scope', rows, own_projection, {}) != payload
 
 
 def test_history_encoding_builds_gzip_only_when_requested_or_needed(monkeypatch):

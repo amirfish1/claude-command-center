@@ -19177,6 +19177,36 @@ def _archive_list_rows_cached(cache_options, *, window="all", now=None):
 
 _ARCHIVE_LIST_SOURCE_FLIGHTS = {}
 _ARCHIVE_LIST_SOURCE_FLIGHTS_LOCK = threading.Lock()
+_ARCHIVE_LIST_HISTORY_FLIGHTS = {}
+_ARCHIVE_LIST_HISTORY_FLIGHTS_LOCK = threading.Lock()
+
+
+def _archive_list_history_projection(scope, rows, build, phases):
+    """Share a complete All projection only with concurrent readers of these rows."""
+    key = (scope, id(rows))
+    with _ARCHIVE_LIST_HISTORY_FLIGHTS_LOCK:
+        flight = _ARCHIVE_LIST_HISTORY_FLIGHTS.get(key)
+        owner = flight is None
+        if owner:
+            flight = _ARCHIVE_LIST_HISTORY_FLIGHTS[key] = Future()
+    if not owner:
+        started = time.perf_counter()
+        try:
+            payload = flight.result()
+        except Exception:
+            return build()
+        phases["projection_flight"] = {"wait_ms": round((time.perf_counter() - started) * 1000, 1)}
+        return payload
+    try:
+        payload = build()
+        flight.set_result(payload)
+        return payload
+    except BaseException as exc:
+        flight.set_exception(exc)
+        raise
+    finally:
+        with _ARCHIVE_LIST_HISTORY_FLIGHTS_LOCK:
+            del _ARCHIVE_LIST_HISTORY_FLIGHTS[key]
 
 
 def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phases=None, window="all"):
@@ -37137,8 +37167,14 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             def _timed_payload():
                 _pt0 = time.perf_counter()
                 try:
-                    payload = _archive_list_replay_payload(
-                        rows, _delta, window=window, cached=from_cache, phases=_payload_phases)
+                    def project():
+                        return _archive_list_replay_payload(
+                            rows, _delta, window=window, cached=from_cache, phases=_payload_phases)
+
+                    if window == "all" and not body_ver and stale_ok:
+                        return _archive_list_history_projection(
+                            list_cache_key, rows, project, _payload_phases)
+                    payload = project()
                     if _delta is not None:
                         payload["order_token"] = _archive_list_order_token(
                             [_archive_row_sid(row) for row in payload["conversations"]])

@@ -94,7 +94,9 @@ def history_delta(payload, scope, nonce, since, saved_order):
     current = frozenset(digest for digest, _, _ in runs)
     _HISTORY_MANIFESTS.put((scope, token), current, 512 + 128 * len(current))
     order = order_token(ids)
-    payload.update(order_token=order, delta_token=token)
+    # The projection can be shared by concurrent readers of the same source.
+    # Tokens and the changed-row slice belong to this response alone.
+    payload = dict(payload, order_token=order, delta_token=token)
     if previous is not None and previous.intersection(current):
         changed = [row for digest, start, end in runs if digest not in previous for row in rows[start:end]]
         same_order = saved_order == order
