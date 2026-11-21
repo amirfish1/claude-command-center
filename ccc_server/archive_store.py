@@ -830,7 +830,7 @@ def sidebar_preview_view(cache_file, key, *, schema_version, build_id):
 
 def _load_override_entry(con, key, current, schema_version, build_id, min_cached_at,
                          *, capture_layout=False, copy_history=True, packed_version=None,
-                         page_cache=None, check_client=None):
+                         page_cache=None, check_client=None, session_ids=None):
     con.execute('BEGIN')
     header = con.execute('SELECT metadata FROM variants WHERE key=?', (key,)).fetchone()
     if not header:
@@ -854,9 +854,15 @@ def _load_override_entry(con, key, current, schema_version, build_id, min_cached
     # The body and identity are published together. A NULL here marks an
     # override, since stored bodies are non-null. Keep the database's
     # ordering even when the live snapshot ranks those rows differently.
+    params = [json.dumps(list(current)), key]
+    source = 'FROM rows WHERE variant=?'
+    if session_ids is not None:
+        source = ('FROM rows INDEXED BY rows_sid WHERE variant=?'
+                  ' AND sid IN (SELECT value FROM json_each(?))')
+        params.append(json.dumps(list(session_ids)))
     records = con.execute('''SELECT identity,
         CASE WHEN identity IN (SELECT value FROM json_each(?)) THEN NULL ELSE body END
-        FROM rows WHERE variant=? ORDER BY position, rowid''', (json.dumps(list(current)), key))
+        ''' + source + ' ORDER BY position, rowid', params)
     rows = []
     layout = [] if capture_layout else None
     weight = 0
@@ -895,30 +901,33 @@ def _load_override_entry(con, key, current, schema_version, build_id, min_cached
 
 def load_with_overrides(cache_file, key, current_rows, *, schema_version, build_id, min_cached_at,
                         reuse_sidebar_history=False, copy_history=True, packed_version=None,
-                        check_client=None):
+                        check_client=None, session_ids=None):
     """Merge current rows at their stored positions without decoding superseded bodies.
 
     Older schemas and identities derived from a row's position still use the
     caller's ordinary full load and merge.
     With copy_history=False the sidebar reader may borrow stored dictionaries.
     The caller must treat them as read-only, including during lifecycle overlays.
+    A scoped read merges only the requested sessions and bypasses the full memo.
     """
     current = {}
     for row in current_rows:
         sid = row.get('session_id') or row.get('id')
         if not isinstance(sid, str) or not sid or sid.startswith('#'):
             return None
-        current[identity(row)] = row
+        if session_ids is None or sid in session_ids:
+            current[identity(row)] = row
     if not database_path(cache_file).exists():
         return None
-    if reuse_sidebar_history:
+    if reuse_sidebar_history and session_ids is None:
         return _SIDEBAR_HISTORY_READER.read(
             cache_file, key, current, schema_version, build_id, min_cached_at,
             copy_history=copy_history, packed_version=packed_version, check_client=check_client)
     con = _connect(cache_file)
     try:
         loaded = _load_override_entry(
-            con, key, current, schema_version, build_id, min_cached_at, check_client=check_client)
+            con, key, current, schema_version, build_id, min_cached_at,
+            check_client=check_client, session_ids=session_ids)
         return dict(loaded[0], conversations=loaded[1]) if loaded is not None else None
     finally:
         con.close()

@@ -82,6 +82,65 @@ def test_history_read_merges_live_rows_at_stored_positions(tmp_path, monkeypatch
     assert store.load_with_overrides(target, 'base', [live], **dict(options, build_id='older')) is None
 
 
+def test_decision_inbox_scoped_source_preserves_live_archive_inputs(tmp_path, monkeypatch):
+    import server
+    from ccc_server import decision_inbox
+
+    target = tmp_path / 'archive.json'
+    original = data()
+    original.update(schema_version=server._ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
+                    build_id=server._ARCHIVE_RESPONSE_CACHE_BUILD_ID)
+    key = server._archive_response_cache_key()
+    entry = original['entries'].pop('base')
+    original['entries'][key] = entry
+    _, recent, _, pinned = entry['conversations']
+    duplicate = {'session_id': 'old', 'engine': 'claude', 'source': 'import'}
+    deleted = {'session_id': 'deleted', 'engine': 'codex'}
+    entry['conversations'].extend([duplicate, deleted])
+    store.save(target, original, complete=True)
+    latest = dict(recent, first_message='live input')
+    new = {'session_id': 'new', 'first_message': 'not yet published'}
+    hot = [new, latest, pinned, deleted]
+    live_ids = {'old', 'recent', 'new', 'overlay', 'deleted'}
+    monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE_FILE', target)
+    monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE', {key: {'cached_at': 10}})
+    monkeypatch.setattr(server, '_archive_serve_hot_rows_versioned',
+                        lambda *a, **kw: (hot, True, 0))
+    monkeypatch.setattr(server, '_load_conversation_lifecycle_sets',
+                        lambda: ({'old'}, set()))
+    monkeypatch.setattr(server, '_load_session_lane_overrides', lambda: {})
+    monkeypatch.setattr(server, '_codex_deleted_thread_ids', lambda: {'deleted'})
+    monkeypatch.setattr(server, '_archive_list_source_rows_cached',
+                        lambda *_: pytest.fail('unexpected full history read'))
+    seen = []
+
+    def overlays(rows, existing, phase):
+        seen.append(existing)
+        return rows + [{'session_id': 'other'}, {'session_id': 'overlay'}], []
+
+    monkeypatch.setattr(server, '_archive_list_source_overlays', overlays)
+    decoded = []
+    loads = json.loads
+    monkeypatch.setattr(store.json, 'loads', lambda body: decoded.append(body) or loads(body))
+    result = decision_inbox._server_rows(live_ids)
+    assert [r['session_id'] for r in result] == ['old', 'recent', 'old', 'new', 'overlay']
+    assert result[0]['archived'] and result[2]['archived']
+    assert result[1]['first_message'] == 'live input'
+    assert 'archived' not in latest and 'archived' not in new
+    assert seen == [{'old', 'recent', 'new'}]
+    assert not any('"session_id":"pinned"' in body or '"session_id":"parent"' in body
+                   for body in decoded)
+    assert decision_inbox._server_rows(set()) == []
+    assert decision_inbox._server_rows({'recent'})[0]['first_message'] == 'live input'
+    assert len(seen) == 1
+
+    # A newer in-memory generation cannot be merged with an older store.
+    server._ARCHIVE_RESPONSE_CACHE[key]['cached_at'] = 11
+    monkeypatch.setattr(server, '_archive_list_source_rows_cached',
+                        lambda *_: ([latest, pinned], True, 0))
+    assert decision_inbox._server_rows({'recent'}) == [latest]
+
+
 def test_sidebar_lifecycle_overlay_leaves_borrowed_history_unchanged(tmp_path, monkeypatch):
     import server
 

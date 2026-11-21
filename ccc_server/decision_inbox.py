@@ -1055,10 +1055,10 @@ def run_once(*, cfg=None, now=None, rows=None, live_ids=None, cards=None,
     started = time.time()
     live_store = cards is None
     cards = load_cards() if live_store else cards
-    if rows is None:
-        rows = _server_rows()
     if live_ids is None:
         live_ids = _server_live_ids()
+    if rows is None:
+        rows = _server_rows(live_ids)
     max_new = int(cfg.get("max_cards_per_run") or 5)
     expired = expire_ephemeral_cards(cards, now=now, ttl_s=cfg.get("governor_card_ttl_s"))
     blocked = blocked_source_ids(cards, now=now, dedupe_days=cfg.get("dedupe_days"))
@@ -1166,13 +1166,9 @@ def run_once(*, cfg=None, now=None, rows=None, live_ids=None, cards=None,
 
 # ── server glue (only these touch _core) ─────────────────────────────────────
 
-def _server_rows():
+def _server_rows(live_ids):
     try:
-        rows, _, _body_ver = _core._archive_list_source_rows_cached({
-            "include_prs": False, "resolve_pr_states": False,
-            "resolve_effective": False, "resolve_worktree_dirty": False,
-        })
-        return list(rows or [])
+        return _core._archive_list_source_rows_for_sessions(live_ids)
     except Exception:
         return []
 

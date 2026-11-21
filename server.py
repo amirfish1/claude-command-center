@@ -19390,6 +19390,43 @@ def _archive_list_source_rows_read(cache_options, *, force_refresh=False, phases
     return rows, from_cache, body_ver
 
 
+def _archive_list_source_rows_for_sessions(session_ids):
+    """Read archive inputs for the Decision Inbox's sampled live sessions."""
+    session_ids = set(session_ids)
+    if not session_ids:
+        return []
+    from ccc_server import archive_store
+    import sqlite3
+
+    cache_options = {}
+    key = _archive_response_cache_key()
+    hot, _, _ = _archive_serve_hot_rows_versioned(
+        key, cache_options, copy_rows=False, defer_cold=True)
+    entry = None
+    if hot:
+        with _ARCHIVE_RESPONSE_CACHE_LOCK:
+            min_cached_at = float((_ARCHIVE_RESPONSE_CACHE.get(key) or {}).get("cached_at") or 0)
+        try:
+            entry = archive_store.load_with_overrides(
+                _ARCHIVE_RESPONSE_CACHE_FILE, key, hot,
+                schema_version=_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
+                build_id=_ARCHIVE_RESPONSE_CACHE_BUILD_ID,
+                min_cached_at=min_cached_at, session_ids=session_ids,
+            )
+        except (OSError, ValueError, sqlite3.Error):
+            pass  # Older or unavailable SQLite stores use the normal source.
+    if entry is None:
+        rows, _, _ = _archive_list_source_rows_cached(cache_options)
+    else:
+        rows = _overlay_conversation_lifecycle_flags(
+            entry["conversations"], copy_on_change=True)
+        existing = _archive_overlay_existing_ids(rows)
+        if not session_ids <= existing:
+            rows, _ = _archive_list_source_overlays(rows, existing, lambda _phase: None)
+
+    return [row for row in rows if isinstance(row, dict) and row.get("session_id") in session_ids]
+
+
 def _archive_list_source_overlays(rows, existing_ids, phase):
     """Apply the same current engine gap fillers to full and indexed reads."""
     codex_overlay = _archive_overlay_codex_sessions(rows, existing_ids=existing_ids)
