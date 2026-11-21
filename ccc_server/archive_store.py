@@ -563,6 +563,25 @@ class SidebarHistoryProjection:
         self.rows = None
 
 
+def _recover_sidebar_history(conn, key, missing, version):
+    """Recover skipped bodies after a small change to the live overrides."""
+    if len(missing) > 32:
+        return None
+    marks = ','.join('?' for _ in missing)
+    records = conn.execute(
+        f'SELECT identity, body FROM rows WHERE variant=? AND identity IN ({marks})',
+        (key, *missing)).fetchall()
+    # A publication between the memo check and this SELECT could otherwise
+    # mix different revisions of the same ordered history.
+    if (len(records) != len(missing)
+            or conn.execute('PRAGMA data_version').fetchone()[0] != version):
+        return None
+    rows = _decode_full_batch([body for _, body in records])
+    if not all(isinstance(row, dict) for row in rows):
+        return None
+    return dict(zip((rid for rid, _ in records), rows))
+
+
 class _SidebarHistoryReader:
     """Keep one decoded cold layout for overlapping sidebar loads and reloads."""
 
@@ -615,19 +634,23 @@ class _SidebarHistoryReader:
                 guard = (version, key, schema_version, build_id, copy_history)
                 if self.memo is not None:
                     _, previous, entry, layout, overridden, _ = self.memo
-                    # A new override can replace a decoded row in its original
-                    # position or append below. If an old override disappeared,
-                    # its stored body may have been skipped on the first read.
-                    if (previous == guard and overridden <= current.keys()
+                    if (previous == guard
                             and float(entry.get('cached_at') or 0) >= min_cached_at):
-                        rows = []
-                        for rid, stored in layout:
-                            live = current.pop(rid, None)
-                            if live is None:
-                                live = stored.copy() if copy_history else stored
-                            rows.append(live)
-                        rows.extend(current.values())
-                        return dict(entry, conversations=rows)
+                        recovered = {}
+                        if not overridden <= current.keys():
+                            recovered = _recover_sidebar_history(
+                                conn, key, overridden - current.keys(), version)
+                        if recovered is not None:
+                            rows = []
+                            for rid, stored in layout:
+                                live = current.pop(rid, None)
+                                if live is None:
+                                    if stored is None:
+                                        stored = recovered[rid]
+                                    live = stored.copy() if copy_history else stored
+                                rows.append(live)
+                            rows.extend(current.values())
+                            return dict(entry, conversations=rows)
                     self._clear()
 
                 with conn:

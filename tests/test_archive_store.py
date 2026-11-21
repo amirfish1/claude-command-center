@@ -181,12 +181,43 @@ def test_sidebar_history_reuses_cold_rows_with_fresh_overrides_and_detects_peer_
 
         # The originally skipped body still needs to be read if its live
         # override disappears.
+        memo = reader.memo
         assert read([appended, updated]) == [updated, *rows[1:], appended]
-        assert decoded == [3, 3, 3]
+        assert decoded == [3, 3, 1]
+        assert reader.memo is memo
         reader._expire(reader.memo[0])
         assert reader.conn is None and reader.memo is None
         assert read([latest]) == [updated, latest, *rows[2:]]
-        assert decoded == [3, 3, 3, 3]
+        assert decoded == [3, 3, 1, 3]
+    finally:
+        with reader.lock:
+            reader._close()
+
+
+def test_sidebar_history_retries_sparse_recovery_if_peer_commits(tmp_path, monkeypatch):
+    target = tmp_path / 'archive.json'
+    original = data()
+    rows = original['entries']['base']['conversations']
+    store.save(target, original, complete=True)
+    reader = store._SidebarHistoryReader()
+    monkeypatch.setattr(store, '_SIDEBAR_HISTORY_READER', reader)
+    options = dict(schema_version=original['schema_version'], build_id=original['build_id'],
+                   min_cached_at=10, reuse_sidebar_history=True, copy_history=False)
+    recover = store._recover_sidebar_history
+    updated = dict(rows[0], first_message='peer update')
+
+    def publish_then_recover(conn, key, missing, version):
+        with sqlite3.connect(store.database_path(target)) as peer:
+            peer.execute("UPDATE rows SET body=? WHERE sid='old'", (json.dumps(updated),))
+        return recover(conn, key, missing, version)
+
+    try:
+        live = dict(rows[1], first_message='live')
+        assert store.load_with_overrides(target, 'base', [live], **options)['conversations'] == [
+            rows[0], live, *rows[2:]]
+        monkeypatch.setattr(store, '_recover_sidebar_history', publish_then_recover)
+        assert store.load_with_overrides(target, 'base', [], **options)['conversations'] == [
+            updated, *rows[1:]]
     finally:
         with reader.lock:
             reader._close()
