@@ -1,1 +1,0 @@
-Queue signed macOS assets for source-only releases and retry them independently of daily release waivers. Backfills use isolated tag builds, preserve newer Sparkle updates, and recover from interrupted uploads or appcast pushes.

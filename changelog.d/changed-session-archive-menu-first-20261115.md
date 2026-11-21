@@ -1,1 +1,0 @@
-- Put Archive first in the sidebar session row's actions menu.

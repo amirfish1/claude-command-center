@@ -1,1 +1,0 @@
-- Allow snoozing session-limit popups for seven days per engine in the current browser. Session limits remain available in Settings.

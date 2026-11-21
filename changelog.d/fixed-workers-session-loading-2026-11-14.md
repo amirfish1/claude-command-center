@@ -1,1 +1,0 @@
-- Workers now show active ticket claims while session details load, avoid counting those workers again as starting, and show elapsed time for the current ticket instead of the entire session.

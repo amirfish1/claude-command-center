@@ -1,1 +1,0 @@
-Teammate steering now reaches Claude at the next tool boundary instead of cancelling an active hook with misleading user-stop text. Agents are reminded to report tool denials and cancellations, preserve unknown attribution, and honour real user stops and permission boundaries.

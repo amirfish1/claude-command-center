@@ -1,1 +1,0 @@
-Local speech-to-text endpoint for the mobile ticket recorder: `POST /api/ticket-audio/transcribe` and `GET /api/ticket-audio/status`, using local ffmpeg and whisper.cpp (`CCC_WHISPER_MODEL` to pick the model).

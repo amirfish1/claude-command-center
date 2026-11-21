@@ -1,1 +1,0 @@
-- A browser opening the dashboard for the first time now gets its apps in the left rail within a couple of seconds. The app list was held behind the optional startup reads, so the rail showed only Sessions and Queues for about 23 seconds on a busy machine.

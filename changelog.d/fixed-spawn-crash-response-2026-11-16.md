@@ -1,1 +1,0 @@
-- A launch handler crash (for example after an on-disk upgrade) now returns a JSON error with a reference instead of a dropped connection showing "Load failed".

@@ -1,1 +1,0 @@
-- Remove the experimental managed-daemon restart controller and proof harness. The existing restart gate continues to refuse restarts while Codex threads are loaded or active.

@@ -1,1 +1,0 @@
-- Stop preparing the full sidebar history when an opted-in refresh is abandoned, freeing capacity for the next load.

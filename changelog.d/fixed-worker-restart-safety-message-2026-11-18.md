@@ -1,1 +1,0 @@
-- Worker restart errors now distinguish confirmed running Codex turns from loaded threads or an unavailable safety check.

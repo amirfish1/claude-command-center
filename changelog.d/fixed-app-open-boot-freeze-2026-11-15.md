@@ -1,1 +1,0 @@
-Opening straight into an app no longer freezes it for a second or more while the dashboard behind it starts up: the hidden session list, the last conversation and the settings scan now load when you leave the app.

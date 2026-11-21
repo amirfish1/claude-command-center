@@ -1,1 +1,0 @@
-- Keep ambiguous request framing on closing connections and exclude idle keep-alive waits from server slow-request logs and CPU wall-time accounting.

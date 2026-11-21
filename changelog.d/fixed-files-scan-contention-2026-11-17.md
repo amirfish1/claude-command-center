@@ -1,1 +1,0 @@
-- Reduce dashboard contention while indexing conversation files by skipping ordinary text faster without changing which paths are recognized.

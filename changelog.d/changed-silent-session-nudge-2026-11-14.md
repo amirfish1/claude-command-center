@@ -1,1 +1,0 @@
-Silent sessions now receive one automatic “?” after five minutes without activity. Investigate appears after another five minutes without a response, with checks protected against repeated status updates and browser reloads.

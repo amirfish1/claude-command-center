@@ -1,1 +1,0 @@
-Automatic Codex messages held during a dashboard restart now retain normal queued delivery when the original turn has ended, without retrying uncertain sends or overriding explicit queued-message steering.

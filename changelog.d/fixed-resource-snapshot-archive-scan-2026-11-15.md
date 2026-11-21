@@ -1,1 +1,0 @@
-- Keep resource snapshots responsive with large session archives by batching transcript activity, running display scans in the existing live-status helper, and caching completed snapshots for their full lifetime.

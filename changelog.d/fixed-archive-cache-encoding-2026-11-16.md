@@ -1,1 +1,0 @@
-- Reduce archive snapshot persistence work by encoding conversation rows in bounded batches while preserving atomic cache publication.

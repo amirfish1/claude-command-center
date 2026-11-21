@@ -1,1 +1,0 @@
-- Keep the repository name visible when composer paths are truncated and simplify the Codex account label to “Primary”.

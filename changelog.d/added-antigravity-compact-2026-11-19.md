@@ -1,1 +1,0 @@
-- Compact Antigravity sessions from the conversation toolbar using the native `/compact` command, with completion confirmed by the session checkpoint.

@@ -1,1 +1,0 @@
-Browser voice is the English read-aloud default. Remove server speech synthesis, audio clip caching, prefetch and cache diagnostics; retain device voice fallback, playback controls and dictation. Server TTS and offline voice-install API endpoints are removed in version 7.

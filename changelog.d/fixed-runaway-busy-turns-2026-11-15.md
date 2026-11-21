@@ -1,1 +1,0 @@
-- The Runaway card no longer flags sessions that are busy verifying (running tests, checking production): a turn with four or more tool calls now ends a "nothing changing" run.

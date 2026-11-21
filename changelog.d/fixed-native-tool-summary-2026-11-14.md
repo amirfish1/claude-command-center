@@ -1,1 +1,0 @@
-Collapsed Claude tool groups show purple orchestration chips, including the filed ticket reference, and keep long command and result previews to two lines each. Expand the group to read the full text.

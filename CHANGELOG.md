@@ -7,6 +7,574 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.0.0] - 2026-11-21
+
+### Added
+- CCC compacts Antigravity CLI conversations at the saved context threshold before sending the next turn. Use `/autocompact` to open the threshold setting.
+- Compact Antigravity sessions from the conversation toolbar using the native `/compact` command, with completion confirmed by the session checkpoint.
+- Add Gemini 4 Neon to Antigravity model selectors with High, XHigh, Medium, and Low reasoning levels and CLI aliases.
+- Apps can explicitly include bounded initial JSON reads with their current HTML, avoiding sequential startup requests while retaining normal refresh APIs and conversation readiness.
+- Archive-list performance diagnostics now record cache-key revisions and memory usage so rebuilds can be traced to changing inputs, unversioned snapshots or eviction without recording conversation content.
+- Archive list diagnostics now separate elapsed and CPU time for window selection, row projection, title and driver overlays, continuation topics, ticket enrichment, and delta state preparation.
+- Dev-clone (main update channel) installs now show an "Update · N commits behind" pill when HEAD is behind origin/main, using a 30-minute git-fetch cache; the update modal shows the behind count and a compare link, and the "…" menu always shows the origin/main sync state.
+- Add `ccc spawn --wait` and `ccc run` headless single-turn runner so scheduled jobs and automation scripts automatically follow CCC's saved default session engine, model, and reasoning effort instead of hardcoding `claude -p`.
+- Add an opt-in Claude Cloud CI dispatcher that waits for commit-specific test results and keeps existing CI checks active during setup.
+- Compact conversations show the latest tool description beneath collapsed tool groups.
+- Credential request cards can include an optional reason when denying a request. The requesting CLI shows the reason on stderr.
+- Scrolling up in a conversation now keeps the message you asked frozen at the top of the transcript (the first message of the session when no message of yours is loaded). Click it to jump to that message; it clears when you return to the end.
+- Added “Locate in session view” to the conversation’s Session actions menu. It opens the session list, scrolls to the matching row, and briefly highlights it.
+- Hold the draggable mobile microphone shortcut to record a ticket, then release to review its transcript before submitting. Web recording uses local server transcription; the button remembers its position and dragging cancels capture.
+- Added a local On-call illustration where visitors can answer a sample message and follow a ticket through a scripted fix.
+- Added a `pt` UTC-to-Pacific time helper with daylight-saving handling, and agent instructions to verify action outcomes before reporting them.
+- Load the latest 500 archived sessions, pinned sessions and required ancestors first while the full selected archive loads in the background. Mark search and counts as incomplete until completion, and record initial and full loading times separately.
+- The queue dashboard shows separate hourly graphs for Open, Needs input, Awaiting worker, Waiting on other tickets, and Other status over seven days. New snapshots retain status breakdowns; missing historical observations appear as gaps instead of invented zeros.
+- Added an opt-in, expiring Linux read-aloud CPU-priority trial with playback leases, automatic restoration, and a local off switch.
+- Added `ccc recap --date YYYY-MM-DD --out file.html`: a public-safe HTML recap of one day's agent sessions, commits, and shipped items (with engine/model mix). Paths, prompts, and session names are never included; repo names appear only when passed via `--repo`. Served by `GET /api/recap` (JSON or `format=html`).
+- The "⋯ more" menu now has a "Share today's recap" link that opens `/api/recap?format=html` in a new tab.
+- Read-only daily release watch distinguishes historical failures and waived runs from timer-triggered success backed by a published release containing the required fix.
+- Opt in to response-write timing with a random hexadecimal `X-CCC-Timing` request ID. The matching header and timestamp-only log distinguish backend writes from later delivery delays without recording request content.
+- Credential requests include a “View hidden” checkbox to reveal and re-mask the entered value. Submission and page hiding still clear the value and reset visibility.
+- Add per-ticket session activity with recorded drivers, message delivery links, hourly inputs and measured tokens. Move inherited ticket lineage into the session graph through an explicit migration, and stop automatic lineage and handoff comments.
+- Allow snoozing session-limit popups for seven days per engine in the current browser. Session limits remain available in Settings.
+- Session origin now expands beneath the title in the Metadata rail to show launcher, helper purpose, parent navigation, and the evidence behind recorded or inferred attribution. Helper sessions also show their tool and purpose in search and sidebar rows. Missing parent links are explained separately from missing launcher attribution.
+- Show the recorded turn initiator and last owner input on session rows and headers, distinguishing people, peer sessions, services, and background wakes.
+- Sidebar search stays in the selected tab and accepts `-word` to exclude matching session titles.
+- Opt-in response diagnostics on Linux now report incoming socket wait separately from handler and response-write time, without capturing request content.
+- Local speech-to-text endpoint for the mobile ticket recorder: `POST /api/ticket-audio/transcribe` and `GET /api/ticket-audio/status`, using local ffmpeg and whisper.cpp (`CCC_WHISPER_MODEL` to pick the model).
+- Ticket view: a switch in the sidebar ⋮ menu that folds the All, Features and Small bugs tabs into Workers, where their tickets are listed alongside worker tickets. Available while the idea tickets preview is on.
+- Added a live TTS server CPU/load metric (`×/core` and CPU cores used) to the bottom-left host pressure pill and popup panel so text-to-speech synthesis load is directly comparable against overall host CPU load.
+- Show a compact worker activity line beneath CI status, grouped by repository, using recent token receipts and reported plan progress rather than idle process counts.
+
+### Changed
+- Make the agent-owned next-step label explicitly state that work proceeds without waiting for acknowledgment.
+- Share repeated field names in full All archive responses to reduce encoding work and download size.
+- App agent panes download archive refresh code when they first use it, reducing the initial conversation script transfer.
+- HTTPS app navigations can preload the shared conversation renderer and styles while the server prepares the app page, without changing conversation readiness or controls.
+- Dedicated app documents include their canonical startup bridges directly, avoiding extra blocking script requests while preserving shared conversation controls and readiness.
+- Reduce repeated app page preparation by caching identical script-policy checks and escaped bootstrap JSON within fixed memory bounds. Current app source, data and conversation tails still determine every response.
+- App conversation panes use a dedicated entry with the dashboard’s shared renderer, composer, live state, and controls instead of loading hidden dashboard panels. Shared controllers arrive in one cacheable response, and the pane omits the dashboard scan overlay. Desktop app navigation starts independently and initializes hidden dashboard controls on demand while retaining the open app and its draft. Static page revisions use immediate filesystem notifications on supported local Linux filesystems, with conservative edit checks elsewhere. Conversation extensions share cacheable responses while retaining their original source and initialization phases. Session navigation and ticket detail actions load their canonical controller on demand while retaining live conversation state.
+- App agent panes download a smaller version of the shared stylesheet while preserving its rules and controls.
+- Reopening an app with identical embedded content reuses its existing document markup, shortening server preparation.
+- App pages preload the shared conversation extension bundles while preparing their HTML, reducing cold agent-pane download delays.
+- Carry the canonical app kit in local app HTML to avoid a separate startup request, preserving static and dynamic script loaders. Apps with content-security policies or integrity attributes retain the versioned external script.
+- App load diagnostics include critical stylesheet and bootstrap downloads, transport sizes and protocol, with server timing on static responses.
+- App load diagnostics distinguish page construction and compression time, including CPU work in the isolated reader process.
+- Cold app agent panes load their small controls with the conversation document to avoid extra requests.
+- Prepare compressed app agent-pane bundles during dashboard startup so a first visit after an update can reuse them.
+- Prepare app agent-pane preload links in the page reader to reduce dashboard request contention.
+- Reuse HTTP connections for bodyless app and static GETs with framed responses and bounded idle waits, reducing new connection and handler-thread work during app startup. Other routes and methods retain their connection behavior.
+- App deep links defer the surrounding dashboard's conversation workspace until you open dashboard controls. The embedded agent pane still loads with the app.
+- App shells fetch hidden Settings and board markup when dashboard controls are first used, reducing the initial page payload while preserving the app's document and draft.
+- Prepare versioned app assets without scanning the embedded startup data.
+- App deep links load the selected app and its agent before the surrounding dashboard assets, using current route and agent details to avoid discovery delays and stale-route reloads.
+- Allow explicitly declared startup JSON reads up to 128 KiB per value and 256 KiB combined, retaining the 16-read limit and canonical payloads so medium-sized reads can avoid an extra startup request.
+- Decode full conversation archive reads in bounded batches to reduce wait time for older history.
+- Full-history sidebar refreshes can reuse unchanged conversation rows and download only the changes.
+- Reuse compressed full-history responses when the freshly projected rows still match.
+- Concurrent All-history requests for the same snapshot share manifest hashing, reducing repeated work while keeping each tab’s refresh response tied to its own saved rows.
+- Reduce sidebar layout work as the archive fills in by skipping reorder animation during preview replacement.
+- The archive list now rebuilds at most every 10 minutes instead of every 2 (a build takes about 5 minutes of CPU, so the old gap kept one core busy around the clock). New transcripts still refresh it immediately.
+- Reuse the saved sidebar preview during reload while the complete archive is being validated, reducing competing recent-list requests.
+- Reduce the cost of merging large archive lists while preserving independent row snapshots and PR metadata.
+- Reduce warm sidebar reload work by storing the complete archive cache as JSON text while retaining current server validation and compatibility with older cached snapshots.
+- Avoid redundant recent-row requests when a warm sidebar reload already has a complete server-validated response, with bounded fallback for missing, slow, or damaged caches.
+- Reduce dashboard contention by reusing attention archive validation between SQLite commits.
+- Reuse the Attention feed’s archive index so refreshes spend less time revisiting sessions that cannot produce an attention card.
+- Reduce dashboard contention during cross-repository Attention refreshes by skipping sidebar lane projection and leaving transcript metadata saves to the parsers that update it.
+- Reuse unchanged attention classifier rows across polls with bounded memory, reducing repeated history parsing while preserving current state and full-history results.
+- Skip Git checks for unpushed commits when the Attention feed excludes those items.
+- Identify background refresh categories in CPU diagnostics without including repository paths or other request scope values.
+- Move periodic runaway-session scans to the background helper to reduce contention with sidebar loading.
+- Report a problem: the Send button now says "Sending…" right away instead of "Collecting diagnostics…".
+- Reduced dashboard work during Claude session discovery by checking process identity only for PIDs in the session registry.
+- Shorten the agent-owned step label to “Doing next” and reduce session-state footer verbosity while preserving completion checks.
+- Display tool and generated images in a compact right-hand column inside assistant turns, keeping text and tools flowing on the left without image-height gaps. Narrow conversation panes stack media below the text.
+- Move Productivity, System and Throughput below Settings in the desktop avatar menu. Smaller layouts retain their existing shortcuts.
+- Desktop Settings now lives in the bottom-left rail avatar menu alongside account controls; phone Settings navigation is unchanged.
+- Desktop now shows CI runs, usage left and savings on one header line, matching the phone layout. CI run details open from that line, and the mouse wheel scrolls it when the sidebar is narrow.
+- Devin CLI session list refreshes reuse folder and Git root checks for sessions in the same directory.
+- Stop scanning large Devin transcripts for commit, push, and pull request indicators once all three indicators are known.
+- Speed up session-state footer parsing in conversation discovery while preserving commented footers and visible reply cleanup.
+- The last message you scrolled past now sits in the read-aloud row beside the speaker controls, so it no longer floats over the transcript.
+- Reduce CPU contention from quota headroom refreshes by skipping expired and superseded observations while rebuilding forecast history.
+- Hermes sidebar previews spend less time processing tool-heavy conversations.
+- Avoid forced transcript layout when updating hidden speaker controls; position the speech dial when it becomes visible.
+- Serve HTML with optional Brotli compression when supported, with cached gzip and uncompressed fallbacks, reducing embedded app shell downloads.
+- Report opt-in socket queue timing for reused app and static connections on Linux.
+- Speed up full All sidebar responses for local browsers that support Zstandard.
+- Reduce dashboard CPU use by skipping the full usage scan once all API-value milestones have been awarded.
+- Reduced CPU work when applying archive, trash, and lane settings to packed conversation history.
+- Reduce dashboard contention while saving the question-tag index by encoding cache records in small batches.
+- Reuse question-list compression when only the question index's scanner status changes.
+- Reuse compressed question-tag responses when the questions, ticket decisions, and scan status stay the same.
+- Queue worker engine/model/effort (plus fallback and headroom) now lives in the single queue settings dialog: a "Runs on" line and top-used combo chips replace the separate worker-settings editor, with full model/effort pickers under Custom.
+- Queue workers use WatchTower claim-time related-work lookup instead of checking a generic drain prompt at spawn; concrete session goals keep the shipped warning.
+- Read-aloud diagnostics now identify the phases of slow sidebar renders, including DOM replacement and action updates.
+- Pause automatic session-list redraws during read-aloud, with a visible Refresh control; navigation and urgent lifecycle updates remain live, and updates catch up when reading stops.
+- Conversation replay only types messages you wrote in the composer. Injected briefs, lane reports, task notifications and worker messages now slide in whole instead of being typed out keystroke by keystroke.
+- Repository rankings reuse parsed dates across transcripts to reduce dashboard CPU during refreshes.
+- Reduced repository picker refresh work by checking each transcript's file type and cache freshness in one filesystem read.
+- Reduced the cold-start work needed to find repository logos in Settings and the conversation sidebar.
+- Session-row three-dot menu now opens as a normal dropdown with text labels, anchored to the dots, instead of an icon strip covering the row.
+- Put Archive first in the sidebar session row's actions menu.
+- Replace the session row hover speaker with a pop-out button that opens the session in its own window.
+- Session limit notices show session titles, status and last activity, open the engine/model/effort continuation picker with a saved fallback suggestion, and can be hidden and reopened without dismissing recovery actions.
+- Show ranked model shortcuts before detailed dropdowns, with engine account selection inside the model Change controls instead of the folder area.
+- Share repository usage scans across tabs that open the dashboard at the same time.
+- Stop reading packed sidebar history when a disconnected dashboard request has no other reader waiting for it.
+- The All conversations sidebar batches archive order reads to reduce delays when the dashboard is busy.
+- Load the All sidebar preview from archive indexes and reuse packed cold rows for the complete list while applying current session and lifecycle updates.
+- Reduce compression delay for changing conversation-list responses while keeping Brotli transfer sizes close to the previous setting.
+- Reduce cold archive sidebar projection work by avoiding JSON escaping when estimating cached row sizes.
+- Full sidebar responses spend less time on Brotli compression.
+- Sidebar refreshes transfer fewer bytes when the session order stays the same.
+- Download full conversation history alongside recent sessions, while preserving their first paint and the incomplete-search notice until history finishes.
+- The Sessions sidebar resolves browser-stored family links once per render to reduce grouping time.
+- Full sidebar loads reuse the same row layout when computing the delta manifest and encoding the response.
+- Reduce All conversations reload transfers when a few sessions change the saved sidebar order.
+- Reuse recently decoded archive history when reloading the All sidebar against the same stored snapshot.
+- The All sidebar reuses decoded history rows whose Archive, Trash, and lane settings are already current.
+- Sidebar archive responses spend less time assembling and reusing encoded rows.
+- Reuse sidebar eligibility and utility checks within each render, and avoid rebuilding container type tuples while projecting archive rows.
+- Reuse unchanged archive pages when a new snapshot arrives during a sidebar reload.
+- Reduce repeated browser preference reads while counting and filtering large session lists.
+- Reloading the All sessions sidebar can reuse prepared history for longer after a slow list load.
+- Save sidebar previews faster when their size budget is nearly full, preserving the same cached sessions and family context.
+- Reduce cold archive preview cleanup by stopping once enough plain text is available, preserving link captions and displayed previews.
+- Reuse the decoded All sidebar history when a few live overrides disappear, reading only the newly exposed stored rows.
+- Keep the prepared conversation archive available for an immediate reload after a complete sidebar load.
+- Avoid unnecessary sidebar layout measurements when sessions retain their relative order, while preserving reorder animations.
+- Refined sidebar repository/project group headers with a borderless sticky layout, aligned geometric disclosure chevron, crisp 18px repository emblem, integrated count pill, subtle trailing hairline, and hover/focus-revealed action bar for light, dark, and narrow sidebar layouts.
+- Reuse unchanged scalar fields when rebuilding sidebar lists, while refreshing live metadata and isolating mutable row contents.
+- Reduce cold sidebar projection overhead by sizing cached metadata without tracking object references.
+- Overlapping initial and full sidebar reads share their live source scan without retaining results between polls or delaying explicit freshness requests.
+- Reuse session IDs from unchanged spawn logs so live sidebar updates do less repeated work.
+- Reduced sidebar topic processing for sessions without continuation ancestry.
+- Keep cached sidebar continuation topics across unrelated title metadata updates so a small refresh does less work on the next full read.
+- Silent sessions now receive one automatic “?” after five minutes without activity. Investigate appears after another five minutes without a response, with checks protected against repeated status updates and browser reloads.
+- Queue worker settings are now one short screen: current route on top, engine/model/effort pickers, fallback options under "More options", and a single Save (no more Override / Follow default / Preview steps).
+- Normal transcript view keeps one stable Working heading while the latest thought or command description updates below it. Expand it to inspect the full history; questions and approvals remain visible.
+- Reduce dashboard CPU use while saving cached transcript statistics.
+- Reduce CPU use during usage stats and repository ranking refreshes by skipping transcript records that cannot contribute a user or assistant turn.
+- Open System on the Status tab by default, with service checks starting immediately.
+- System Health shows resource and process measurements directly; configuration checks remain in Settings, with setup links and explanatory prose removed from Health.
+- Consecutive thoughts share one stable Thinking row with a two-line preview of the latest thought. Expand the row to read the full latest thought; replies and tool calls start a new activity.
+- Reuse ticket inheritance projections when session graph writes change only activity, while still refreshing for new lineage and ticket membership.
+- In the Workers tab, clicking a ticket name opens its session, including tickets with several sessions; the count button still shows the rest.
+- Reduce archive list work by checking ticket eligibility before parsing session provenance. Eligible helper sessions remain excluded from ticket filing and inheritance.
+- Keep recent session rows in memory and older history in a transactional per-row store, preserving pinned sessions and topic parents. Forward cache-version changes retain usable rows while detached refresh runs; empty and freshness-requested archive HTTP reads no longer wait for a full transcript rebuild.
+- Session search and recall now retrieve and boost parent sessions with multiple topic-matching children, using bounded relevance evidence rather than total family size. Explicit query syntax keeps exact-match behavior.
+- Reuse sidebar continuation topics when a known root still has no title, while checking for newly available titles.
+- Prepare browser voice after the embedded conversation's first paint so audio setup does not delay its content and composer.
+- Simplified Voice & sound settings: keep the read-aloud voice and phone shortcut visible, and expand live calls, dictation, offline voices, or Car Mode only when needed.
+- The floating mobile Hold button is now off by default, with a Voice ticket button switch in Settings to enable it for this browser.
+- WatchTower command chips show ticket references, including references returned by filing and claiming commands, and queue names for queue-wide actions.
+- Workers rows now fit in two lines (ticket, then question and answers), so a screen shows about three times as many tickets; a test keeps them inside that height budget.
+- Working activity previews now end with three dots as commands and thoughts replace one another.
+
+### Removed
+- Removed the redundant Session search entry from More actions; the search box and keyboard shortcuts remain available.
+- Remove the experimental managed-daemon restart controller and proof harness. The existing restart gate continues to refuse restarts while Codex threads are loaded or active.
+- Removed the dormant `/api/outcomes` API, `ccc spawn --outcome-id`, and outcome-specific spawn context, inheritance and association. Spawn requests containing `outcome_id` now return 400. This breaking API/CLI removal raises the version to 6.0.0; ordinary session, decision and queue contracts remain unchanged.
+- Remove Sol 6.1, Gemini 4 Argon, Gemini 3.8 Flash, and Gemini 3.1 Pro from model pickers and recent shortcuts.
+- Browser voice is the English read-aloud default. Remove server speech synthesis, audio clip caching, prefetch and cache diagnostics; retain device voice fallback, playback controls and dictation. Server TTS and offline voice-install API endpoints are removed in version 7.
+- Remove the per-session repository chip and the “no edits” badge to reduce clutter on session cards.
+- Remove the floating Session limits counter from the top-right corner of the dashboard.
+- Remove repeated “Where this applies” disclosures from settings and contextual dialogs while preserving control descriptions and reset safeguards.
+
+### Fixed
+- Stop building an All sidebar refresh when the local dashboard that requested it disconnects, while finishing shared work for tabs that are still waiting.
+- Stop preparing the full sidebar history when an opted-in refresh is abandoned, freeing capacity for the next load.
+- Avoid scanning historical spawn markers when filling a newly attached ACP session into the sidebar; read only that session's attribution marker.
+- Read recent activity from the end of the log so dashboard polls stay responsive as the log grows.
+- Model advisor no longer re-applies its pick on every composer render: auto-selection applies once, and a pick that later becomes ineligible shows a "Use <model>" suggestion instead of silently spawning a different engine.
+- Keep the full All sidebar snapshot available for reload when a live refresh arrives before the first browser save.
+- Keep full All-session sidebar snapshots in the browser cache so reloads can validate a small update instead of downloading the entire list again.
+- Allow compact requests to proceed after finished Antigravity turns on macOS by using portable process checks and verifying conversation identity before stopping lingering CLI processes.
+- Refresh Antigravity's context meter after compaction using its native rebuilt-context estimate; show a pending measurement instead of a stale pre-compaction count when no estimate is available.
+- Release queued Antigravity messages promptly when workspace trust blocks automatic compaction, and keep follow-ups in order on the Antigravity queue.
+- Show explicit Antigravity reply choices on settled session rows and keep unticketed decisions visible in All.
+- Antigravity Compact recognizes the Linux CLI readiness footer, so it starts compaction instead of waiting at an idle terminal until timeout.
+- Antigravity Compact now runs the native command in an invisible terminal. Headless prompt replies can no longer masquerade as a completed compaction; completion requires a fresh transcript checkpoint.
+- Group native Antigravity subagent sessions beneath their recorded parent and show the role assigned at launch.
+- Antigravity follow-ups can resume after a quiet stream saves its final response without reporting turn completion.
+- Antigravity sidebar updates skip trajectory token accounting, leaving token counts available in the conversation pane.
+- Antigravity conversations now offer `/compact` in the composer's slash command menu.
+- Antigravity opens its native conversation as soon as CCC finds it and shows separate timings for process launch, first activity, and the first visible reply.
+- Antigravity sessions started directly in a terminal now appear as live in the dashboard, including plain `agy` launches without a conversation argument.
+- Show the complete saved Antigravity thinking text in conversation transcripts.
+- An app's agent pane now follows its agent into the newest continued session (for example after switching engines), instead of reopening the original one.
+- Shared apps: when no agent program is installed, the app's agent pane now says to install Claude Code and links to it, instead of showing a command-line error.
+- App agent panes load their transcript alongside the shared renderer, skip hidden dashboard resources, and show a usable saved conversation while refreshing.
+- App agent sidebars and agent routines now follow the default worker engine, model, effort and context window instead of the separate new-session defaults. New agents read the latest settings; existing conversations are preserved.
+- Start standard local apps and their conversation panes from canonical HTML supplied in the first response, removing successive child document requests while preserving URLs, reloads, drafts and normal navigation fallbacks.
+- Skip transcript and engine resolution while preparing an app page when no cached transcript could be embedded; existing cached transcripts retain their freshness checks.
+- Deliver app extension preload links with the final document headers too, preventing their downloads from queuing ahead of the page on HTTP/2 connections.
+- Carry eligible validated conversation reads with the app's initial document, preserving the shared renderer, composer initialization, live stream cursor and normal read fallback. Restore live transcript updates in the native entry by sharing file-cache invalidation with the dashboard.
+- Keep issue details, pull request summaries, and issue composer actions available in app conversations through the dashboard's shared controller, loaded when needed.
+- Opening straight into an app no longer freezes it for a second or more while the dashboard behind it starts up: the hidden session list, the last conversation and the settings scan now load when you leave the app.
+- Opening an app (for example Ski) no longer freezes while the dashboard behind it keeps working: the session list hidden under an open app is not rebuilt by background refreshes until you leave the app, its queue digest is skipped there, and a toolbar layout check that ran on every change now runs once per frame.
+- Prepare app shells, app pages and their conversation embeds in the existing isolated reader so busy dashboard work does not contend with their HTML builders; retain the same templates and foreground fallback.
+- Reuse unchanged app-shell and agent-page transforms, asset stamps, and compressed HTML across navigations. Template, asset, and app metadata edits still take effect immediately, and browser HTML caching remains disabled.
+- App agent panes open without waiting for the dashboard’s archive startup script.
+- Start the app agent pane once its markup is parsed so a slow optional extension download cannot hold up the transcript and composer.
+- Keep the current agent-pane bundles in the dashboard’s disk cache so ordinary asset traffic does not force a cold reload to compress them again.
+- Start large app bundles from the final response's preload headers so early downloads do not delay the document headers on shared HTTP/2 connections. Smaller extension bundles still preload during page preparation.
+- Keep app data, routine, and individual conversation reads on reusable HTTP connections so subsequent app loads can avoid repeated connection setup.
+- App deep links start their content before the surrounding dashboard, and agent panes skip hidden dashboard markup while retaining the shared conversation, composer and dialogs.
+- App load times now count the whole wait. On a link to an open app the dashboard page loads first, and that time was left out, so `ccc app speed` read up to a few seconds faster than what someone actually waited. Each sample also records that lead as `shell_lead_ms`.
+- `ccc app speed` keeps app load and freeze history on busy machines: these samples were dropping out of the summary after an hour or two.
+- Reduce repeated filesystem checks when loading an app's declared startup data, while retaining current values, file size limits and path validation.
+- Move background ticket-list reconstruction outside the dashboard interpreter so it competes less with app startup requests.
+- Full archive list builders now read row templates in one batch, reducing cache-lock contention between concurrent readers while preserving current row data and cache limits.
+- Reduce archive snapshot persistence work by encoding conversation rows in bounded batches while preserving atomic cache publication.
+- Share matching archive delta response builds across overlapping dashboard reads, reducing duplicate projection and compression work while keeping explicit fresh reads independent.
+- Save small sidebar archive updates without rewriting the browser's complete archive snapshot.
+- Read early archive replies while the app initializes, allowing validated full results to replace redundant preview work while preserving cancellation timings and incomplete-result cues.
+- Start the complete archive read during page boot even without a saved response, while retaining the recent-session preview and server validation.
+- Reuse unchanged archive encoding chunks across snapshot refreshes to reduce full sidebar response CPU time while preserving fresh live rows.
+- Keep unchanged session archive encoding chunks reusable when sessions are added, removed, or reordered, reducing work rebuilding full sidebar responses.
+- Start loading full session history while the recent-session preview paints, reducing archive wait without delaying the preview's paint for full-response processing.
+- Reduce cold session-list projection work by reusing field layouts within each request, preserving archive contents and metadata freshness.
+- Reuse recent sidebar selection work while keeping time-window boundaries and live row state current.
+- Reduce the time spent classifying session lanes when loading a large conversation archive.
+- Reuse transcript lineage checks and persist Codex-only metadata updates across archive refresh workers, reducing repeated transcript reads.
+- Reuse archive projections when live sessions change recency order, preserving fresh timestamps, window membership, and response order. Skip empty recency fields when selecting archive windows.
+- Reuse encoded archive rows when live sessions only advance their timestamps, while keeping full-window membership, ticket processing, and live fields fresh.
+- Reduce cold session-list work by skipping state-footer parsing for replies that have no state footer.
+- Keep existing conversation rows available with unknown driver metadata while refreshed subagent attribution is rebuilt after an upgrade.
+- Reduce repeated text processing when checking archived sessions for unanswered questions.
+- Skip expensive terminal-session metadata construction when the live Claude registry has no eligible sessions missing from the archive.
+- Reuse a bounded complete archive snapshot for conditional reloads, validating it with the server before showing the archive as complete.
+- Reuse compressed archive sections when only live timestamps change, while preserving fresh metadata and complete conversation rows.
+- Restore reused archive projections faster while preserving fresh live fields and isolated mutable rows.
+- Large full-history reads preserve the cached conversation rows used by shorter archive windows.
+- Reuse unchanged archive encoding chunks when live ticket updates change a session row, preserving current ticket data without recompressing the full list.
+- Keep remote ticket title refreshes in the dashboard instead of blocking every detached archive rebuild on remote queues.
+- Reduce archive refresh stalls by reusing unchanged row templates across snapshots, batching continuation topic persistence, and sharing title-marker scans across concurrent requests.
+- Defer automatic browser voice preparation until the full session sidebar has painted, keeping audio and model setup out of archive startup. Explicit voice requests still start immediately.
+- Avoid repeated JSON encoder setup and temporary byte copies when accounting for cold archive rows in the bounded cache.
+- Reduce dashboard contention when selecting recent and active conversations from archive snapshots.
+- Ticket detail views return to the queue while WatchTower closes the ticket. The dashboard reports the confirmed result, prevents repeat submissions while a close is pending, and keeps the resolution draft if the close cannot be confirmed.
+- Reduce background attention-feed work by reading compact classifier inputs instead of complete historical session bodies, while preserving historical items and current live state.
+- Reduce background dashboard work by skipping question scoring for ended sessions in the attention feed.
+- Reduce background attention-feed copying and duplicate index scans while preserving complete history, freshness checks and isolated results.
+- Remove the permanent selected-looking highlight from the Auto-fix rail action while retaining hover and keyboard-focus feedback.
+- Opening the conversation list no longer backfills idea tickets. New idea tickets use launch provenance to exclude automated sessions.
+- Reduce default local speech inference parallelism and CPU spent saving ticket display snapshots.
+- Queued background dashboard reads sleep until a slot opens or a restart begins, reducing CPU use when many reads are waiting.
+- Serialize expensive dashboard cache refreshes and coalesce ticket-list prewarms so simultaneous background scans do not crowd out page requests.
+- Overlapping Background Runs requests share a single scan, reducing dashboard contention when several tabs refresh together.
+- Run the diagnostic worker import fingerprint in the existing background helper so cold maintenance checks do not block dashboard requests with Python import scanning. Disabled or older helpers retain the local fallback and existing restart decisions.
+- Reduce dashboard slowdown during recall embedding backfill by finding pending sessions through the row index and loading only the next batch of documents.
+- The top Claude Command Center title no longer opens GitHub when tapped or clicked.
+- Session briefs use repository paths from the background index instead of scanning every local clone, avoiding slow lookups and CLI timeouts while indexing.
+- Browser read-aloud highlighting now follows phrase audio boundaries and measured speaking pace, preventing timing drift across long reads while keeping audio streaming immediately.
+- Let cached sidebar rows paint before a ready full archive replaces them during reload. Automatic full loading and incomplete-search notices remain unchanged.
+- Cancelled dashboard restarts resume their worker queue without releasing a newer drain owned by another operation.
+- Honor simple session-list limits before decoding historical row bodies, preserving lifecycle filters, live updates, response fields, and compatibility aliases while reducing background polling work.
+- Keep the default sessions census warm between CLI calls, so an occasional caller can use completed results instead of restarting an expired refresh.
+- Reduce dashboard contention by reusing unchanged project directory listings when the session census looks up transcripts.
+- Avoid repeated transcript searches for missing session identities so session census refreshes stay available on large installations.
+- Keep child lanes and earlier continuation sessions attached to visible topics when narrowing the sidebar time window.
+- CI status shows distinct Claude Cloud, GitHub-hosted, and self-hosted icons and labels. Cloud runs show an indeterminate status instead of treating result-receiver steps as test progress.
+- CI runner setup and status controls now have accurate action scope guidance in Settings.
+- Avoid fetching the Codex worker's complete thread-state map when reading a cached Claude conversation; retain invalidation for queued inputs and discovered Codex state or captures.
+- Fixed occasional session-listing failures for narrow `ccc sessions --since` windows by reusing the warm default census while preserving the requested time filter.
+- Session CLI timeouts now check dashboard health and report warming or busy state with elapsed time, while preserving uncertainty when health is unavailable.
+- Keep Claude Cloud attribution on completed workflows that explicitly mark their result-verification jobs with `CI compute: Claude Cloud`; skipped markers retain native runner attribution.
+- Codex sessions whose turn was interrupted or aborted no longer keep showing as working; a late end-of-turn receipt from another turn cannot mark a newer active turn idle.
+- Keep Codex compaction progress in one card and queue typed follow-ups, including “continue”, during compaction.
+- Keep Codex follow-ups in the durable input queue when they arrive during a dashboard compaction.
+- Reduce peer-message acknowledgment delays while the Codex stuck-session counter refreshes by batching thread metadata and skipping fresh transcript reads, without limiting candidate coverage.
+- Report native Codex goal failures without a success banner, and keep confirmed goals current in the sidebar.
+- Claude helpers launched by Codex retain their parent session at startup, so short-lived helpers show parent navigation even after they exit.
+- Keep Codex replies in transcript order when a later live answer arrives before earlier saved messages, while preserving reply actions and expanded tool groups.
+- Avoid parsing Codex tool activity when resolving the working directory for peer messages, preserving the latest complete turn context.
+- Persist validated Codex parser cursors across archive workers so growing rollouts read appended records instead of their entire history.
+- The session list refreshes much faster on machines with many Codex sessions: unchanged Codex sessions are no longer re-read on every refresh.
+- Batch Codex thread schema reads to reduce sidebar delays while sessions update.
+- Reduce duplicate transcript reads when loading live Codex replies in the sidebar.
+- Worker restarts no longer abort live Codex turns. Every path that stops the worker refuses while a Codex turn could be running, or while that cannot be checked. This covers the `run.sh` stale-code roll, its compatibility retire and unit restart, `--install-service`, the maintenance roll, `/api/restart/worker` and `/api/restart/all`. Each path first freezes Codex admissions. It then asks the Codex app-server which threads it has loaded, and goes ahead only when none are loaded and no CCC request is unanswered. It checks again as the last step before stopping the worker. A long-silent turn never stops counting. A worker started before this change cannot report its turns, so its restart is deferred. Pass `{"allow_codex_interrupt": true}` to `/api/restart*` to restart it anyway.
+- Codex progress now reads wake acknowledgments from the worker's shared ledger, so accepted turns show as thinking instead of remaining on “Waiting for delivery.” Earlier turns cannot falsely acknowledge a newer send.
+- Reduce cold sidebar topic lookup work when loading large metadata archives.
+- Collapsed child-session groups defer building hidden rows until opened, preserving lane counts, saved expansion, and keyboard focus while reducing archive rendering work.
+- Build rows in collapsed session sections when opened, preserving counts, family deduplication, saved expansion, search visibility, and keyboard focus.
+- Routine combined restarts let the dashboard update when Codex delays the worker restart. The worker releases unused, saved Codex subscriptions through native idle cleanup and keeps the live-turn safety check. Server Status flags restart requests that keep retrying.
+- Combine read-aloud controls with the visible conversation header and remove redundant driver attribution from header titles.
+- Live worker rows now use a compact two-line layout with their current ticket title, activity state, and a session link on the title.
+- Compact tool summaries now reveal grouped tool rows in one action, and standalone tool groups retain a single disclosure.
+- Complete sidebar row pools skip redundant continuation-chain traversal while preserving row order and parent restoration for filtered lists.
+- Keep the repository name visible when composer paths are truncated and simplify the Codex account label to “Primary”.
+- Eliminated multi-hundred-millisecond composer keystroke stalls by stopping a self-triggering Workers recent-work sidebar render loop, deferring background sidebar and queue-board rebuilds while typing, skipping layout-forcing single-line textarea autosize reflows, and fast-pathing body mutation observers.
+- Composer terminal and headless retries preserve the original message and quoted reply, and failed sends restore the pending quote.
+- Concurrent dashboard tabs share a transcript scan when loading the same conversation's Files panel.
+- Share the first session inventory read across concurrent peer requests so it does not slow other dashboard requests after startup.
+- Conditional sends to an older session reuse its existing continuation, including before transcript indexing catches up, instead of starting parallel successors. Preserve normal message delivery, queue controls and sender attribution.
+- Keep the predecessor composer's Continued label and newer-session link consistent when a continuation moves between live and archived sessions.
+- Keep the Continue in a new session model dropdown in sync with the New Session catalog, even when the catalog loads after the dialog opens.
+- Bound conditional-send preflight to indexed session metadata and a small transcript tail, retain current context and successor routing, and refuse conditional delivery when usage is unknown.
+- Session titles for vague takeover requests now use the conversation's actual task. Regenerating a title also replaces the saved live title, so the old name cannot reappear on the next turn.
+- Continuation rows avoid repeating a topic already present in their name when hyphens and spaces differ.
+- App agent panes now finish loading conversations containing uncached turns instead of stopping with a diagnostic logging error.
+- Right-align incoming agent reports and compact conversation messages, with clearer blue user bubbles and green report backgrounds on light conversation palettes. Preserve message wrapping and image-report layout when mirrored in the header.
+- Wide Markdown tables in conversations now scroll horizontally to reveal every column.
+- Keep conversations following the latest message when images finish loading, content folds, or the composer changes height, while preserving intentional scrolling into history.
+- Pause archive-list reads while an app covers the dashboard; returning to Sessions resumes the list without losing the conversation draft.
+- Keep dashboard requests moving when CPU accounting samples many live threads.
+- Show pending credential requests while the dashboard loads so short-lived requests can be answered before they expire.
+- Prepare the dashboard script’s compressed response during startup so the first sidebar visit can reuse it.
+- Dashboard-only restarts preserve the running execution worker when pulling new code.
+- Dashboard lifecycle events now retain restart callers, reasons, uptime, process and service memory evidence, with a systemd post-stop hook for OOM and forced termination.
+- Space optional dashboard startup reads, serve CI and model discovery from snapshots while refreshing, and batch remaining decision and session-index reads.
+- New dashboard tabs avoid repeating the archive list read for events that predate the page.
+- Decision inbox reports and owner actions are preserved when background analysis and incoming reports overlap; simultaneous reports share source deduplication and stable decision references.
+- Remove Steer from already-delivered transcript messages while retaining queued-message steering.
+- Keep message forwarding responsive during session-index updates by reading committed continuation lineage without running schema migrations or corpus refreshes on the delivery path.
+- Restore the browser demo's visible session list and interactive guided decisions in fresh builds, while preserving saved layout choices.
+- Avoid repeated transcript scans for Desktop sidebar visibility when no Desktop metadata destination exists; retries still recover when Desktop becomes available.
+- Reduce conversation sidebar contention during Devin CLI discovery by reading small session lists in one batch and reusing unchanged session lock contents.
+- Reduce sidebar loading work by reading the latest meaningful Devin replay event before parsing its session state.
+- Ticket activity now includes recorded Devin CLI inputs, with missing token usage accurately shown as unobserved.
+- Queue signed macOS assets for source-only releases and retry them independently of daily release waivers. Backfills use isolated tag builds, preserve newer Sparkle updates, and recover from interrupted uploads or appcast pushes.
+- Automatic Codex messages held during a dashboard restart now retain normal queued delivery when the original turn has ended, without retrying uncertain sends or overriding explicit queued-message steering.
+- Rebuild saved conversation rows when upgrading to turn-driver badges, and keep saved sidebar responses scoped to the current row schema so existing sessions receive their driver metadata.
+- Keep the saved conversation list available while new turn-driver metadata is rebuilt; old provenance stays explicitly unknown until it is observed.
+- Show saved or recent session titles before dashboard startup finishes, with an updating notice and direct conversation links while the full archive loads automatically.
+- An empty orchestration map no longer forces dashboard layout while clearing stale nodes and edges.
+- Keep engine icons recognizable in light mode with theme-aware colors and solid, legible corner badges that do not fade with model cost.
+- Reduce dashboard contention while indexing conversation files by skipping ordinary text faster without changing which paths are recognized.
+- Finished sessions no longer regain a stale Working badge when the archive list redraws after a live status refresh.
+- Surface the fleet limit banner when an engine account hits its usage wall: `fleet-limit` was implemented but never added to the pop-up allow-list, so stopped sessions stayed silent on the dashboard. Codex limit stops now also read the real reset time Codex prints inside the error ("try again at …") instead of guessing a 5-hour window, and stale cached estimates are re-derived.
+- Reduced dashboard load from fleet limit details by looking up requested sessions in one batch.
+- Folder previews now display text reports, logs, and JSON safely, including a working full-screen view.
+- Avoid a full dashboard garbage-collection pause when that dashboard is about to restart and replace its heap.
+- Gemini sessions through Antigravity show current thinking in the session list while working, including thought-only updates, without replacing completed answers.
+- Finish in-flight requests before service shutdown or Ctrl+C, and cancel busy in-place restarts instead of dropping requests.
+- Keep ACP agents alive after their launching request ends on Linux, open accepted Grok sessions immediately, and apply the selected reasoning effort correctly.
+- CCC-spawned Grok sessions keep their recorded approval mode when they reconnect. Native sessions and sessions without a recognized approval mode continue to prompt.
+- Translate versioned Claude model aliases from saved defaults and explicit model flags when running `ccc run`.
+- Retire an exhausted headless Claude process when a different model is queued, preserving active turns and applying the choice on the next submitted message. Fix the duplicate “next” in the pending model label.
+- Restore the dashboard's plan headroom response on installations without the optional spend integration.
+- Keep automatic loop checks and temporary review calls in Other even when they inherit a ticket or parent session; preserve ordinary reviewer lanes.
+- Allow hiding scheduled-resume session notices without cancelling the scheduled resume. Hidden notices stay dismissed across reloads and reappear when the session's limit or resume state changes.
+- Keep a small reserve of connection workers ready so busy dashboard traffic does not make the accept loop wait for a new thread, while preserving concurrent streams and graceful shutdown.
+- Idle sessions with a scoped, reversible agent repair offer a transcript-checked Fix issue action limited to that first step.
+- Interrupt approval prompts now link to the affected conversation so it can be inspected before approving or dismissing recovery.
+- Reopening a newly landed Claude session now uses its real transcript immediately, even while the archive list is catching up. Resolved spawn cards no longer open an empty transcript or keep background refresh paused.
+- Speed up session message acknowledgments on Linux by reading process working directories and parent chains from procfs instead of launching a command for each lookup.
+- Reduce conversation-list transfer sizes with optional cached Brotli compression, preserving gzip and uncompressed fallbacks.
+- Keep conversation-list caching and incremental updates active when older pinned sessions or topic parents are included.
+- Keep the live-only session census warm after first use so occasional HTTP callers do not repeatedly receive refreshing responses.
+- Reuse the warm session census for `ccc sessions --live`, avoiding spurious refresh errors between calls while preserving older live sessions and explicit time filters.
+- Avoid parsing unrelated agents' full prompts during Antigravity live-session discovery, reducing repeated sidebar status work.
+- Live-session status now shares a bounded worker-read budget when reconciling dashboard-owned sessions after a helper reply, preventing repeated worker timeouts from stalling the snapshot. Aggregate phase timings identify any remaining reconciliation delays.
+- Fixed live session rows losing their current work explanation after Codex coordination events.
+- Live sidebar updates now batch row-action geometry checks after their content updates, reducing repeated layouts during read-aloud while keeping status changes immediate.
+- Bound worker queries during live-status refreshes so a busy Codex worker cannot stall the sidebar's status build for several seconds. Action requests retain their normal deadlines.
+- Live assistant replies now finish their word reveal within a brief 600 ms animation, catching up after delayed frames instead of making long answers crawl word by word.
+- Workers view: a live worker now shows the ticket it claimed straight away, instead of "no listed ticket" next to the same ticket still marked Open while the full ticket list catches up on a busy machine.
+- Run maintenance helpers and archive startup at lower CPU priority while preserving interactive live-status priority.
+- Support immutable Python worker/control bootstrap with pinned dependency source, explicit kernel identity visibility, and a shared custom state directory; native execution remains disabled in these profiles.
+- The mobile session-list header now slides gradually into the top as you scroll, pauses with your gesture, and returns progressively when scrolling back.
+- Made "Load earlier messages" on phones about five times faster: the page no longer re-styles the hidden session list and the whole document on every update while you read a conversation.
+- Restore the microphone position after mobile navigation finishes measuring, and open ticket drafts without waiting for worker health checks.
+- Keep phone transcript jump controls clear of the floating Hold microphone button.
+- Hide the session-row pop-out window icon on mobile to leave more room for session content and actions.
+- Fix mobile session thumbs-down taps opening the conversation instead of the report editor, and enlarge the report touch target.
+- Smooth the phone session list's compact header transition, including interrupted scroll gestures, while preserving native scrolling and reduced-motion preferences.
+- Keep the Settings close button below the phone status bar and make it easier to tap.
+- Make System Health and restart controls discoverable from the mobile More menu and label the service restart tab explicitly.
+- On phones, the last lines of a conversation now scroll clear of the floating jump buttons, and tapping anywhere on the latest Thinking block expands the whole thought (tap again to collapse).
+- Keep engine, model and effort adjustments open after choosing a model shortcut. Use compact Primary/Secondary Codex account choices without stretching the account selector.
+- Headless Claude model changes now wait for the current turn to finish and replace the old process before delivering the next message. Pending choices are labeled in the model picker and session strip.
+- Named idea and small-bug ticket refs keep their numbers in session avatars instead of showing redundant ticket chips.
+- Named WatchTower ticket notices retain their readable names while alert grouping, queue routing and delivery supersession use the stable ticket number.
+- A sidebar dragged narrow (under 320px) now lays out for its real width: usage rows no longer overlap, New session and Ticket share one line with search below, session titles get the full row, and the footer stays inside the column.
+- Narrow (≤1200px) conversations show the status row (branch, context, model) below the composer, matching wide mode.
+- Shorten sidebar ticket chips in narrow views (for example, `I-374`), keeping the full reference and session count in their accessible label and tooltip.
+- The session sidebar's lane count expands native subagent names and opens their read-only transcripts instead of displaying an inert badge. Conversation opens and streams decode URL-encoded subagent IDs so these transcripts load correctly.
+- Opening a session directly now reads its recorded creating client and WatchTower origin ledger, recovering launcher, purpose and parent information even when the session list or CCC launch registry has no entry. Creating-client evidence stays separate from inferred helper identity and missing parent links.
+- Collapsed Claude tool groups show purple orchestration chips, including the filed ticket reference, and keep long command and result previews to two lines each. Expand the group to read the full text.
+- Avoid rebuilding continuation topics when native session metadata refreshes without changing titles.
+- A browser opening the dashboard for the first time now gets its apps in the left rail within a couple of seconds. The app list was held behind the optional startup reads, so the rail showed only Sessions and Queues for about 23 seconds on a busy machine.
+- Strip injected host instructions from newly created Codex session titles before shortening them. Truncated instruction-only launch summaries fall back to a useful session name.
+- A continued Codex session now joins its origin's ticket right away, so it shows under All and Features without waiting for the full list rebuild.
+- Keep the new-session folder shortcuts and path field at full width when an engine account picker is shown, with aligned folder-menu and browse buttons.
+- On phones, the Next (↓) button no longer nudges the view a few pixels in one-prompt sessions; it hides when there is no later message of yours, leaving End to jump down.
+- On-call accepts named WatchTower ticket references when filing reports and reading automatic decisions.
+- Overlapping All-history requests share projection work when they read the same archive snapshot, reducing duplicate work across browser tabs.
+- Teammate steering now reaches Claude at the next tool boundary instead of cancelling an active hook with misleading user-stop text. Agents are reminded to report tool denials and cancellations, preserve unknown attribution, and honour real user stops and permission boundaries.
+- Keep peer session polls from repeatedly decoding full historical session details by reading a bounded, transactionally current inventory projection with the same live updates and ordering.
+- Keep cross-session reports in one quiet, readable container; prevent compact view from clipping report previews or expanded details.
+- Queued restarts pick up CLI upgrades before dispatch while preserving the pending request and restart safety checks.
+- Pending tasks that explicitly ask to rerun, retry, or resume now offer a **Retry task** chip when they are within scope and reversible. The reply retains prerequisites and approval limits, and requires a fresh transcript check before display and send.
+- Attach recurring performance alerts to the existing WatchTower investigation while its fix awaits release.
+- Tighten phone session-list spacing and show complete decision questions with expandable saved context before reply choices.
+- Phonon retries after a page reload when voice loading or playback fails, instead of permanently switching off the user's browser voice preference.
+- Keep disposable plugin checker sessions out of automatic ticket inheritance and lineage comments, preventing unnecessary worker wakeups.
+- Text reports stay available as inert folder previews without expanding the OS file opener allow-list.
+- Make Last/Previous jump to genuine user messages, skip generated resume text, reveal sticky-hidden requests, and load earlier history when needed.
+- Build historical productivity snapshots in the maintenance helper so transcript scans do not compete with dashboard requests for Python execution time.
+- Reuse saved transcript metadata when the Productivity helper starts its first refresh.
+- Historical productivity scans skip per-session live Codex activity requests,
+avoiding unnecessary worker round trips while retaining transcript statistics.
+- Speed up Productivity refreshes by resolving each repository alias once per scan.
+- Keep optional startup probes queued while the full session archive loads, including when cached or recent rows have already painted. The sidebar stays usable and explicit user actions remain immediate.
+- Keep question chips and ticket status available during startup while loading transcript explanations only when a question or its history is opened.
+- Keep question-preview chips alongside ticket shortcuts, restoring one-tap access to the original decision context and options.
+- Queue history reuses the shared queue snapshot and shows a saved graph immediately on reload while refreshing in the background. Failed refreshes preserve the graph and retry instead of leaving an indefinite loading message.
+- Include a newly recorded queue-status observation in the current hourly graph immediately.
+- Open a queue's worker settings without resolving every other queue's launch configuration first.
+- Reduce CPU wakeups from queued background reads while preserving immediate admission when their slot becomes available and bounded restart draining.
+- Keep delayed ticket-save confirmations quiet instead of showing warnings or reopening the composer; confirmed failures still show errors and retries retain their submission key.
+- Keep ambiguous request framing on closing connections and exclude idle keep-alive waits from server slow-request logs and CPU wall-time accounting.
+- Dock read-aloud controls in the conversation view toolbar so the speaker and speed dial no longer cover messages.
+- Worker session headers show a clickable ticket reference beside the task name. Repository portraits stay sharp and retain readable initials when a logo cannot load.
+- Keep conversation titles readable in narrow panes by moving read-aloud controls below the session header when they need more room.
+- Avoid a redundant saved-sidebar preview render when a complete response for the selected archive window is already ready, while retaining the preview if a full resync fails.
+- Recent model shortcuts remain available beside Routine and Deep recommendations, including newly used models missing from saved rankings.
+- Fix managed session message attribution, preserve conservative process checks across platforms, and restore release test isolation and version consistency.
+- Reuse token-usage aggregates for unchanged Claude transcripts, reducing background CPU work while keeping edits, compaction, overrides, and pricing current.
+- Resolve reply routes before synchronous asks and worker delivery; reject unknown return addresses without resuming a session. Sender display labels no longer create unusable reply addresses.
+- Reduce peer-message acknowledgment delays under load by serializing reply routes in a single write while preserving atomic updates and rebindable return addresses.
+- Session-row reports now return a durable receipt promptly while ticket filing continues in the background. Retrying a saved submission reuses its ticket identity, including after a dashboard restart.
+- Keep resource snapshots responsive with large session archives by batching transcript activity, running display scans in the existing live-status helper, and caching completed snapshots for their full lifetime.
+- Routine CLI restart requests now merge over 30 minutes, with atomic dispatch reservations to prevent concurrent callers from restarting the dashboard repeatedly. Explicit immediate restarts fulfill matching queued requests while preserving other pending targets.
+- Keep best-effort diagnostic logging failures from displaying an unsaved-change warning during restart recovery.
+- Restart pauses now resume dispatch automatically after failed worker restarts and automatic worker upgrades, while preserving newer manual pauses. Temporary restart notices explain automatic recovery instead of asking for a Resume click.
+- Routine CLI restarts now respect the dashboard's actual start time, including service-manager starts, so queued requests preserve the full warm-up window. Explicit `--now` restarts remain immediate.
+- Start restart batching from the observed new dashboard generation so drain and startup delays cannot shorten the warm window; keep queued requests and newer explicit targets intact.
+- Dashboard restarts now defer queued background reads with a retry response, so a backlog cannot consume the shutdown drain window. Reads already running and accepted writes still finish.
+- Retry dashboard and Queues reads across brief restart outages with a visible recovery notice, and retry writes only when the server confirms they never started.
+- Keep queued restarts pending through safety refusals until the server permits a restart, instead of dropping them after ten retries. Other consecutive failures retain their retry limit.
+- Restart banners explicitly ask users to wait and explain that messages send automatically; the Resume control stays hidden during automatic restarts.
+- The dashboard no longer leaves defunct (zombie) helper processes behind after each in-place restart.
+- Keep confirmed continuation buttons stable during transcript refreshes so session descriptions do not repeatedly expand and collapse; retain fresh checks before sending.
+- Reuse unchanged root-session metadata when upgrading native subagent attribution, verifying Codex session headers before reusing their metadata so archive refreshes do not unnecessarily reparse the entire transcript history.
+- The Runaway card no longer flags sessions that are busy verifying (running tests, checking production): a turn with four or more tool calls now ends a "nothing changing" run.
+- Saved sidebar reloads reuse their verified conversation order when only row contents change, reducing the data transferred.
+- Avoid scanning the entire Savings claims ledger whenever a transcript changes.
+- Reduce background session-scan cache formatting work while retaining atomic persistence and allowing HTTP request threads to run between records.
+- Resolve only the selected app on a deep link instead of scanning unrelated app folders. Manifest overrides, disabled apps, and live metadata edits keep their existing behavior.
+- Keep System status responsive while WatchTower ticket and queue summaries refresh in the background.
+- Sessions with missing launch attribution now show Unknown instead of claiming Terminal. TokenEconomizer and WatchTower model helpers are identified from their working-directory conventions, including older cached sessions; their origin tooltips explain the inference and missing parent evidence.
+- Resolve stopped-session names, latest status and activity directly from saved session records and native transcripts, including sessions outside the loaded sidebar page.
+- Tighten session list tabs, filters, and section spacing so the first session appears sooner, while preserving phone controls.
+- Opening a session no longer jumps the transcript up a few seconds later when earlier messages load in and thinking blocks merge across the page join.
+- Reuse known transcript locations for session status and usage reads, and avoid rewriting unchanged subagent graphs during dashboard startup.
+- Keep session status polls responsive while aggregate dashboard reads occupy background slots, retaining duplicate-poll serialization and safe restart draining.
+- Avoid repeated scans of long text tokens when cleaning image paths from session titles.
+- Reduce sidebar refresh CPU spent cleaning whitespace in long session prompts,
+while preserving title truncation and image attachment cleanup.
+- Skip session-state trailer scans for ordinary text to reduce CPU during session-list rebuilds.
+- Report census warmup explicitly in health, share one background census build across startup callers, and return prompt retry guidance while sessions are unavailable instead of holding requests through repeated cold index joins.
+- Coalesce settings ownership annotations within each frame and scan nested settings roots once, reducing startup work while retaining accessible descriptions.
+- Share concurrent Task-child discovery and short-lived Claude process snapshots so dashboard startup polls do not repeat the same filesystem and process scans.
+- Show Claude's descriptive shell-action headlines in conversations while keeping the underlying command expandable.
+- Avoid unnecessary sidebar layout measurements when updating session actions or when the Decisions views are inactive.
+- Reduce repeated archive scans when refreshing sidebar action and popout controls, while keeping each update current.
+- Reuse the archive refresh's successful sidebar paint during startup instead of shaping the same rows again.
+- Reduce dashboard CPU use while streaming Codex sidebar previews by copying only the latest turn when the live cursor changes.
+- Place the conversation-list collapse arrow next to the sidebar divider.
+- Reduce sidebar refresh work by retaining ancestor membership during window selection instead of checking every visible row twice.
+- Avoid inspecting Devin replay logs for sessions already present in the sidebar snapshot, while keeping missing sessions' replies and activity current.
+- Start the dashboard's recent sidebar request before the main scripts initialize, reuse its response, and include the entire request lifetime in list timing.
+- Keep sidebar row controls responsive while checking visible transcript eligibility after the rows first paint.
+- Avoid waiting on engine startup locks while collecting sidebar session overlays.
+- Reduce sidebar refresh work by skipping ticket-history and title calculations for sessions that cannot be worker helpers.
+- The All sidebar reuses decoded history when live sessions appear or replace stored rows, keeping the saved order and showing current session details.
+- Reuse static preparation for recently loaded sidebar history rows so refreshes spend less time rebuilding the All list.
+- Avoid building hidden Active and Issues session rows while another sidebar tab or search is displayed.
+- Existing archives now get the sidebar indexes during a background refresh even when their source files have stayed unchanged.
+- Reduce sidebar live-feed CPU by skipping discarded Codex tool formatting while preserving message text and user-turn boundaries.
+- Reuse unchanged session-name overrides across sidebar refresh phases while immediately detecting peer renames and preserving isolated mappings for writers.
+- Avoid repeated sidebar identity scans while keeping newly started sessions visible across engine overlays.
+- Session-list pagination now loads sessions matching the current view, keeps related lanes reachable, and confirms new additions without changing collapsed groups.
+- Keep spawned sessions with their loaded parents in startup previews, distinguish loading status from incomplete work, and show a parent link for lanes outside their cluster.
+- Prioritize sidebar list reads ahead of optional queued polls while preserving the HTTP/1.1 connection limit and the slot reserved for user actions.
+- Limit recent Codex sidebar metadata lookups to visible missing sessions instead of copying the full thread registry on each refresh.
+- Avoid measuring archive scroll geometry on unchanged sidebar refreshes while preserving scroll anchors when rows are rebuilt.
+- Reuse unchanged archive projections when ticket metadata changes, while refreshing ticket fields and preserving current window membership and delta freshness.
+- Keep established continuation topics cached when unrelated session metadata changes, while detecting newly discovered fallback titles.
+- Reuse unchanged topic records when new sessions arrive, avoiding repeated archive-wide database reads while preserving continuation and title corrections.
+- Reduce sidebar list work by skipping indexed Codex titles for sessions already loaded from the archive.
+- The conversation sidebar identifies workers from the live roster and history without fetching whole repositories for worker cards.
+- Ticket submissions now retry silently instead of showing repeated confirmation-wait warnings.
+- Open a ticket's sole worker session directly from its title or row, without a redundant session/lane disclosure chip.
+- Source commit pushes no longer appear Major merely because the question says "publish"; question guidance asks for the actual consequence or missing decision instead of citing an approval rule as its reason.
+- A launch handler crash (for example after an on-disk upgrade) now returns a JSON error with a reference instead of a dropped connection showing "Load failed".
+- Budget speculative speech preparation under CPU contention; foreground playback bypasses preparation pauses.
+- Collect Python stack snapshots with less overhead and stop sampling when the diagnostic client disconnects.
+- A failed transcript request from a previous conversation no longer replaces the newly selected conversation with its error.
+- Show Open parent on standalone child session rows on desktop as well as phone, so search results retain visible navigation to their parent.
+- Starring a session for today keeps its project in one group, with starred topics first, instead of creating a second identical project heading.
+- Fixed clean installs and foreground startup failing when Bash expands the worker health check.
+- Keep compressed dashboard assets cached across a full page boot, with a byte limit and individual eviction instead of flushing every asset at once.
+
+- Keep ready apps visible while the dashboard finishes loading in the background.
+- Serve smaller canonical static assets with optional system Brotli compression, retaining gzip fallback and separate bounded encoding caches.
+- Reuse bounded, integrity-checked compressed static assets across dashboard restarts so the first app open does not recompress unchanged scripts and styles.
+- Steer and Steer all immediately move pending messages into the conversation while delivery continues in the background, preserving safe queue replacement and visible retry on failure.
+- Keep steering messages above the live activity row during transcript refreshes, preventing “Generating…” from jumping above and below them.
+- Expose a View structured output disclosure in compact transcripts so schema responses show their actual payload instead of only a tool acknowledgement.
+- Explicit dashboard restarts now proceed after the bounded HTTP drain even when handlers are stuck. Disconnected reads no longer hold the drain, and the dashboard and CLI confirm a new server generation before reporting success or show the cancellation reason.
+- Keep turn-driver badges compact in session lists, attribute native subagents to their parent sessions, and retain owner-input details in headers and tooltips.
+- Taking back a ticket from a continued conversation now cancels its canonical WatchTower supervision and clears stale adoption retries.
+- Reuse discovered Task-subagent transcript paths during family polling while keeping live activity checks and copied-transcript recovery fresh.
+- Keep Master and background-task tabs above the conversation when using the right status rail, including collapsed and narrow layouts.
+- Show terminal Antigravity conversations automatically while the archive snapshot is still refreshing.
+- Daily throughput ticket counts run in the existing background helper so scanning every queue does not compete with dashboard archive requests for the Python interpreter.
+- Ticket decision Send closes immediately while submission continues in the background, with pending feedback, duplicate-send protection, and saved drafts for unconfirmed answers.
+- Answering a ticket from another session's reply chip also sends a visible decision receipt to that conversation. The ticket's worker is notified once, and receipt failures remain distinct from a recorded answer.
+- Keep slow ticket saves running once across confirmation retries, and show the queue, ticket preview, elapsed time, and waiting reason while checking their result.
+- Ticket confirmation retries and pending warnings show the queue, ticket preview, elapsed time and last check, with plain-language timeout explanations across ticket composers.
+- Keep the mobile New queue ticket actions above the on-screen keyboard and add a Hide keyboard button that preserves the draft.
+- Ticket details and answers work again for every queue. A local variable in the dashboard's request handler hid the queue engine, so tickets showed as "not found" with a misleading GitHub message.
+- Reduce dashboard pauses during ticket refreshes by encoding the saved ticket display cache in the background reader process.
+- Ticket decision buttons now use the current theme’s raised surface so reply and plain-English labels remain readable in light mode.
+- Ticket submission safely retries interrupted saves and distinguishes pending confirmation from rejection after dashboard restarts.
+- Avoid building discarded session rows before rendering ticket lifecycle sections, reducing sidebar refresh work while preserving grouping and collapse controls.
+- Avoid rescanning unchanged Claude and Codex transcripts for the conversation activity timeline; transcript edits immediately invalidate the bounded result cache.
+- Reuse unchanged saved session titles when unrelated status files change, reducing sidebar refresh work while preserving title additions, replacements, and removals.
+- Tool screenshots now stay in a compact image stack beside the reply. Open the stack to browse an animated gallery with zoom and download controls, without stretching the transcript.
+- Avoid measuring expanded tool history during conversation startup, and preserve long-result expansion when folded history is opened.
+- Avoid resolving newly discovered continuation topics twice during archive loads when the database is unchanged, while preserving concurrent title and ancestry corrections.
+- Preserve cached continuation topics across unrelated index updates while refreshing title and ancestry changes.
+- Reduce repeated filename parsing when sidebar continuation titles use cached transcript metadata.
+- Reduce archive topic-resolution contention by reading continuation records and indexed origins together in bounded, indexed queries.
+- Keep the sidebar and Workers steps visible during the guide, and preserve reclaimed engine-column space without shifting task-avatar rows.
+- Bare web links after bold labels in conversation messages are clickable.
+- Reduce dashboard contention when saving large transcript metadata caches, and prevent concurrent saves from sharing a temporary file.
+- Keep open conversations receiving replies when a live stream reconnects during history loading. Resume from the last applied transcript line so delivered messages clear when their transcript entries arrive.
+- Interrupted API writes no longer leave a generic “check whether your change was saved” banner. Individual features retain their error handling, and uncertain writes are never automatically repeated.
+- Avoid rewriting ticket state and invalidating archive snapshots when takeover status has not changed.
+- Fixed the update dialog showing old feature announcements as new changes. Main-channel installs now preview the actual incoming commits, and updates preserve unrelated local work while refusing to overwrite conflicting files.
+- `uv run pytest` no longer fails dependency resolution on Python 3.9: the ACP extra is now limited to Python 3.10 and newer.
+- Show unlisted workers inside the scrollable Workers list with their identity, activity, and an Open session action, without waiting for conversation history. Only a new process without a registered session is Starting, for at most ten seconds; longer launches show Startup delayed.
+- Show clickable chips for tickets currently ready and awaiting a worker directly above the Workers ticket list; omit blocked, deferred, paused, and already claimed work.
+- Load voice choices and call settings immediately when Voice settings opens, even while background startup reads are waiting.
+- Refresh What’s New with November highlights for update previews, Antigravity controls, ticket activity, Apps, and delivery status. Keep sidebar dates readable in light themes.
+- Honor the configured systemd worker restart opt-out after a dashboard-only restart.
+- Worker blocker categories now sit inline with their explanation instead of occupying a separate row.
+- Clarify that worker activity counts span all queues, group them by queue rather than working folder, and keep every actively working ticket visible beyond the recent-history limit. Live workers without listed tickets appear before ticket history.
+- Queue tickets parked for agent follow-up or verification now say "worker follow-up" instead of "awaiting worker", distinguishing them from tickets ready for automatic pickup.
+- Worker header now shows every live worker and queue separately from measured token activity, matching the Workers tab when token receipts are unavailable.
+- Refresh worker health on heartbeats without rereading the conversation archive when worker rows are unchanged.
+- Queue worker launch instructions now appear as a compact disclosure in the conversation. Expand it to read the complete prompt without letting setup boilerplate crowd out the actual work.
+- Fixed flickering worker previews while the queue snapshot is loading, keeping session-backed ticket rows at a stable height during live updates.
+- Worker restart errors now distinguish confirmed running Codex turns from loaded threads or an unavailable safety check.
+- Keep a separate row for every live worker even when its session is grouped under a ticket. Label waiting tickets as queued, show queue staffing in their tooltips, and exclude archived or unconfigured queues from assignment expectations.
+- Workers rows open ticket details when no session is attached to the list. Titles support keyboard activation, and row status and context remain clickable without changing session-group expansion.
+- Worker session titles now show the current ticket description instead of the generic queue-draining launch prompt, including pane headers.
+- Removed misleading token activity counts from the live worker strip; live totals, queue groups, and reported plan progress remain visible.
+- Worker decision cards now offer scoped approval chips and submit answers in one tap, with duplicate-tap protection and a fresh-question check. Custom answers remain available.
+- Workers now shows the same deferred status as Queues for scheduled tickets instead of a red Open label.
+- The Workers tab now shows ticket activity only when a worker or session on the current machine actually participated, instead of mixing in unrelated work from synced queues. Local work remains visible across queues, reassignment, and worker cleanup.
+- Workers now show active ticket claims while session details load, avoid counting those workers again as starting, and show elapsed time for the current ticket instead of the entire session.
+- Consecutive commands stay in one expandable Working step when hidden empty reasoning entries occur between them.
+- Fixed the dead-notify alert parser so notices with a sender header keep their ref, queue and severity.
+
 ## [5.46.0] - 2026-11-14
 
 ### Added
@@ -5119,7 +5687,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.46.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v7.0.0...HEAD
+[7.0.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v7.0.0
 [5.46.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.46.0
 [5.45.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.45.0
 [5.44.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.44.0

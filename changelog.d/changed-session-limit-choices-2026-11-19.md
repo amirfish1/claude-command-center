@@ -1,1 +1,0 @@
-Session limit notices show session titles, status and last activity, open the engine/model/effort continuation picker with a saved fallback suggestion, and can be hidden and reopened without dismissing recovery actions.

@@ -1,1 +1,0 @@
-Routine CLI restart requests now merge over 30 minutes, with atomic dispatch reservations to prevent concurrent callers from restarting the dashboard repeatedly. Explicit immediate restarts fulfill matching queued requests while preserving other pending targets.

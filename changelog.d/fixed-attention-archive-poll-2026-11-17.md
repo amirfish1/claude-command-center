@@ -1,1 +1,0 @@
-- Reduce background attention-feed work by reading compact classifier inputs instead of complete historical session bodies, while preserving historical items and current live state.

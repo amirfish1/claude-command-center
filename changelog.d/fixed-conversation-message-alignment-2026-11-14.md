@@ -1,1 +1,0 @@
-- Right-align incoming agent reports and compact conversation messages, with clearer blue user bubbles and green report backgrounds on light conversation palettes. Preserve message wrapping and image-report layout when mirrored in the header.

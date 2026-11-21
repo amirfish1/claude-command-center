@@ -1,1 +1,0 @@
-- Reduce sidebar refresh work by retaining ancestor membership during window selection instead of checking every visible row twice.

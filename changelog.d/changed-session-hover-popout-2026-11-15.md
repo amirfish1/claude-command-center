@@ -1,1 +1,0 @@
-- Replace the session row hover speaker with a pop-out button that opens the session in its own window.

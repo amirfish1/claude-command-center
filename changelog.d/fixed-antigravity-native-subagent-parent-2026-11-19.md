@@ -1,1 +1,0 @@
-- Group native Antigravity subagent sessions beneath their recorded parent and show the role assigned at launch.

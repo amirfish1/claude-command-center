@@ -1,1 +1,0 @@
-- Keep ACP agents alive after their launching request ends on Linux, open accepted Grok sessions immediately, and apply the selected reasoning effort correctly.

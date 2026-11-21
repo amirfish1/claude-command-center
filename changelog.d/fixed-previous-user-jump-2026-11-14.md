@@ -1,1 +1,0 @@
-- Make Last/Previous jump to genuine user messages, skip generated resume text, reveal sticky-hidden requests, and load earlier history when needed.

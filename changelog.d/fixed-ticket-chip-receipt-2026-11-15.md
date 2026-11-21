@@ -1,1 +1,0 @@
-Answering a ticket from another session's reply chip also sends a visible decision receipt to that conversation. The ticket's worker is notified once, and receipt failures remain distinct from a recorded answer.

@@ -1,1 +1,0 @@
-- Move background ticket-list reconstruction outside the dashboard interpreter so it competes less with app startup requests.

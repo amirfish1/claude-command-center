@@ -1,1 +1,0 @@
-- Reuse the saved sidebar preview during reload while the complete archive is being validated, reducing competing recent-list requests.

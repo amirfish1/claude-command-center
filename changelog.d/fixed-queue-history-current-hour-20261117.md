@@ -1,1 +1,0 @@
-- Include a newly recorded queue-status observation in the current hourly graph immediately.

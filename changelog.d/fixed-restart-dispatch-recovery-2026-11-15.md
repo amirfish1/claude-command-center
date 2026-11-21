@@ -1,1 +1,0 @@
-Restart pauses now resume dispatch automatically after failed worker restarts and automatic worker upgrades, while preserving newer manual pauses. Temporary restart notices explain automatic recovery instead of asking for a Resume click.

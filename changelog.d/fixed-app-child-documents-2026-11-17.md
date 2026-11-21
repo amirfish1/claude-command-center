@@ -1,1 +1,0 @@
-Start standard local apps and their conversation panes from canonical HTML supplied in the first response, removing successive child document requests while preserving URLs, reloads, drafts and normal navigation fallbacks.

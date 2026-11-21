@@ -1,1 +1,0 @@
-- Removed the redundant Session search entry from More actions; the search box and keyboard shortcuts remain available.

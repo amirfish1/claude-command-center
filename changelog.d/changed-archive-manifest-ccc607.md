@@ -1,1 +1,0 @@
-- Concurrent All-history requests for the same snapshot share manifest hashing, reducing repeated work while keeping each tab’s refresh response tied to its own saved rows.

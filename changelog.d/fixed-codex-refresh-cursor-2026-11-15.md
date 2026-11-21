@@ -1,1 +1,0 @@
-- Persist validated Codex parser cursors across archive workers so growing rollouts read appended records instead of their entire history.

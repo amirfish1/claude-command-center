@@ -1,1 +1,0 @@
-- The session list refreshes much faster on machines with many Codex sessions: unchanged Codex sessions are no longer re-read on every refresh.

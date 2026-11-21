@@ -1,1 +1,0 @@
-Explicit dashboard restarts now proceed after the bounded HTTP drain even when handlers are stuck. Disconnected reads no longer hold the drain, and the dashboard and CLI confirm a new server generation before reporting success or show the cancellation reason.

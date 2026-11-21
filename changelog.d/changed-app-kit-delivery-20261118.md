@@ -1,1 +1,0 @@
-- Carry the canonical app kit in local app HTML to avoid a separate startup request, preserving static and dynamic script loaders. Apps with content-security policies or integrity attributes retain the versioned external script.
