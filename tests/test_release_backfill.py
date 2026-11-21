@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import re
 import os
 from pathlib import Path
 import shutil
@@ -338,3 +339,10 @@ def test_dmg_only_dry_run_does_not_cut_new_version(tmp_path):
     assert "1/9" not in result.stdout
 
 
+
+
+def test_daily_guards_empty_array_for_macos_bash32():
+    """macOS ships bash 3.2, where set -u rejects an empty "${arr[@]}"."""
+    script = (ROOT / "scripts/release-daily.sh").read_text()
+    assert '${backfill_args[@]+"${backfill_args[@]}"}' in script
+    assert re.search(r'(?<!\+)"\$\{backfill_args\[@\]\}"(?!\})', script) is None

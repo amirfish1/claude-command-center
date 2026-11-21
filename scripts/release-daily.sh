@@ -70,9 +70,10 @@ fi
 
 # Run before every waive gate, including dirty-tree and age waivers. Backfill
 # builds/publication use isolated worktrees and do not consume pending changes.
+# macOS bash 3.2 treats an empty "${arr[@]}" as unbound under set -u.
 backfill_args=()
 [ "$DRY" = 0 ] || backfill_args+=(--dry-run)
-python3 "$REPO_ROOT/scripts/release_backfill.py" pending "${backfill_args[@]}" || {
+python3 "$REPO_ROOT/scripts/release_backfill.py" pending ${backfill_args[@]+"${backfill_args[@]}"} || {
   say "FAILED: pending DMG backfill state could not be processed"; exit 1;
 }
 
