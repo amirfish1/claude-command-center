@@ -58,6 +58,57 @@ class FlushTests(unittest.TestCase):
         # Window resets.
         self.assertIsNone(ca.maybe_flush(now=1000.0 + ca.WINDOW_S + 2))
 
+    def test_request_accounting_does_not_wait_for_thread_snapshot(self):
+        sampling = threading.Event()
+        release = threading.Event()
+        recorded = threading.Event()
+        first_window = []
+        due = 1000.0 + ca.WINDOW_S
+
+        def snapshot():
+            sampling.set()
+            release.wait(5)
+            return {}
+
+        def finish_request():
+            ca.record("/ready", 0.002, 0.003, now=due + 1)
+            recorded.set()
+
+        ca.record("/initial", 0.004, 0.005, now=1001.0)
+        with mock.patch.object(ca, "_thread_snapshot", snapshot), mock.patch("builtins.print"):
+            flusher = threading.Thread(target=lambda: first_window.append(ca.maybe_flush(now=due)))
+            request = threading.Thread(target=finish_request)
+            flusher.start()
+            try:
+                self.assertTrue(sampling.wait(2))
+                request.start()
+                self.assertTrue(recorded.wait(2))
+            finally:
+                release.set()
+                flusher.join()
+                if request.ident is not None:
+                    request.join()
+            second_window = ca.maybe_flush(now=due + ca.WINDOW_S)
+
+        self.assertEqual(first_window[0]["req_cpu_ms"], 4)
+        self.assertEqual(second_window["routes"], [
+            {"route": "/ready", "cpu_ms": 2, "wall_ms": 3, "n": 1},
+        ])
+
+    def test_snapshot_does_not_read_request_thread_stat(self):
+        threads = [
+            mock.Mock(native_id=10),
+            mock.Mock(native_id=11),
+            mock.Mock(native_id=12),
+        ]
+        for thread, name in zip(threads, ["http-admission", "process_request_thread",
+                                          "Thread-78 (process_request_thread)"]):
+            thread.name = name
+        with mock.patch.object(ca.threading, "enumerate", return_value=threads), \
+                mock.patch.object(ca, "_thread_cpu_s", return_value=0.25) as read_cpu:
+            self.assertEqual(ca._thread_snapshot(), {10: ("http-admission", 0.25)})
+        read_cpu.assert_called_once_with(10)
+
     @unittest.skipUnless(sys.platform.startswith("linux"), "live thread CPU snapshots require Linux /proc")
     def test_background_thread_cpu_is_attributed_by_name(self):
         stop = threading.Event()

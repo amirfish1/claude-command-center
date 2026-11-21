@@ -43,7 +43,8 @@ _ID_SEG = re.compile(
     re.I,
 )
 
-_lock = threading.Lock()
+_route_lock = threading.Lock()
+_window_lock = threading.Lock()
 _routes = {}            # route -> [cpu_ms, wall_ms, count]
 _window_t0 = time.monotonic()
 _proc_cpu0 = time.process_time()
@@ -89,11 +90,14 @@ def _thread_snapshot():
     out = {}
     for t in threading.enumerate():
         tid = getattr(t, "native_id", None)
-        if tid is None:
+        name = _normalize_thread_name(t.name)
+        if tid is None or name == "process_request_thread":
+            # Request CPU is already in the route totals, including
+            # keep-alive threads that span a window.
             continue
         cpu = _thread_cpu_s(tid)
         if cpu is not None:
-            out[tid] = (t.name, cpu)
+            out[tid] = (name, cpu)
     return out
 
 
@@ -108,18 +112,17 @@ def _note_thread_exit(name, started_at, c0):
     if key == "process_request_thread":
         return  # request CPU is already in the route totals
     tid = threading.get_native_id()
-    d = None
-    if started_at < _window_t0:
-        # Lived across a window boundary: only the part since the last
-        # snapshot belongs to this window.
-        base = _thread_cpu0.get(tid)
-        now_cpu = _thread_cpu_s(tid) if base is not None else None
-        if base is not None and now_cpu is not None:
-            d = (now_cpu - base) * 1000.0
-    if d is None:
-        d = (time.thread_time() - c0) * 1000.0
-    if d >= 1:
-        with _lock:
+    with _window_lock:
+        d = None
+        if started_at < _window_t0:
+            # Use the baseline from the same window as the exit counter.
+            base = _thread_cpu0.get(tid)
+            now_cpu = _thread_cpu_s(tid) if base is not None else None
+            if base is not None and now_cpu is not None:
+                d = (now_cpu - base) * 1000.0
+        if d is None:
+            d = (time.thread_time() - c0) * 1000.0
+        if d >= 1:
             _exited[key] = _exited.get(key, 0.0) + d
 
 
@@ -149,7 +152,7 @@ def record(path, cpu_s, wall_s, now=None):
     """Account one finished request; closes the window when it is due."""
     try:
         route = route_of(path)
-        with _lock:
+        with _route_lock:
             row = _routes.get(route)
             if row is None:
                 row = _routes[route] = [0.0, 0.0, 0]
@@ -164,12 +167,17 @@ def record(path, cpu_s, wall_s, now=None):
 def maybe_flush(now=None):
     """Emit the window summary if WINDOW_S has elapsed. Returns the row."""
     global _window_t0, _proc_cpu0, _thread_cpu0, _routes, _exited
-    now = time.monotonic() if now is None else now
-    with _lock:
+    # One caller samples /proc. Other requests can finish and keep recording
+    # into the next window even if that sample stalls.
+    if not _window_lock.acquire(blocking=False):
+        return None
+    try:
+        now = time.monotonic() if now is None else now
         if now - _window_t0 < WINDOW_S:
             return None
         span = now - _window_t0
-        routes, _routes = _routes, {}
+        with _route_lock:
+            routes, _routes = _routes, {}
         proc_now = time.process_time()
         proc_ms = (proc_now - _proc_cpu0) * 1000.0
         _proc_cpu0 = proc_now
@@ -178,17 +186,15 @@ def maybe_flush(now=None):
         snap = _thread_snapshot()
         _thread_cpu0 = {tid: cpu for tid, (_n, cpu) in snap.items()}
         exited, _exited = _exited, {}
+    finally:
+        _window_lock.release()
     threads = dict(exited)
-    for tid, (name, cpu) in snap.items():
-        key = _normalize_thread_name(name)
-        # A thread born inside the window owns all of its CPU so far. Request
-        # threads are skipped below (their CPU is in the route totals); the
-        # boot window's background jobs used to land in "other" (CCC-142).
+    for tid, (key, cpu) in snap.items():
+        # A background thread born inside the window owns all of its CPU so
+        # far, including jobs already running during startup (CCC-142).
         base = prev.get(tid, 0.0)
         d = (cpu - base) * 1000.0
-        # Keep-alive handler threads span windows; their CPU is already in
-        # the per-request route totals.
-        if d >= 1 and key != "process_request_thread":
+        if d >= 1:
             threads[key] = threads.get(key, 0.0) + d
     req_ms = sum(r[0] for r in routes.values())
     top_routes = sorted(routes.items(), key=lambda kv: -kv[1][0])[:TOP_N]
