@@ -591,6 +591,7 @@ class _SidebarHistoryReader:
         self.identity = None
         self.memo = None
         self.expiry = None
+        self.expires_at = 0.0
 
     def _clear(self):
         self.memo = None
@@ -609,6 +610,27 @@ class _SidebarHistoryReader:
         with self.lock:
             if self.memo is not None and self.memo[0] is marker:
                 self._close()
+
+    def _arm_expiry(self):
+        if self.expiry is not None:
+            self.expiry.cancel()
+        marker = object()
+        self.memo = (marker, *self.memo[1:])
+        self.expires_at = time.monotonic() + _SIDEBAR_HISTORY_REUSE_S
+        self.expiry = threading.Timer(_SIDEBAR_HISTORY_REUSE_S, self._expire, (marker,))
+        self.expiry.daemon = True
+        self.expiry.start()
+
+    def publish_projection(self, projection, rows):
+        with self.lock:
+            if (self.memo is None or self.memo[-1] is not projection or projection.rows is not None
+                    or time.monotonic() >= self.expires_at):
+                return
+            projection.rows = rows
+            # The first projection can consume most of the original lease.
+            # Renew once so an immediate reload can reuse that work. Reads
+            # still check SQLite's data_version and the publication header.
+            self._arm_expiry()
 
     def read(self, cache_file, key, current, schema_version, build_id, min_cached_at,
              *, copy_history=True):
@@ -662,16 +684,13 @@ class _SidebarHistoryReader:
                     return None
                 entry, rows, layout = loaded
                 if layout is not None:
-                    marker = object()
                     overridden = {rid for rid, stored in layout if stored is None}
                     projection = None
                     if (not copy_history and len(layout) * SidebarHistoryProjection.source_row_bytes
                             < SidebarHistoryProjection.max_bytes):
                         projection = SidebarHistoryProjection(layout)
-                    self.memo = (marker, guard, entry, layout, overridden, projection)
-                    self.expiry = threading.Timer(_SIDEBAR_HISTORY_REUSE_S, self._expire, (marker,))
-                    self.expiry.daemon = True
-                    self.expiry.start()
+                    self.memo = (None, guard, entry, layout, overridden, projection)
+                    self._arm_expiry()
                 else:
                     self._close()
                 return dict(entry, conversations=rows)
@@ -768,6 +787,10 @@ def sidebar_history_projection():
     """Get the prepared-field cache for the current read-only SQLite memo."""
     memo = _SIDEBAR_HISTORY_READER.memo
     return memo[-1] if memo is not None else None
+
+
+def publish_sidebar_history_projection(projection, rows):
+    _SIDEBAR_HISTORY_READER.publish_projection(projection, rows)
 
 
 def load(cache_file, *, hot=False, key=None, now=None):

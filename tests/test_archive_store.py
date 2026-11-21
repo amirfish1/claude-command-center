@@ -260,10 +260,15 @@ def test_sidebar_static_projection_keeps_request_overlays_live(tmp_path, monkeyp
         assert source[0]['session_state'] == old['session_state']
         projection = store.sidebar_history_projection()
         assert projection is not None
+        original_expiry = reader.memo[0]
         phases = {}
         first = payload(source, projection, phases=phases)
         assert phases['history_static_rows'] == {'hits': 0, 'prepared': 3}
         assert json.dumps(first) == json.dumps(payload(source))
+        renewed_expiry = reader.memo[0]
+        assert renewed_expiry is not original_expiry
+        reader._expire(original_expiry)
+        assert store.sidebar_history_projection() is projection
 
         graph_parents['old'] = 'parent'
         overlays = {'old': {'display_name': 'Current title'}}
@@ -271,6 +276,7 @@ def test_sidebar_static_projection_keeps_request_overlays_live(tmp_path, monkeyp
         assert store.sidebar_history_projection() is projection
         phases = {}
         second = payload(latest, projection, overlays, phases)
+        assert reader.memo[0] is renewed_expiry
         assert phases['history_static_rows'] == {'hits': 3, 'prepared': 0}
         assert json.dumps(second) == json.dumps(payload(latest, overlays=overlays))
         assert second['conversations'][0]['display_name'] == 'Current title'
@@ -288,7 +294,17 @@ def test_sidebar_static_projection_keeps_request_overlays_live(tmp_path, monkeyp
         assert store.sidebar_history_projection() is None
         renewed = read(live, copy_history=False)
         assert store.sidebar_history_projection() is not projection
+        replacement_expiry = reader.memo[0]
+        reader.publish_projection(projection, projection.rows)
+        assert reader.memo[0] is replacement_expiry
         assert renewed[0]['session_state'] == old['session_state']
+
+        # A delayed timer must not let a late publisher renew an expired memo.
+        replacement_projection = store.sidebar_history_projection()
+        reader.expires_at = 0
+        reader.publish_projection(replacement_projection, projection.rows)
+        assert replacement_projection.rows is None
+        assert reader.memo[0] is replacement_expiry
     finally:
         with reader.lock:
             reader._close()

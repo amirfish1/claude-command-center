@@ -19180,7 +19180,9 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _in
     if check_client is not None:
         check_client()
     if pending and _history_projection.rows is None:
-        _history_projection.rows = pending
+        from ccc_server import archive_store
+
+        archive_store.publish_sidebar_history_projection(_history_projection, pending)
     if phases is not None and _history_projection is not None:
         phases["history_static_rows"] = {"hits": hits, "prepared": len(pending or {})}
     # Persisted rows may predate a goal change or a title override.
