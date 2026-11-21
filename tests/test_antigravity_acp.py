@@ -138,14 +138,20 @@ def test_model_label_is_applied_over_acp(stream, tmp_path):
     assert _wait(lambda: "MODEL:fake-high" in _log(tmp_path))
 
 
-def test_unknown_model_or_conversation_falls_back_and_pauses_acp(stream, tmp_path):
-    with pytest.raises(stream._AcpError):
+def test_unknown_model_or_conversation_falls_back_for_that_session_only(stream, tmp_path):
+    with pytest.raises(stream._AcpSessionError):
         _start(stream, tmp_path, model="Nope 9")
-    assert not stream.acp_enabled()
     assert stream.state(SID) is None
-    stream._ACP_DISABLED_UNTIL = 0.0
-    with pytest.raises(stream._AcpError):
+    assert stream.acp_enabled()   # other conversations keep steering
+    with pytest.raises(stream._AcpSessionError):
         _start(stream, tmp_path, sid="missing")
+    assert stream.acp_enabled()
+
+
+def test_failed_start_pauses_acp_for_everyone(stream, tmp_path):
+    with pytest.raises(stream._AcpError):
+        stream.spawn_acp(SID, [sys.executable, "-c", "import sys; sys.exit(2)"], str(tmp_path),
+                         str(tmp_path / "acp.log"), ("", ()), handshake_timeout=5)
     assert not stream.acp_enabled()
 
 

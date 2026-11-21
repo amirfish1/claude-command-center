@@ -202,6 +202,14 @@ class _AcpError(Exception):
     """`agy acp` refused a request or went away before answering it."""
 
 
+class _AcpSessionError(_AcpError):
+    """ACP works but not for this conversation (unknown id, model not offered).
+
+    Falls back to stream-json for this conversation only; unlike a failed
+    start it must not pause ACP for every other conversation.
+    """
+
+
 def _model_key(text):
     return re.sub(r"[^a-z0-9]+", "", str(text or "").lower())
 
@@ -281,9 +289,14 @@ class _AcpProc:
     def handshake(self, model_label="", timeout=None):
         """initialize, attach to the existing conversation, apply the model."""
         self._request("initialize", {"protocolVersion": 1, "clientCapabilities": {}}, timeout)
-        resumed = self._request("session/resume", {
-            "sessionId": self.sid, "cwd": self.cwd, "mcpServers": [],
-        }, timeout)
+        try:
+            resumed = self._request("session/resume", {
+                "sessionId": self.sid, "cwd": self.cwd, "mcpServers": [],
+            }, timeout)
+        except _AcpError as exc:
+            if not self.alive():
+                raise
+            raise _AcpSessionError(str(exc))
         if model_label:
             models = resumed.get("models") or {}
             want = _model_key(model_label)
@@ -293,9 +306,14 @@ class _AcpProc:
                     match = item.get("modelId")
                     break
             if not match:
-                raise _AcpError(f"model {model_label!r} is not offered over ACP")
+                raise _AcpSessionError(f"model {model_label!r} is not offered over ACP")
             if match != models.get("currentModelId"):
-                self._request("session/set_model", {"sessionId": self.sid, "modelId": match}, timeout)
+                try:
+                    self._request("session/set_model", {"sessionId": self.sid, "modelId": match}, timeout)
+                except _AcpError as exc:
+                    if not self.alive():
+                        raise
+                    raise _AcpSessionError(str(exc))
 
     def _answer(self, msg):
         """Reply to a request the agent sends us; never leave one hanging."""
@@ -551,7 +569,8 @@ def spawn_acp(sid, cmd, cwd, log_path, key, env=None, cli_log_path=None,
             proc.terminate()
         except OSError:
             pass
-        _ACP_DISABLED_UNTIL = time.time() + 300
+        if not isinstance(exc, _AcpSessionError):
+            _ACP_DISABLED_UNTIL = time.time() + 300
         try:
             _core._log_activity("inject", "AGY_ACP_FALLBACK",
                                 f"session={sid} error=\"{str(exc)[:160]}\"")
