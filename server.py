@@ -5994,6 +5994,9 @@ def _default_session_lane(row):
     """Disposable helper working directories belong in Other."""
     cwd = str(row.get("session_cwd") or row.get("folder_path") or row.get("cwd") or "")
     if cwd:
+        # Only helper paths need basename normalization and validation.
+        if "te-side-" not in cwd and "wt-model-" not in cwd:
+            return ""
         helper = re.fullmatch(r"(?:te-side|wt-model)-[A-Za-z0-9_-]+", Path(cwd).name)
     else:
         helper = re.search(r"-(?:te-side|wt-model)-[A-Za-z0-9_-]+$", str(row.get("slug") or ""))
