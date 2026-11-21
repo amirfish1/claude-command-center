@@ -21,6 +21,8 @@ __version__ = "7.0.0"
 import sender_envelope as _attribution
 from ccc_server import session_driver as _driver
 from ccc_server import archive_list_replay as _list_replay
+from ccc_server import archive_preview as _archive_preview
+from ccc_server import archive_sidebar_pages as _archive_sidebar_pages
 import ast
 import base64
 import traceback
@@ -6004,7 +6006,8 @@ def _set_session_lane_overrides(session_ids, lane):
 
 def _default_session_lane(row):
     """Disposable helper working directories belong in Other."""
-    cwd = str(row.get("session_cwd") or row.get("folder_path") or row.get("cwd") or "")
+    fallback = row.cwd if isinstance(row, _archive_sidebar_pages.StoredRow) else row.get("cwd")
+    cwd = str(row.get("session_cwd") or row.get("folder_path") or fallback or "")
     if cwd:
         # Only helper paths need basename normalization and validation.
         if "te-side-" not in cwd and "wt-model-" not in cwd:
@@ -17108,7 +17111,9 @@ def _read_archive_response_cache_file():
                                      daemon=True).start()
                 else:
                     archive_store.backup_legacy(_ARCHIVE_RESPONSE_CACHE_FILE)
-                    archive_store.save(_ARCHIVE_RESPONSE_CACHE_FILE, data, complete=True)
+                    archive_store.save(_ARCHIVE_RESPONSE_CACHE_FILE, data, complete=True,
+                                       sidebar_key=_archive_response_cache_key(),
+                                       sidebar_pages=(_ARCHIVE_SIDEBAR_PACKED_VERSION, _archive_list_pack_static))
                     data = archive_store.load(_ARCHIVE_RESPONSE_CACHE_FILE, hot=True) or data
             except (OSError, ValueError, sqlite3.Error) as exc:
                 print(f"  [archive-cache] row-store migration deferred: {exc}")
@@ -17183,7 +17188,8 @@ def _archive_import_legacy_store(cache_file, data, done):
     import sqlite3
     try:
         archive_store.backup_legacy(cache_file)
-        archive_store.save(cache_file, data, complete=True)
+        archive_store.save(cache_file, data, complete=True, sidebar_key=_archive_response_cache_key(),
+                           sidebar_pages=(_ARCHIVE_SIDEBAR_PACKED_VERSION, _archive_list_pack_static))
         with _ARCHIVE_RESPONSE_CACHE_LOCK:
             done.set()
             for entry in _ARCHIVE_RESPONSE_CACHE.values():
@@ -17246,7 +17252,9 @@ def _persist_archive_response_cache(force=False, *, complete=False):
         "signature_maps": signature_maps,
     }
     try:
-        archive_store.save(_ARCHIVE_RESPONSE_CACHE_FILE, snapshot, complete=complete)
+        archive_store.save(_ARCHIVE_RESPONSE_CACHE_FILE, snapshot, complete=complete,
+                           sidebar_key=_archive_response_cache_key(),
+                           sidebar_pages=(_ARCHIVE_SIDEBAR_PACKED_VERSION, _archive_list_pack_static))
         hot_entries = {key: dict(entry, conversations=archive_store.hot_rows(entry.get("conversations") or []))
                        for key, entry in entries.items()}
         snapshot = dict(snapshot, entries=hot_entries)
@@ -17303,7 +17311,7 @@ def _archive_response_cache_put(key, conversations, signature=None):
             current["conversations"] = archive_store.hot_rows(rows)
 
 
-def _archive_response_cache_build_get(key, *, overlay_rows=None, reuse_sidebar_history=False):
+def _archive_response_cache_build_get(key, *, overlay_rows=None, reuse_sidebar_history=False, packed_version=None):
     """Materialize cold bodies, preserving live replacements for a history read."""
     entry = _archive_response_cache_get(key)
     from ccc_server import archive_store, archive_snapshot
@@ -17317,6 +17325,7 @@ def _archive_response_cache_build_get(key, *, overlay_rows=None, reuse_sidebar_h
                 min_cached_at=float((entry or {}).get("cached_at") or 0),
                 reuse_sidebar_history=reuse_sidebar_history,
                 copy_history=not reuse_sidebar_history,
+                packed_version=packed_version,
             )
             if merged is not None:
                 return merged
@@ -18836,30 +18845,7 @@ def _archive_list_window_cutoff(window, now=None):
     return (time.time() if now is None else now) - seconds if seconds else None
 
 
-def _archive_list_row_ts(row):
-    newest = 0
-    for key in ("modified", "mtime", "last_interacted", "last_activity", "last_mtime",
-                "archived_at", "closed_at", "started_at"):
-        value = (row or {}).get(key)
-        if not value:
-            continue
-        try:
-            ts = float(value)
-        except (TypeError, ValueError):
-            continue
-        if math.isfinite(ts) and ts > 0:
-            if ts > 100000000000:
-                ts /= 1000
-            if ts > newest:
-                newest = ts
-    try:
-        moved_at = float(((row or {}).get("idea_ticket") or {}).get("moved_at") or 0)
-        if math.isfinite(moved_at):
-            newest = max(newest, moved_at)
-    except (TypeError, ValueError):
-        pass
-    return newest
-
+_archive_list_row_ts = _archive_preview.activity
 
 def _archive_list_window_allows_row(row, cutoff, idea_tickets_by_sid=None):
     if not cutoff:
@@ -18913,6 +18899,9 @@ def _archive_list_preview(text, limit=140):
         if len(cache) > _ARCHIVE_LIST_PREVIEW_CACHE_MAX:
             del cache[next(iter(cache))]
     return preview
+
+# Change the prefix when the stored preview or packed field semantics change.
+_ARCHIVE_SIDEBAR_PACKED_VERSION = "1:" + hashlib.sha256(repr(_ARCHIVE_LIST_FIELDS).encode()).hexdigest()
 
 
 _ARCHIVE_LIST_ROW_TEMPLATES = ByteBudgetCache(
@@ -19009,6 +18998,10 @@ def _archive_list_static_row(row, template, fields_by_shape, retain_template, *,
     return out
 
 
+def _archive_list_pack_static(row, fields_by_shape):
+    return _archive_list_static_row(row, None, fields_by_shape, False, borrow_containers=True)
+
+
 def _archive_list_project_row(row, *, resumes=None, parents=None,
                               _template=_ARCHIVE_LIST_TEMPLATE_UNREAD, _fields_by_shape=None,
                               _retain_template=True, _prepared=None):
@@ -19053,14 +19046,7 @@ def _archive_list_row_overlays():
     return overlays
 
 
-def _archive_list_parent_ids(row, parents):
-    sid = _archive_row_sid(row)
-    return {str(value) for value in (
-        row.get("parent_session_id"), row.get("hermes_parent_session_id"),
-        row.get("continued_from_session_id"), row.get("hermes_continued_from"),
-        parents.get(sid),
-    ) if isinstance(value, str) and value}
-
+_archive_list_parent_ids = _archive_preview.parent_ids
 
 def _archive_list_family_rows(rows, selected, idea_tickets_by_sid, parents, *, context_ids=None):
     """Keep loaded family context together without making unrelated rows recent."""
@@ -19158,7 +19144,10 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _in
         if check_client is not None and position % 256 == 0:
             check_client()
         static = None
-        if _history_projection is not None:
+        if isinstance(row, _archive_sidebar_pages.StoredRow):
+            static = row
+            hits += 1
+        elif _history_projection is not None:
             row_id = id(row)
             static = prepared.get(row_id) if prepared is not None else None
             if static is not None:
@@ -19297,17 +19286,20 @@ def _archive_list_history_projection(scope, rows, build, phases, check_client=No
             del _ARCHIVE_LIST_HISTORY_FLIGHTS[key]
 
 
-def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phases=None, window="all"):
+def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phases=None, window="all",
+                                     packed_version=None):
     """Share a snapshot only with reads already running for the same scope.
 
     Initial and full sidebar requests may overlap. Neither needs a duplicate
     scan of the live engine overlays. Nothing is retained after a read ends;
     explicit freshness requests always perform their own read.
     """
+    options = {"force_refresh": force_refresh, "phases": phases, "window": window}
+    if packed_version is not None:
+        options["packed_version"] = packed_version
     if force_refresh:
-        return _archive_list_source_rows_read(
-            cache_options, force_refresh=True, phases=phases, window=window)
-    key = (_archive_response_cache_key(**cache_options), window)
+        return _archive_list_source_rows_read(cache_options, **options)
+    key = (_archive_response_cache_key(**cache_options), window, packed_version)
     with _ARCHIVE_LIST_SOURCE_FLIGHTS_LOCK:
         flight = _ARCHIVE_LIST_SOURCE_FLIGHTS.get(key)
         owner = flight is None
@@ -19323,11 +19315,9 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phas
                     (time.perf_counter() - started) * 1000.0, 1))
             return flight["value"]
         # A failed owner must not strand followers or cache its exception.
-        return _archive_list_source_rows_read(
-            cache_options, force_refresh=False, phases=phases, window=window)
+        return _archive_list_source_rows_read(cache_options, **options)
     try:
-        flight["value"] = _archive_list_source_rows_read(
-            cache_options, force_refresh=False, phases=phases, window=window)
+        flight["value"] = _archive_list_source_rows_read(cache_options, **options)
         return flight["value"]
     finally:
         with _ARCHIVE_LIST_SOURCE_FLIGHTS_LOCK:
@@ -19335,7 +19325,8 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phas
             flight["event"].set()
 
 
-def _archive_list_source_rows_read(cache_options, *, force_refresh=False, phases=None, window="all"):
+def _archive_list_source_rows_read(cache_options, *, force_refresh=False, phases=None, window="all",
+                                   packed_version=None):
     """Read-only full snapshot feeding the projected sidebar list.
 
     The list response immediately projects a small 1d/7d window into fresh
@@ -19364,16 +19355,22 @@ def _archive_list_source_rows_read(cache_options, *, force_refresh=False, phases
         window=window,
         defer_cold=True,
         reuse_sidebar_history=window == "all" and not force_refresh and not any(cache_options.values()),
+        **({"packed_version": packed_version} if packed_version is not None else {}),
     )
     _phase("serve_ms")
-    # Every gap filler sees the same snapshot plus preceding overlays. Build
-    # membership once per request; still read every engine's current source.
-    existing_ids = _archive_overlay_existing_ids(rows)
+    rows, extra = _archive_list_source_overlays(rows, _archive_overlay_existing_ids(rows), _phase)
+    body_ver = _archive_list_body_ver(key, rows, extra)
+    _phase("ver_ms")
+    return rows, from_cache, body_ver
+
+
+def _archive_list_source_overlays(rows, existing_ids, phase):
+    """Apply the same current engine gap fillers to full and indexed reads."""
     codex_overlay = _archive_overlay_codex_sessions(rows, existing_ids=existing_ids)
     if codex_overlay:
         rows = list(rows or []) + codex_overlay
         existing_ids.update(_archive_overlay_existing_ids(codex_overlay))
-    _phase("codex_ms")
+    phase("codex_ms")
     # ACP sessions (Kimi/GLM) live in memory before their first transcript
     # lands and before the archive background refresh picks them up. Without
     # this overlay, a brand-new ACP session appears in the UI via the pending
@@ -19385,7 +19382,7 @@ def _archive_list_source_rows_read(cache_options, *, force_refresh=False, phases
     if overlay:
         rows = list(rows or []) + overlay
         existing_ids.update(_archive_overlay_existing_ids(overlay))
-    _phase("acp_ms")
+    phase("acp_ms")
     # Same gap for Devin CLI: the session row exists in sessions.db within a
     # second of spawn, but the archive snapshot only picks it up after the
     # next full background rebuild (~20s+ on a large corpus). The Devin CLI
@@ -19395,20 +19392,20 @@ def _archive_list_source_rows_read(cache_options, *, force_refresh=False, phases
     if devin_overlay:
         rows = list(rows or []) + devin_overlay
         existing_ids.update(_archive_overlay_existing_ids(devin_overlay))
-    _phase("devin_ms")
+    phase("devin_ms")
     from ccc_server.antigravity import archive_terminal_overlay
     antigravity_overlay = archive_terminal_overlay(rows, existing_ids=existing_ids)
     if antigravity_overlay:
         rows = list(rows or []) + antigravity_overlay
         existing_ids.update(_archive_overlay_existing_ids(antigravity_overlay))
-    _phase("antigravity_ms")
+    phase("antigravity_ms")
     # WatchTower already knows the engine session before the archive scan.
     # Keep that worker in its normal session/queue group during the gap.
     worker_overlay = _archive_overlay_wt_worker_sessions(rows, existing_ids=existing_ids)
     if worker_overlay:
         rows = list(rows or []) + worker_overlay
         existing_ids.update(_archive_overlay_existing_ids(worker_overlay))
-    _phase("wt_ms")
+    phase("wt_ms")
     # CCC-153: a session started in a terminal (Claude writes
     # ~/.claude/sessions/<pid>.json at launch) was invisible until the next
     # snapshot refresh: >=5 min at the serve TTL, and never while the load
@@ -19417,14 +19414,12 @@ def _archive_list_source_rows_read(cache_options, *, force_refresh=False, phases
     claude_overlay = _archive_overlay_claude_registry_sessions(rows, existing_ids=existing_ids)
     if claude_overlay:
         rows = list(rows or []) + claude_overlay
-    _phase("claude_reg_ms")
+    phase("claude_reg_ms")
     extra = ((codex_overlay or []) + (overlay or []) + (devin_overlay or [])
              + (antigravity_overlay or []) + (worker_overlay or []) + (claude_overlay or []))
     if extra:
         _apply_session_lane_overrides(extra)
-    body_ver = _archive_list_body_ver(key, rows, extra)
-    _phase("ver_ms")
-    return rows, from_cache, body_ver
+    return rows, extra
 
 
 
@@ -20052,22 +20047,25 @@ def _trace_row_flicker(rows, now=None):
         pass
 
 
-def _queue_health_stats(rows, *, now=None):
+def _queue_health_stats(rows, *, now=None, working_snapshot=None):
     """Queue-vs-turn stats for the perf pane: how many sessions still have a
     turn in flight, and how long queued inputs have been sitting for
     sessions whose turn already finished (the drain-lag signal)."""
     now = time.time() if now is None else now
-    unfinished = 0
-    working_by_sid = {}
-    for r in rows or []:
-        if not isinstance(r, dict):
-            continue
-        sid = r.get("session_id") or r.get("id")
-        working = r.get("state") == "working" or r.get("codex_state") == "working"
-        if working:
-            unfinished += 1
-        if sid and sid not in working_by_sid:
-            working_by_sid[sid] = working
+    if working_snapshot is None:
+        unfinished = 0
+        working_by_sid = {}
+        for r in rows or []:
+            if not isinstance(r, dict):
+                continue
+            sid = r.get("session_id") or r.get("id")
+            working = r.get("state") == "working" or r.get("codex_state") == "working"
+            if working:
+                unfinished += 1
+            if sid and sid not in working_by_sid:
+                working_by_sid[sid] = working
+    else:
+        unfinished, working_by_sid = working_snapshot
     try:
         waits = queued_wait_snapshot(now=now)
     except Exception:
@@ -20171,9 +20169,68 @@ def _archive_list_initial_payload(rows, *, window="all", now=None, cached=None, 
     return payload
 
 
+def _archive_list_indexed_initial_payload(cache_options, *, phases):
+    """Hydrate only selected All-preview rows from an indexed generation."""
+    import sqlite3
+    from ccc_server import archive_store
+
+    key = _archive_response_cache_key(**cache_options)
+    try:
+        with archive_store.sidebar_preview_view(
+            _ARCHIVE_RESPONSE_CACHE_FILE, key,
+            schema_version=_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
+            build_id=_ARCHIVE_RESPONSE_CACHE_BUILD_ID,
+        ) as view:
+            if view is None:
+                return None
+            connection, cached_at = view
+            hot_rows, from_cache, _ = _archive_serve_hot_rows_versioned(
+                key, cache_options, copy_rows=False, defer_cold=True)
+            with _ARCHIVE_RESPONSE_CACHE_LOCK:
+                min_cached_at = float((_ARCHIVE_RESPONSE_CACHE.get(key) or {}).get("cached_at") or 0)
+            if not hot_rows or cached_at < min_cached_at:
+                return None
+            lifecycle = _conversation_lifecycle_snapshot()
+            current = {}
+            for row in hot_rows:
+                sid = row.get("session_id") or row.get("id")
+                if not isinstance(sid, str) or not sid or sid.startswith("#"):
+                    return None
+                current[archive_store.identity(row)] = row
+
+            def overlay_cold(row):
+                return _overlay_conversation_lifecycle_flags(
+                    [row], copy_on_change=True, snapshot=lifecycle)[0]
+
+            # Keep deleted hot identities as overrides until the indexed merge
+            # has masked their persisted body, then drop the resulting row.
+            current = {identity: overlay_cold(row) if not (
+                row.get("engine") == "codex" and _archive_row_sid(row) in lifecycle[2]
+            ) else row for identity, row in current.items()}
+            preview = _archive_preview.Preview(connection, key, current, lifecycle[2], overlay_cold)
+            existing_ids = {item[0] for item in preview.items}
+            _, extra = _archive_list_source_overlays([], existing_ids, lambda _phase: None)
+            preview.append(extra)
+            parents = _session_graph.parent_snapshot()
+            ideas = _idea_tickets.idea_ticket_rows_map()
+            initial = preview.select(parents, ideas)
+            counts = preview.counts()
+            total_count = len(preview.items)
+    except (OSError, ValueError, sqlite3.Error):
+        return None
+
+    inputs = (_load_usage_limit_resumes(), parents, ideas, initial)
+    payload = _archive_list_payload(
+        initial, window="all", cached=from_cache, phases=phases,
+        _inputs=inputs, _working_snapshot=counts)
+    payload.update(total_count=total_count, complete=len(initial) == total_count,
+                   selected_count=total_count, initial=True)
+    return payload
+
+
 def _archive_list_payload(rows, *, window="all", now=None, cached=None, phases=None, _inputs=None,
                           _retain_templates=True, _row_overlays=None, check_client=None,
-                          _history_projection=None):
+                          _history_projection=None, _working_snapshot=None):
     window = _archive_list_window(window)
     projected = _archive_list_project_rows(rows, window=window, now=now, phases=phases, _inputs=_inputs,
                                            _retain_templates=_retain_templates, _row_overlays=_row_overlays,
@@ -20188,7 +20245,8 @@ def _archive_list_payload(rows, *, window="all", now=None, cached=None, phases=N
         "total_count": sum(isinstance(row, dict) for row in (rows or [])),
         "window": window,
         "fields": list(_ARCHIVE_LIST_FIELDS),
-        "queue_health": _queue_health_stats(rows, now=now),
+        "queue_health": (_queue_health_stats(rows, now=now) if _working_snapshot is None
+                         else _queue_health_stats(rows, now=now, working_snapshot=_working_snapshot)),
     }
     if cached is not None:
         payload["cached"] = bool(cached)
@@ -20893,7 +20951,20 @@ def _archive_serve_refresh(key, cache_options, serve_generation, started_at):
                 _archive_serve_refreshing.pop(key, None)
 
 
-def _overlay_conversation_lifecycle_flags(rows, *, include_lanes=True, copy_on_change=False):
+def _conversation_lifecycle_snapshot():
+    archived_set, trashed_set = _load_conversation_lifecycle_sets()
+    try:
+        deleted_codex = _codex_deleted_thread_ids()
+    except Exception:
+        deleted_codex = set()
+    try:
+        lanes = _load_session_lane_overrides()
+    except Exception:
+        lanes = {}
+    return archived_set, trashed_set, deleted_codex, lanes
+
+
+def _overlay_conversation_lifecycle_flags(rows, *, include_lanes=True, copy_on_change=False, snapshot=None):
     """Re-stamp archived/trashed from the lifecycle sidecars.
 
     Lifecycle mutations (archive/trash/merge) clear the in-memory serve cache
@@ -20904,13 +20975,16 @@ def _overlay_conversation_lifecycle_flags(rows, *, include_lanes=True, copy_on_c
     stays cheap on the cold-serve path that exists to avoid rehydration cost.
     """
     try:
-        archived_set, trashed_set = _load_conversation_lifecycle_sets()
+        if snapshot is None:
+            archived_set, trashed_set = _load_conversation_lifecycle_sets()
+            try:
+                deleted_codex = _codex_deleted_thread_ids()
+            except Exception:
+                deleted_codex = set()
+        else:
+            archived_set, trashed_set, deleted_codex, lanes = snapshot
     except Exception:
         return rows
-    try:
-        deleted_codex = _codex_deleted_thread_ids()
-    except Exception:
-        deleted_codex = set()
     if isinstance(rows, list) and deleted_codex:
         rows[:] = [row for row in rows if not (
             isinstance(row, dict)
@@ -20920,10 +20994,11 @@ def _overlay_conversation_lifecycle_flags(rows, *, include_lanes=True, copy_on_c
     if copy_on_change:
         # The All sidebar borrows decoded history, then projects it into
         # response-owned dictionaries. Copy only rows affected by sidecars.
-        try:
-            lanes = _load_session_lane_overrides() if include_lanes else {}
-        except Exception:
-            lanes = {}
+        if snapshot is None:
+            try:
+                lanes = _load_session_lane_overrides() if include_lanes else {}
+            except Exception:
+                lanes = {}
         for index, row in enumerate(rows):
             if not isinstance(row, dict):
                 continue
@@ -20934,7 +21009,11 @@ def _overlay_conversation_lifecycle_flags(rows, *, include_lanes=True, copy_on_c
             lane = lanes.get(str(sid), _default_session_lane(row)) if include_lanes else None
             if (row.get("archived") is not archived or row.get("trashed") is not trashed
                     or (include_lanes and row.get("all_lane_override") != lane)):
-                changed = dict(row, archived=archived, trashed=trashed)
+                if isinstance(row, _archive_sidebar_pages.StoredRow):
+                    changed = row.copy()
+                    changed.update(archived=archived, trashed=trashed)
+                else:
+                    changed = dict(row, archived=archived, trashed=trashed)
                 if include_lanes:
                     changed["all_lane_override"] = lane
                 rows[index] = changed
@@ -20957,15 +21036,25 @@ def _archive_serve_rows(key, cache_options):
 
 
 def _archive_serve_rows_versioned(key, cache_options, *, copy_rows=True, force_refresh=False,
-                                  window="all", defer_cold=False, reuse_sidebar_history=False):
+                                  window="all", defer_cold=False, reuse_sidebar_history=False,
+                                  packed_version=None):
     rows, cached, version = _archive_serve_hot_rows_versioned(
         key, cache_options, copy_rows=copy_rows, force_refresh=force_refresh, defer_cold=defer_cold)
     if window == "all":
         from ccc_server import archive_store
         if archive_store.database_path(_ARCHIVE_RESPONSE_CACHE_FILE).exists():
             borrow_history = reuse_sidebar_history and not copy_rows
+            # Packed rows depend on the lifecycle snapshot for fields whose
+            # original values are discarded at publication.
+            lifecycle = None
+            if packed_version is not None:
+                try:
+                    lifecycle = _conversation_lifecycle_snapshot()
+                except Exception:
+                    packed_version = None
             entry = _archive_response_cache_build_get(
-                key, overlay_rows=rows, reuse_sidebar_history=borrow_history)
+                key, overlay_rows=rows, reuse_sidebar_history=borrow_history,
+                **({"packed_version": packed_version} if packed_version is not None else {}))
             if entry:
                 # Full-history bodies can still replay against the hot snapshot
                 # version. A new disk publication invalidates its cached body.
@@ -20980,7 +21069,8 @@ def _archive_serve_rows_versioned(key, cache_options, *, copy_rows=True, force_r
                         version = sc.get("ver", 0)
                 rows = entry["conversations"]
                 if borrow_history:
-                    return _overlay_conversation_lifecycle_flags(rows, copy_on_change=True), cached, version
+                    return _overlay_conversation_lifecycle_flags(
+                        rows, copy_on_change=True, snapshot=lifecycle), cached, version
                 return _overlay_conversation_lifecycle_flags(rows), cached, version
     if window != "all":
         from ccc_server import archive_store
@@ -37224,11 +37314,32 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     "body_hit": True, "since": "disk" if since else "none", "stale_ok": stale_ok,
                 })
                 return
+            if initial and window == "all" and stale_ok and not any(cache_options.values()):
+                indexed_phases = {}
+                indexed = _archive_list_indexed_initial_payload(cache_options, phases=indexed_phases)
+                if indexed is not None:
+                    self.send_json(indexed)
+                    record_diag("list_server", (time.perf_counter() - _lt0) * 1000.0, {
+                        "window": window, "initial": True, "indexed": True, "status": 200,
+                        "rows_src": indexed["total_count"], "projection": indexed_phases,
+                        "cpu_ms": round((time.thread_time() - _lc0) * 1000.0, 1),
+                    })
+                    return
+            packed_version = None
+            if (not initial and window == "all" and stale_ok and not any(cache_options.values())
+                    and _ARCHIVE_SIDEBAR_PACKED_VERSION is not None):
+                from ccc_server import archive_store
+
+                if archive_store.sidebar_pages_available(
+                    _ARCHIVE_RESPONSE_CACHE_FILE, list_cache_key, _ARCHIVE_SIDEBAR_PACKED_VERSION,
+                ):
+                    packed_version = _ARCHIVE_SIDEBAR_PACKED_VERSION
             rows, from_cache, body_ver = _archive_list_source_rows_cached(
                 cache_options,
                 force_refresh=not stale_ok,
                 phases=_src_phases,
                 window=window,
+                **({"packed_version": packed_version} if packed_version is not None else {}),
             )
             if initial:
                 # No delta token or persisted full-body cache entry can ever

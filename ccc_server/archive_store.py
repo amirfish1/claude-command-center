@@ -9,6 +9,7 @@ small JSON snapshot remains a fallback, not the canonical historical store.
 from concurrent.futures import Future
 import hashlib
 import copy
+from contextlib import contextmanager
 import json
 import math
 import marshal
@@ -173,7 +174,7 @@ def _connect(cache_file, *, write=False, shared_reader=False):
                            timeout=0.5, check_same_thread=not shared_reader)
 
 
-def save(cache_file, snapshot, *, complete=False):
+def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_pages=None):
     """Publish variants atomically. Return the count of changed row bodies.
 
     Only complete builder snapshots may remove absent rows. Hot snapshots
@@ -182,6 +183,11 @@ def save(cache_file, snapshot, *, complete=False):
     changed = 0
     con = _connect(cache_file, write=True)
     try:
+        from ccc_server import archive_preview, archive_sidebar_pages
+        if sidebar_key is not None:
+            archive_preview.setup(con)
+        if sidebar_pages is not None:
+            archive_sidebar_pages.setup(con)
         con.execute('BEGIN IMMEDIATE')
         from ccc_server.archive_snapshot import _entries
         for key, entry in _entries(snapshot).items():
@@ -198,6 +204,7 @@ def save(cache_file, snapshot, *, complete=False):
                 'SELECT identity,digest FROM session_inventory WHERE variant=?', (key,))}
             attention = {rid: digest for rid, digest in con.execute(
                 'SELECT identity,digest FROM session_attention WHERE variant=?', (key,))}
+            preview_ids = archive_preview.indexed(con, key) if key == sidebar_key else None
             seen = set()
             for index, row in enumerate(entry.get('conversations') or []):
                 if not isinstance(row, dict):
@@ -216,9 +223,12 @@ def save(cache_file, snapshot, *, complete=False):
                     projected = json.dumps(inventory_row(row), separators=(',', ':'), sort_keys=True)
                     con.execute('INSERT OR REPLACE INTO session_inventory VALUES(?,?,?,?)',
                                 (key, rid, inventory_digest, projected))
-                if existing.get(rid, (None,))[0] == digest:
+                same_body = existing.get(rid, (None,))[0] == digest
+                if same_body:
                     if existing[rid][1] != index:
                         con.execute('UPDATE rows SET position=? WHERE variant=? AND identity=?', (index, key, rid))
+                    if preview_ids is not None and rid not in preview_ids:
+                        archive_preview.publish(con, key, rid)
                     continue
                 row_activity = activity(row)
                 con.execute('INSERT OR REPLACE INTO rows VALUES(?,?,?,?,?,?,?,?,?)', (
@@ -226,6 +236,8 @@ def save(cache_file, snapshot, *, complete=False):
                     str(row.get('parent_session_id') or row.get('hermes_parent_session_id') or ''),
                     index, row_activity, int(sticky(row, stamp=row_activity)), digest, body,
                 ))
+                if preview_ids is not None:
+                    archive_preview.publish(con, key, rid, row)
                 changed += 1
             if complete:
                 con.executemany('DELETE FROM rows WHERE variant=? AND identity=?',
@@ -240,6 +252,12 @@ def save(cache_file, snapshot, *, complete=False):
                         (key, stamp, json.dumps(metadata, separators=(',', ':'))))
             con.execute('INSERT OR REPLACE INTO attention_variants VALUES(?,?,?,?,?)',
                         (key, stamp, new_version, snapshot.get('build_id'), ATTENTION_VERSION))
+            if preview_ids is not None:
+                archive_preview.finish_publication(con, key, stamp)
+                if complete and sidebar_pages is not None:
+                    version, project = sidebar_pages
+                    hot = {identity(row) for row in hot_rows(entry.get('conversations') or [], now=stamp)}
+                    archive_sidebar_pages.publish(con, key, stamp, version, hot, project)
         con.commit()
     except BaseException:
         con.rollback()
@@ -633,7 +651,7 @@ class _SidebarHistoryReader:
             self._arm_expiry()
 
     def read(self, cache_file, key, current, schema_version, build_id, min_cached_at,
-             *, copy_history=True):
+             *, copy_history=True, packed_version=None):
         with self.lock:
             target = database_path(cache_file).resolve()
             try:
@@ -653,7 +671,7 @@ class _SidebarHistoryReader:
                 version = conn.execute('PRAGMA data_version').fetchone()[0]
                 # Writable shallow copies can retain pointers to nested
                 # values. Keep them separate from borrowed, read-only rows.
-                guard = (version, key, schema_version, build_id, copy_history)
+                guard = (version, key, schema_version, build_id, copy_history, packed_version)
                 if self.memo is not None:
                     _, previous, entry, layout, overridden, _ = self.memo
                     if (previous == guard
@@ -678,7 +696,7 @@ class _SidebarHistoryReader:
                 with conn:
                     loaded = _load_override_entry(
                         conn, key, current, schema_version, build_id, min_cached_at,
-                        capture_layout=True, copy_history=copy_history)
+                        capture_layout=True, copy_history=copy_history, packed_version=packed_version)
                 if loaded is None:
                     self._close()
                     return None
@@ -702,8 +720,55 @@ class _SidebarHistoryReader:
 _SIDEBAR_HISTORY_READER = _SidebarHistoryReader()
 
 
+def sidebar_pages_available(cache_file, key, version):
+    """Select the packed source flight only when both sidebar readers are ready."""
+    if not database_path(cache_file).exists():
+        return False
+    try:
+        con = _connect(cache_file)
+        try:
+            return con.execute("""
+                SELECT 1 FROM variants v
+                JOIN sidebar_page_generation b ON b.variant=v.key AND b.cached_at=v.cached_at
+                JOIN sidebar_preview_generation p ON p.variant=v.key AND p.cached_at=v.cached_at
+                WHERE v.key=? AND b.version=?
+            """, (key, version)).fetchone() is not None
+        finally:
+            con.close()
+    except (OSError, sqlite3.Error):
+        return False
+
+
+@contextmanager
+def sidebar_preview_view(cache_file, key, *, schema_version, build_id):
+    """Expose only a complete indexed generation and its read transaction."""
+    from ccc_server import archive_preview
+
+    if not database_path(cache_file).exists():
+        yield None
+        return
+    con = _connect(cache_file)
+    try:
+        con.execute("BEGIN")
+        stored = con.execute("""
+            SELECT v.metadata, v.cached_at FROM variants v
+            JOIN sidebar_preview_generation p ON p.variant=v.key AND p.cached_at=v.cached_at
+            WHERE v.key=? AND p.version=?
+        """, (key, archive_preview.VERSION)).fetchone()
+        if not stored:
+            yield None
+            return
+        metadata = json.loads(stored[0])
+        if metadata.get("schema_version") != schema_version or metadata.get("build_id") != build_id:
+            yield None
+            return
+        yield con, stored[1]
+    finally:
+        con.close()
+
+
 def _load_override_entry(con, key, current, schema_version, build_id, min_cached_at,
-                         *, capture_layout=False, copy_history=True):
+                         *, capture_layout=False, copy_history=True, packed_version=None):
     con.execute('BEGIN')
     header = con.execute('SELECT metadata FROM variants WHERE key=?', (key,)).fetchone()
     if not header:
@@ -714,12 +779,21 @@ def _load_override_entry(con, key, current, schema_version, build_id, min_cached
             and float(entry.get('cached_at') or 0) >= min_cached_at):
         return None
 
+    if packed_version is not None and capture_layout and not copy_history:
+        from ccc_server import archive_sidebar_pages
+
+        packed = archive_sidebar_pages.read(
+            con, key, float(entry.get('cached_at') or 0), packed_version, current,
+            _SIDEBAR_HISTORY_MAX_BYTES)
+        if packed is not None:
+            return entry, *packed
+
     # The body and identity are published together. A NULL here marks an
     # override, since stored bodies are non-null. Keep the database's
     # ordering even when the live snapshot ranks those rows differently.
     records = con.execute('''SELECT identity,
         CASE WHEN identity IN (SELECT value FROM json_each(?)) THEN NULL ELSE body END
-        FROM rows WHERE variant=? ORDER BY position''', (json.dumps(list(current)), key))
+        FROM rows WHERE variant=? ORDER BY position, rowid''', (json.dumps(list(current)), key))
     rows = []
     layout = [] if capture_layout else None
     weight = 0
@@ -755,7 +829,7 @@ def _load_override_entry(con, key, current, schema_version, build_id, min_cached
 
 
 def load_with_overrides(cache_file, key, current_rows, *, schema_version, build_id, min_cached_at,
-                        reuse_sidebar_history=False, copy_history=True):
+                        reuse_sidebar_history=False, copy_history=True, packed_version=None):
     """Merge current rows at their stored positions without decoding superseded bodies.
 
     Older schemas and identities derived from a row's position still use the
@@ -774,7 +848,7 @@ def load_with_overrides(cache_file, key, current_rows, *, schema_version, build_
     if reuse_sidebar_history:
         return _SIDEBAR_HISTORY_READER.read(
             cache_file, key, current, schema_version, build_id, min_cached_at,
-            copy_history=copy_history)
+            copy_history=copy_history, packed_version=packed_version)
     con = _connect(cache_file)
     try:
         loaded = _load_override_entry(con, key, current, schema_version, build_id, min_cached_at)
