@@ -2,7 +2,7 @@
 import os
 import pytest
 import server
-from ccc_server.app_bootstrap import inline, mark
+from ccc_server.app_bootstrap import inline, mark, mark_embed
 from ccc_server.index_page_cache import IndexPageCache
 
 
@@ -35,3 +35,22 @@ def test_ineligible_source_keeps_original_parser_blocking_script(tmp_path, sourc
     html = mark('<script src="/static/app-embed-boot.js"></script>','app-embed-boot.js')
     assert inline(html,tmp_path) == html
     assert '<script data-ccc-inline-bootstrap src=' in html
+
+
+@pytest.mark.parametrize('source,embedded', [
+    ('.sample { color: red }', True),
+    ('.sample { background: url("picture.png") }', False),
+    ('@import "other.css";', False),
+    ('/* </STYLE> */', False),
+])
+def test_embed_inlines_styles_in_place_with_external_fallback(tmp_path, source, embedded):
+    (tmp_path / 'session-origin.css').write_text(source)
+    html = ('<link rel="stylesheet" href="/static/conversation-base.css">'
+            '<link rel="stylesheet" href="/static/session-origin.css">'
+            '<script src="/static/session-origin.js"></script>')
+    result = inline(mark_embed(html), tmp_path)
+    if embedded:
+        assert result.index('conversation-base.css') < result.index('<style') < result.index('<script')
+        assert f'>{source}</style>' in result
+    else:
+        assert 'rel="stylesheet" href="/static/session-origin.css"' in result

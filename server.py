@@ -32388,8 +32388,8 @@ def _load_index_html(app_embed=False, app_shell=False, selected_app=None):
     def transform(html):
         if app_embed:
             from ccc_server.app_embed import conversation_page
-            from ccc_server.app_bootstrap import mark
-            return mark(conversation_page(html), 'app-embed-boot.js')
+            from ccc_server.app_bootstrap import mark_embed
+            return mark_embed(conversation_page(html))
         if app_shell:
             from ccc_server.app_embed import application_shell_page
             from ccc_server.app_bootstrap import mark
