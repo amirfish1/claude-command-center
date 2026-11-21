@@ -343,23 +343,32 @@ def savings_scan_transcript(path):
     return session_id, rows
 
 
-def _transcript_paths(root: Path):
-    """Yield every ``*.jsonl`` transcript directly under each project dir."""
+def _transcript_stats(root: Path):
+    """Yield transcript paths and their current stat in project and file order."""
     try:
-        project_dirs = sorted(
-            (d for d in root.iterdir() if d.is_dir()), key=lambda p: p.name
-        )
+        with os.scandir(root) as entries:
+            project_names = sorted(entry.name for entry in entries if entry.is_dir())
     except OSError:
         return
-    for pd in project_dirs:
+    for name in project_names:
+        project = root / name
         try:
-            files = sorted(
-                (f for f in pd.iterdir() if f.is_file() and f.name.endswith(".jsonl")),
-                key=lambda p: p.name,
-            )
+            with os.scandir(project) as entries:
+                files = sorted(
+                    (entry for entry in entries
+                     if entry.name.endswith(".jsonl") and entry.is_file()),
+                    key=lambda entry: entry.name,
+                )
         except OSError:
             continue
-        yield from files
+        for entry in files:
+            try:
+                # DirEntry can reuse the stat already needed to classify a
+                # symlink or a file on a filesystem without entry types.
+                file_stat = entry.stat()
+            except OSError:
+                file_stat = None
+            yield entry.path, file_stat
 
 
 _LEDGER_LOCK = threading.Lock()
@@ -410,19 +419,17 @@ def _scan_incremental(conn, root: Path, deadline=None):
     queued_set = {
         r[0] for r in _sqlite_fetch_rows(conn, "SELECT path FROM backlog", (), ("path",))
     }
-    for path in _transcript_paths(root):
-        on_disk.add(str(path))
-        try:
-            st = path.stat()
-        except OSError:
+    for path, st in _transcript_stats(root):
+        on_disk.add(path)
+        if st is None:
             continue
-        row = known_map.get(str(path))
+        row = known_map.get(path)
         if row and row[0] == st.st_mtime and row[1] == st.st_size:
             stats["skipped"] += 1
             continue
-        if str(path) in queued_set:
+        if path in queued_set:
             continue  # already queued for the background pass
-        candidates.append((st.st_mtime, str(path), st.st_size))
+        candidates.append((st.st_mtime, path, st.st_size))
 
     # Queued backlog first (it was deferred by an earlier budget), then fresh
     # changes newest-first.

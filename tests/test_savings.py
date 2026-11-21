@@ -188,6 +188,26 @@ class TestPayload:
 class TestPerfBudget:
     """Perf-gate mirrors test_perf_budget.py: counts WORK, not just output."""
 
+    def test_transcript_stat_walk_keeps_symlinks_and_shallow_sorted_order(self, tmp_path):
+        root = tmp_path / "projects"
+        transcript = _write_transcript(root, "z", "b.jsonl", [])
+        project = root / "a"
+        project.mkdir()
+        (project / "linked.jsonl").symlink_to(transcript)
+        (project / "broken.jsonl").symlink_to(tmp_path / "missing")
+        (project / "directory.jsonl").mkdir()
+        (root / "z" / "subagents").mkdir()
+        (root / "z" / "subagents" / "child.jsonl").touch()
+        (root / "project-link").symlink_to(root / "z", target_is_directory=True)
+
+        rows = list(savings._transcript_stats(root))
+        assert [path for path, _ in rows] == [
+            str(project / "linked.jsonl"),
+            str(root / "project-link" / "b.jsonl"),
+            str(transcript),
+        ]
+        assert all(file_stat == transcript.stat() for _, file_stat in rows)
+
     def test_existing_ledger_adds_file_claim_lookup_without_rebuilding(self, tmp_path):
         root = tmp_path / "projects"
         _write_transcript(root, "p", "a.jsonl", [
