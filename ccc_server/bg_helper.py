@@ -385,6 +385,8 @@ class _Child:
             except Exception as exc:
                 print(f"  [bg-helper] {op}: {exc!r}", flush=True)
                 reply = {"ok": False, "error": str(exc)}
+            if op == "live_activity" and reply.get("ok"):
+                reply["ready_at"] = time.time()
             conn.sendall(json.dumps(reply, default=str).encode() + b"\n")
         except Exception:
             pass

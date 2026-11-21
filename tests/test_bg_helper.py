@@ -353,7 +353,7 @@ def test_live_op_reports_when_it_was_read(live_helper):
     before = time.time()
     reply = bg_helper.call("live_activity", role="live", max_age_s=0)
     assert reply["data"] == fake.live_rows
-    assert before <= reply["built_at"] <= time.time()
+    assert before <= reply["built_at"] <= reply["ready_at"] <= time.time()
     assert reply["detail"]["phases"]["liveness"]["wall_ms"] == 1.0
 
 
@@ -387,9 +387,12 @@ def test_resource_snapshot_uses_helper_but_reap_guard_reads_locally(live_helper,
 
 def test_live_op_shares_a_fresh_build_but_rebuilds_a_stale_one(live_helper):
     fake, _child = live_helper
-    bg_helper.call("live_activity", role="live", max_age_s=30)
-    bg_helper.call("live_activity", role="live", max_age_s=30)
+    first = bg_helper.call("live_activity", role="live", max_age_s=30)
+    before = time.time()
+    second = bg_helper.call("live_activity", role="live", max_age_s=30)
     assert fake.live_builds == 1
+    assert second["built_at"] == first["built_at"]
+    assert before <= second["ready_at"] <= time.time()
     time.sleep(0.05)
     bg_helper.call("live_activity", role="live", max_age_s=0.01)
     assert fake.live_builds == 2
@@ -403,6 +406,7 @@ def test_dashboard_reads_helper_and_keeps_its_read_time(live_helper):
     assert abs(built_at - time.time()) < 5
     assert detail["helper"] is True and detail["helper_rtt_ms"] >= 0
     assert detail["helper_age_ms"] >= 0
+    assert 0 <= detail["helper_reply_wait_ms"] <= detail["helper_rtt_ms"]
 
 
 def test_dashboard_overlays_state_only_it_can_see(live_helper, monkeypatch):

@@ -14270,6 +14270,7 @@ def _live_activity_via_helper(detail):
         "live_activity", role="live", timeout=bg_helper.LIVE_CALL_TIMEOUT_S,
         max_age_s=_LIVE_ACTIVITY_HELPER_MAX_AGE_S,
     )
+    received_at = time.time()
     rtt_ms = (time.perf_counter() - t0) * 1000.0
     data = reply.get("data") if reply else None
     built_at = reply.get("built_at") if reply else None
@@ -14311,6 +14312,13 @@ def _live_activity_via_helper(detail):
                   helper_rtt_ms=round(rtt_ms, 1),
                   helper_age_ms=round(max(0.0, (time.time() - built_at) * 1000.0), 1),
                   local_sessions=len(local))
+    # Capture time after the helper prepared the reply, independent of the
+    # age of its data (which may come from its short-lived cache).
+    ready_at = reply.get("ready_at")
+    if isinstance(ready_at, (int, float)):
+        reply_wait_ms = (received_at - ready_at) * 1000.0
+        if 0 <= reply_wait_ms <= rtt_ms:
+            detail["helper_reply_wait_ms"] = round(reply_wait_ms, 1)
     return data, float(built_at)
 
 
@@ -20462,16 +20470,22 @@ _GC_PAUSE_RECORD_MS = 50.0
 
 
 def _install_gc_pause_diag():
-    started = {}
+    started = None
 
     def on_gc(phase, info):
+        nonlocal started
         if phase == "start":
-            started["t"] = time.perf_counter()
+            started = (time.perf_counter(), time.thread_time())
             return
-        ms = (time.perf_counter() - started.get("t", time.perf_counter())) * 1000.0
+        if started is None:
+            return
+        wall_start, cpu_start = started
+        started = None
+        ms = (time.perf_counter() - wall_start) * 1000.0
         if ms >= _GC_PAUSE_RECORD_MS:
             record_diag("gc_pause", ms, {"generation": info.get("generation"),
-                                         "collected": info.get("collected")})
+                                         "collected": info.get("collected"),
+                                         "cpu_ms": round((time.thread_time() - cpu_start) * 1000.0, 2)})
 
     gc.callbacks.append(on_gc)
 
