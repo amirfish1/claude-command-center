@@ -1625,14 +1625,14 @@ class TestServerImports(unittest.TestCase):
         hits without turning the field into doc search."""
         app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
-        self.assertIn("const params = new URLSearchParams({ q, limit: '50', since: '90d' });", app_js)
+        self.assertIn("const params = new URLSearchParams({ q: positive, limit: '50', since: '90d' });", app_js)
         self.assertFalse(
             "params.set('cwd', cwd);" in app_js,
             "conversation search must not silently scope history search to the active repo",
         )
         self.assertIn("/api/search-recall-sessions", app_js)
         self.assertIn("c._historySource === 'recall'", app_js)
-        self.assertIn("const recallParams = new URLSearchParams({ q, limit: '50' });", app_js)
+        self.assertIn("const recallParams = new URLSearchParams({ q: positive, limit: '50' });", app_js)
         self.assertIn("fetch('/api/search-recall-sessions?' + recallParams.toString())", app_js)
         self.assertIn("const recallDone = recallReq.then((recallData) => {", app_js)
         self.assertIn("_mergeHistoryResults(qLower, (recallData && recallData.results) || []);", app_js)
@@ -5122,7 +5122,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _gcItems = _visibleGroupChats.map(chat => {", app_js)
         self.assertIn("const _gcCountForSection = _hideGroupChatsForSearch ? 0", app_js)
         self.assertIn("const _archivedGroupChatsForRender = _hideGroupChatsForSearch", app_js)
-        self.assertIn("const hasIndependentContent = (!q && _gcActiveChats && _gcActiveChats.length > 0)", app_js)
+        self.assertIn("const hasIndependentContent = (!searchKey && _gcActiveChats && _gcActiveChats.length > 0)", app_js)
 
     def test_group_chats_respect_inprogress_window_filter(self):
         """Group chats should disappear from Active rows under 1d/7d just like
@@ -14836,7 +14836,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn("let _lastArchiveRenderFilter = null;", js)
         self.assertIn("function _captureArchiveListScroll", js)
         self.assertIn("function _restoreArchiveListScroll", js)
-        self.assertIn("_lastArchiveRenderFilter = q;", js)
+        self.assertIn("_lastArchiveRenderFilter = searchKey;", js)
 
     def test_archive_anchor_restores_after_a_structural_top_insert(self):
         """A late archive row above the viewport must not shove idle cards.

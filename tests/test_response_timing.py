@@ -14,6 +14,11 @@ import pytest
 import server
 
 
+def _timing_lines(output):
+    prefix = "[response-timing] "
+    return [line[len(prefix):] for line in output.splitlines() if line.startswith(prefix)]
+
+
 def test_reused_app_read_accounting_excludes_idle_time(monkeypatch):
     records = []
     monkeypatch.setattr(server._cpu_accounting, 'record',
@@ -84,16 +89,18 @@ def test_response_measurements_are_opt_in_and_content_free(measurement, capsys):
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=5)
-    output = capsys.readouterr().out
+    # Another test's background thread can write after the timing record.
+    print("[fixture] unrelated diagnostic")
+    timing_lines = _timing_lines(capsys.readouterr().out)
     if len(measurement) == 16:
-        assert output.count("[response-timing]") == 1
-        record = json.loads(output.split("[response-timing] ")[1])
+        line, = timing_lines
+        record = json.loads(line)
         assert record["id"] == measurement
         assert record["emit_epoch_ms"] <= record["headers_done_epoch_ms"] <= record["done_epoch_ms"]
         assert record["header_write_ms"] >= 0 and record["completed"]
-        assert not any(value in output for value in ["private", "secret", "body", "value"])
+        assert not any(value in line for value in ["private", "secret", "body", "value"])
     else:
-        assert output == ""
+        assert timing_lines == []
 
 
 def test_malformed_request_can_return_an_error_before_headers_exist(capsys):
@@ -155,9 +162,7 @@ def test_socket_wait_distinguishes_backlog_from_handler_and_keepalive(capsys):
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=5)
-    records = [json.loads(line.split("[response-timing] ")[1])
-               for line in capsys.readouterr().out.splitlines()
-               if line.startswith("[response-timing] ")]
+    records = [json.loads(line) for line in _timing_lines(capsys.readouterr().out)]
     assert len(records) == 2
     # The 120ms handler delay must not be included in the 150ms backlog age.
     assert records[0]["socket_wait_ms"] >= 100
@@ -206,9 +211,7 @@ def test_socket_wait_measures_a_queued_request_on_a_reused_socket(capsys):
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=5)
-    records = [json.loads(line.split("[response-timing] ")[1])
-               for line in capsys.readouterr().out.splitlines()
-               if line.startswith("[response-timing] ")]
+    records = [json.loads(line) for line in _timing_lines(capsys.readouterr().out)]
     assert len(records) == 1
     assert records[0]["socket_wait_ms"] >= 150
 

@@ -68,3 +68,33 @@ test('standalone exclusions preserve positive phrases, IDs and quoted text', () 
     excluded: [],
   });
 });
+
+test('history and recall receive the same global positive query', async () => {
+  const requests = [];
+  const merged = [];
+  const query = 'Release notes -draft';
+  const context = {
+    URLSearchParams, window: {}, _historyFetchSeq: 0, _historyState: {},
+    _convSearchCalls: [], _convListRenderSig: null, $convSearch: { value: query },
+    setConversationSearchLoading() {}, _bestRepoMatchForQuery: () => null,
+    _trackConvSearchCall: (_, __, request) => request,
+    _buildRepoSearchRows: () => [],
+    _mergeHistoryResults: (key, rows) => merged.push([key, ...rows]),
+    _renderConversationSearchResults() {},
+    fetch: async endpoint => {
+      const url = new URL(endpoint, 'https://example.test');
+      requests.push([url.pathname, Object.fromEntries(url.searchParams)]);
+      return { ok: true, json: async () => ({ results: [url.pathname] }) };
+    },
+  };
+  vm.runInNewContext(functions(['splitConversationSearch', '_fetchHistoryAugment']), context);
+  await context._fetchHistoryAugment(query);
+  assert.deepEqual(requests, [
+    ['/api/search-history', { q: 'Release notes', limit: '50', since: '90d' }],
+    ['/api/search-recall-sessions', { q: 'Release notes', limit: '50' }],
+  ]);
+  assert.deepEqual(merged.sort(), [
+    ['release notes -draft', '/api/search-history'],
+    ['release notes -draft', '/api/search-recall-sessions'],
+  ]);
+});

@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 from tests.conversation_source import conversation_function
 
 
@@ -24,7 +25,7 @@ def test_render_list_uses_bounded_rows_and_offers_more_on_demand():
     assert "_boundSidebarRowsForRender(convs, _sidebarRenderRowLimit" in source
     assert 'data-role="sidebar-show-more"' in source
     assert "_sidebarRenderRowLimit += SIDEBAR_RENDER_MORE_ROWS" in source
-    assert "renderConversationList(_sidebarFullRows)" in source
+    assert re.search(r"renderConversationList\(_sidebarFullRows\s*[,)]", source)
 
 
 def test_archive_and_queue_timers_are_stream_failure_fallbacks_only():
