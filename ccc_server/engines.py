@@ -4693,10 +4693,17 @@ def _antigravity_reap_finished_process(session_id, pid):
         executable = re.split(r"\s+-{1,2}[a-zA-Z]", options, maxsplit=1)[0]
     except (OSError, TypeError, ValueError, subprocess.SubprocessError):
         return False
+    exe_words = executable.split()
+    is_acp = len(exe_words) == 2 and exe_words[1] == "acp"
+    if is_acp:
+        executable = exe_words[0]
     if Path(executable).name != "agy":
         return False
     match = re.search(r"(?:^|\s)--conversation(?:=|\s+)(\S+)", options)
     conversation = match[1] if match else None
+    if conversation is None and is_acp:
+        match = re.search(r"acp-antigravity-([0-9a-fA-F-]{36})-", options)
+        conversation = match[1] if match else None
     if conversation is None:
         # ps displays argv without shell escaping. Preserve spaces and
         # apostrophes in the log path rather than applying shlex to it.
@@ -4767,9 +4774,12 @@ def _antigravity_live_resume_pid(session_id):
     if out.returncode != 0:
         return None
     needle = f"--conversation {session_id}"
+    acp_needle = f"acp-antigravity-{session_id}-"
     for line in out.stdout.splitlines():
         line = line.strip()
-        if not line or needle not in line:
+        # `agy acp` has no --conversation flag; CCC names its log file
+        # after the conversation instead (antigravity_stream.spawn_acp).
+        if not line or (needle not in line and (" acp " not in line or acp_needle not in line)):
             continue
         pid_str, _, cmd = line.partition(" ")
         first = cmd.strip().split()[0].rsplit("/", 1)[-1] if cmd.strip() else ""
@@ -4970,15 +4980,14 @@ def _resume_session_antigravity(session_id, text, mode):
          orphaned transcripts (no .pb, no app file) were dead — now they
          get the new turn appended via headless print.
 
-    Antigravity is a one-shot headless process with no mid-turn steer
-    primitive (unlike Codex's resume/steer or Kimi/Grok's ACP session/cancel)
-    -- there is no safe way to interject without killing whatever the
-    current turn is mid-edit on. When ``mode == "steer"`` hits a still-busy
-    turn below, say so plainly (``queued_preserved``) instead of returning
-    the same silent re-queue a plain send would get: the queued-steer tray's
-    Steer button already renders on every engine (CCC-42/43), so a busy
-    Antigravity session needs an honest "can't interrupt" answer rather than
-    the click quietly reverting with no explanation (CCC-1030).
+    Steer: a conversation driven by a persistent `agy acp` process (the
+    default, see antigravity_stream.spawn_acp) takes a steer straight into
+    the running turn -- agy reads it after its current step. Stream-json and
+    one-shot `agy -p` processes have no mid-turn primitive; when ``mode ==
+    "steer"`` hits one of those still busy, say so plainly
+    (``queued_preserved``) instead of returning the same silent re-queue a
+    plain send would get, so the queued-steer tray's Steer button (CCC-42/43)
+    gets an honest "can't interrupt" answer (CCC-1030).
     """
     pending_input = text
     pending_action = "insert_front" if getattr(pending_input, "pending_id", None) else "append_tail"
@@ -5017,6 +5026,12 @@ def _resume_session_antigravity(session_id, text, mode):
         )
         if stream_state["busy"]:
             if mode == "steer":
+                # An `agy acp` process takes the text into the running turn
+                # (agy reads it after its current step). A stream-json one
+                # can't, so the text stays queued for the next turn.
+                steered = _antigravity_stream.steer(session_id, text)
+                if steered.get("ok"):
+                    return steered
                 return {
                     "ok": True,
                     "queued_preserved": True,
@@ -5198,6 +5213,35 @@ def _resume_session_antigravity(session_id, text, mode):
         stream_cli_log = cli_log_path
     if not _core._antigravity_has_arg(user_args, "--print-timeout"):
         cmd.extend(["--print-timeout", _core._antigravity_print_timeout()])
+    skip_permissions = "--dangerously-skip-permissions" in cmd
+    if (
+        _antigravity_stream.acp_enabled()
+        and not _core._antigravity_command_words(resolved)[1:]
+        and stream_cli_log is not None
+    ):
+        # Preferred: `agy acp`, the only agy mode that can steer a running
+        # turn. It takes neither --settings nor --model, so the model is set
+        # over ACP; custom CCC_ANTIGRAVITY_ARGS (which may not be valid for
+        # `agy acp`) keep the stream-json path. The full conversation id in
+        # the log path lets _antigravity_live_resume_pid find this process.
+        acp_cmd = [resolved["bin"], "acp", "--log-file",
+                   str(log_dir / f"acp-antigravity-{session_id}-{timestamp}.log")]
+        if skip_permissions:
+            acp_cmd.append("--dangerously-skip-permissions")
+        _core._antigravity_add_dirs(acp_cmd, [], add_dirs)
+        try:
+            _antigravity_stream.spawn_acp(
+                session_id, acp_cmd, cwd, log_path,
+                (model_to_use or "", tuple(sorted(set(add_dirs))), account_id),
+                env=child_env, cli_log_path=None, model_label=model_to_use or "",
+                skip_permissions=skip_permissions,
+            )
+            sent = _antigravity_stream.send(session_id, text)
+        except Exception:
+            sent = None
+        if sent and sent.get("ok"):
+            return {**sent, "log": str(log_path), "resumed": True, "model": model_to_use}
+        _antigravity_stream.retire(session_id)
     if _antigravity_stream.enabled():
         # Documented multi-turn mode: one persistent process per conversation,
         # NDJSON on stdin, one `result` event per turn. Any failure falls

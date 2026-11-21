@@ -143,6 +143,8 @@ class TestResumeCommand:
                 # over the Mock's stdout that outlives this test (CCC-274).
                 engines_mod._antigravity_stream, "enabled", return_value=False,
             ), mock.patch.object(
+                engines_mod._antigravity_stream, "acp_enabled", return_value=False,
+            ), mock.patch.object(
                 server_mod.subprocess, "Popen", return_value=proc,
             ) as popen, mock.patch.object(server_mod, "_record_spawn_to_registry"):
                 result = server_mod.resume_session_antigravity(sid, "keep going")

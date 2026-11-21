@@ -156,6 +156,7 @@ def test_persisted_secondary_resume_routes_same_account(runtime, tmp_path):
          mock.patch.object(server, '_resolve_antigravity_bin', return_value={'available': True, 'bin': '/test/agy'}), \
          mock.patch.object(antigravity_stream, 'state', return_value=None), \
          mock.patch.object(antigravity_stream, 'enabled', return_value=False), \
+         mock.patch.object(antigravity_stream, 'acp_enabled', return_value=False), \
          mock.patch.object(engines, '_antigravity_terminal_holder_pid', return_value=None), \
          mock.patch.object(engines, '_antigravity_live_resume_pid', return_value=None), \
          mock.patch.object(engines.antigravity_ls, 'send', return_value=None), \
