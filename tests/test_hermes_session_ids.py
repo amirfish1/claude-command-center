@@ -2,6 +2,7 @@
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
@@ -31,6 +32,36 @@ class HermesSessionIdsTest(unittest.TestCase):
             finally:
                 _core._HERMES_ID_CACHE.clear(); _core._HERMES_ID_CACHE.update(saved_ids)
                 _core._HERMES_DB_INDEX.clear(); _core._HERMES_DB_INDEX.update(saved_index)
+
+
+def test_session_owner_uses_current_wal_without_rebuilding_bulk_index(tmp_path, monkeypatch):
+    main = tmp_path / "state.db"
+    profile = tmp_path / "profile.db"
+    monkeypatch.setattr(hermes, "_hermes_db_paths", lambda: [main, profile])
+    monkeypatch.setattr(_core, "_detect_session_engine", lambda _sid: "hermes")
+    monkeypatch.setattr(_core, "_HERMES_ID_CACHE", {"key": None, "ids": set()})
+    monkeypatch.setattr(_core, "_HERMES_DB_INDEX", {"key": None, "by_session": {}})
+    with closing(sqlite3.connect(main)) as writer, closing(sqlite3.connect(profile)) as worker:
+        writer.execute("PRAGMA journal_mode=WAL")
+        for db in (writer, worker):
+            db.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY)")
+            db.commit()
+        worker.execute("INSERT INTO sessions VALUES ('shared')")
+        worker.commit()
+        assert hermes._hermes_session_ids() == {"shared"}
+        assert hermes._hermes_db_for_session("shared") == profile
+
+        monkeypatch.setattr(hermes, "_hermes_session_ids",
+                            mock.Mock(side_effect=AssertionError("unexpected bulk scan")))
+        writer.execute("INSERT INTO sessions VALUES ('shared')")
+        writer.commit()
+        assert hermes._hermes_db_for_session("shared", build_index=False) == main
+        assert _core._conv_parse_jsonl_mtime("shared") == hermes._hermes_file_key(
+            (main, tmp_path / "state.db-wal"))
+        assert hermes._hermes_db_for_session("absent", build_index=False) is None
+        writer.execute("DELETE FROM sessions WHERE id = 'shared'")
+        writer.commit()
+        assert hermes._hermes_db_for_session("shared", build_index=False) == profile
 
 
 if __name__ == "__main__":

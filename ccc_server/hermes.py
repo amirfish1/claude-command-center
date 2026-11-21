@@ -108,12 +108,14 @@ def _hermes_db_paths():
     return paths
 
 
-def _hermes_db_cache_key():
+def _hermes_db_cache_key(paths=None):
     """Combined (mtime,size) across every Hermes DB so caches invalidate when
     any gateway or profile DB changes."""
     mtime_ns = 0
     size = 0
-    for db in _hermes_db_paths():
+    if paths is None:
+        paths = _hermes_db_paths()
+    for db in paths:
         for p in (db, Path(str(db) + "-wal")):
             try:
                 st = p.stat()
@@ -167,7 +169,7 @@ def _hermes_session_cache_key(session_id):
         paths = [_core.HERMES_WHATSAPP_BRIDGE_LOG]
         paths.extend(_hermes_pending_paths())
         return _hermes_file_key(paths)
-    db = _hermes_db_for_session(sid)
+    db = _hermes_db_for_session(sid, build_index=False)
     if db is not None:
         return _hermes_file_key((db, Path(str(db) + "-wal")))
     return _hermes_cache_key()
@@ -437,14 +439,36 @@ def _hermes_connect(db=None):
     return dbutil.connect_readonly(db)
 
 
-def _hermes_db_for_session(session_id):
+def _hermes_db_for_session(session_id, *, build_index=True):
     """Return the DB path that owns this session id (gateway or a profile)."""
     sid = str(session_id or "").strip()
     if not sid:
         return None
-    if _core._HERMES_DB_INDEX.get("key") != _hermes_db_cache_key():
-        _hermes_session_ids()  # rebuilds the index as a side effect
-    return _core._HERMES_DB_INDEX.get("by_session", {}).get(sid)
+    paths = _hermes_db_paths()
+    key = _hermes_db_cache_key(paths)
+    index = _core._HERMES_DB_INDEX.copy()
+    if index["key"] == key:
+        return index["by_session"].get(sid)
+    if build_index:
+        _hermes_session_ids()
+        return _core._HERMES_DB_INDEX["by_session"].get(sid)
+    # Message writes also change the WAL. Check the requested owner in
+    # profile order instead of enumerating every session on each live poll.
+    for db in paths:
+        con = _hermes_connect(db)
+        if con is None:
+            continue
+        try:
+            row = con.execute(
+                "SELECT id FROM sessions WHERE id = ? COLLATE BINARY LIMIT 1", (sid,)
+            ).fetchone()
+            if row is not None and str(row[0]) == sid:
+                return db
+        except sqlite3.Error:
+            continue
+        finally:
+            con.close()
+    return None
 
 
 def _hermes_columns(con, table):
@@ -479,10 +503,8 @@ def _hermes_session_ids():
             pass
         finally:
             con.close()
-    _core._HERMES_ID_CACHE["key"] = key
-    _core._HERMES_ID_CACHE["ids"] = set(ids)
-    _core._HERMES_DB_INDEX["key"] = key
-    _core._HERMES_DB_INDEX["by_session"] = by_session
+    _core._HERMES_DB_INDEX.update(key=key, by_session=by_session)
+    _core._HERMES_ID_CACHE.update(key=key, ids=set(ids))
     return ids
 
 

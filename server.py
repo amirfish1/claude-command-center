@@ -29180,6 +29180,8 @@ def _conv_parse_jsonl_mtime(conversation_id, repo_path=None):
         engine = _detect_session_engine(conversation_id)
         if engine == "antigravity":
             return _antigravity_reader_cache_key(conversation_id)
+        if engine == "hermes":
+            return _hermes_session_cache_key(conversation_id)
         if engine == "codex":
             cache_key = (conversation_id, repo_path)
             now = time.monotonic()
