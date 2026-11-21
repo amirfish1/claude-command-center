@@ -232,6 +232,8 @@ def acquire(reason="", ttl_s=DEFAULT_TTL_S, now=None, token=None, commit=False,
     if not isinstance(proof, dict) or proof.get("safe") is not True:
         proof = proof if isinstance(proof, dict) else {}
         release(owned)
+        if not token and proof.get("reason") == "threads_loaded":
+            sys.modules["server"]._schedule_codex_restart_idle_cleanup(proof["threads"])
         return _refused(str(proof.get("reason") or "unknown"),
                         threads=proof.get("threads"))
     with _state_lock:

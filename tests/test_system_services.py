@@ -13,6 +13,8 @@ Codex turn yet" would paint the header yellow on a perfectly healthy machine.
 
 import importlib
 import os
+from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 
@@ -120,6 +122,26 @@ class SystemServicesTests(unittest.TestCase):
         self.assertIsNone(self._row(payload, "app_server")["restart_endpoint"])
         # An adopted daemon, not a CCC-managed service: nothing to restart.
         self.assertIsNone(self._row(payload, "kimi_kap")["restart_endpoint"])
+
+    def test_prolonged_restart_attention_matches_target_and_dashboard_generation(self):
+        import json
+        with tempfile.TemporaryDirectory() as home, mock.patch.object(Path, "home", return_value=Path(home)):
+            state_file = Path(home) / ".claude" / "command-center" / "restart-debounce.json"
+            state_file.parent.mkdir(parents=True)
+            boot = self.server._SERVER_START_TS
+            for target, generation, retries, expected in (
+                ("worker", boot, 30, {"worker": 30}),
+                ("all", boot, 206, {"dashboard": 206, "worker": 206}),
+                ("dashboard", boot, 29, {}),
+                ("all", boot - 1, 206, {}),
+            ):
+                with self.subTest(target=target, generation=generation, retries=retries):
+                    state_file.write_text(json.dumps({"pending": {
+                        "target": target, "dashboard_started_at": generation, "retries": retries,
+                    }}))
+                    rows = self._build()["services"]
+                    self.assertEqual({row["id"]: row["restart_delay_retries"] for row in rows
+                                      if "restart_delay_retries" in row}, expected)
 
     # ── dashboard ────────────────────────────────────────────────────────
 

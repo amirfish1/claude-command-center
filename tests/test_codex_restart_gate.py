@@ -107,6 +107,7 @@ def native(monkeypatch):
     monkeypatch.setattr(server, "_CODEX_APP_SERVER_THREAD_STATE", {})
     monkeypatch.setattr(server, "_app_server_trace", lambda *a, **k: None)
     monkeypatch.setattr(server, "_log_activity", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_schedule_codex_restart_idle_cleanup", lambda ids: None)
     monkeypatch.setattr(gate, "_frozen_until", 0.0)
     monkeypatch.setattr(gate, "_frozen_reason", "")
     monkeypatch.setattr(gate, "_owner", "")
@@ -123,6 +124,25 @@ def native(monkeypatch):
 def _release_owned():
     """Lift whichever lease is live, as its owner would."""
     return gate.release(gate._owner)
+
+
+def test_loaded_idle_restart_requests_cleanup_but_still_requires_native_unload(native, monkeypatch):
+    native.loaded = ["idle-thread"]
+    cleanup = []
+
+    def schedule(ids):
+        assert not gate.frozen()
+        cleanup.extend(ids)
+
+    monkeypatch.setattr(server, "_schedule_codex_restart_idle_cleanup", schedule)
+    assert gate.acquire("initial restart")["reason"] == "threads_loaded"
+    assert cleanup == ["idle-thread"]
+    assert not gate.acquire("still loaded")["frozen"]
+    native.loaded.clear()
+    lease = gate.acquire("unloaded")
+    assert lease["frozen"]
+    assert gate.acquire("pre-kill", token=lease["token"], commit=True,
+                        owner_pid=os.getpid())["committed"]
 
 
 def _fake_child(*extra):

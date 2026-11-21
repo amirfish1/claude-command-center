@@ -4573,6 +4573,7 @@ def _app_server_status_preferring_worker():
 # double-checked-lock shape as _system_health_snapshot.
 _SYSTEM_SERVICES_TTL = 3.0
 _system_services_lock = threading.Lock()
+_RESTART_ATTENTION_RETRIES = 30
 
 # A single transient 500 should not paint the header yellow. The health bar
 # already treats 5 errors in the 15-minute window as critical; reuse that line
@@ -5243,13 +5244,26 @@ def kill_next_server(pid):
 
 
 def _build_system_services_uncached():
+    dashboard = _system_services_dashboard_entry()
     worker = _system_services_worker_entry()
+    try:
+        state_file = Path.home() / ".claude" / "command-center" / "restart-debounce.json"
+        pending = json.loads(state_file.read_bytes()).get("pending") or {}
+        retries = pending.get("retries")
+        target = pending.get("target")
+        if (type(retries) is int and retries >= _RESTART_ATTENTION_RETRIES
+                and pending.get("dashboard_started_at") == _core._SERVER_START_TS):
+            for service in (dashboard, worker):
+                if target in ("all", service["id"]):
+                    service["restart_delay_retries"] = retries
+    except (OSError, ValueError, AttributeError):
+        pass
     return {
         "ok": True,
         "generated_at": time.time(),
         "dashboard_version": _core.__version__,
         "services": [
-            _system_services_dashboard_entry(),
+            dashboard,
             worker,
             _core._system_services_watchtower_entry(),
             _system_services_app_server_entry(worker),
@@ -5966,9 +5980,36 @@ def _codex_app_server_thread_is_active(session_id, *, start_if_needed=False):
 
 _CODEX_IDLE_UNSUBSCRIBE_PENDING = set()
 _CODEX_IDLE_UNSUBSCRIBE_UNSUPPORTED_TRANSPORT = None
+_CODEX_RESTART_IDLE_CLEANUP_LOCK = threading.Lock()
 
 
-def _codex_unsubscribe_idle_thread(session_id):
+def _codex_restart_idle_thread_has_work(transport, thread_id):
+    """An idle thread can still own native work outside CCC's turn ledger."""
+    params = {"threadId": thread_id}
+    for method in ("thread/queue/list", "thread/backgroundTerminals/list"):
+        response = _core._codex_app_server_request_to_transport(
+            transport, method, params, timeout=5,
+        )
+        result = response.get("result")
+        if not isinstance(result, dict) or result.get("data") != [] or result.get("nextCursor"):
+            return True
+    response = _core._codex_app_server_request_to_transport(
+        transport, "thread/goal/get", params, timeout=5,
+    )
+    error = response.get("error")
+    if (isinstance(error, dict) and error.get("code") == -32600
+            and error.get("message") == "goals feature is disabled"):
+        return False
+    result = response.get("result")
+    if not isinstance(result, dict) or "goal" not in result:
+        return True
+    goal = result["goal"]
+    return goal is not None and (
+        not isinstance(goal, dict) or goal.get("status") not in ("complete", "paused")
+    )
+
+
+def _codex_unsubscribe_idle_thread(session_id, *, restart_cleanup=False):
     """Drop an unused local subscription; Codex controls its unload grace."""
     global _CODEX_IDLE_UNSUBSCRIBE_UNSUPPORTED_TRANSPORT
     if not _core._codex_app_server_is_live():
@@ -5978,7 +6019,8 @@ def _codex_unsubscribe_idle_thread(session_id):
         return False
     def needs_subscription():
         state = _core._codex_app_server_thread_state(session_id)
-        if (str(state.get("status") or "").lower() != "idle"
+        status = str(state.get("status") or "").lower()
+        if (status not in (("", "idle") if restart_cleanup else ("idle",))
                 or state.get("active_turn_id") or state.get("ccc_turn_start_pending")
                 or state.get("thread_needs_approval")):
             return True
@@ -5996,6 +6038,10 @@ def _codex_unsubscribe_idle_thread(session_id):
         transport = _core._CODEX_APP_SERVER_TRANSPORT
         if transport is None or transport is _CODEX_IDLE_UNSUBSCRIBE_UNSUPPORTED_TRANSPORT:
             return False
+        if restart_cleanup and transport.kind != "stdio":
+            return False
+        if restart_cleanup and _codex_restart_idle_thread_has_work(transport, session_id):
+            return False
         response = _core._codex_app_server_request_to_transport(
             transport, "thread/read", {"threadId": session_id, "includeTurns": False},
             timeout=5,
@@ -6003,6 +6049,7 @@ def _codex_unsubscribe_idle_thread(session_id):
         thread = (response.get("result") or {}).get("thread") or {}
         if (not _core._codex_response_succeeded(response)
                 or (thread.get("status") or {}).get("type") != "idle"
+                or (restart_cleanup and (thread.get("ephemeral") or not thread.get("path")))
                 or transport is not _core._CODEX_APP_SERVER_TRANSPORT
                 or not _core._codex_app_server_is_live()):
             return False
@@ -6023,6 +6070,29 @@ def _codex_unsubscribe_idle_thread(session_id):
         return False
     finally:
         lock.release()
+
+
+def _schedule_codex_restart_idle_cleanup(thread_ids):
+    """Release idle subscriptions off the restart RPC's critical path.
+
+    Native Codex decides when to unload. A subsequent restart must still
+    obtain a new lease and see an empty native loaded list before killing.
+    """
+    if not _CODEX_RESTART_IDLE_CLEANUP_LOCK.acquire(blocking=False):
+        return
+
+    def cleanup():
+        try:
+            for thread_id in thread_ids:
+                _core._codex_unsubscribe_idle_thread(thread_id, restart_cleanup=True)
+        finally:
+            _CODEX_RESTART_IDLE_CLEANUP_LOCK.release()
+
+    thread = threading.Thread(target=cleanup, daemon=True, name="codex-restart-idle-cleanup")
+    try:
+        thread.start()
+    except RuntimeError:
+        _CODEX_RESTART_IDLE_CLEANUP_LOCK.release()
 
 
 def _schedule_codex_idle_unsubscribe(session_id):

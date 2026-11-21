@@ -1807,6 +1807,10 @@ RESTART_DEBOUNCE_S = int(os.environ.get("CCC_RESTART_DEBOUNCE_S") or 1800)
 _RESTART_RETRY_S = 60
 _RESTART_MAX_RETRIES = 10
 _RESTART_PATHS = {"all": "/api/restart/all", "dashboard": "/api/restart", "worker": "/api/restart/worker"}
+_WORKER_RESTART_REFUSALS = frozenset({
+    "codex_gate_unsupported", "codex_restart_in_progress",
+    "codex_state_unavailable", "codex_turns_running",
+})
 
 
 def _merge_restart_targets(a, b):
@@ -1946,7 +1950,7 @@ def _reserve_restart(base, target=None, force=False, runner=False):
     return _restart_state_update(apply)
 
 
-def _finish_restart_reservation(reservation, status):
+def _finish_restart_reservation(reservation, status, target=None):
     import time
 
     def apply(state):
@@ -1955,6 +1959,8 @@ def _finish_restart_reservation(reservation, status):
         state.pop("reservation", None)
         if status == 200:
             state["last_restart"] = time.time()
+            if target:
+                state["last_target"] = target
         elif status == 409:
             # The server explicitly refused before restarting. Release the
             # slot and preserve the one-minute safety retry, not a 30m wait.
@@ -1970,7 +1976,7 @@ def _finish_restart_reservation(reservation, status):
     _restart_state_update(apply)
 
 
-def _note_dashboard_back():
+def _note_dashboard_back(before_started_at=None, started_at=None):
     """A request acknowledgement precedes the new dashboard generation.
 
     Start the full batching window when that generation is actually seen;
@@ -1985,6 +1991,9 @@ def _note_dashboard_back():
         state["last_dashboard_back"] = observed
         state["last_restart"] = max(observed, float(state.get("last_restart") or 0))
         if state.get("pending"):
+            if (before_started_at and started_at
+                    and state["pending"].get("dashboard_started_at") == before_started_at):
+                state["pending"]["dashboard_started_at"] = started_at
             state["pending"]["due"] = max(float(state["pending"].get("due") or 0),
                                           state["last_restart"] + RESTART_DEBOUNCE_S)
 
@@ -2051,10 +2060,28 @@ def _wait_dashboard_back(base, before_pid, timeout=120, before_started_at=None):
 
 def _restart_now(base, target, wait=True, routine=False, reservation=None):
     status, payload = _post_restart(base, target, routine=routine)
+    requested = target
+    worker_deferred = None
+    if (routine and target == "all" and status == 409
+            and payload.get("code") in _WORKER_RESTART_REFUSALS):
+        # Only a worker-specific refusal permits a downgrade. The dashboard
+        # endpoint still checks its own adoption/drain and speech safeguards.
+        worker_deferred = payload.get("error") or "worker restart was refused"
+        requested = "dashboard"
+        status, payload = _post_restart(base, requested, routine=True)
     if reservation is not None:
-        _finish_restart_reservation(reservation, status)
+        _finish_restart_reservation(reservation, status, target=requested)
     if status == 200 and payload.get("ok", True):
-        print(f"ccc restart: {target} restart requested")
+        print(f"ccc restart: {requested} restart requested")
+        if routine and target == "all" and payload.get("worker_restarted") is False:
+            # The combined endpoint reached the dashboard handoff, but its
+            # final worker gate may have refused after the first proof.
+            worker_deferred = (payload.get("worker") or {}).get("reason") or "worker restart did not complete"
+        if worker_deferred:
+            import time
+            before = (payload.get("before") or {}).get("started_at") or 0
+            _defer_restart(base, "worker", time.time() + _RESTART_RETRY_S,
+                           f"worker still pending ({worker_deferred})", before)
         if target != "worker" and wait:
             b = payload.get("before") or {}
             back = _wait_dashboard_back(base, b.get("pid"), before_started_at=b.get("started_at"))
@@ -2063,7 +2090,7 @@ def _restart_now(base, target, wait=True, routine=False, reservation=None):
                 print(f"ccc restart: {outcome['state']}: {outcome.get('reason')}", file=sys.stderr)
                 return 503, {"ok": False, "error": outcome.get("reason"), "restart_outcome": outcome}
             if back:
-                _note_dashboard_back()
+                _note_dashboard_back(b.get("started_at"), back.get("started_at"))
                 print(f"ccc restart: dashboard back (pid {back.get('pid')}, rev {back.get('code_rev') or '?'})")
             else:
                 print("ccc restart: new dashboard generation not observed; check `ccc doctor`", file=sys.stderr)

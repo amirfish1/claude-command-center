@@ -173,3 +173,31 @@ def test_older_transport_is_only_probed_once(monkeypatch, isolated):
     assert not codex._codex_unsubscribe_idle_thread("test-thread")
     assert not codex._codex_unsubscribe_idle_thread("test-thread")
     assert calls == ["thread/read", "thread/unsubscribe"]
+
+
+@pytest.mark.parametrize("blocked_by", [None, "queue", "terminal", "goal", "ephemeral", "unknown"])
+def test_restart_cleanup_preserves_native_work(monkeypatch, isolated, blocked_by):
+    calls = []
+
+    def rpc(transport, method, params, **kwargs):
+        calls.append(method)
+        if method == "thread/queue/list":
+            return {"result": {"data": [{}] if blocked_by == "queue" else []}}
+        if method == "thread/backgroundTerminals/list":
+            if blocked_by == "unknown":
+                return {"error": {"message": "RPC failed"}}
+            return {"result": {"data": [{}] if blocked_by == "terminal" else []}}
+        if method == "thread/goal/get":
+            if blocked_by == "goal":
+                return {"result": {"goal": {"status": "active"}}}
+            return {"error": {"code": -32600, "message": "goals feature is disabled"}}
+        if method == "thread/read":
+            return {"result": {"thread": {"id": "test-thread", "status": {"type": "idle"},
+                                         "path": "/test/session.jsonl",
+                                         "ephemeral": blocked_by == "ephemeral"}}}
+        assert method == "thread/unsubscribe"
+        return {"result": {"status": "unsubscribed"}}
+
+    monkeypatch.setattr(server, "_codex_app_server_request_to_transport", rpc)
+    assert codex._codex_unsubscribe_idle_thread("test-thread", restart_cleanup=True) is (blocked_by is None)
+    assert ("thread/unsubscribe" in calls) is (blocked_by is None)

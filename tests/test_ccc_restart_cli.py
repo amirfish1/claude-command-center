@@ -211,6 +211,42 @@ class RestartReservationTests(unittest.TestCase):
             + [(200, {"ok": True})]), 33)
         self.assertNotIn("pending", self.state())
 
+    def test_combined_restart_preserves_worker_after_dashboard_recovers(self):
+        self.m.RESTART_DEBOUNCE_S = 0
+        self.m._RESTART_RETRY_S = 0
+        self.m._restart_state_update(lambda state: state.update(
+            runner_pid=os.getpid(), pending={"target": "all", "due": 0, "retries": 206}))
+        replies = [
+            (409, {"code": "codex_state_unavailable", "reason": "threads_loaded"}),
+            (200, {"before": {"started_at": 9000, "pid": 7}, "worker_restarted": False}),
+            (409, {"code": "codex_turns_running"}),
+            (200, {"ok": True}),
+        ]
+        with mock.patch.object(self.m, "_post_restart", side_effect=replies) as post, \
+             mock.patch.object(self.m, "_wait_dashboard_back", return_value={"pid": 7, "started_at": 10000}):
+            assert self.m._run_pending_restart("base", 0) == 0
+        assert [call.args[1] for call in post.call_args_list] == [
+            "all", "dashboard", "worker", "worker",
+        ]
+        assert all(call.kwargs["routine"] for call in post.call_args_list)
+        assert "pending" not in self.state()
+
+    def test_combined_restart_keeps_dashboard_guard_and_explicit_target(self):
+        for code, routine in (("codex_state_unavailable", False), ("dashboard_busy", True)):
+            with self.subTest(code=code, routine=routine), mock.patch.object(
+                self.m, "_post_restart", return_value=(409, {"code": code}),
+            ) as post:
+                assert self.m._restart_now("base", "all", routine=routine)[0] == 409
+                post.assert_called_once_with("base", "all", routine=routine)
+
+    def test_combined_restart_retries_worker_when_final_proof_refuses(self):
+        with mock.patch.object(self.m, "_post_restart", return_value=(
+            200, {"ok": True, "worker_restarted": False, "worker": {"reason": "codex_turns_running"}},
+        )) as post:
+            assert self.m._restart_now("base", "all", routine=True, wait=False)[0] == 0
+        post.assert_called_once_with("base", "all", routine=True)
+        assert self.state()["pending"]["target"] == "worker"
+
     def test_merging_request_preserves_failure_budget(self):
         with mock.patch("time.time", return_value=10000):
             self.m._reserve_restart("base", "worker")

@@ -1206,6 +1206,9 @@
   function _plural(n, one, many) { return Number(n) === 1 ? one : many; }
 
   function sysDashBusySentence(svc) {
+    if (svc.restart_delay_retries) {
+      return 'Dashboard restart is still pending after ' + svc.restart_delay_retries + ' attempts.';
+    }
     if (svc.restart_blocking) {
       return 'Busy: a Kimi turn is owned by this dashboard. A restart is '
         + 'refused until it finishes.';
@@ -1226,6 +1229,8 @@
       text = 'Not running. Queued work is not being dispatched.';
     } else if (svc.state === 'degraded') {
       text = 'Running but not answering health checks. A restart usually clears it.';
+    } else if (svc.restart_delay_retries) {
+      text = 'Worker restart is still pending after ' + svc.restart_delay_retries + ' attempts.';
     } else if (Number(svc.active || 0) + Number(svc.queued || 0) > 0) {
       text = 'Busy: ' + Number(svc.active || 0) + ' running, '
         + Number(svc.queued || 0) + ' queued. Restarting now marks running '
@@ -1306,6 +1311,8 @@
     if (worker.state === 'offline') reasons.push('Execution worker is offline');
     if (worker.state === 'degraded') reasons.push('Execution worker is degraded');
     if (dash.state === 'degraded') reasons.push('Dashboard is reporting errors');
+    if (worker.restart_delay_retries) reasons.push('Worker restart is still pending');
+    if (dash.restart_delay_retries) reasons.push('Dashboard restart is still pending');
     if (wtCounts && wt.state === 'offline') reasons.push('WatchTower server is not running');
     if (wtCounts && wt.state === 'degraded') reasons.push('WatchTower server is degraded');
     const stuck = wtCounts ? Number(wt.stuck_total || 0) : 0;
