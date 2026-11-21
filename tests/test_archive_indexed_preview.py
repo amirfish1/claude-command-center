@@ -136,6 +136,7 @@ def test_packed_history_is_exact_after_live_lifecycle_changes(tmp_path, monkeypa
     version = server._ARCHIVE_SIDEBAR_PACKED_VERSION
     hot = {"session_id": "hot", "mtime": now}
     cold = {"session_id": "cold", "mtime": 10, "cwd": "/tmp/te-side-demo",
+            "archived": True, "trashed": True, "all_lane_override": "project",
             "question_options": ("x", "y"), "last_assistant_text": "A **reply**"}
     deleted = {"session_id": "deleted", "engine": "codex", "mtime": 1}
     rows = [cold, hot, deleted]
@@ -178,14 +179,28 @@ def test_packed_history_is_exact_after_live_lifecycle_changes(tmp_path, monkeypa
         assert packed[0] is not borrowed_cold
         assert packed[0].cwd == borrowed_cold.cwd
         assert list(packed[0]) == list(borrowed_cold)
-        assert borrowed_cold["archived"] is False
+        assert borrowed_cold["archived"] is True
+        assert borrowed_cold["trashed"] is True
+        assert borrowed_cold["all_lane_override"] == "project"
         assert packed[0]["all_lane_override"] == "other"
         assert packed[0]["archived"] is True
+        assert packed[0]["trashed"] is False
         normal = server._archive_list_project_rows([raw[0]], _retain_templates=False)
         compact = server._archive_list_project_rows([packed[0]], _retain_templates=False)
         assert json.dumps(compact) == json.dumps(normal)
         assert compact[0]["last_assistant_preview"] == "A reply"
         assert compact[0]["question_options"] == ["x", "y"]
+
+        matching = server._overlay_conversation_lifecycle_flags(
+            load(version), copy_on_change=True,
+            snapshot=({"cold"}, {"cold"}, {"deleted"}, {"cold": "project"}))
+        assert matching[0] is borrowed_cold
+
+        monkeypatch.setattr(server, "_load_conversation_lifecycle_sets", lambda: (set(), set()))
+        restored = server._overlay_conversation_lifecycle_flags(load(version), copy_on_change=True)
+        assert restored[0]["archived"] is False
+        assert restored[0]["trashed"] is False
+        assert borrowed_cold["archived"] is True
 
         cold["last_assistant_text"] = "New publication"
         assert publish(now + 0.5) == 1

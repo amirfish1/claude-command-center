@@ -78,8 +78,11 @@ def _build_bucket(con, group, project):
         if not isinstance(sid, str) or not sid or sid.startswith("#"):
             continue
         cwd = row.get("cwd")
-        # The full list replaces these scalar values from live sidecars.
-        row.update(archived=False, trashed=False, all_lane_override="")
+        # Live sidecars still decide the final values. Keep the last
+        # published values so matching rows can be borrowed without copying.
+        row.setdefault("archived", False)
+        row.setdefault("trashed", False)
+        row.setdefault("all_lane_override", "")
         try:
             output = project(row, fields_by_shape)
         except (TypeError, ValueError, OverflowError):
