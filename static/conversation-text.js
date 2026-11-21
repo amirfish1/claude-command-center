@@ -986,9 +986,10 @@
       }
       return '<a role="button" tabindex="0" class="path-link" data-path="' + escapeAttr(target) + '">' + text + '</a>';
     });
-    // Bare http(s) URLs
-    s = s.replace(/(^|[\s(])((?:https?:\/\/)[^\s<>"')]+)/g,
-      (m, pre, url) => pre + '<a href="' + url + '" target="_blank" rel="noopener">' + url + '</a>');
+    // A bold label's space may already be wrapped in md-bold-gap. Treat
+    // that wrapper as whitespace while skipping existing links and tags.
+    s = s.replace(/<a\b[^>]*>[\s\S]*?<\/a>|(^|[\s(]|<span class="md-bold-gap">(?:&nbsp;)+<\/span>)(https?:\/\/[^\s<>"')]+)|<[^>]+>/g,
+      (m, pre, url) => url ? pre + '<a href="' + url + '" target="_blank" rel="noopener">' + url + '</a>' : m);
     // Bare file paths (relative like docs/foo/bar.md, absolute /Users/..., or ~/...)
     s = s.replace(/(^|[\s(])((?:~\/|\/|(?:[\w.\-]+\/)+)[\w.\-/]+\.(?:md|ts|tsx|js|jsx|py|json|yaml|yml|css|html|sql|prisma|sh))\b/g,
       (m, pre, p) => pre + '<a role="button" tabindex="0" class="path-link" data-path="' + p + '">' + p + '</a>');

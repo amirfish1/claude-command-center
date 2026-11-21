@@ -38,3 +38,20 @@ test('renderers remain independent while sharing the same implementation', () =>
   assert.match(second.pastedImageTag('image.png'), /session_id=second/);
   assert.equal(first.renderMarkdown('**hello** world'), second.renderMarkdown('**hello** world'));
 });
+
+test('bare URLs after a bold list label keep their full destination and visible gap', () => {
+  const renderer = createRenderer({});
+  const url = 'https://example.com/presentation/d/demo/edit?mode=view&slide=1';
+  const html = renderer.renderMarkdown('- **Link:** ' + url);
+
+  assert.match(html, /<strong>Link:<\/strong><span class="md-bold-gap">&nbsp;<\/span>/);
+  assert.ok(html.includes('<a href="' + url.replace('&', '&amp;') + '" target="_blank" rel="noopener">'));
+});
+
+test('a URL in an explicit link label does not create a second anchor', () => {
+  const renderer = createRenderer({});
+  const html = renderer.renderInline('[**Link:** https://example.com/label](https://example.com/target)');
+
+  assert.equal((html.match(/<a\b/g) || []).length, 1);
+  assert.match(html, /<a href="https:\/\/example\.com\/target"/);
+});
