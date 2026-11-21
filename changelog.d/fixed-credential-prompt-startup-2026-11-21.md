@@ -1,0 +1,1 @@
+- Show pending credential requests while the dashboard loads so short-lived requests can be answered before they expire.

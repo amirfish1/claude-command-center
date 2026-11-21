@@ -179,7 +179,8 @@
     busy = true;
     try {
       const response = await fetch('/api/secrets/pending', {
-        cache: 'no-store', credentials: 'same-origin',
+        // Short-lived prompts must surface even while startup parks background reads.
+        cache: 'no-store', credentials: 'same-origin', cccPriority: 'user',
       });
       if (response.ok) {
         const data = await response.json();
