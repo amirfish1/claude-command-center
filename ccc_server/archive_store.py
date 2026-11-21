@@ -550,6 +550,19 @@ _SIDEBAR_HISTORY_MAX_BYTES = 256 << 20
 _SIDEBAR_HISTORY_REUSE_S = 20
 
 
+class SidebarHistoryProjection:
+    """Static sidebar fields belonging to one borrowed history layout."""
+
+    max_bytes = 64 << 20
+    source_row_bytes = 128
+
+    def __init__(self, layout):
+        # Strong references make identity checks safe even if the reader's
+        # expiry timer replaces the layout during projection.
+        self.sources = {id(row): row for _, row in layout if row is not None}
+        self.rows = None
+
+
 class _SidebarHistoryReader:
     """Keep one decoded cold layout for overlapping sidebar loads and reloads."""
 
@@ -597,9 +610,11 @@ class _SidebarHistoryReader:
                 # data_version is comparable only on this connection. It
                 # detects all intervening commits, even with the same header.
                 version = conn.execute('PRAGMA data_version').fetchone()[0]
-                guard = (version, key, schema_version, build_id)
+                # Writable shallow copies can retain pointers to nested
+                # values. Keep them separate from borrowed, read-only rows.
+                guard = (version, key, schema_version, build_id, copy_history)
                 if self.memo is not None:
-                    _, previous, entry, layout, overridden = self.memo
+                    _, previous, entry, layout, overridden, _ = self.memo
                     # A new override can replace a decoded row in its original
                     # position or append below. If an old override disappeared,
                     # its stored body may have been skipped on the first read.
@@ -626,7 +641,11 @@ class _SidebarHistoryReader:
                 if layout is not None:
                     marker = object()
                     overridden = {rid for rid, stored in layout if stored is None}
-                    self.memo = (marker, guard, entry, layout, overridden)
+                    projection = None
+                    if (not copy_history and len(layout) * SidebarHistoryProjection.source_row_bytes
+                            < SidebarHistoryProjection.max_bytes):
+                        projection = SidebarHistoryProjection(layout)
+                    self.memo = (marker, guard, entry, layout, overridden, projection)
                     self.expiry = threading.Timer(_SIDEBAR_HISTORY_REUSE_S, self._expire, (marker,))
                     self.expiry.daemon = True
                     self.expiry.start()
@@ -720,6 +739,12 @@ def load_with_overrides(cache_file, key, current_rows, *, schema_version, build_
         return dict(loaded[0], conversations=loaded[1]) if loaded is not None else None
     finally:
         con.close()
+
+
+def sidebar_history_projection():
+    """Get the prepared-field cache for the current read-only SQLite memo."""
+    memo = _SIDEBAR_HISTORY_READER.memo
+    return memo[-1] if memo is not None else None
 
 
 def load(cache_file, *, hot=False, key=None, now=None):

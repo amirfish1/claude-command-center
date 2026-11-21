@@ -192,6 +192,77 @@ def test_sidebar_history_reuses_cold_rows_with_fresh_overrides_and_detects_peer_
             reader._close()
 
 
+def test_sidebar_static_projection_keeps_request_overlays_live(tmp_path, monkeypatch):
+    import server
+    from ccc_server import continuation_topics
+
+    target = tmp_path / 'archive.json'
+    original = data()
+    old, live, *_ = original['entries']['base']['conversations']
+    old['session_state'] = {'todos': [{'text': 'stored'}]}
+    store.save(target, original, complete=True)
+    reader = store._SidebarHistoryReader()
+    monkeypatch.setattr(store, '_SIDEBAR_HISTORY_READER', reader)
+    monkeypatch.setattr(continuation_topics, 'attach_topics', lambda *args, **kwargs: None)
+    monkeypatch.setattr(server, '_archive_list_ticket_updates', lambda *args: False)
+    monkeypatch.setattr(server, '_queue_health_stats', lambda *args, **kwargs: {})
+    monkeypatch.setattr(server, '_trace_row_flicker', lambda *args, **kwargs: None)
+    graph_parents = {}
+    monkeypatch.setattr(server._session_graph, 'parent_snapshot', lambda: graph_parents)
+    options = dict(schema_version=original['schema_version'], build_id=original['build_id'],
+                   min_cached_at=10, reuse_sidebar_history=True)
+
+    def read(current, **kwargs):
+        return store.load_with_overrides(
+            target, 'base', [current], **options, **kwargs)['conversations']
+
+    def payload(source, projection=None, overlays=None, phases=None):
+        return server._archive_list_payload(
+            source, _retain_templates=False, _row_overlays=overlays or {},
+            _history_projection=projection, phases=phases)
+
+    try:
+        writable = read(live)
+        assert store.sidebar_history_projection() is None
+        writable[0]['session_state']['todos'][0]['text'] = 'caller edit'
+        source = read(live, copy_history=False)
+        assert source[0]['session_state'] == old['session_state']
+        projection = store.sidebar_history_projection()
+        assert projection is not None
+        phases = {}
+        first = payload(source, projection, phases=phases)
+        assert phases['history_static_rows'] == {'hits': 0, 'prepared': 3}
+        assert json.dumps(first) == json.dumps(payload(source))
+
+        graph_parents['old'] = 'parent'
+        overlays = {'old': {'display_name': 'Current title'}}
+        latest = read(dict(live, first_message='live change'), copy_history=False)
+        assert store.sidebar_history_projection() is projection
+        phases = {}
+        second = payload(latest, projection, overlays, phases)
+        assert phases['history_static_rows'] == {'hits': 3, 'prepared': 0}
+        assert json.dumps(second) == json.dumps(payload(latest, overlays=overlays))
+        assert second['conversations'][0]['display_name'] == 'Current title'
+        assert 'parent_session_id' not in first['conversations'][0]
+        assert second['conversations'][0]['parent_session_id'] == 'parent'
+        assert second['conversations'][1]['first_message'] == 'live change'
+
+        # A lifecycle overlay creates a new source row and bypasses the old
+        # preparation. The original layout still describes the stored row.
+        lifecycle = [dict(latest[0], archived=True), *latest[1:]]
+        assert payload(lifecycle, projection)['conversations'][0]['archived']
+        assert not payload(latest, projection)['conversations'][0].get('archived')
+
+        reader._expire(reader.memo[0])
+        assert store.sidebar_history_projection() is None
+        renewed = read(live, copy_history=False)
+        assert store.sidebar_history_projection() is not projection
+        assert renewed[0]['session_state'] == old['session_state']
+    finally:
+        with reader.lock:
+            reader._close()
+
+
 def test_unchanged_cold_rows_are_not_rewritten(tmp_path):
     target = tmp_path / 'archive.json'
     store.save(target, data(), complete=True)

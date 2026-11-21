@@ -18979,12 +18979,8 @@ def _archive_list_row_template(row, cached=_ARCHIVE_LIST_TEMPLATE_UNREAD, *,
     return scalars, containers
 
 
-def _archive_list_project_row(row, *, resumes=None, parents=None,
-                              _template=_ARCHIVE_LIST_TEMPLATE_UNREAD, _fields_by_shape=None,
-                              _retain_template=True):
-    """Project one row for the sidebar list. Bulk callers pass `resumes` /
-    `parents` snapshots so the per-row work is dict lookups, not a stat() or
-    lock acquisition each (those cost a GIL hand-off apiece)."""
+def _archive_list_static_row(row, template, fields_by_shape, retain_template, *,
+                             borrow_containers=False):
     # The cached rows are shared with other readers, so container fields
     # still need isolation — but copy.deepcopy over ~130 mostly-scalar
     # fields × every row was the single largest slice of
@@ -18994,10 +18990,13 @@ def _archive_list_project_row(row, *, resumes=None, parents=None,
     # (cost_breakdown_usd sits on nearly every row) cut this ~1.5x; deepcopy
     # runs only for the rare container that nests another container.
     scalars, containers = _archive_list_row_template(
-        row, _template, _fields_by_shape=_fields_by_shape, _retain=_retain_template)
-    out = dict(scalars)
+        row, template, _fields_by_shape=fields_by_shape, _retain=retain_template)
+    out = scalars if borrow_containers and template is None else dict(scalars)
     for key in containers:
         v = row[key]
+        if borrow_containers:
+            out[key] = v
+            continue
         t = type(v)
         if t is dict:
             out[key] = (copy.deepcopy(v) if any(type(x) in (dict, list) for x in v.values())
@@ -19007,6 +19006,15 @@ def _archive_list_project_row(row, *, resumes=None, parents=None,
                         else list(v))
         elif isinstance(v, (dict, list)):
             out[key] = copy.deepcopy(v)
+    return out
+
+
+def _archive_list_project_row(row, *, resumes=None, parents=None,
+                              _template=_ARCHIVE_LIST_TEMPLATE_UNREAD, _fields_by_shape=None,
+                              _retain_template=True, _prepared=None):
+    """Project one row, applying the current graph and resume information."""
+    out = (dict(_prepared) if _prepared is not None else _archive_list_static_row(
+        row, _template, _fields_by_shape, _retain_template))
     # CCC-863: cheap in-memory lookup (no file I/O) -- surfaces the live
     # countdown for a session parked on a usage-limit auto-resume.
     sid = row.get("session_id") or row.get("id")
@@ -19100,7 +19108,8 @@ def _archive_list_window_rows(rows, cutoff, idea_tickets_by_sid, parents, *, anc
 
 
 def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _inputs=None,
-                               _retain_templates=True, _row_overlays=None, check_client=None):
+                               _retain_templates=True, _row_overlays=None, check_client=None,
+                               _history_projection=None):
     # Request-local diagnostics distinguish CPU work from GIL/lock waits on
     # the real corpus, without the per-call overhead of a Python profiler.
     phase_wall = time.perf_counter() if phases is not None else 0
@@ -19139,15 +19148,41 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _in
     )
     fields_by_shape = {}
     projected = []
+    prepared = _history_projection.rows if _history_projection is not None else None
+    sources = _history_projection.sources if _history_projection is not None else {}
+    pending = {} if _history_projection is not None and prepared is None else None
+    remaining = (_history_projection.max_bytes - _history_projection.source_row_bytes * len(sources)
+                 if pending is not None else 0)
+    hits = 0
     for position, (row, template) in enumerate(zip(window_rows, templates)):
         if check_client is not None and position % 256 == 0:
             check_client()
+        static = None
+        if _history_projection is not None:
+            row_id = id(row)
+            static = prepared.get(row_id) if prepared is not None else None
+            if static is not None:
+                hits += 1
+            elif remaining > 0 and sources.get(row_id) is row:
+                # The complete list's encoding and ticket checks only read
+                # these nested values. Live overlays update a separate dict.
+                static = _archive_list_static_row(
+                    row, template, fields_by_shape, False, borrow_containers=True)
+                preview = static.get("last_assistant_preview", "")
+                remaining -= sys.getsizeof(static) + sys.getsizeof(preview)
+                if remaining >= 0:
+                    pending[row_id] = static
         projected.append(_archive_list_project_row(
             row, resumes=resumes, parents=parents, _template=template,
-            _fields_by_shape=fields_by_shape, _retain_template=_retain_templates))
+            _fields_by_shape=fields_by_shape, _retain_template=_retain_templates,
+            _prepared=static))
     phase("rows")
     if check_client is not None:
         check_client()
+    if pending and _history_projection.rows is None:
+        _history_projection.rows = pending
+    if phases is not None and _history_projection is not None:
+        phases["history_static_rows"] = {"hits": hits, "prepared": len(pending or {})}
     # Persisted rows may predate a goal change or a title override.
     row_overlays = _archive_list_row_overlays() if _row_overlays is None else _row_overlays
     drivers = _session_graph.driver_snapshot()
@@ -20135,11 +20170,13 @@ def _archive_list_initial_payload(rows, *, window="all", now=None, cached=None, 
 
 
 def _archive_list_payload(rows, *, window="all", now=None, cached=None, phases=None, _inputs=None,
-                          _retain_templates=True, _row_overlays=None, check_client=None):
+                          _retain_templates=True, _row_overlays=None, check_client=None,
+                          _history_projection=None):
     window = _archive_list_window(window)
     projected = _archive_list_project_rows(rows, window=window, now=now, phases=phases, _inputs=_inputs,
                                            _retain_templates=_retain_templates, _row_overlays=_row_overlays,
-                                           check_client=check_client)
+                                           check_client=check_client,
+                                           _history_projection=_history_projection)
     if window == "all":
         _trace_row_flicker(projected, now=now)
     payload = {
@@ -37270,9 +37307,14 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 try:
                     if window == "all" and not body_ver:
                         def prepare_history(check_client=None):
+                            from ccc_server import archive_store
+
                             payload = _archive_list_payload(
                                 rows, window=window, cached=from_cache, phases=_payload_phases,
-                                _retain_templates=False, check_client=check_client)
+                                _retain_templates=False, check_client=check_client,
+                                _history_projection=(archive_store.sidebar_history_projection()
+                                                     if stale_ok and not any(cache_options.values())
+                                                     else None))
                             if check_client is not None:
                                 check_client()
                             return _list_replay.prepare_history(payload)
