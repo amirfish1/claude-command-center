@@ -51,6 +51,17 @@ def message_text(event):
                      if isinstance(b, dict) and (b.get("kind") or b.get("type")) == "text")
 
 
+def _antigravity_native_key(sid):
+    try:
+        path = core._antigravity_transcript_path(sid)
+        if not path:
+            return None
+        st = Path(path).stat()
+    except OSError:
+        return None
+    return st.st_mtime_ns, (path, st.st_dev, st.st_ino, st.st_ctime_ns, st.st_size)
+
+
 class FreshSession:
     def __init__(self, sid):
         self.sid = sid
@@ -67,6 +78,7 @@ class FreshSession:
         self.normalizer = _SpawnEventNormalizer()
         self.last_resolve = 0
         self.last_transcript_check = 0
+        self.antigravity_provisional = None
         self.codex_key = None
         self.codex_turn = ""
         self.retired_turns = set()
@@ -88,18 +100,43 @@ class FreshSession:
     def read(self):
         updates = []
         now = time.monotonic()
+        engine = core._detect_session_engine(self.sid)
         key = self.key
+        native_key = None
         if self.key is None or now - self.last_transcript_check >= TRANSCRIPT_CHECK_S:
             self.last_transcript_check = now
-            key = core._conv_parse_jsonl_mtime(self.sid)
+            if engine == "antigravity":
+                native_key = _antigravity_native_key(self.sid)
+            # Once the parser sees native output, CLI logs and the trajectory
+            # database cannot change its answer. Track the selected transcript
+            # until it disappears or the parser returns to the provisional source.
+            if self.antigravity_provisional is False and native_key is not None:
+                key = native_key
+            else:
+                key = core._conv_parse_jsonl_mtime(self.sid)
         if key != self.key:
             initial = self.key is None
-            self.key = key
             # Reuse the normal bounded transcript tail and its absolute line
             # cursor. Tools advance the cursor but emit no explanation text.
             result = core.parse_conversation(
                 self.sid, tail=80, messages_only=True, message_cursor=self.last_line)
-            previous_line = 0 if initial or result.get("last_line", 0) < self.last_line else self.last_line
+            source_reset = False
+            if engine == "antigravity":
+                provisional = native_key is None or bool(result.get("antigravity_provisional"))
+                source_reset = (self.antigravity_provisional is not None
+                                and self.antigravity_provisional != provisional)
+                if not initial and self.antigravity_provisional is False and not provisional:
+                    source_reset = self.key[1][:3] != native_key[1][:3]
+                self.antigravity_provisional = provisional
+                if not provisional:
+                    key = native_key
+                elif native_key is not None and key == native_key:
+                    key = core._conv_parse_jsonl_mtime(self.sid)
+            else:
+                self.antigravity_provisional = None
+            self.key = key
+            previous_line = (0 if initial or source_reset or result.get("last_line", 0) < self.last_line
+                             else self.last_line)
             self.last_line = result.get("last_line", self.last_line)
             events = result.get("events") or []
             latest = next((ev for ev in reversed(events) if ev.get("type") in
@@ -202,7 +239,7 @@ class FreshSession:
         from ccc_server.codex_live_events import live_turns_from_snapshot
         snapshot = (
             CODEX_CONVERSATIONS.snapshot(self.sid, after=self.codex_key, assistant_preview=True)
-            if core._detect_session_engine(self.sid) == "codex" else {}
+            if engine == "codex" else {}
         )
         live_key = ((snapshot.get("generation"), snapshot.get("cursor"))
                     if snapshot is not None else self.codex_key)

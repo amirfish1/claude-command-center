@@ -132,3 +132,65 @@ def test_stream_stops_probing_cli_logs_after_native_transcript(reader_files, mon
     reader_key.assert_called_once_with("example")
     handler.wfile.write.assert_called_once()
     assert b"Completed." in handler.wfile.write.call_args.args[0]
+
+
+def test_sidebar_tracks_native_transcript_and_reenables_cli_fallback(reader_files, monkeypatch):
+    from ccc_server.ultra_fresh import FreshSession
+
+    transcript, stdout, debug, _ = reader_files
+    sid = "example"
+    stdout.write_text("Error: Before native output.")
+    log_lookup = Mock(return_value={"log_path": str(debug)})
+    monkeypatch.setattr(engines, "_antigravity_cli_log_meta_for_session", log_lookup)
+    monkeypatch.setattr(server, "_detect_session_engine", lambda sid: "antigravity")
+    monkeypatch.setattr(server, "_resolve_spawn_log_for_session", lambda sid: (None, False))
+    monkeypatch.setattr(server, "_get_queued_events_for_session", lambda sid: [])
+    monkeypatch.setattr("ccc_server.ultra_fresh.TRANSCRIPT_CHECK_S", 0)
+
+    reader = FreshSession(sid)
+    assert "Before native output" in reader.read()[-1]["text"]
+    provisional_line = reader.last_line
+    with transcript.open("a") as handle:
+        handle.write("\n" + json.dumps({
+            "type": "PLANNER_RESPONSE", "content": "First native reply.",
+        }) + "\n")
+    assert reader.read()[-1]["text"] == "First native reply."
+    # The fallback and native transcript can have the same last line.
+    assert reader.last_line == provisional_line
+    log_lookup.reset_mock()
+
+    stdout.write_text("Error: Ignore this old fallback once native output exists.")
+    assert reader.read() == []
+    with transcript.open("a") as handle:
+        handle.write(json.dumps({"type": "PLANNER_RESPONSE", "content": "Next native reply."}) + "\n")
+    frame = reader.read()[-1]
+    assert frame["text"] == "Next native reply."
+    assert frame["source_mtime"] == transcript.stat().st_mtime_ns / 1e9
+    log_lookup.assert_not_called()
+
+    replacement = transcript.with_suffix(".next")
+    last_native_line = reader.last_line
+    replacement.write_text("\n" * (last_native_line - 1) + json.dumps({
+        "type": "PLANNER_RESPONSE", "content": "Replacement native reply.",
+    }) + "\n")
+    replacement.replace(transcript)
+    assert reader.read()[-1]["text"] == "Replacement native reply."
+    assert reader.last_line == last_native_line
+    log_lookup.assert_not_called()
+
+    replacement.write_text(json.dumps({
+        "type": "USER_INPUT", "source": "USER_EXPLICIT", "content": "Retry the task.",
+    }) + "\n")
+    replacement.replace(transcript)
+    stdout.write_text("Error: Fresh provisional diagnostic.")
+    assert "Fresh provisional diagnostic" in reader.read()[-1]["text"]
+    assert log_lookup.call_count
+
+    log_lookup.reset_mock()
+    stdout.write_text("Error: Another provisional update.")
+    reader.read()
+    assert log_lookup.call_count
+
+    transcript.unlink()
+    stdout.write_text("Error: Native file disappeared.")
+    assert "Native file disappeared" in reader.read()[-1]["text"]
