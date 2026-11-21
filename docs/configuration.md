@@ -90,9 +90,11 @@ tail -n 200 ~/.claude/command-center/logs/python-stacks.log
 ```
 
 The endpoint is local-only. Each sample is returned as JSON and appended to
-`python-stacks.log`. Sampling repeatedly is the way to find where a slow
-request spends its time.
+`python-stacks.log`. HTTP samples include file names, line numbers and functions
+without reading the source files during capture. Sampling repeatedly helps
+locate where a slow request spends its time.
 
 On macOS and Linux, `kill -USR2 <server pid>` also appends one snapshot to the
-same log, which helps when HTTP itself is wedged. A burst of signals coalesces
-into one dump. The signal is unavailable on Windows.
+same log, including source lines when available. This helps when HTTP itself is
+wedged. A burst of signals coalesces into one dump. The signal is unavailable on
+Windows.

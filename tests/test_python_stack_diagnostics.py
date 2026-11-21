@@ -74,11 +74,16 @@ def test_dump_python_stacks_samples_and_clamps(tmp_path, monkeypatch):
     assert len(server._dump_python_stacks("test", samples=999, interval_s=0)) == server.PYTHON_STACK_SAMPLES_MAX
     assert len(server._dump_python_stacks("test", samples="x", interval_s=0)) == 1
     log.flush()
-    assert (tmp_path / "s.log").read_text().count("=== test sample 1/3") == 1
+    contents = (tmp_path / "s.log").read_text()
+    assert contents.count("=== test sample 1/3") == 1
+    assert 'out = server._dump_python_stacks("test"' in contents
 
 
 def test_debug_stacks_endpoint_returns_samples(monkeypatch):
     monkeypatch.setattr(server, "_PYTHON_STACK_DUMP_FILE", None)
+    source_lookups = []
+    monkeypatch.setattr(server.linecache, "checkcache", lambda filename: source_lookups.append(filename))
+    monkeypatch.setattr(server.linecache, "getline", lambda filename, *args: source_lookups.append(filename) or "")
     httpd = server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), server.CommandCenterHandler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     try:
@@ -93,7 +98,11 @@ def test_debug_stacks_endpoint_returns_samples(monkeypatch):
     assert body["ok"] is True
     assert body["pid"] == os.getpid()
     assert len(body["samples"]) == 2
-    assert any("serve_forever" in t["stack"] for t in body["samples"][0]["threads"])
+    assert any(
+        'socketserver.py", line ' in t["stack"] and "in serve_forever" in t["stack"]
+        for t in body["samples"][0]["threads"]
+    )
+    assert source_lookups == []
 
 
 def test_debug_stacks_stops_after_client_disconnect(monkeypatch, tmp_path):
@@ -101,10 +110,10 @@ def test_debug_stacks_stops_after_client_disconnect(monkeypatch, tmp_path):
     disconnected = threading.Event()
     snapshot = server._python_stack_snapshot
 
-    def coordinated_snapshot():
+    def coordinated_snapshot(**kwargs):
         entered.set()
         assert disconnected.wait(10)
-        return snapshot()
+        return snapshot(**kwargs)
 
     monkeypatch.setattr(server, "_python_stack_snapshot", coordinated_snapshot)
     log_path = tmp_path / "stacks.log"

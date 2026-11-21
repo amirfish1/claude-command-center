@@ -1084,7 +1084,7 @@ PYTHON_STACK_SAMPLES_MAX = 50
 PYTHON_STACK_INTERVAL_MAX_S = 2.0
 
 
-def _python_stack_snapshot():
+def _python_stack_snapshot(*, source_lines=True):
     """Every live thread's current Python stack, as plain data."""
     names = {t.ident: t.name for t in threading.enumerate()}
     current = threading.get_ident()
@@ -1097,18 +1097,22 @@ def _python_stack_snapshot():
         locations = []
         while frame is not None:
             code = frame.f_code
-            location = (code, frame.f_lasti)
+            # The snapshot keeps the frames and their code alive. Hashing a
+            # code object itself can walk its constants and bytecode.
+            location = (id(code), frame.f_lasti)
             summary = frame_summaries.get(location)
             if summary is None:
                 filename = code.co_filename
                 lineno = frame.f_lineno
-                if filename not in source_files:
+                if source_lines and filename not in source_files:
                     # A busy server has many threads stopped in the same HTTP
                     # code. Refresh source once per file in this snapshot.
                     source_files.add(filename)
                     linecache.lazycache(filename, frame.f_globals)
                     linecache.checkcache(filename)
-                summary = traceback.FrameSummary(filename, lineno, code.co_name)
+                summary = traceback.FrameSummary(
+                    filename, lineno, code.co_name, line=None if source_lines else "",
+                )
                 frame_summaries[location] = summary
             locations.append(location)
             stack.append(summary)
@@ -1135,7 +1139,9 @@ def _format_python_stack_snapshot(threads, header):
     return "".join(lines)
 
 
-def _dump_python_stacks(reason="manual", samples=1, interval_s=0.5, *, cancelled=None):
+def _dump_python_stacks(
+    reason="manual", samples=1, interval_s=0.5, *, cancelled=None, source_lines=True,
+):
     """Append all-thread stacks to python-stacks.log; return the samples.
 
     Safe to call from any thread, any number of times. Callers that need the
@@ -1160,7 +1166,7 @@ def _dump_python_stacks(reason="manual", samples=1, interval_s=0.5, *, cancelled
             break
         next_sample_at = time.monotonic() + interval_s
         at = datetime.now(tz=timezone.utc).isoformat()
-        threads = _python_stack_snapshot()
+        threads = _python_stack_snapshot(source_lines=source_lines)
         out.append({"at": at, "threads": threads})
         dump_file = _PYTHON_STACK_DUMP_FILE
         if dump_file is None:
@@ -1190,7 +1196,7 @@ def _http_python_stack_samples(conn, samples, interval_s):
 
         out = _dump_python_stacks(
             "api/debug/stacks", samples=samples, interval_s=interval_s,
-            cancelled=disconnected,
+            cancelled=disconnected, source_lines=False,
         )
         return None if disconnected() else out
 
