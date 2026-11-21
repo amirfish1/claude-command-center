@@ -37394,7 +37394,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 ):
                     packed_version = _ARCHIVE_SIDEBAR_PACKED_VERSION
             check_client = (self._check_archive_list_client
-                            if window == "all" and not initial and stale_ok and since
+                            if window == "all" and not initial and stale_ok
                             and self.headers.get("X-CCC-Abort-On-Disconnect") == "1"
                             and not phone_access.is_remote_request(self.client_address[0], self.headers)
                             else None)
@@ -48157,7 +48157,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             pass
 
     def _check_archive_list_client(self):
-        # The browser explicitly abandons this conditional read on EOF.
+        # The browser explicitly abandons this read on EOF.
         # Keep ordinary HTTP half-closed clients on the regular path.
         try:
             readable, _, _ = select.select([self.connection], [], [], 0)
@@ -48203,17 +48203,21 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                                    history="current" if payload is None else "delta" if is_delta else "full")
             if payload is None:
                 return self._send_archive_list_representation(None, None, '"d-' + since + '"')
-            with _archive_history_timing(diagnostics, "representation"):
-                body, encoding, etag = history_representation(
-                    payload, self.headers.get("Accept-Encoding"),
-                    None if is_delta else self.headers.get("If-None-Match"),
-                    diagnostics=diagnostics, fingerprint=fingerprint,
-                    row_layouts=row_layouts and not is_delta, packed_rows=history[2],
-                    packed_runs=history[1][1] if history[1] is not None else None,
-                    # Direct local connections can trade extra wire bytes for
-                    # lower compression latency.
-                    prefer_zstd=(row_layouts and not is_delta and not
-                                 phone_access.is_remote_request(self.client_address[0], self.headers)))
+            try:
+                with _archive_history_timing(diagnostics, "representation"):
+                    body, encoding, etag = history_representation(
+                        payload, self.headers.get("Accept-Encoding"),
+                        None if is_delta else self.headers.get("If-None-Match"),
+                        diagnostics=diagnostics, fingerprint=fingerprint,
+                        row_layouts=row_layouts and not is_delta, packed_rows=history[2],
+                        packed_runs=history[1][1] if history[1] is not None else None,
+                        # Direct local connections can trade extra wire bytes for
+                        # lower compression latency.
+                        prefer_zstd=(row_layouts and not is_delta and not
+                                     phone_access.is_remote_request(self.client_address[0], self.headers)),
+                        check_client=check_client)
+            except _ArchiveListClientDisconnected:
+                return "abandoned"
             status = self._send_archive_list_representation(body, encoding, etag)
             return "delta" if is_delta and status == 200 else status
 

@@ -122,10 +122,12 @@ def prepare_history(payload, *, check_client=None):
     return payload, (ids, runs, fingerprint, order_token(ids)), packed
 
 
-def _packed_history_fragments(rows, runs):
+def _packed_history_fragments(rows, runs, check_client):
     """Reuse exactly guarded JSON fragments for full packed history replies."""
     chunks = [b"["]
-    for digest, start, end in runs:
+    for position, (digest, start, end) in enumerate(runs):
+        if check_client is not None and position % 8 == 0:
+            check_client()
         group = rows[start:end]
         # The manifest hashes the field names, so its digest stays stable
         # even when another layout first appears earlier in a response.
@@ -269,7 +271,7 @@ def encode_gzip_payload(payload, raw=None):
                      b'\x03\x00', struct.pack('<II', zlib.crc32(raw), len(raw) & 0xffffffff)))
 
 
-def encode_payload(payload, *, packed_runs=None):
+def encode_payload(payload, *, packed_runs=None, check_client=None):
     if packed_runs is None and not isinstance(payload, EncodedListPayload):
         return json.dumps(payload).encode()
     chunks = [b'{']
@@ -281,7 +283,7 @@ def encode_payload(payload, *, packed_runs=None):
             if packed_runs is None:
                 chunks.append(payload.conversations_json)
             else:
-                chunks.extend(_packed_history_fragments(value, packed_runs))
+                chunks.extend(_packed_history_fragments(value, packed_runs, check_client))
         else:
             chunks.append(json.dumps(value).encode())
     chunks.append(b'}')

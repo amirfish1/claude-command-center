@@ -348,8 +348,9 @@ def test_unversioned_history_projection_shares_only_overlapping_exact_source(mon
     assert project('scope', rows, own_projection, {}) != payload
 
 
-@pytest.mark.parametrize('stage', ['projection', 'manifest'])
-def test_all_list_disconnect_abandons_only_opted_in_conditional_reads(monkeypatch, tmp_path, stage):
+@pytest.mark.parametrize('since', ['', '&since=old'])
+@pytest.mark.parametrize('stage', ['projection', 'manifest', 'representation'])
+def test_all_list_disconnect_abandons_only_opted_in_reads(monkeypatch, tmp_path, stage, since):
     import server
     from ccc_server import archive_list_replay, continuation_topics
 
@@ -374,7 +375,7 @@ def test_all_list_disconnect_abandons_only_opted_in_conditional_reads(monkeypatc
             return original(*args, **kwargs)
 
         monkeypatch.setattr(server, '_archive_list_project_row', project)
-    else:
+    elif stage == 'manifest':
         original = archive_list_replay.payload_fingerprint
 
         def fingerprint(value):
@@ -384,6 +385,14 @@ def test_all_list_disconnect_abandons_only_opted_in_conditional_reads(monkeypatc
             return original(value)
 
         monkeypatch.setattr(archive_list_replay, 'payload_fingerprint', fingerprint)
+    else:
+        original = archive_list_replay._packed_history_fragments
+
+        def fragments(*args):
+            wait_for_disconnect()
+            return original(*args)
+
+        monkeypatch.setattr(archive_list_replay, '_packed_history_fragments', fragments)
     monkeypatch.setattr(continuation_topics, 'attach_topics',
                         lambda *a, **kw: topic_work.append(True))
     monkeypatch.setattr(server, 'record_diag',
@@ -397,7 +406,10 @@ def test_all_list_disconnect_abandons_only_opted_in_conditional_reads(monkeypatc
             entered.clear()
             ready.clear()
             with socket.create_connection(httpd.server_address, timeout=5) as client:
-                request = 'GET /api/conversations/list?window=all&stale_ok=1&since=old HTTP/1.1\r\n'
+                request = (
+                    'GET /api/conversations/list?window=all&stale_ok=1&row_layouts=1'
+                    f'{since} HTTP/1.1\r\n'
+                )
                 request += 'Host: localhost\r\nConnection: close\r\n'
                 if opted_in:
                     request += 'X-CCC-Abort-On-Disconnect: 1\r\n'

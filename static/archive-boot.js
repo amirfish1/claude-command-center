@@ -285,7 +285,7 @@
       if (savedOrder) target += '&saved_order=' + savedOrder;
       if (windowName === 'all') target += '&row_layouts=1&order_spans=1';
       const headers = value?.etag ? {'If-None-Match':value.etag} : {};
-      if (value?.delta && windowName === 'all') headers['X-CCC-Abort-On-Disconnect'] = '1';
+      if (windowName === 'all') headers['X-CCC-Abort-On-Disconnect'] = '1';
       const response = await window.fetch(target, {signal:controller.signal, headers});
       response._cccArchiveTiming = {start,headers:performance.now()};
       if (response.ok && response.status !== 304) {

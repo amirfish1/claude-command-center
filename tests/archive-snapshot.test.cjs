@@ -92,6 +92,7 @@ test('All history requests reconstruct ordered rows from shared layouts before c
     assert.equal(f.state._archiveAllDelta.get(allUrl).token,'history');
     assert.equal(validated,1);
     assert.deepEqual(f.reads.map(read => read.url),early ? [] : [allUrl + '&row_layouts=1&order_spans=1']);
+    if (!early) assert.equal(f.reads[0].init.headers['X-CCC-Abort-On-Disconnect'], '1');
     assert.deepEqual(Array.from(f.savedLayouts[0]),[body.row_layouts,body.conversations]);
   }
   const invalid = setup({response:reply({row_layouts:[['__proto__']], conversations:[[0, [{}]]]})});
@@ -326,7 +327,9 @@ test('All reload keeps a compact snapshot when a delta overtakes the first save'
   try {
     page.setDefaultTimeout(6000);
     await page.evaluateOnNewDocument(() => localStorage.setItem('ccc-archive-window', 'all'));
+    const cold = page.waitForRequest(req => req.url().includes('row_layouts=1') && !req.url().includes('since='));
     await page.goto(origin, {waitUntil:'load'});
+    assert.equal((await cold).headers()['x-ccc-abort-on-disconnect'], '1');
     const count = 9000;
     const expandedBytes = await page.evaluate(({url, count}) => {
       const repeatedKey = 'field'.repeat(400);

@@ -114,7 +114,8 @@ def representation(raw, gzip_body, accept, *, encode_gzip=None, encodings=None):
 
 
 def history_representation(payload, accept, validator, *, diagnostics=None, fingerprint=None,
-                           row_layouts=False, packed_rows=None, packed_runs=None, prefer_zstd=False):
+                           row_layouts=False, packed_rows=None, packed_runs=None, prefer_zstd=False,
+                           check_client=None):
     """Reuse encoded bytes after a fresh full-history projection."""
     supported = ("zstd", "br", "gzip") if row_layouts and prefer_zstd else ("br", "gzip")
     accepted = static_encoding.accepted_encodings(accept, supported=supported)
@@ -133,10 +134,14 @@ def history_representation(payload, accept, validator, *, diagnostics=None, fing
 
     if row_layouts:
         layouts, rows = (packed_rows if packed_rows is not None
-                         else archive_list_replay.pack_row_layouts(payload["conversations"]))
+                         else archive_list_replay.pack_row_layouts(
+                             payload["conversations"], check_client=check_client))
         payload = dict(payload, conversations=rows, row_layouts=layouts)
     raw = archive_list_replay.encode_payload(
-        payload, packed_runs=packed_runs if row_layouts and packed_rows is not None else None)
+        payload, packed_runs=packed_runs if row_layouts and packed_rows is not None else None,
+        check_client=check_client)
+    if check_client is not None:
+        check_client()
     etag = '"' + hashlib.sha1(raw).hexdigest() + '"'
     if validator == etag:
         return None, None, etag

@@ -4991,7 +4991,7 @@
         try {
           const init = { signal: controller.signal };
           if (prevEtag) init.headers = { 'If-None-Match': prevEtag };
-          if (deltaToken && !opts.initial && !opts.includePrs && opts.staleOk !== false
+          if (!opts.initial && !opts.includePrs && opts.staleOk !== false
               && params.get('window') === 'all') {
             (init.headers ||= {})['X-CCC-Abort-On-Disconnect'] = '1';
           }
