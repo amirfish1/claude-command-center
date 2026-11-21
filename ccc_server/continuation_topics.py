@@ -544,8 +544,15 @@ def _project_topics(batch, rows):
         sid = _sid(row)
         if not sid:
             continue
-        root, title = batch.resolve(sid)
-        origin = batch.record(sid)[0]
+        record = batch.records.get(sid)
+        if (record and record[1] == sid and record[2] and not record[0]
+                and not _origin(batch.rows[sid]) and not batch.indexed_origin(sid)):
+            # A named canonical root with no origin needs no projected topic
+            # or write. Check the same last row per ID that the resolver uses.
+            origin = ''
+        else:
+            root, title = batch.resolve(sid)
+            origin = batch.record(sid)[0]
         if origin and root:
             root_record = batch.record(root)
             batch.ancestors.add(root)

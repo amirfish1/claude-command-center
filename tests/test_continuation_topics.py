@@ -24,6 +24,29 @@ def row(sid, title='', origin=''):
     return {'session_id': sid, 'display_name': title, 'continued_from_session_id': origin}
 
 
+def test_named_root_projection_preserves_explicit_and_indexed_origins(store):
+    topics.attach_topics([row('root', 'Project'), row('explicit', 'Old explicit'),
+                          row('indexed', 'Old indexed')], wait_for_writer=True, names={})
+    store.execute("INSERT INTO session_meta VALUES ('indexed', 'root')")
+    store.commit()
+    standalone = dict(row('root'), continuation_topic_title='Stale',
+                      continuation_topic_root_session_id='old',
+                      continuation_topic_session_id='old')
+    first = row('explicit')
+    last = row('explicit', origin='root')
+    indexed = row('indexed')
+
+    topics.attach_topics([standalone, first, last, indexed], wait_for_writer=True, names={})
+
+    assert standalone == row('root')
+    for continuation in (first, last, indexed):
+        assert continuation['continuation_topic_title'] == 'Project'
+        assert continuation['continuation_topic_root_session_id'] == 'root'
+    assert store.execute(
+        "SELECT origin, root_sid, topic_title FROM continuation_topics WHERE sid='root'"
+    ).fetchone() == ('', 'root', 'Project')
+
+
 def test_repeated_metadata_fallback_reuses_paths_but_reads_changed_titles(store, monkeypatch):
     metadata = {'/archive/untitled.jsonl': {'ai_title': ''},
                 '/archive/other.jsonl': {'ai_title': 'Other'}}
