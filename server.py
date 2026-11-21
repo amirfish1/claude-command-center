@@ -48209,6 +48209,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     None if is_delta else self.headers.get("If-None-Match"),
                     diagnostics=diagnostics, fingerprint=fingerprint,
                     row_layouts=row_layouts and not is_delta, packed_rows=history[2],
+                    packed_runs=history[1][1] if history[1] is not None else None,
                     # Direct local connections can trade extra wire bytes for
                     # lower compression latency.
                     prefer_zstd=(row_layouts and not is_delta and not

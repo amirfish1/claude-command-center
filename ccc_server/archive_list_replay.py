@@ -18,6 +18,9 @@ from ccc_server.bounded_cache import ByteBudgetCache
 # Snapshot versions change when only a few rows change. Keep small encoded
 # runs reusable across those versions, bounded independently of full bodies.
 _RUN_CACHE = ByteBudgetCache(32 * 1024 * 1024, 512)
+# Packed All responses have different row slots and must not evict the
+# smaller sidebar windows' DEFLATE runs.
+_PACKED_RUN_CACHE = ByteBudgetCache(32 * 1024 * 1024, 700)
 _HISTORY_MANIFESTS = ByteBudgetCache(4 * 1024 * 1024, 32)
 # Multiple manifests can share an order. Keep IDs under a separate budget
 # so retaining them never evicts the run guards needed for ordinary deltas.
@@ -117,6 +120,27 @@ def prepare_history(payload, *, check_client=None):
         return payload, None, packed
     fingerprint = hashlib.sha256(metadata + b"".join(digest for digest, _, _ in runs)).digest()
     return payload, (ids, runs, fingerprint, order_token(ids)), packed
+
+
+def _packed_history_fragments(rows, runs):
+    """Reuse exactly guarded JSON fragments for full packed history replies."""
+    chunks = [b"["]
+    for digest, start, end in runs:
+        group = rows[start:end]
+        # The manifest hashes the field names, so its digest stays stable
+        # even when another layout first appears earlier in a response.
+        # Packed JSON contains the wire slot numbers too.
+        slots = tuple(index for index, _ in group)
+        key = (digest, slots)
+        raw = _PACKED_RUN_CACHE.get(key)
+        if raw is None:
+            raw = json.dumps(group).encode()[1:-1]
+            _PACKED_RUN_CACHE.put(key, raw, len(raw) + 224 + 32 * len(slots))
+        if start:
+            chunks.append(b", ")
+        chunks.append(raw)
+    chunks.append(b"]")
+    return chunks
 
 
 def _order_spans(previous_ids, ids):
@@ -245,16 +269,21 @@ def encode_gzip_payload(payload, raw=None):
                      b'\x03\x00', struct.pack('<II', zlib.crc32(raw), len(raw) & 0xffffffff)))
 
 
-def encode_payload(payload):
-    if not isinstance(payload, EncodedListPayload):
+def encode_payload(payload, *, packed_runs=None):
+    if packed_runs is None and not isinstance(payload, EncodedListPayload):
         return json.dumps(payload).encode()
     chunks = [b'{']
     for index, (key, value) in enumerate(payload.items()):
         if index:
             chunks.append(b', ')
-        chunks.extend((json.dumps(key).encode(), b': ',
-            payload.conversations_json if key == 'conversations'
-            else json.dumps(value).encode()))
+        chunks.extend((json.dumps(key).encode(), b': '))
+        if key == 'conversations':
+            if packed_runs is None:
+                chunks.append(payload.conversations_json)
+            else:
+                chunks.extend(_packed_history_fragments(value, packed_runs))
+        else:
+            chunks.append(json.dumps(value).encode())
     chunks.append(b'}')
     return b''.join(chunks)
 

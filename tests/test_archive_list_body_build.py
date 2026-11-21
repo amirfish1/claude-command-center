@@ -445,6 +445,32 @@ def test_history_encoding_builds_gzip_only_when_requested_or_needed(monkeypatch)
     assert len(gzip_calls) == 1
 
 
+def test_packed_history_reuses_runs_but_checks_wire_layout_slots(monkeypatch):
+    from ccc_server import archive_list_replay as replay, list_encoding
+
+    monkeypatch.setattr(replay, '_RUN_MAX_ROWS', 1)
+    cache = replay.ByteBudgetCache(4096, 8)
+    monkeypatch.setattr(replay, '_PACKED_RUN_CACHE', cache)
+    left = {'session_id': 'left', 'first_message': 'first', 'mtime': 12}
+    right = {'session_id': 'right', 'mtime': 14}
+    exact_repeat = []
+    digests = []
+    for rows in ([left, right], [left, right], [right, left], [left, dict(right, mtime=15)]):
+        payload = {'ok': True, 'conversations': rows}
+        _, manifest, packed = replay.prepare_history(payload)
+        assert packed is not None
+        runs = manifest[1]
+        digests.append([digest for digest, _, _ in runs])
+        representation = list_encoding.history_representation(
+            payload, '', None, row_layouts=True, packed_rows=packed, packed_runs=runs)
+        expected = list_encoding.history_representation(
+            payload, '', None, row_layouts=True, packed_rows=packed)
+        assert representation == expected
+        exact_repeat.append(len(cache))
+    assert exact_repeat == [2, 2, 4, 5]
+    assert digests[0] == list(reversed(digests[2]))
+    assert digests[0][1] != digests[3][1]
+
 def test_history_zstd_requires_local_packed_response_and_client_acceptance(monkeypatch):
     from ccc_server import list_encoding
 
