@@ -32484,7 +32484,7 @@ def _prepare_html_response(content, accept):
     return {"body": body, "encoding": None}
 
 
-def _app_page_response(path, query, accept):
+def _app_page_response(path, query, accept, *, asset_hints=False):
     """Only app shells, conversation embeds and local app pages are delegated.
 
     This runs behind the dashboard's existing request checks and private
@@ -32492,6 +32492,7 @@ def _app_page_response(path, query, accept):
     """
     build_start = time.perf_counter(), time.thread_time()
     html = None
+    links = None
     if path in ("", "/"):
         params = urllib.parse.parse_qs(query)
         embed = (params.get("embed") == ["app"] and
@@ -32502,6 +32503,9 @@ def _app_page_response(path, query, accept):
         if not embed and not shell:
             return None
         selected = next(iter(_resolve_apps(only_id=app_id)), None) if shell else None
+        if shell and asset_hints:
+            from ccc_server.app_asset_hints import prepare
+            links = prepare(app_id, USER_APPS_DIR, _static_asset_url)
         html = (_load_app_shell_html(selected) if shell else _load_index_html(app_embed=embed))
     elif re.fullmatch(r"/view/[a-z0-9_-]+", path):
         html = _load_application_html(path[len("/view/"):])
@@ -32509,6 +32513,8 @@ def _app_page_response(path, query, accept):
         return None
     encode_start = time.perf_counter(), time.thread_time()
     prepared = _prepare_html_response(html, accept)
+    if links is not None:
+        prepared["asset_hints"] = links
     encode_end = time.perf_counter(), time.thread_time()
     # The foreground handler's CPU excludes this reader process. Preserve
     # both clocks so page construction and encoding can be distinguished
@@ -33031,12 +33037,18 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             app_id = query.get("ccc_app", [""])[0]
             app_shell = bool(app_id and app_id not in ("sessions", "queues")
                              and not query.get("ccc_popout") and not query.get("popout"))
-            if app_shell:
-                from ccc_server.app_asset_hints import send as send_app_asset_hints
-                send_app_asset_hints(self, app_id, USER_APPS_DIR, _static_asset_url)
             if app_shell or app_embed:
+                from ccc_server import app_asset_hints
+                needs_hints = app_shell and app_asset_hints.wants_hints(self)
+                page_options = {"asset_hints": True} if needs_hints else {}
                 prepared = _conv_reader.forward_page("/", parsed.query,
-                                                    self.headers.get("Accept-Encoding", ""))
+                                                    self.headers.get("Accept-Encoding", ""),
+                                                    **page_options)
+                if needs_hints:
+                    if prepared is not None and "asset_hints" in prepared:
+                        self._ccc_final_asset_hints = prepared["asset_hints"]
+                    else:
+                        app_asset_hints.send(self, app_id, USER_APPS_DIR, _static_asset_url)
                 if prepared is not None:
                     self._send_prepared_html(prepared)
                     return

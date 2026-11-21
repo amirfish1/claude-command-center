@@ -10,12 +10,13 @@ from ccc_server import conv_reader
 from tests.test_static_asset_caching import _get, _server
 
 
-def wire_page(server, path, query, accept):
+def wire_page(server, path, query, accept, **options):
     client, child = socket.socketpair()
     thread = threading.Thread(target=conv_reader._handle, args=(child, server))
     thread.start()
     try:
-        client.sendall(json.dumps({'op':'app_page','path':path,'query':query,'accept':accept}).encode()+b'\n')
+        request = {'op': 'app_page', 'path': path, 'query': query, 'accept': accept, **options}
+        client.sendall(json.dumps(request).encode() + b'\n')
         reader = client.makefile('rb')
         head = json.loads(reader.readline())
         return head, reader.read(head.get('len', 0))

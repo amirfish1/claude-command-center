@@ -91,13 +91,39 @@ def test_dashboard_route_keeps_canonical_final_html_after_hints(apps, monkeypatc
     from tests.test_static_asset_caching import _get, _server
     server = _server()
     monkeypatch.setattr(server, 'USER_APPS_DIR', apps)
-    monkeypatch.setattr(server, '_static_asset_url', asset_url)
-    monkeypatch.setattr(server._conv_reader, 'forward_page',
-                        lambda *_args: {'body': b'<p>canonical page</p>', 'encoding': None})
+
+    def prepared_page(*_args, asset_hints):
+        assert asset_hints
+        return {'body': b'<p>canonical page</p>', 'encoding': None,
+                'asset_hints': ('</static/conversation-app.js?v=current>; rel=preload; as=script',)}
+    monkeypatch.setattr(server._conv_reader, 'forward_page', prepared_page)
+    monkeypatch.setattr(server, '_static_asset_url', lambda _: pytest.fail('prepared hints were rebuilt'))
     status, _headers, body = _get(server, '/?ccc_app=example', HEADERS)
     assert status == 200
     assert body == b'<p>canonical page</p>'
     assert _headers["content-length"] == "21"
+    assert _headers["link"] == '</static/conversation-app.js?v=current>; rel=preload; as=script'
+
+
+def test_reader_preparation_and_local_fallback_emit_the_same_links(apps, monkeypatch):
+    from tests.test_app_page_reader import wire_page
+    from tests.test_static_asset_caching import _get, _server
+
+    server = _server()
+    monkeypatch.setattr(server, 'USER_APPS_DIR', apps)
+    monkeypatch.setattr(server, '_static_asset_url', asset_url)
+    path, query = '/', 'ccc_app=example'
+    head, body = wire_page(server, path, query, 'identity', asset_hints=True)
+    from ccc_server.app_asset_hints import _ASSETS
+    assert head['asset_hints'] == [f'<{asset_url(name)}>; rel=preload; as={kind}'
+                                   for name, kind in _ASSETS]
+    with monkeypatch.context() as context:
+        context.setattr(server._conv_reader, 'forward_page', lambda *_args, **_options: None)
+        status, headers, fallback = _get(server, '/?' + query, HEADERS)
+    assert status == 200 and fallback == body
+    assert headers['link'] == head['asset_hints'][-1]
+    ordinary, _ = wire_page(server, path, query, 'identity')
+    assert 'asset_hints' not in ordinary
 
 
 def test_real_connection_sees_hints_before_page_and_reuses_final_framing(apps):

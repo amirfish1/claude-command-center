@@ -30,35 +30,37 @@ class AppAssetHintsMixin:
         return super().end_headers()
 
 
-def send(handler, app_id, apps_dir, asset_url):
-    """Preload assets without delaying the final response's header delivery.
+def wants_hints(handler):
+    """Only top-level HTTPS browser navigations need these response links."""
+    return (handler.request_version == "HTTP/1.1"
+            and handler.headers.get("Sec-Fetch-Mode") == "navigate"
+            and handler.headers.get("Sec-Fetch-Dest") == "document"
+            and handler.headers.get("X-Forwarded-Proto", "").lower() == "https")
 
-    Navigation metadata limits speculative loading to browser documents.
-    HTTPS proxies can relay the hints over HTTP/2; direct HTTP browsers keep
-    their existing HTML preloads. Only installed apps with an agent need them.
-    The caller has already applied its proxy and phone access checks.
-    """
-    if (handler.request_version != "HTTP/1.1"
-            or handler.headers.get("Sec-Fetch-Mode") != "navigate"
-            or handler.headers.get("Sec-Fetch-Dest") != "document"
-            or handler.headers.get("X-Forwarded-Proto", "").lower() != "https"):
-        return False
+
+def prepare(app_id, apps_dir, asset_url):
+    """Use the fixed manifest and only preload for installed apps with an agent."""
     folder = app_routines.app_dir(app_id, apps_dir)
     if folder is None:
-        return False
+        return ()
     agent = app_routines.load_state(folder).get("agent")
     session = agent.get("session_id") if isinstance(agent, dict) else None
     if not isinstance(session, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", session):
-        return False
+        return ()
     links = []
     for name, kind in _ASSETS:
         url = asset_url(name)
         if not re.fullmatch(r"/static/" + re.escape(name) + r"\?v=[A-Za-z0-9_.-]{1,128}", url):
-            return False
+            return ()
         link = f"<{url}>; rel=preload; as={kind}"
         links.append(link)
     # Even extension downloads can queue ahead of the document on a shared
     # HTTP/2 connection. Deliver all preload links with its final headers so
     # the browser can start them before parsing HTML without delaying it.
-    handler._ccc_final_asset_hints = tuple(links)
-    return True
+    return tuple(links)
+
+
+def send(handler, app_id, apps_dir, asset_url):
+    """Prepare links locally when the page reader is unavailable."""
+    handler._ccc_final_asset_hints = prepare(app_id, apps_dir, asset_url) if wants_hints(handler) else ()
+    return bool(handler._ccc_final_asset_hints)

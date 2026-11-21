@@ -207,10 +207,10 @@ def forward(conv_id, query, accept):
     return _forward_binary({"conv_id": conv_id, "query": query or "", "accept": accept or ""})
 
 
-def forward_page(path, query, accept):
+def forward_page(path, query, accept, asset_hints=False):
     """Read-only app HTML uses the same private channel and local fallback."""
     return _forward_binary({"op": "app_page", "path": path, "query": query or "",
-                            "accept": accept or ""}, timeout=0.75)
+                            "accept": accept or "", "asset_hints": asset_hints}, timeout=0.75)
 
 
 def _forward_binary(request, timeout=None):
@@ -246,8 +246,11 @@ def _forward_binary(request, timeout=None):
     cache = header.get("cache")
     result = {"body": body, "encoding": header.get("encoding"),
               "cache": f"reader-{cache}" if cache else "reader"}
-    if request.get("op") == "app_page" and isinstance(header.get("page_timing"), dict):
-        result["page_timing"] = header["page_timing"]
+    if request.get("op") == "app_page":
+        if isinstance(header.get("page_timing"), dict):
+            result["page_timing"] = header["page_timing"]
+        if isinstance(header.get("asset_hints"), list):
+            result["asset_hints"] = tuple(header["asset_hints"])
     return result
 
 
@@ -301,8 +304,10 @@ def _handle(conn, server_mod):
         conv_id = str(req.get("conv_id") or "")
         out = None
         if req.get("op") == "app_page":
+            options = {"asset_hints": True} if req.get("asset_hints") is True else {}
             out = server_mod._app_page_response(str(req.get("path") or ""),
-                                                req.get("query") or "", req.get("accept") or "")
+                                                req.get("query") or "", req.get("accept") or "",
+                                                **options)
         elif conv_id:
             try:
                 out = server_mod._conversation_open_response(
@@ -319,6 +324,8 @@ def _handle(conn, server_mod):
                 "cache": out.get("cache")}
         if req.get("op") == "app_page" and isinstance(out.get("page_timing"), dict):
             head["page_timing"] = out["page_timing"]
+        if req.get("op") == "app_page" and "asset_hints" in out:
+            head["asset_hints"] = out["asset_hints"]
         conn.sendall(json.dumps(head).encode() + b"\n" + body)
     except Exception:
         pass
