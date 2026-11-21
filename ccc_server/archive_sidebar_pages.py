@@ -26,7 +26,12 @@ class StoredRow(dict):
         self.cwd = cwd
 
     def copy(self):
-        return StoredRow(self.keys(), self.values(), self.cwd)
+        # Copy the dict directly. Lifecycle overlays may update thousands of
+        # packed rows, and rebuilding each one from zipped fields is costly.
+        clone = StoredRow.__new__(StoredRow)
+        clone.update(self)
+        clone.cwd = self.cwd
+        return clone
 
 
 def setup(con):

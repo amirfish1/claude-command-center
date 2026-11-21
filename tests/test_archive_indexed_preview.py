@@ -169,10 +169,15 @@ def test_packed_history_is_exact_after_live_lifecycle_changes(tmp_path, monkeypa
 
         raw = server._overlay_conversation_lifecycle_flags(load(None), copy_on_change=True)
         original_packed = load(version)
+        borrowed_cold = original_packed[0]
         unchanged = original_packed[2]
         packed = server._overlay_conversation_lifecycle_flags(original_packed, copy_on_change=True)
         assert len(packed) == 2
         assert isinstance(packed[0], server._archive_sidebar_pages.StoredRow)
+        assert packed[0] is not borrowed_cold
+        assert packed[0].cwd == borrowed_cold.cwd
+        assert list(packed[0]) == list(borrowed_cold)
+        assert borrowed_cold["archived"] is False
         assert packed[0]["all_lane_override"] == "other"
         assert packed[0]["archived"] is True
         normal = server._archive_list_project_rows([raw[0]], _retain_templates=False)

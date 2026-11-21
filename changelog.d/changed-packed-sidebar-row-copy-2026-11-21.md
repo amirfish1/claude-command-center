@@ -1,0 +1,1 @@
+- Reduced CPU work when applying archive, trash, and lane settings to packed conversation history.
