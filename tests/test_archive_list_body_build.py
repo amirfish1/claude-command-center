@@ -10,6 +10,8 @@ import threading
 import time
 import urllib.request
 
+import pytest
+
 
 def test_projection_isolates_flat_and_nested_containers():
     server = importlib.import_module('server')
@@ -346,25 +348,42 @@ def test_unversioned_history_projection_shares_only_overlapping_exact_source(mon
     assert project('scope', rows, own_projection, {}) != payload
 
 
-def test_all_list_disconnect_abandons_only_opted_in_conditional_reads(monkeypatch, tmp_path):
+@pytest.mark.parametrize('stage', ['projection', 'manifest'])
+def test_all_list_disconnect_abandons_only_opted_in_conditional_reads(monkeypatch, tmp_path, stage):
     import server
-    from ccc_server import continuation_topics
+    from ccc_server import archive_list_replay, continuation_topics
 
     monkeypatch.setattr(server, '_ARCHIVE_LIST_DISK_DIR', tmp_path)
     monkeypatch.setattr(server, '_archive_list_source_rows_cached',
                         lambda *a, **kw: ([{'session_id': 'row'}], True, 0))
     entered = threading.Event()
     ready = threading.Event()
-    original = server._archive_list_project_row
     topic_work = []
+    fingerprints = []
     dispositions = []
 
-    def project(*args, **kwargs):
+    def wait_for_disconnect():
         entered.set()
         assert ready.wait(5)
-        return original(*args, **kwargs)
 
-    monkeypatch.setattr(server, '_archive_list_project_row', project)
+    if stage == 'projection':
+        original = server._archive_list_project_row
+
+        def project(*args, **kwargs):
+            wait_for_disconnect()
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(server, '_archive_list_project_row', project)
+    else:
+        original = archive_list_replay.payload_fingerprint
+
+        def fingerprint(value):
+            fingerprints.append(value)
+            if isinstance(value, tuple):
+                wait_for_disconnect()
+            return original(value)
+
+        monkeypatch.setattr(archive_list_replay, 'payload_fingerprint', fingerprint)
     monkeypatch.setattr(continuation_topics, 'attach_topics',
                         lambda *a, **kw: topic_work.append(True))
     monkeypatch.setattr(server, 'record_diag',
@@ -398,7 +417,11 @@ def test_all_list_disconnect_abandons_only_opted_in_conditional_reads(monkeypatc
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=5)
-    assert topic_work == [True]
+    assert topic_work == ([True] if stage == 'projection' else [True, True])
+    if stage == 'manifest':
+        # Both computed their layout digest. Only the ordinary client
+        # reached the run and metadata fingerprints after receiving EOF.
+        assert [type(value) for value in fingerprints] == [tuple, list, dict, tuple]
     assert dispositions == [200, 'abandoned']
 
 

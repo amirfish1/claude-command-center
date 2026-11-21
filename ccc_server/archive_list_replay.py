@@ -64,23 +64,25 @@ def order_token(ids):
     return hashlib.sha256(json.dumps(ids, separators=(",", ":")).encode()).hexdigest()
 
 
-def pack_row_layouts(rows):
+def pack_row_layouts(rows, *, check_client=None):
     """Collect the ordered keys and corresponding values for each row."""
     layouts = {}
     packed = []
-    for row in rows:
+    for position, row in enumerate(rows):
+        if check_client is not None and position % _RUN_MAX_ROWS == 0:
+            check_client()
         layout = tuple(row)
         index = layouts.setdefault(layout, len(layouts))
         packed.append((index, list(row.values())))
     return list(layouts), packed
 
 
-def prepare_history(payload):
+def prepare_history(payload, *, check_client=None):
     """Build the shared manifest and, when bounded, the reusable row layout."""
     rows = payload["conversations"]
     packed = layout_digests = None
     if len(rows) <= _HISTORY_PACK_MAX_ROWS and all(type(row) is dict for row in rows):
-        packed = pack_row_layouts(rows)
+        packed = pack_row_layouts(rows, check_client=check_client)
         layout_digests = [payload_fingerprint(layout) if all(type(key) is str for key in layout)
                           else None for layout in packed[0]]
         if None in layout_digests:
@@ -88,6 +90,8 @@ def prepare_history(payload):
     ids, seen, runs = [], set(), []
     start = 0
     for end, row in enumerate(rows, 1):
+        if check_client is not None and (end - 1) % _RUN_MAX_ROWS == 0:
+            check_client()
         sid = row.get("session_id") or row.get("id")
         if not isinstance(sid, str) or not sid or sid in seen:
             return payload, None, packed

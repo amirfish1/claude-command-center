@@ -37466,7 +37466,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                             if check_client is not None:
                                 check_client()
                             with _archive_history_timing(_payload_phases, "manifest"):
-                                return _list_replay.prepare_history(payload)
+                                return _list_replay.prepare_history(payload, check_client=check_client)
 
                         if stale_ok:
                             return _archive_list_history_projection(
