@@ -795,6 +795,31 @@
     return res.json();
   }
 
+  // Keep the server's order and rows separate from the local write overlays.
+  var queueListSnapshot = null;
+  async function readQueueList(prior) {
+    var url = '/api/queue/list?slim=1';
+    var data = await getJson(prior && prior.version
+      ? url + '&since=' + encodeURIComponent(prior.version) : url);
+    if (data && data.ok !== false && data.delta && prior && prior.order && data.version) {
+      if (data.unchanged) {
+        return {items: prior.items, order: prior.order, version: data.version};
+      }
+      if (Array.isArray(data.order) && data.changed && typeof data.changed === 'object') {
+        var previous = new Map(prior.order.map(function (key, i) { return [key, prior.items[i]]; }));
+        var items = data.order.map(function (key) {
+          return Object.prototype.hasOwnProperty.call(data.changed, key)
+            ? data.changed[key] : previous.get(key);
+        });
+        if (items.every(Boolean)) return {items: items, order: data.order, version: data.version};
+      }
+    }
+    if (data && data.delta) data = await getJson(url);
+    if (!data || data.ok === false || !Array.isArray(data.items)) throw new Error('Invalid queue list');
+    var order = Array.isArray(data.order) && data.order.length === data.items.length ? data.order : null;
+    return {items: data.items, order: order, version: order ? data.version : ''};
+  }
+
   var nextRefresh = 0;
   var appliedRefresh = 0;
   async function refresh() {
@@ -802,10 +827,11 @@
     try {
       var results = await Promise.all([
         getJson('/api/queue/status'),
-        getJson('/api/queue/list?slim=1'),
+        readQueueList(queueListSnapshot),
       ]);
       if (request < appliedRefresh) return;
       appliedRefresh = request;
+      queueListSnapshot = results[1];
       state.queues = (results[0] && results[0].queues) || [];
       // Per-project health rows carry WHY a queue is stuck (is there a fixer at
       // all, is it alive, has it closed anything lately). The queue rows only
@@ -818,7 +844,7 @@
         .filter(function (w) { return w && w.alive !== false; }));
       state.pastWorkers = (results[0] && results[0].past_workers) || [];
       state.workerSessionMap = (results[0] && results[0].worker_session_map) || {};
-      state.items = mergeFiledTickets((results[1] && results[1].items) || []).map(function (item) {
+      state.items = mergeFiledTickets(queueListSnapshot.items).map(function (item) {
         var current = preferCloseResult(item);
         if (current === item) closeResults.delete(item.ref);
         return current;
@@ -826,6 +852,7 @@
       state.offline = false;
       state.loaded = true;
     } catch (e) {
+      if (request < appliedRefresh) return;
       // Keep the last good render on screen and flag it, rather than
       // blanking the board every time a poll misses.
       state.offline = true;
