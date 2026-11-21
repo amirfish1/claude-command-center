@@ -200,6 +200,8 @@ _DEVIN_CLI_TAIL_WALK_MAX_ROWS = 400
 # placeholder number collided every "has_pr" session onto one dedup key,
 # silently dropping the rest from the sidebar).
 _DEVIN_CLI_PR_NUMBER_RE = re.compile(r"(?:/pull/|\bpr\s*#)(\d+)", re.IGNORECASE)
+_DEVIN_CLI_SHIP_BATCH_ROWS = 64
+_DEVIN_CLI_SHIP_ROLE_FILTER = "json_extract(chat_message, '$.role') IN ('assistant', 'tool')"
 
 def _devin_api_key():
     """Personal Devin API key from the environment, or None when unset."""
@@ -1421,6 +1423,54 @@ def _devin_cli_session_versions(con, raw_ids):
     return out
 
 
+def _devin_cli_scan_ship_flags(con, raw_id, start, ship):
+    """Find monotonic ship flags without walking the rest of a large transcript."""
+    keys = ("has_commit", "has_push", "has_pr")
+    found = {key: bool(ship.get(key)) for key in keys}
+    newest = con.execute(
+        "SELECT MAX(row_id) FROM message_nodes WHERE session_id = ? AND row_id > ?",
+        (raw_id, start),
+    ).fetchone()[0]
+    if newest is None:
+        return start, found
+    params = {"sid": raw_id, "start": start, "newest": newest}
+    after = "session_id = :sid AND row_id > :start AND row_id <= :newest"
+    latest = start
+    while not all(found.values()):
+        # Find a batch boundary from the row-id index without loading message
+        # bodies. A session may be sparse in the database's global row IDs.
+        boundary = con.execute(
+            f"SELECT row_id FROM message_nodes WHERE {after} "
+            f"ORDER BY row_id LIMIT 1 OFFSET {_DEVIN_CLI_SHIP_BATCH_ROWS - 1}",
+            params,
+        ).fetchone()
+        end_filter = ""
+        if boundary is not None:
+            params["end"] = boundary[0]
+            end_filter = "AND row_id <= :end"
+        row = con.execute(
+            "SELECT MAX(row_id),"
+            " MAX(CASE WHEN NOT :has_commit THEN chat_message LIKE '%git%commit%' END),"
+            " MAX(CASE WHEN NOT :has_push THEN chat_message LIKE '%git%push%' END),"
+            " MAX(CASE WHEN NOT :has_pr THEN chat_message LIKE '%gh%pr%create%' END)"
+            f" FROM message_nodes WHERE {after} {end_filter} AND {_DEVIN_CLI_SHIP_ROLE_FILTER}",
+            {**params, **found},
+        ).fetchone()
+        latest = max(latest, int(row[0] or 0))
+        found = {key: found[key] or bool(flag) for key, flag in zip(keys, row[1:])}
+        if boundary is None:
+            return latest, found
+        params["start"] = boundary[0]
+    # Once all flags are set, only the latest eligible row is still needed.
+    # The backwards row-id index walk stops at the first match.
+    row = con.execute(
+        f"SELECT row_id FROM message_nodes WHERE {after} AND {_DEVIN_CLI_SHIP_ROLE_FILTER}"
+        " ORDER BY row_id DESC LIMIT 1",
+        params,
+    ).fetchone()
+    return (int(row[0]) if row else latest), found
+
+
 def _devin_cli_row_fields_for_session(con, raw_id, prev):
     """Recompute the derived list fields for ONE changed session.
 
@@ -1527,23 +1577,9 @@ def _devin_cli_row_fields_for_session(con, raw_id, prev):
     # --- ship flags, incremental over rows not yet scanned ---
     ship_scan_start = out["ship_row_id"]
     try:
-        row = con.execute(
-            "SELECT MAX(row_id),"
-            "  MAX(CASE WHEN chat_message LIKE '%git%commit%' THEN 1 ELSE 0 END),"
-            "  MAX(CASE WHEN chat_message LIKE '%git%push%' THEN 1 ELSE 0 END),"
-            "  MAX(CASE WHEN chat_message LIKE '%gh%pr%create%' THEN 1 ELSE 0 END)"
-            " FROM message_nodes"
-            " WHERE session_id = ? AND row_id > ?"
-            "   AND (json_extract(chat_message, '$.role') = 'assistant' OR"
-            "        json_extract(chat_message, '$.role') = 'tool')",
-            (raw_id, out["ship_row_id"]),
-        ).fetchone()
-        if row is not None:
-            ship = out["ship"]
-            ship["has_commit"] = bool(ship.get("has_commit")) or bool(row[1])
-            ship["has_push"] = bool(ship.get("has_push")) or bool(row[2])
-            ship["has_pr"] = bool(ship.get("has_pr")) or bool(row[3])
-            out["ship_row_id"] = max(out["ship_row_id"], int(row[0] or 0), max_row_id)
+        latest, flags = _devin_cli_scan_ship_flags(con, raw_id, ship_scan_start, out["ship"])
+        out["ship"].update(flags)
+        out["ship_row_id"] = max(latest, max_row_id)
     except sqlite3.Error:
         pass
 

@@ -29,6 +29,39 @@ def test_devin_fields_parse_footer_before_truncating_preview(monkeypatch):
     con.close()
 
 
+def test_devin_ship_scan_preserves_flags_cursor_and_pr_number(monkeypatch):
+    import server
+    from ccc_server import devin
+
+    monkeypatch.setattr(devin, "_DEVIN_CLI_SHIP_BATCH_ROWS", 2)
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE message_nodes (row_id INTEGER PRIMARY KEY, session_id TEXT, chat_message TEXT)")
+    con.execute("CREATE INDEX message_session ON message_nodes(session_id)")
+    entries = [
+        (1, "sample", "user", "git commit, git push, gh pr create"),
+        (3, "sample", "assistant", "I can run git commit"),
+        (5, "other", "assistant", "git push"),
+        (6, "sample", "tool", "gh pr create"),
+        (9, "sample", "assistant", "git push"),
+        (12, "sample", "tool", "gh pr create returned PR #17"),
+        (15, "sample", "user", "Thanks"),
+    ]
+    con.executemany(
+        "INSERT INTO message_nodes VALUES (?, ?, ?)",
+        [(row, sid, json.dumps({"role": role, "content": content})) for row, sid, role, content in entries],
+    )
+    assert devin._devin_cli_scan_ship_flags(con, "sample", 0, {}) == (
+        12, {"has_commit": True, "has_push": True, "has_pr": True},
+    )
+    fields = devin._devin_cli_row_fields_for_session(con, "sample", {"first_message": "Please ship"})
+    assert fields["ship_row_id"] == 15
+    assert fields["ship"] == {"has_commit": True, "has_push": True, "has_pr": True, "pr_number": 17}
+    updated = devin._devin_cli_row_fields_for_session(con, "sample", fields)
+    assert updated["ship"] == fields["ship"]
+    assert updated["ship_row_id"] == fields["ship_row_id"]
+    con.close()
+
+
 def test_devin_acp_sends_reporting_instruction_with_original_retry_text(monkeypatch):
     server=importlib.import_module('server')
     monkeypatch.setenv('CCC_CONTROL_PLANE_ENGINES','0')
