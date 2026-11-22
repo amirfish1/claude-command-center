@@ -3400,6 +3400,36 @@ def test_detached_archive_queries_codex_titles_only_for_requested_ids(monkeypatc
     assert titles["thread-949"]["title"] == "Latest title"
 
 
+def test_archive_worker_titles_skip_idle_activity_scans(monkeypatch, tmp_path):
+    workers = tmp_path / "workers.json"
+    workers.write_text(json.dumps({"workers": [
+        {"pid": 123, "worker_id": "worker-a", "queue": "TEST", "session_id": "recorded"},
+        {"pid": 124, "worker_id": "worker-b", "queue": "TEST", "log": "worker.log"},
+    ]}))
+    monkeypatch.setattr(server, "_wt_workers_path", lambda: workers)
+    monkeypatch.setattr(server, "_is_pid_alive", lambda pid: True)
+    monkeypatch.setattr(server, "_wt_record_worker_session", lambda *args: None)
+    monkeypatch.setattr(server, "_wt_read_worker_session_ids", lambda: [])
+    monkeypatch.setattr(server, "_wt_read_session_origins", lambda: {})
+    monkeypatch.setattr(server, "_WT_DISPLAY_SNAPSHOT_ONLY", True)
+    monkeypatch.setattr(server, "_wt_detached_title_items", lambda: [])
+    scans = _count_calls(monkeypatch, "_wt_worker_idle_fields")
+    log_reads = []
+
+    def resolve_session(log):
+        log_reads.append(log)
+        return "recovered"
+
+    monkeypatch.setattr(server, "extract_session_id", resolve_session)
+    rows = [{"session_id": sid} for sid in ("recorded", "recovered")]
+
+    server._apply_watchtower_worker_display_names(rows)
+
+    assert not scans
+    assert log_reads == ["worker.log"]
+    assert [row["display_name"] for row in rows] == [server._wt_display_name("TEST", None)] * 2
+
+
 def test_archive_incremental_refresh_reparses_only_changed_transcripts(
     big_projects, monkeypatch, tmp_path
 ):

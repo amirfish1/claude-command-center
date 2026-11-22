@@ -3502,13 +3502,14 @@ def _wt_devin_worker_session_id(pid):
     return sid
 
 
-def _wt_read_workers(include_activity=True):
+def _wt_read_workers(include_activity=True, *, resolve_session_ids=False):
     """Live WatchTower worker records read straight from workers.json.
 
     Each row is annotated with ``alive`` (os.kill liveness) and carries the
     fields WatchTower persists, notably ``queue`` and ``session_id`` (the cloud
     UUID, backfilled by WT) so the dashboard can link a worker to its session.
-    Only live workers are returned. No watchtower import needed."""
+    Only live workers are returned. Display callers can recover missing
+    session IDs without scanning transcripts for worker idle times."""
     try:
         with open(_wt_workers_path()) as f:
             data = json.load(f)
@@ -3534,7 +3535,7 @@ def _wt_read_workers(include_activity=True):
         # the file yet, resolve it from the worker's stream-json log in-memory
         # (no file write -> no race with WT's own writer) so the dashboard can
         # link the worker to its conversation immediately.
-        if include_activity and not row.get("session_id") and row.get("log"):
+        if (include_activity or resolve_session_ids) and not row.get("session_id") and row.get("log"):
             try:
                 sid = extract_session_id(row["log"])
                 if sid:
@@ -4009,7 +4010,7 @@ def _apply_watchtower_worker_display_names(rows):
     except Exception:
         worker_session_ids = set()
     try:
-        workers = _wt_read_workers()
+        workers = _wt_read_workers(include_activity=False, resolve_session_ids=True)
     except Exception:
         workers = []
     sid_to_worker = {}
