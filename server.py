@@ -19390,15 +19390,24 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phas
         flight = _ARCHIVE_LIST_SOURCE_FLIGHTS.get(key)
         owner = flight is None
         if owner:
-            flight = {"event": threading.Event(), "shared": threading.Event(), "value": None}
+            flight = {"event": threading.Event(), "followers": 0, "value": None}
             _ARCHIVE_LIST_SOURCE_FLIGHTS[key] = flight
         else:
-            flight["shared"].set()
+            flight["followers"] += 1
     if not owner:
         started = time.perf_counter()
-        flight["event"].wait()
-        if check_client is not None:
-            check_client()
+        try:
+            if check_client is None:
+                flight["event"].wait()
+            else:
+                # A waiting browser can navigate away before the snapshot
+                # completes. Drop its interest so an abandoned owner can stop.
+                while not flight["event"].wait(timeout=0.05):
+                    check_client()
+                check_client()
+        finally:
+            with _ARCHIVE_LIST_SOURCE_FLIGHTS_LOCK:
+                flight["followers"] -= 1
         if flight["value"] is not None:
             if phases is not None:
                 phases.update(coalesced=True, wait_ms=round(
@@ -19409,7 +19418,9 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phas
 
     if check_client is not None:
         def check_owner():
-            if not flight["shared"].is_set():
+            with _ARCHIVE_LIST_SOURCE_FLIGHTS_LOCK:
+                shared = flight["followers"] > 0
+            if not shared:
                 check_client()
 
         options["check_client"] = check_owner

@@ -101,3 +101,54 @@ def test_freshness_and_scope_do_not_wait_for_another_read(monkeypatch, flights):
             release.set()
             owner.result(timeout=5)
     assert flights == {}
+
+
+def test_disconnected_follower_releases_abandoned_source_owner(monkeypatch, flights):
+    entered, release, waiting, follower_disconnected = (
+        threading.Event() for _ in range(4)
+    )
+    calls = []
+
+    def read(_options, check_client, **_kwargs):
+        calls.append('read')
+        if len(calls) == 1:
+            entered.set()
+            assert release.wait(5)
+        check_client()
+        return [], True, 1
+
+    def disconnected_owner():
+        raise server._ArchiveListClientDisconnected()
+
+    def check_follower():
+        if follower_disconnected.is_set():
+            raise server._ArchiveListClientDisconnected()
+
+    monkeypatch.setattr(server, '_archive_list_source_rows_read', read)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        owner = pool.submit(server._archive_list_source_rows_cached, {},
+                            check_client=disconnected_owner)
+        try:
+            assert entered.wait(5)
+            event = next(iter(flights.values()))['event']
+            original_wait = event.wait
+
+            def observe_wait(timeout=None):
+                waiting.set()
+                return original_wait(timeout=timeout)
+
+            monkeypatch.setattr(event, 'wait', observe_wait)
+            follower = pool.submit(server._archive_list_source_rows_cached, {},
+                                   check_client=check_follower)
+            assert waiting.wait(5)
+            follower_disconnected.set()
+            with pytest.raises(server._ArchiveListClientDisconnected):
+                follower.result(timeout=2)
+        finally:
+            release.set()
+        with pytest.raises(server._ArchiveListClientDisconnected):
+            owner.result(timeout=5)
+
+    assert calls == ['read']
+    assert flights == {}
+    assert server._archive_list_source_rows_cached({}, check_client=lambda: None) == ([], True, 1)
