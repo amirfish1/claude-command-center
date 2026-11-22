@@ -922,6 +922,30 @@ class _DetachedConvMetaCache(dict):
         self.connection = connection
         self.missing = set()
         self.read_lock = threading.Lock()
+        self.has_lineage = conv_meta_store.lineage_ready(connection)
+        self.lineage = {}
+        self.legacy_lineage = {}
+
+    def get_lineage(self, key):
+        # The metadata body can contain parsed tail and preview data. Read
+        # the small projection for lineage-only lookups in detached workers.
+        if key in self:
+            return self[key].get("lineage_head")
+        if key not in self.lineage and self.has_lineage:
+            try:
+                with self.read_lock:
+                    self.lineage[key] = conv_meta_store.get_lineage(
+                        self.connection, _CONV_META_SCHEMA_VERSION, key,
+                    )
+            except (sqlite3.Error, ValueError):
+                pass
+        projected = self.lineage.get(key)
+        if projected is not None:
+            return projected
+        head = (self.get(key) or {}).get("lineage_head")
+        if isinstance(head, dict):
+            self.legacy_lineage[key] = head
+        return head
 
     def get(self, key, default=None):
         if key not in self and key not in self.missing:
@@ -936,6 +960,13 @@ class _DetachedConvMetaCache(dict):
                     else:
                         self.setdefault(key, value)
         return super().get(key, default)
+
+
+def _conv_meta_lineage(key):
+    cache = _core._conv_meta_cache
+    if isinstance(cache, _DetachedConvMetaCache):
+        return cache.get_lineage(key)
+    return (cache.get(key) or {}).get("lineage_head")
 
 
 def _load_conv_meta_cache(*, lazy=False):
@@ -1132,7 +1163,9 @@ def _mark_conv_meta_dirty(path):
 
 def _save_conv_meta_cache():
     """Persist changed paths without replacing another process's unrelated entries."""
-    if not _core._conv_meta_cache_dirty:
+    cache = _core._conv_meta_cache
+    legacy_lineage = cache.legacy_lineage if isinstance(cache, _DetachedConvMetaCache) else {}
+    if not _core._conv_meta_cache_dirty and not legacy_lineage:
         return
     with _conv_meta_cache_save_lock:
         with _core._conv_meta_cache_lock:
@@ -1143,10 +1176,12 @@ def _save_conv_meta_cache():
                 changes[path] = dict(meta) if meta is not None else None
             _conv_meta_dirty_paths.difference_update(paths)
             _core._conv_meta_cache_dirty = False
-        if not changes:
+            projected = dict(legacy_lineage)
+        if not changes and not projected:
             return
         try:
-            conv_meta_store.save(_core._CONV_META_CACHE_FILE, _CONV_META_SCHEMA_VERSION, changes)
+            conv_meta_store.save(_core._CONV_META_CACHE_FILE, _CONV_META_SCHEMA_VERSION, changes,
+                                 legacy_lineage=projected)
         except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
             with _core._conv_meta_cache_lock:
                 _conv_meta_dirty_paths.update(paths)
@@ -1154,6 +1189,11 @@ def _save_conv_meta_cache():
             if not isinstance(exc, (OSError, sqlite3.Error)):
                 raise
             print(f"  [conv-meta-cache] save failed: {exc}")
+        else:
+            with _core._conv_meta_cache_lock:
+                for path, head in projected.items():
+                    if legacy_lineage.get(path) is head:
+                        del legacy_lineage[path]
 
 
 _META_MARKERS = (

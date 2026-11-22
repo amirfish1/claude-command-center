@@ -19,6 +19,7 @@ import concurrent.futures
 import gzip
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -6542,6 +6543,67 @@ def test_archive_hot_body_reads_sort_only_row_ids(tmp_path, monkeypatch, legacy_
     assert "body" not in ordered
     body_reads = [sql for sql in statements if "SELECT rowid,body FROM rows" in sql]
     assert len(body_reads) == 3
+
+
+def test_detached_archive_lineage_loads_full_metadata_only_for_misses(monkeypatch, tmp_path):
+    from ccc_server import conv_meta_store, log_parse
+
+    target = tmp_path / "metadata.json"
+    version = log_parse._CONV_META_SCHEMA_VERSION
+    entries = {}
+    transcripts = []
+    for index in range(100):
+        path = tmp_path / f"transcript-{index}.jsonl"
+        path.write_text("{}\n")
+        stat = path.stat()
+        entries[str(path)] = {
+            "mtime": stat.st_mtime,
+            "lineage_head": {"parent": "", "origin": "", "token": [1, stat.st_mtime_ns, stat.st_size]},
+        }
+        transcripts.append(path)
+    conv_meta_store.save(target, version, entries)
+    # Simulate a pre-upgrade store. One pass should warm the projection
+    # while retaining an unrelated full metadata field.
+    writer = sqlite3.connect(conv_meta_store.database_path(target))
+    try:
+        writer.execute("DROP TABLE lineage")
+    finally:
+        writer.close()
+    monkeypatch.setattr(server, "_CONV_META_CACHE_FILE", target)
+    monkeypatch.setattr(server, "_conv_meta_cache", {})
+    monkeypatch.setattr(server, "_conv_meta_cache_dirty", False)
+    monkeypatch.setattr(log_parse, "_conv_meta_dirty_paths", set())
+
+    read = conv_meta_store.get
+    calls = []
+
+    def read_metadata(conn, version, path):
+        calls.append(path)
+        return read(conn, version, path)
+
+    monkeypatch.setattr(conv_meta_store, "get", read_metadata)
+    server._load_conv_meta_cache(lazy=True)
+    try:
+        for path in transcripts:
+            assert server._continued_from_session_id_from_transcript(path) == ""
+        assert len(calls) == len(transcripts)
+        server._save_conv_meta_cache()
+    finally:
+        server._conv_meta_cache.connection.close()
+    calls.clear()
+    changed = transcripts[-1]
+    changed.write_text(json.dumps({"type": "user", "message": {
+        "content": "Origin session id: changed-12345678",
+    }}) + "\n")
+    server._load_conv_meta_cache(lazy=True)
+    try:
+        for path in transcripts[:-1]:
+            assert server._continued_from_session_id_from_transcript(path) == ""
+        assert server._continued_from_session_id_from_transcript(changed) == "changed-12345678"
+        assert calls == [str(changed)]
+        assert server._conv_meta_cache[str(changed)]["mtime"] == entries[str(changed)]["mtime"]
+    finally:
+        server._conv_meta_cache.connection.close()
 
 
 def test_archive_scoped_spawn_markers_stat_only_requested_sessions(monkeypatch, tmp_path):

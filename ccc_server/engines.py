@@ -42,6 +42,7 @@ from ccc_server import antigravity_accounts as _antigravity_accounts
 from ccc_server import antigravity_ls
 from ccc_server import antigravity_stream as _antigravity_stream
 from ccc_server import core as _core
+from ccc_server.log_parse import _conv_meta_lineage
 from ccc_server import session_driver as _driver
 from ccc_server.paths import _is_pid_alive as _paths_is_pid_alive
 from ccc_server import free_runtime as _free_runtime
@@ -6142,7 +6143,7 @@ def _transcript_lineage_head(path):
         token = [1, st.st_mtime_ns, st.st_size]
         key = str(path)
         with _core._conv_meta_cache_lock:
-            cached = (_core._conv_meta_cache.get(key) or {}).get("lineage_head")
+            cached = _conv_meta_lineage(key)
             if isinstance(cached, dict) and cached.get("token") == token:
                 if all(isinstance(cached.get(k), str) for k in empty):
                     return {k: cached[k] for k in empty}

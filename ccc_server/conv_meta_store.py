@@ -36,12 +36,24 @@ def get(conn, version, transcript_path):
     return decode(found[0]) if found else None
 
 
+def lineage_ready(conn):
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='lineage'"
+    ).fetchone() is not None
+
+
+def get_lineage(conn, version, transcript_path):
+    found = conn.execute("SELECT body FROM lineage WHERE version=? AND path=?",
+                         (version, transcript_path)).fetchone()
+    return json.loads(found[0]) if found else None
+
+
 def load(conn, version):
     return {path: decode(body) for path, body in conn.execute(
         "SELECT path,body FROM metadata WHERE version=?", (version,))}
 
 
-def save(legacy, version, entries, *, migration=False):
+def save(legacy, version, entries, *, migration=False, legacy_lineage=None):
     database = database_path(legacy)
     database.parent.mkdir(parents=True, exist_ok=True)
     os.close(os.open(database, os.O_CREAT | os.O_WRONLY, 0o600))
@@ -50,6 +62,10 @@ def save(legacy, version, entries, *, migration=False):
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS initialized (version INTEGER PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS metadata (
+                version INTEGER NOT NULL, path TEXT NOT NULL, body TEXT NOT NULL,
+                PRIMARY KEY (version, path)
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS lineage (
                 version INTEGER NOT NULL, path TEXT NOT NULL, body TEXT NOT NULL,
                 PRIMARY KEY (version, path)
             ) WITHOUT ROWID;
@@ -63,5 +79,15 @@ def save(legacy, version, entries, *, migration=False):
             """, ((version, path, json.dumps(meta, separators=(",", ":")))
                   for path, meta in entries.items() if meta is not None))
             conn.executemany("DELETE FROM metadata WHERE version=? AND path=?",
+                             ((version, path) for path, meta in entries.items() if meta is None))
+            conn.executemany("INSERT OR IGNORE INTO lineage VALUES(?,?,?)", (
+                (version, path, json.dumps(head, separators=(",", ":")))
+                for path, head in (legacy_lineage or {}).items()
+            ))
+            conn.executemany("INSERT OR REPLACE INTO lineage VALUES(?,?,?)", (
+                (version, path, json.dumps(meta["lineage_head"], separators=(",", ":")))
+                for path, meta in entries.items() if meta and isinstance(meta.get("lineage_head"), dict)
+            ))
+            conn.executemany("DELETE FROM lineage WHERE version=? AND path=?",
                              ((version, path) for path, meta in entries.items() if meta is None))
             conn.execute("INSERT OR IGNORE INTO initialized VALUES(?)", (version,))
