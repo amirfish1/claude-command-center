@@ -793,6 +793,8 @@ def test_sidebar_history_cut_keeps_candidate_bodies_in_the_ordered_inventory_cut
     target = tmp_path / 'archive.json'
     original = data()
     store.save(target, original, complete=True, sidebar_key='base')
+    with closing(sqlite3.connect(store.database_path(target))) as writer, writer:
+        writer.execute('DROP INDEX rows_sidebar_history')
     updated = data(stamp=11)
     updated['entries']['base']['conversations'][0]['first_message'] = 'new publication'
     criteria = dict(schema_version=original['schema_version'], build_id=original['build_id'], max_rows=4)
@@ -805,6 +807,9 @@ def test_sidebar_history_cut_keeps_candidate_bodies_in_the_ordered_inventory_cut
             original['entries']['base']['conversations'][0], {'session_id': 'new'},
         ]
 
+    with closing(sqlite3.connect(store.database_path(target))) as reader:
+        indexes = {row[1] for row in reader.execute("PRAGMA index_list('rows')")}
+        assert 'rows_sidebar_history' in indexes
     with store.sidebar_history_cut(target, 'base', **criteria) as view:
         inventory, hydrate = view
         assert hydrate([], {'old'}) == [updated['entries']['base']['conversations'][0]]
@@ -829,13 +834,17 @@ def test_sidebar_history_cut_keeps_candidate_bodies_in_the_ordered_inventory_cut
         assert view is None
 
 
+@pytest.mark.parametrize('covering', [False, True])
 @pytest.mark.parametrize('parent', ['parent\0id', b'\xff', None])
-def test_sidebar_history_inventory_preserves_values_outside_text_batch(parent):
+def test_sidebar_history_inventory_preserves_values_and_rowid_ties(parent, covering):
     with closing(sqlite3.connect(':memory:')) as con:
         con.execute('CREATE TABLE rows (variant, position, sid, identity, parent, digest)')
-        rows = [('child', 'child-identity', parent, 'child-digest'),
+        if covering:
+            con.execute('CREATE INDEX rows_sidebar_history '
+                        'ON rows(variant, position, sid, identity, parent, digest)')
+        rows = [('z-child', 'child-identity', parent, 'child-digest'),
                 ('parent', 'parent-identity', '', 'parent-digest')]
-        con.execute('INSERT INTO rows VALUES (?, ?, ?, ?, ?, ?)', ('base', 1, *rows[1]))
-        con.execute('INSERT INTO rows VALUES (?, ?, ?, ?, ?, ?)', ('base', 0, *rows[0]))
+        con.executemany('INSERT INTO rows VALUES (?, ?, ?, ?, ?, ?)',
+                        [('base', 0, *row) for row in rows])
 
         assert store._sidebar_history_inventory(con, 'base', 2) == tuple(rows)

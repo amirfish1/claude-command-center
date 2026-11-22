@@ -166,6 +166,8 @@ def _connect(cache_file, *, write=False, shared_reader=False):
             CREATE INDEX IF NOT EXISTS rows_activity ON rows(variant, activity);
             CREATE INDEX IF NOT EXISTS rows_sid ON rows(variant, sid);
             CREATE INDEX IF NOT EXISTS rows_position ON rows(variant, position);
+            CREATE INDEX IF NOT EXISTS rows_sidebar_history
+                ON rows(variant, position, sid, identity, parent, digest);
             CREATE INDEX IF NOT EXISTS rows_hot_roots
                 ON rows(variant, activity, sticky, sid, parent, position);
             CREATE TABLE IF NOT EXISTS session_inventory (
@@ -1124,6 +1126,24 @@ class SidebarHistoryIndex:
 
 
 def _sidebar_history_inventory(con, key, max_rows):
+    # New writers publish a covering index. Read the narrow columns directly
+    # from it so a cold inventory scan can leave the row bodies on disk.
+    # Older stores keep working until their next archive write.
+    if con.execute("SELECT 1 FROM sqlite_master WHERE type='index' "
+                   "AND name='rows_sidebar_history'").fetchone():
+        records = tuple(con.execute(
+            'SELECT sid, identity, parent, digest FROM rows INDEXED BY rows_sidebar_history '
+            'WHERE variant=? ORDER BY position,rowid LIMIT ?', (key, max_rows + 1),
+        ))
+    else:
+        records = _sidebar_history_inventory_legacy(con, key, max_rows)
+    if not records or len(records) > max_rows:
+        return None
+    identities = {sid for sid, _, _, _ in records if sid and not sid.startswith('#')}
+    return records if len(identities) == len(records) else None
+
+
+def _sidebar_history_inventory_legacy(con, key, max_rows):
     # Batch the bounded cut without asking SQLite to JSON-escape every
     # identity (already JSON) and Python to decode that second layer.
     columns = ('sid', 'identity', 'parent', 'digest')
@@ -1149,8 +1169,7 @@ def _sidebar_history_inventory(con, key, max_rows):
     # typed reader on a legacy scalar or an embedded separator.
     if records is None:
         records = tuple(_sqlite_fetch_rows(con, query, params, columns))
-    identities = {sid for sid, _, _, _ in records if sid and not sid.startswith('#')}
-    return records if len(identities) == count else None
+    return records
 
 
 def _sidebar_history_reader(con, stamp, records, key, schema_version, build_id):
