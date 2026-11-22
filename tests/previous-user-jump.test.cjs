@@ -18,8 +18,8 @@ const reply=()=>'<div class="event assistant"><div class="assistant-text">Assist
 async function open(content,width=1200){
  const page=await browser.newPage();await page.setViewport({width,height:850});
  await page.setContent(`<meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}
- body{margin:0;background:#161b22;color:#ddd}.conv-pane{position:absolute;top:100px;left:0;width:100%;height:650px;display:block}
- .conversations-view{position:absolute;inset:0;display:block;overflow:auto;padding:0;scroll-behavior:auto}
+ body{margin:0;background:#161b22;color:#ddd}.conv-pane{position:absolute;top:100px;left:0;width:100%;height:650px}
+ .conversations-view{overflow:auto;padding:0;scroll-behavior:auto}
  .conversations-view .event{position:relative;margin:16px;height:auto;padding:10px}.conversations-view .assistant{height:520px}
  .conversations-view .user_text{min-height:45px}.conversations-view .compact-resume-event.is-pinned-in-sticky{display:none}
  </style><div class="conv-pane" data-pane-id="p"><div class="conversations-view">${content}</div></div>`);

@@ -30,6 +30,7 @@ const fixture = `
         control.style.transition = 'none';
         control.classList.add('visible');
       }
+      view._convEndButton.parentElement.hidden = false;
       positionConversationEndAffordance(view);
     };
     view._convLastButton.querySelector('span').textContent = 'Previous';
@@ -83,10 +84,15 @@ const fixture = `
           width:innerWidth, main:rect(document.querySelector('.main')),
           railVisible:getComputedStyle(document.querySelector('.ccc-side-nav')).display !== 'none',
           passedVisible:getComputedStyle(document.getElementById('localCiMobileReader')).display !== 'none',
-          buttons:[...document.querySelectorAll('.conv-pane > :is(.conv-scroll-end-btn, .conv-scroll-next-btn, .conv-scroll-last-btn, .conv-scroll-segment-btn)')].map(rect),
+          buttons:[...document.querySelectorAll('#conversationsView + .conv-transcript-nav > :is(.conv-scroll-end-btn, .conv-scroll-next-btn, .conv-scroll-last-btn, .conv-scroll-segment-btn)')].map(rect),
+          transcript:rect(document.getElementById('conversationsView')),
           back:rect(document.getElementById('mobileBackBtn'))
         };
       });
+      assert.equal(geometry.buttons.length, 4, 'all jump controls render');
+      for (const button of geometry.buttons) {
+        assert.ok(button.top >= geometry.transcript.bottom, 'jump controls stay outside transcript text and actions');
+      }
       if (width <= 700) {
         assert.equal(await page.$eval('.sidebar-header', el => getComputedStyle(el).visibility), 'hidden', 'reader hides home branding');
         assert.equal(geometry.main.top, 0, 'reader uses the whole viewport');
@@ -134,7 +140,7 @@ const fixture = `
         assert.ok(keyboard.input.bottom <= 328, 'draft above keyboard accessory bar');
         assert.ok(keyboard.send.bottom <= 328, 'Submit above keyboard');
         assert.ok(keyboard.scrolling, 'long drafts scroll inside the composer');
-        const controlsBottom = await page.evaluate(() => Math.max(...[...document.querySelectorAll('.conv-pane > :is(.conv-scroll-end-btn,.conv-scroll-next-btn,.conv-scroll-last-btn,.conv-scroll-segment-btn)')].map(el => el.getBoundingClientRect().bottom)));
+        const controlsBottom = await page.evaluate(() => Math.max(...[...document.querySelectorAll('#conversationsView + .conv-transcript-nav > :is(.conv-scroll-end-btn,.conv-scroll-next-btn,.conv-scroll-last-btn,.conv-scroll-segment-btn)')].map(el => el.getBoundingClientRect().bottom)));
         assert.ok(controlsBottom <= keyboard.bar.top, 'jump controls stay above the growing composer');
         if (width === 390) await page.screenshot({path:'/tmp/ccc-mobile-keyboard-after.png'});
         await page.evaluate(() => {

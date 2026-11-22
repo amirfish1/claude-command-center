@@ -11684,98 +11684,29 @@
   }
 
   function positionConversationEndAffordance(view) {
-    const btn = view && view._convEndButton;
-    const host = btn && btn.parentElement;
-    if (!btn || !host || !view.isConnected || !host.isConnected) return;
-    const hostRect = host.getBoundingClientRect();
-    const viewRect = view.getBoundingClientRect();
-    if (!hostRect.width || !hostRect.height || !viewRect.width || !viewRect.height) return;
-    let endBottom = Math.max(12, Math.round(hostRect.bottom - viewRect.bottom + 14));
-    const composer = host.querySelector(':scope > .conv-input-bar.visible');
-    if (composer && getComputedStyle(composer).display !== 'none') {
-      endBottom = Math.max(endBottom, Math.round(hostRect.bottom - composer.getBoundingClientRect().top + 8));
-    }
-    // The finished-session Archive button sits above the composer's right
-    // edge, in the same strip as this stack.
-    const readyArchive = host.querySelector(':scope > .conv-input-bar.visible > .conv-ready-archive-footer:not([hidden])');
-    if (readyArchive) endBottom += readyArchive.offsetHeight;
-    const right = Math.max(14, Math.round(hostRect.right - viewRect.right + 20));
-    btn.style.bottom = endBottom + 'px';
-    btn.style.right = right + 'px';
-    // Stack Next (when visible) and Last/Previous above the End button so
-    // they never overlap; a hidden Next doesn't reserve a slot. The slot
-    // follows the rendered pill height (taller tap targets on phones).
-    const step = (btn.offsetHeight || 32) + 10;
-    let above = endBottom + step;
-    const nextBtn = view._convNextButton;
-    if (nextBtn) {
-      nextBtn.style.right = right + 'px';
-      nextBtn.style.bottom = above + 'px';
-      if (nextBtn.classList.contains('visible')) above += step;
-    }
-    const lastBtn = view._convLastButton;
-    if (lastBtn) {
-      lastBtn.style.right = right + 'px';
-      lastBtn.style.bottom = above + 'px';
-      if (lastBtn.classList.contains('visible')) above += step;
-    }
-    const segBtn = view._convSegmentButton;
-    if (segBtn) {
-      segBtn.style.right = right + 'px';
-      segBtn.style.bottom = above + 'px';
-      if (segBtn.classList.contains('visible')) above += step;
-    }
-    // Phones use a single row above the composer rather than a tall stack
-    // obscuring the conversation. Measure actual controls to fit each slot.
+    const nav = view?._convEndButton?.parentElement;
+    if (!nav || nav.hidden || !nav.isConnected) return;
     let clearance = 0;
     if (matchMedia('(max-width: 700px)').matches) {
-      let rowRight = right;
-      let anyVisible = false;
-      const rowControls = [btn, nextBtn, lastBtn, segBtn].filter(Boolean);
-      for (const control of rowControls) {
-        if (!control) continue;
-        control.style.right = rowRight + 'px';
-        control.style.bottom = endBottom + 'px';
-        if (control.classList.contains('visible')) {
-          rowRight += (control.offsetWidth || 44) + 6;
-          anyVisible = true;
-        }
-      }
-      // The global ticket recorder floats independently of this pane. Keep
-      // the whole jump row above it when their rendered bounds intersect,
-      // including a recorder restored to a user-dragged position.
       const recorder = document.getElementById('mobileTicketRecord');
-      if (recorder && recorder.getClientRects().length) {
+      if (recorder?.getClientRects().length) {
+        const rect = nav.getBoundingClientRect();
         const recordRect = recorder.getBoundingClientRect();
-        const rowBottom = hostRect.bottom - endBottom;
-        const rowTop = rowBottom - (btn.offsetHeight || 44);
-        // Keep the same clearance when End hides at the bottom; shrinking
-        // the scroll padding there would move the last transcript lines.
-        const rowWidth = rowControls.reduce((width, control) => width + (control.offsetWidth || 44) + 6, -6);
-        const rowLeft = hostRect.right - right - rowWidth;
-        const rowEnd = hostRect.right - right;
-        if (recordRect.left < rowEnd + 8 && recordRect.right > rowLeft - 8
+        // Allow for all four 44px targets, their gaps and the row inset.
+        // The clearance stays stable as individual jump targets hide.
+        const rowRight = rect.right - 12;
+        const rowLeft = rowRight - (4 * 44 + 3 * 6);
+        const rowBottom = rect.bottom - 4;
+        const rowTop = rowBottom - 44;
+        if (recordRect.left < rowRight + 8 && recordRect.right > rowLeft - 8
             && recordRect.top < rowBottom + 8 && recordRect.bottom > rowTop - 8) {
-          endBottom = Math.max(endBottom, Math.ceil(hostRect.bottom - recordRect.top + 8));
-          for (const control of rowControls) control.style.bottom = endBottom + 'px';
+          clearance = Math.ceil(rowBottom - recordRect.top + 8);
         }
-      }
-      above = endBottom + step;
-      // The row floats over the transcript's last lines; give the scroller
-      // that much extra bottom room so the final text can scroll clear of it.
-      // Reserve it for any scrollable transcript, not only while a button is
-      // showing: End hides on reaching the bottom, and dropping the room
-      // there would clamp scrollTop upward and read as the user scrolling up.
-      const scrollable = view.scrollHeight > view.clientHeight + sharedState.CONV_BOTTOM_TOLERANCE;
-      if ((anyVisible || scrollable) && !view.classList.contains('is-presentation-mode')) {
-        const rowHeight = btn.offsetHeight || 44;
-        const rowTop = hostRect.bottom - endBottom - rowHeight;
-        clearance = Math.max(0, Math.round(viewRect.bottom - rowTop + 8));
       }
     }
-    const clearancePx = clearance ? clearance + 'px' : '';
-    if (view.style.paddingBottom !== clearancePx) {
-      view.style.paddingBottom = clearancePx;
+    const padding = clearance ? (4 + clearance) + 'px' : '';
+    if (nav.style.paddingBottom !== padding) {
+      nav.style.paddingBottom = padding;
       if (view._pinnedToBottom) view.scrollTop = view.scrollHeight;
     }
     // Read-aloud lives in the reserved view toolbar, outside the scroller.
@@ -12010,6 +11941,16 @@
       segBtn.classList.toggle('visible', showSeg);
       segBtn.setAttribute('aria-hidden', showSeg ? 'false' : 'true');
       segBtn.tabIndex = showSeg ? 0 : -1;
+    }
+    // Reserve the row while scrolling, even when reaching the end hides
+    // the only available jump. This keeps the transcript height stable.
+    const nav = btn.parentElement;
+    if (nav) {
+      const hidden = !(scrollable || nav.querySelector('.visible'));
+      if (nav.hidden !== hidden) {
+        nav.hidden = hidden;
+        if (view._pinnedToBottom) view.scrollTop = view.scrollHeight;
+      }
     }
     positionConversationEndAffordance(view);
     // Resolve against the final position after resize or navigation changes.
@@ -12464,7 +12405,16 @@
     if (!view || view._convEndAffordanceAttached) return;
     const host = view.closest('.conv-pane') || view.closest('.conv-panel');
     if (!host) return;
-    let btn = host.querySelector(':scope > .conv-scroll-end-btn');
+    let nav = host.querySelector(':scope > .conv-transcript-nav');
+    if (!nav) {
+      nav = document.createElement('div');
+      nav.className = 'conv-transcript-nav';
+      nav.hidden = true;
+      nav.setAttribute('role', 'group');
+      nav.setAttribute('aria-label', 'Transcript navigation');
+      view.after(nav);
+    }
+    let btn = nav.querySelector('.conv-scroll-end-btn');
     if (!btn) {
       btn = document.createElement('button');
       btn.type = 'button';
@@ -12472,7 +12422,7 @@
       btn.title = 'Jump to end of conversation';
       btn.setAttribute('aria-label', 'Jump to end of conversation');
       btn.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v13"></path><path d="M6 10l6 6 6-6"></path><path d="M5 21h14"></path></svg><span>End</span>';
-      host.appendChild(btn);
+      nav.appendChild(btn);
     }
     btn._convTargetView = view;
     btn.addEventListener('click', () => {
@@ -12484,10 +12434,9 @@
     view._convEndButton = btn;
     // "Jump to my last message" (CCC-292): reading a fresh reply means scrolling
     // up to your own message and reading down. This 1-click affordance pins the
-    // start of the latest user message to the top of the pane. Stacked above the
-    // End button. Once the last message is reached it relabels to "Previous"
+    // start of the latest user message to the top of the pane. Once the last message is reached it relabels to "Previous"
     // and each click steps up to the next-earlier user message (CCC-451).
-    let lastBtn = host.querySelector(':scope > .conv-scroll-last-btn');
+    let lastBtn = nav.querySelector('.conv-scroll-last-btn');
     if (!lastBtn) {
       lastBtn = document.createElement('button');
       lastBtn.type = 'button';
@@ -12495,7 +12444,7 @@
       lastBtn.title = 'Jump to the start of your last message';
       lastBtn.setAttribute('aria-label', 'Jump to the start of your last message');
       lastBtn.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"></path><path d="M6 11l6-6 6 6"></path></svg><span>Last</span>';
-      host.appendChild(lastBtn);
+      nav.prepend(lastBtn);
     }
     lastBtn._convTargetView = view;
     lastBtn.addEventListener('click', () => {
@@ -12504,7 +12453,7 @@
     view._convLastButton = lastBtn;
     // "Next" steps back down to the following user message after Previous has
     // walked up — the down-arrow counterpart of the Last/Previous stepper.
-    let nextBtn = host.querySelector(':scope > .conv-scroll-next-btn');
+    let nextBtn = nav.querySelector('.conv-scroll-next-btn');
     if (!nextBtn) {
       nextBtn = document.createElement('button');
       nextBtn.type = 'button';
@@ -12512,7 +12461,7 @@
       nextBtn.title = 'Jump to the start of the next message';
       nextBtn.setAttribute('aria-label', 'Jump to the start of the next message');
       nextBtn.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"></path><path d="M6 13l6 6 6-6"></path></svg><span>Next</span>';
-      host.appendChild(nextBtn);
+      nav.insertBefore(nextBtn, btn);
     }
     nextBtn._convTargetView = view;
     nextBtn.addEventListener('click', () => {
@@ -12587,7 +12536,7 @@
     // that session's final messages fill the screen); once the oldest seam
     // is reached, the next click returns to the live bottom — the end of
     // the current session.
-    let segBtn = host.querySelector(':scope > .conv-scroll-segment-btn');
+    let segBtn = nav.querySelector('.conv-scroll-segment-btn');
     if (!segBtn) {
       segBtn = document.createElement('button');
       segBtn.type = 'button';
@@ -12595,7 +12544,7 @@
       segBtn.title = 'Jump to the end of each session in this continued conversation';
       segBtn.setAttribute('aria-label', 'Jump to the end of each session in this continued conversation');
       segBtn.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v6"></path><path d="M8 6l4-4 4 4"></path><path d="M12 21v-6"></path><path d="M8 18l4 4 4-4"></path></svg><span>Sessions</span>';
-      host.appendChild(segBtn);
+      nav.prepend(segBtn);
     }
     segBtn._convTargetView = view;
     segBtn.addEventListener('click', () => {

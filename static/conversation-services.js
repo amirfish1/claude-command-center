@@ -560,7 +560,7 @@
     // chrome elements via class/tag selectors scoped to the clone.
     clone.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
     removeSplitPaneSingletonChrome(clone);
-    clone.querySelectorAll('.conv-scroll-end-btn').forEach(el => el.remove());
+    clone.querySelectorAll('.conv-transcript-nav').forEach(el => el.remove());
     const presentationToolbar = clone.querySelector('[data-role="presentation-toolbar"]');
     if (presentationToolbar) {
       presentationToolbar.hidden = true;

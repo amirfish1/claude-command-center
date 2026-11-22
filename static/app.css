@@ -3886,17 +3886,23 @@
     .conv-pane-drop-overlay { display: none !important; }
   }
 
+  .conv-transcript-nav:not([hidden]) {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+    min-height: 40px;
+    padding: 4px 12px;
+  }
+  .conv-transcript-nav[hidden] { display: none; }
   .conv-scroll-end-btn,
   .conv-scroll-last-btn,
   .conv-scroll-next-btn,
   .conv-scroll-segment-btn {
-    position: absolute;
-    right: 20px;
-    bottom: 96px;
-    z-index: 12;
     height: 32px;
     padding: 0 11px;
-    display: inline-flex;
+    display: none;
     align-items: center;
     justify-content: center;
     gap: 6px;
@@ -3904,21 +3910,12 @@
     border-radius: 16px;
     background: color-mix(in srgb, var(--surface) 92%, var(--bg));
     color: var(--text);
-    box-shadow: 0 8px 24px rgba(0,0,0,0.28);
     cursor: pointer;
-    opacity: 0;
-    pointer-events: none;
-    transform: translateY(6px);
-    transition: opacity 0.14s ease, transform 0.14s ease, border-color 0.14s ease, background 0.14s ease;
   }
   .conv-scroll-end-btn.visible,
   .conv-scroll-last-btn.visible,
   .conv-scroll-next-btn.visible,
-  .conv-scroll-segment-btn.visible {
-    opacity: 1;
-    pointer-events: auto;
-    transform: translateY(0);
-  }
+  .conv-scroll-segment-btn.visible { display: inline-flex; }
   .conv-scroll-end-btn:hover,
   .conv-scroll-last-btn:hover,
   .conv-scroll-next-btn:hover,
@@ -20380,11 +20377,12 @@
 body.status-pos-right .conv-pane.has-status-rail {
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--status-rail-width, 260px);
-  grid-template-rows: auto auto 1fr auto auto auto auto auto auto;
+  grid-template-rows: auto auto 1fr auto auto auto auto auto auto auto;
   grid-template-areas:
     "header  rail"
     "tabs    rail"
     "conv    rail"
+    "nav     rail"
     "goal    rail"
     "model   rail"
     "queued rail"
@@ -20398,6 +20396,7 @@ body.status-pos-right .conv-pane.has-status-rail.has-new-session-context {
     "header  rail"
     "tabs    rail"
     "conv    rail"
+    "nav     rail"
     "context rail"
     "goal    rail"
     "model   rail"
@@ -20409,6 +20408,7 @@ body.status-pos-right .conv-pane.has-status-rail > .conv-pane-header   { grid-ar
 /* Task tabs belong above the transcript, rather than an implicit final row. */
 body.status-pos-right .conv-pane.has-status-rail > .conv-tab-strip { grid-area: tabs; min-width: 0; }
 body.status-pos-right .conv-pane.has-status-rail > .conversations-view { grid-area: conv;    min-width: 0; min-height: 0; }
+body.status-pos-right .conv-pane.has-status-rail > .conv-transcript-nav { grid-area: nav; min-width: 0; }
 body.status-pos-right .conv-pane.has-status-rail > .conv-goal-strip    { grid-area: goal;    min-width: 0; }
 body.status-pos-right .conv-pane.has-status-rail > .conv-model-picker-strip { grid-area: model; min-width: 0; }
 body.status-pos-right .conv-pane.has-status-rail > .conv-input-bar     { grid-area: input;   min-width: 0; }
@@ -21102,6 +21102,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail {
     "header"
     "tabs"
     "conv"
+    "nav"
     "goal"
     "model"
     "queued"
@@ -21114,6 +21115,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail.has-new-s
     "header"
     "tabs"
     "conv"
+    "nav"
     "context"
     "goal"
     "model"
@@ -28313,12 +28315,13 @@ body.has-gc-reader .pwa-install-banner {
    an explicit row for the per-pane selector so it does not fall
    into implicit-grid placement or displaces the composer. */
 body.status-pos-right .conv-pane.has-status-rail {
-  grid-template-rows: auto auto auto 1fr auto auto auto auto auto auto;
+  grid-template-rows: auto auto auto 1fr auto auto auto auto auto auto auto;
   grid-template-areas:
     "header rail"
     "present-toolbar rail"
     "tabs rail"
     "conv rail"
+    "nav rail"
     "goal rail"
     "model rail"
     "queued rail"
@@ -28332,6 +28335,7 @@ body.status-pos-right .conv-pane.has-status-rail.has-new-session-context {
     "present-toolbar rail"
     "tabs rail"
     "conv rail"
+    "nav rail"
     "context rail"
     "goal rail"
     "model rail"
@@ -28346,6 +28350,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail {
     "present-toolbar"
     "tabs"
     "conv"
+    "nav"
     "goal"
     "model"
     "queued"
@@ -28359,6 +28364,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail.has-new-s
     "present-toolbar"
     "tabs"
     "conv"
+    "nav"
     "context"
     "goal"
     "model"
@@ -29439,6 +29445,7 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
       "present-toolbar"
       "tabs"
       "conv"
+      "nav"
       "context"
       "goal"
       "model"
@@ -29487,13 +29494,14 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
     font: 600 12px/1 inherit;
   }
   body.popout-rail-forced .conv-pane.has-status-rail {
-    grid-template-rows: auto auto auto 1fr auto auto auto auto auto auto;
+    grid-template-rows: auto auto auto 1fr auto auto auto auto auto auto auto;
     grid-template-columns: minmax(0, 1fr) var(--status-rail-width, 260px);
     grid-template-areas:
       "header  rail"
       "present-toolbar rail"
       "tabs    rail"
       "conv    rail"
+      "nav    rail"
       "goal    rail"
       "model   rail"
       "queued rail"
@@ -29545,6 +29553,7 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
       "present-toolbar"
       "tabs"
       "conv"
+      "nav"
       "goal"
       "model"
       "queued"
@@ -29562,6 +29571,7 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
       "present-toolbar"
       "tabs"
       "conv"
+      "nav"
       "goal"
       "model"
       "queued"
@@ -33560,7 +33570,7 @@ body.has-img-lightbox-open .ffv-overlay { visibility: hidden; }
     height: 52px;
   }
 
-  /* Floating transcript controls: thumb-sized. */
+  /* Transcript controls: thumb-sized. */
   .conv-scroll-end-btn,
   .conv-scroll-last-btn,
   .conv-scroll-next-btn,
@@ -33681,17 +33691,14 @@ body.has-img-lightbox-open .ffv-overlay { visibility: hidden; }
 
 /* ── Phone new-session screen: just pick a folder, pick a model, type ─────
    The hero copy, model price/compare table, fresh-folder form, typing help,
-   stale LAST WRITTEN line and floating scroll buttons are desktop chrome.
+   stale LAST WRITTEN line and transcript navigation are hidden here.
    Folder and model become one swipeable row of chips each; the folder path
    input, worktree toggle, group labels and the Free pill are dropped. */
 @media (max-width: 1200px) {
   .conv-pane.has-new-session-context .ns-hero-quiet > :not(.ns-advisor):not(.ns-model-comparison.is-manual-expanded),
   .conv-pane.has-new-session-context .conv-last-written,
-  .conv-pane.has-new-session-context .conv-scroll-end-btn,
-  .conv-pane.has-new-session-context .conv-scroll-last-btn,
-  .conv-pane.has-new-session-context .conv-scroll-next-btn,
+  .conv-pane.has-new-session-context .conv-transcript-nav:not([hidden]),
   .conv-pane.has-new-session-context .conv-scroll-speak-btn,
-  .conv-pane.has-new-session-context .conv-scroll-segment-btn,
   .conv-input-context.is-new-session .spawn-cwd-row,
   .conv-input-context.is-new-session .spawn-worktree-row,
   .conv-input-context.is-new-session .spawn-cwd-chip-group-label,
@@ -35767,9 +35774,10 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
   body.mobile-show-main:not(.kanban-split) .main { left: 0; }
   body.mobile-show-main:not(.kanban-split) :is(.ccc-side-nav, .ccc-rail-resizer, .ccc-account-wrap, .ccc-account-pop) { display: none !important; }
 
-  /* Keep the labelled 44px tap targets without covering a column of prose. */
+  /* Keep the transcript controls on one row at phone widths. */
+  .conv-transcript-nav:not([hidden]) { min-height: 52px; }
   :is(.conv-scroll-end-btn, .conv-scroll-last-btn, .conv-scroll-next-btn, .conv-scroll-segment-btn) {
-    width: 44px; height: 44px; padding: 0; gap: 0;
+    position: relative; width: 44px; height: 44px; padding: 0; gap: 0;
   }
   :is(.conv-scroll-end-btn, .conv-scroll-last-btn, .conv-scroll-next-btn, .conv-scroll-segment-btn) span {
     position: absolute; width: 1px; height: 1px; padding: 0;
