@@ -86,11 +86,19 @@ test('opened-session metadata loads once, ignores stale replies and preserves di
   await new Promise(resolve => setImmediate(resolve));
   assert.match(summary.innerHTML, /CCC dashboard/);
   details.open = true;
-  requests[1].resolve({ok: true, json: async () => ({session_id: 'second', spawned_via: 'api', parent_session_id: 'parent'})});
+  requests[1].resolve({ok: true, json: async () => ({
+    session_id: 'second', spawned_via: 'watchtower', parent_session_id: 'parent',
+    worker_origin: {role: 'docs-writer', ref: 'EXAMPLE-42'},
+  })});
   await new Promise(resolve => setImmediate(resolve));
-  assert.match(summary.innerHTML, /CCC API/);
+  assert.match(summary.innerHTML, /WatchTower/);
   assert.equal(details.open, true);
   assert.match(body.innerHTML, /Parent title/);
+  assert.match(body.innerHTML, /docs writer · EXAMPLE-42/);
+  assert.equal(body.innerHTML.match(/WatchTower session-origin record\./g)?.length, 1);
+  api.render({id: 'second', spawned_kind: 'review'}, options);
+  assert.match(body.innerHTML, /WatchTower session-origin record\./);
+  assert.match(body.innerHTML, /Helper kind saved in session metadata\./);
   button.onclick();
   assert.equal(opened, 'parent');
   api.render(null, options);

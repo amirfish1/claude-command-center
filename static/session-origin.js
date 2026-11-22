@@ -147,7 +147,8 @@
       + field(origin.parentId ? 'Parent' : origin.continuedId ? 'Continued from' : 'Parent', parentHtml)
       + field('Evidence', escape(origin.evidence))
       + '</dl>'
-      + (origin.purposeEvidence ? '<p>' + escape(origin.purposeEvidence) + '</p>' : '')
+      + (origin.purposeEvidence && origin.purposeEvidence !== origin.evidence
+        ? '<p>' + escape(origin.purposeEvidence) + '</p>' : '')
       + (origin.note ? '<p>' + escape(origin.note) + '</p>' : '')
       + (saved && saved.failed ? '<p>Saved origin metadata could not be loaded. Showing the available session-row evidence.</p>' : '');
     const parentButton = body.querySelector('.session-origin-parent');
