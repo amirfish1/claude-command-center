@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import sqlite3
 import threading
+import time
 from types import MappingProxyType
 
 from ccc_server import core as _core
@@ -394,6 +395,18 @@ def _archive_topic_records(conn, max_rows):
     return MappingProxyType(by_sid), MappingProxyType(dict(indexed)), linked_roots, tuple(edges)
 
 
+def _archive_fallback_titles():
+    from ccc_server.log_parse import _archive_topic_metadata_items
+
+    external = _external_titles(_archive_topic_metadata_items())
+    codex_cache = getattr(_core, '_codex_titles_cache', {}).get('data') or {}
+    fallback = {sid: title for sid, title in external.items() if title}
+    for sid, value in codex_cache.items():
+        if isinstance(value, dict) and (name := value.get('title') or value.get('agent_nickname')):
+            fallback.setdefault(sid, name)
+    return fallback
+
+
 def archive_projection_inputs(conn, *, max_rows, max_native_roots=32, diagnostics=None):
     """Read topic records and external titles needed to guard an archive layer."""
     global _ARCHIVE_TOPIC_SNAPSHOT
@@ -403,30 +416,43 @@ def archive_projection_inputs(conn, *, max_rows, max_native_roots=32, diagnostic
             diagnostics["topics_unavailable"] = reason
         return None
 
+    @contextmanager
+    def timing(phase):
+        if diagnostics is None:
+            yield
+            return
+        wall, cpu = time.perf_counter(), time.thread_time()
+        try:
+            yield
+        finally:
+            wall_ms = (time.perf_counter() - wall) * 1000
+            cpu_ms = (time.thread_time() - cpu) * 1000
+            totals = diagnostics.setdefault("topics_phases", {}).setdefault(
+                phase, {"wall_ms": 0.0, "cpu_ms": 0.0})
+            totals["wall_ms"] = round(totals["wall_ms"] + wall_ms, 1)
+            totals["cpu_ms"] = round(totals["cpu_ms"] + cpu_ms, 1)
+
     if conn.in_transaction:
         return unavailable("already_in_transaction")
     try:
-        from ccc_server.log_parse import _archive_topic_metadata_items
-
-        external = _external_titles(_archive_topic_metadata_items())
-        codex_cache = getattr(_core, '_codex_titles_cache', {}).get('data') or {}
-        fallback = {sid: title for sid, title in external.items() if title}
-        for sid, value in codex_cache.items():
-            if isinstance(value, dict) and (name := value.get('title') or value.get('agent_nickname')):
-                fallback.setdefault(sid, name)
+        with timing("fallback_titles"):
+            fallback = _archive_fallback_titles()
         for attempt in range(2):
             # A replaced database can leave an older reader on its previous
             # inode. Reuse only on the connection that read the cut.
             owner, version, snapshot = _ARCHIVE_TOPIC_SNAPSHOT
-            reused = owner is conn and _archive_read_version(conn) == version
+            with timing("revision"):
+                reused = owner is conn and _archive_read_version(conn) == version
             if not reused:
                 conn.execute("BEGIN")
                 try:
                     # The revision SELECT establishes the same SQLite
                     # snapshot that supplies records. A commit before it
                     # is in the cut and need not force a second bulk read.
-                    version = _archive_read_version(conn, pinned=True)
-                    snapshot = _archive_topic_records(conn, max_rows)
+                    with timing("revision"):
+                        version = _archive_read_version(conn, pinned=True)
+                    with timing("records"):
+                        snapshot = _archive_topic_records(conn, max_rows)
                 finally:
                     conn.rollback()
             if snapshot is None:
@@ -438,8 +464,11 @@ def archive_projection_inputs(conn, *, max_rows, max_native_roots=32, diagnostic
                             if not fallback.get(sid) and not by_sid.get(sid, ('', '', '', 0))[2]}
             if len(native_roots) > max_native_roots:
                 return unavailable("native_root_limit")
-            native = {sid: _native_title(sid) for sid in native_roots}
-            if _archive_read_version(conn) == version:
+            with timing("native_titles"):
+                native = {sid: _native_title(sid) for sid in native_roots}
+            with timing("revision"):
+                current = _archive_read_version(conn)
+            if current == version:
                 _ARCHIVE_TOPIC_SNAPSHOT = conn, version, snapshot
                 if diagnostics is not None:
                     diagnostics["topics_snapshot_reused"] = reused

@@ -860,11 +860,21 @@ def test_archive_projection_reuses_committed_records_but_refreshes_titles(store,
     monkeypatch.setattr(server, '_conv_meta_cache', metadata)
     monkeypatch.setattr(server, '_codex_titles_cache', {'data': {}})
     monkeypatch.setattr(topics, '_native_title', lambda sid: 'First native title')
-    first, first_edges, version = topics.archive_projection_inputs(store, max_rows=20)
+    cold = {}
+    first, first_edges, version = topics.archive_projection_inputs(
+        store, max_rows=20, diagnostics=cold)
+    assert set(cold["topics_phases"]) == {"fallback_titles", "revision", "records", "native_titles"}
 
     metadata['/sessions/solo.jsonl']['ai_title'] = 'Second external title'
     monkeypatch.setattr(topics, '_native_title', lambda sid: 'Second native title')
-    second, second_edges, repeat_version = topics.archive_projection_inputs(store, max_rows=20)
+    warm = {}
+    second, second_edges, repeat_version = topics.archive_projection_inputs(
+        store, max_rows=20, diagnostics=warm)
+    assert set(warm["topics_phases"]) == {"fallback_titles", "revision", "native_titles"}
+    for phases in (cold["topics_phases"], warm["topics_phases"]):
+        for phase in phases.values():
+            assert phase["wall_ms"] >= 0
+            assert phase["cpu_ms"] >= 0
     assert second[0] is first[0]
     assert second_edges is first_edges
     assert repeat_version == version

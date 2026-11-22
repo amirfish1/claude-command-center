@@ -19293,7 +19293,10 @@ def _archive_history_read_cut(key, cache_options, now, *, phases=None, check_cli
         with _archive_history_timing(phases, "sidecars"):
             sidecars = _capture_archive_history_sidecars(now)
         with _archive_history_timing(phases, "topics"):
-            connection = topic_reader if topic_reader is not None else continuation_topics.archive_connection()
+            connection = topic_reader
+            if connection is None:
+                with _archive_history_timing(phases, "topic_connection"):
+                    connection = continuation_topics.archive_connection()
             topics = continuation_topics.archive_projection_inputs(
                 connection, max_rows=archive_history_layer.MAX_ROWS, diagnostics=phases)
         if topics is None:
@@ -19359,13 +19362,15 @@ def _archive_history_effect_ids(inputs, previous, sidecars):
     tickets = sidecars["tickets"]
     if tickets is None:
         return set()
-    session_ids = tickets["sessions"].keys()
     ticketed = {sid for sid, entry in tickets["sessions"].items()
                 if isinstance(entry, dict) and entry.get("ref")}
+    # Autopilot and retitling consume ticket members. Sweep also needs
+    # pending spawns and relatives of ticket members, including an old
+    # auto-skip that can now inherit its parent's ticket.
     children = {sid for sid, parent in inputs.edges if parent in ticketed}
     if previous is not None:
         children.update(sid for sid, parent in previous.inputs.edges if parent in ticketed)
-    return (session_ids | tickets["pending"].keys() | children) & inputs.sources.keys()
+    return (ticketed | tickets["pending"].keys() | children) & inputs.sources.keys()
 
 
 def _archive_history_project_cut(cut, previous, *, phases=None, check_client=None, persist_topics=True):

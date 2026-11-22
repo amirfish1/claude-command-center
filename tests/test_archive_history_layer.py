@@ -12,6 +12,27 @@ def inventory(*session_ids):
             for sid in session_ids]
 
 
+def test_effect_scope_keeps_ticket_members_pending_and_lineage():
+    from types import SimpleNamespace
+
+    sources = inventory("lead", "member", "pending", "unrelated-skip", "linked-skip",
+                        "old-child", "new-child", "unrelated")
+    previous = layer.read_inputs(sources, {}, {}, (), overlay_maps=(),
+                                 edges=(("old-child", "lead"),))
+    current = layer.read_inputs(sources, {}, {}, (), overlay_maps=(),
+                                edges=(("linked-skip", "lead"), ("new-child", "member")))
+    state = {"sessions": {
+        "lead": {"ref": "TEST-1", "kind": "started"},
+        "member": {"ref": "TEST-1", "kind": "child"},
+        "unrelated-skip": {"skip": "not a UI spawn"},
+        "linked-skip": {"skip": "not a UI spawn"},
+    }, "pending": {"pending": {}, "absent": {}}}
+
+    assert server._archive_history_effect_ids(
+        current, SimpleNamespace(inputs=previous), {"tickets": state},
+    ) == {"lead", "member", "pending", "linked-skip", "old-child", "new-child"}
+
+
 def test_scope_guard_tracks_output_order_separately_from_content():
     previous = layer.read_inputs(inventory("a", "b"), {}, {}, (),
                                  overlay_maps=({},), edges=())
