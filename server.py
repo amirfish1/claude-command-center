@@ -18458,7 +18458,7 @@ def _archive_list_order_token(ids):
 
 
 def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=None,
-                                saved_order=""):
+                                saved_order="", check_client=None):
     """Return changed rows and the order needed to merge them.
 
     A saved reload can reuse its exact order when its digest matches. Other
@@ -18486,6 +18486,8 @@ def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=
         list(state["base"]) + list(state["extra"]), cutoff,
         idea_tickets_by_sid, _session_graph.parent_snapshot(), ancestor_ids=ancestor_ids,
     )
+    if check_client is not None:
+        check_client()
     seen = set()
     for r in visible:
         sid = _archive_row_sid(r)
@@ -18498,7 +18500,8 @@ def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=
                 or id(r) in ancestor_ids):
             changed.append(r)
     projected = _archive_list_project_rows(changed, window="all", now=now,
-                                           _row_overlays=state.get("row_overlays"))
+                                           _row_overlays=state.get("row_overlays"),
+                                           check_client=check_client)
     order_token = _archive_list_order_token(ids)
     same_order = saved_order == order_token
     payload = {
@@ -18526,18 +18529,22 @@ _ARCHIVE_LIST_DELTA_FLIGHTS_LOCK = threading.Lock()
 
 
 def _archive_list_delta_body(state, since, rows, *, window, cached=None, share=True,
-                             diagnostics=None, saved_order=""):
+                             diagnostics=None, saved_order="", check_client=None):
     """Share encoding only with overlapping reads of the same delta snapshot.
 
     No result survives its build. Explicit fresh reads bypass the flight, and
     different source, projection, overlay, client-token or window states never
     join it. Immutable response bytes keep callers from editing shared rows.
     """
-    def build():
+    def build(check_reader):
+        if check_reader is not None:
+            check_reader()
         payload = _archive_list_delta_payload(state, since, rows, window=window, cached=cached,
-                                              saved_order=saved_order)
+                                              saved_order=saved_order, check_client=check_reader)
         if payload is None:
             return None
+        if check_reader is not None:
+            check_reader()
         payload["delta_token"] = state["token"]
         raw = _list_replay.encode_payload(payload)
         compressed = (gzip.compress(raw, compresslevel=1)
@@ -18545,27 +18552,40 @@ def _archive_list_delta_body(state, since, rows, *, window, cached=None, share=T
         return raw, compressed, '"' + hashlib.sha1(raw).hexdigest() + '"'
 
     if not share:
-        return build()
+        return build(check_client)
     key = (state["token"], since, window, cached, saved_order)
     with _ARCHIVE_LIST_DELTA_FLIGHTS_LOCK:
         flight = _ARCHIVE_LIST_DELTA_FLIGHTS.get(key)
         owner = flight is None
         if owner:
-            flight = {"event": threading.Event(), "value": None, "done": False}
+            flight = {"event": threading.Event(), "shared": threading.Event(),
+                      "value": None, "done": False}
             _ARCHIVE_LIST_DELTA_FLIGHTS[key] = flight
+        else:
+            flight["shared"].set()
     if not owner:
         started = time.perf_counter()
         flight["event"].wait()
+        if check_client is not None:
+            check_client()
         if diagnostics is not None:
             diagnostics.update(delta_coalesced=flight["done"],
                                wait_ms=round((time.perf_counter() - started) * 1000, 1))
         # Failed builders do not cache an exception or suppress a retry.
-        return flight["value"] if flight["done"] else build()
+        return flight["value"] if flight["done"] else build(check_client)
+
+    def check_owner():
+        # Keep building for a follower even if the original reader left.
+        if not flight["shared"].is_set():
+            check_client()
+
     try:
         if diagnostics is not None:
             diagnostics["delta_coalesced"] = False
-        flight["value"] = build()
+        flight["value"] = build(check_owner if check_client is not None else None)
         flight["done"] = True
+        if check_client is not None:
+            check_client()
         return flight["value"]
     finally:
         with _ARCHIVE_LIST_DELTA_FLIGHTS_LOCK:
@@ -37725,15 +37745,20 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     _status = 304
                 else:
                     _pt0 = time.perf_counter()
-                    _delta_body = _archive_list_delta_body(
-                        _delta, since, rows, window=window, cached=from_cache,
-                        share=stale_ok, diagnostics=_body_cache_diag, saved_order=saved_order,
-                    )
+                    try:
+                        _delta_body = _archive_list_delta_body(
+                            _delta, since, rows, window=window, cached=from_cache,
+                            share=stale_ok, diagnostics=_body_cache_diag, saved_order=saved_order,
+                            check_client=check_client if window != "all" else None,
+                        )
+                    except _ArchiveListClientDisconnected:
+                        _delta_body = None
+                        _status = "abandoned"
                     if _delta_body is not None:
                         _payload_ms.append((time.perf_counter() - _pt0) * 1000.0)
                         _delta_status = self._send_archive_list_body(*_delta_body)
                         _status = "delta" if _delta_status == 200 else _delta_status
-                    elif _since_diag == "ok":
+                    elif _status is None and _since_diag == "ok":
                         _since_diag = "unmergeable"
 
             _check_client = check_client if window != "all" or not body_ver else None

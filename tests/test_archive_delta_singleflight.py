@@ -27,10 +27,14 @@ def read(**kwargs):
         [], window=kwargs.pop('window', '7d'), cached=kwargs.pop('cached', True), **kwargs)
 
 
-@pytest.mark.parametrize('outcome', ['success', 'unavailable', 'exception'])
+@pytest.mark.parametrize('outcome', ['success', 'unavailable', 'exception', 'owner_disconnected'])
 def test_overlap_cleanup_retry_and_no_retained_delta(monkeypatch, delta_flights, outcome):
-    entered, release = threading.Event(), threading.Event()
+    entered, release, disconnected = threading.Event(), threading.Event(), threading.Event()
     calls = []
+
+    def check_owner_socket():
+        if disconnected.is_set():
+            raise server._ArchiveListClientDisconnected()
 
     def payload(*args, **kwargs):
         calls.append(1)
@@ -41,18 +45,22 @@ def test_overlap_cleanup_retry_and_no_retained_delta(monkeypatch, delta_flights,
                 raise ValueError('projection unavailable')
             if outcome == 'unavailable':
                 return None
+            if outcome == 'owner_disconnected':
+                kwargs['check_client']()
         return {'ok': True, 'delta': True, 'ids': ['example'],
                 'conversations': [{'session_id': 'example', 'display_name': 'x' * 2000}]}
 
     monkeypatch.setattr(server, '_archive_list_delta_payload', payload)
     with ThreadPoolExecutor(max_workers=2) as pool:
-        owner = pool.submit(read)
+        owner = pool.submit(read, check_client=check_owner_socket)
         assert entered.wait(5)
         observed = ObservedEvent()
         next(iter(delta_flights.values()))['event'] = observed
         diagnostics = {}
         follower = pool.submit(read, diagnostics=diagnostics)
         assert observed.waiting.wait(5)
+        if outcome == 'owner_disconnected':
+            disconnected.set()
         release.set()
         if outcome == 'exception':
             with pytest.raises(ValueError, match='projection unavailable'):
@@ -60,6 +68,12 @@ def test_overlap_cleanup_retry_and_no_retained_delta(monkeypatch, delta_flights,
             assert follower.result(timeout=5) is not None
             assert len(calls) == 2
             assert diagnostics['delta_coalesced'] is False
+        elif outcome == 'owner_disconnected':
+            with pytest.raises(server._ArchiveListClientDisconnected):
+                owner.result(timeout=5)
+            assert follower.result(timeout=5) is not None
+            assert len(calls) == 1
+            assert diagnostics['delta_coalesced'] is True
         else:
             assert follower.result(timeout=5) is owner.result(timeout=5)
             assert len(calls) == 1
