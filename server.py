@@ -17313,7 +17313,7 @@ def _archive_refresh_read(key, **options):
         print(f"  [archive-cache] incremental read unavailable: {exc}")
 
 
-def _publish_archive_delta(key, base, merged, signature, *, replace_rows=False):
+def _publish_archive_delta(key, base, merged, signature, *, point_update=False):
     from ccc_server import archive_store
 
     entry = {"cached_at": time.time(), "conversations": merged, "signature": signature}
@@ -17321,9 +17321,9 @@ def _publish_archive_delta(key, base, merged, signature, *, replace_rows=False):
         _ARCHIVE_RESPONSE_CACHE_FILE, _archive_response_snapshot({key: entry}),
         complete=True, sidebar_key=_archive_response_cache_key(),
         sidebar_pages=(_ARCHIVE_SIDEBAR_PACKED_VERSION, _archive_list_pack_static),
-        base_entry=base, replace_rows=replace_rows,
+        base_entry=base, point_update=point_update,
     ):
-        if replace_rows:
+        if point_update:
             return False
         raise RuntimeError("archive response changed while its delta was being built")
     note_archive_build(entry["cached_at"])
@@ -20703,11 +20703,11 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
                             ))
                         publish_start = time.perf_counter()
                         published = indexed and not removed and not refresh_engines and _publish_archive_delta(
-                            key, indexed, fresh, publication_sig, replace_rows=True,
+                            key, indexed, fresh, publication_sig, point_update=True,
                         )
                         publish_seconds = time.perf_counter() - publish_start
                         if published:
-                            phases["replace_rows"] = len(fresh)
+                            phases["point_rows"] = len(fresh)
                         elif indexed:
                             row_index = _archive_refresh_read(key, row_index=True)
                             if not row_index or row_index["cached_at"] != entry["cached_at"]:

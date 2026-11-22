@@ -3555,12 +3555,13 @@ def test_archive_indexed_update_leaves_unchanged_compound_identities_undecoded(
     assert len(identity_reads) == 1
 
 
-@pytest.mark.parametrize("case", ["replace", "new", "changed-identity", "duplicate-sid"])
+@pytest.mark.parametrize("case", ["replace", "new", "mixed", "changed-identity", "duplicate-sid", "path-key"])
 def test_detached_archive_file_delta_uses_point_lookup_when_safe(tmp_path, monkeypatch, case):
     from ccc_server import archive_store
 
     target = tmp_path / "archive.json"
-    key = server._archive_response_cache_key()
+    options = {"resolve_effective": True} if case == "path-key" else {}
+    key = server._archive_response_cache_key(**options)
     now = time.time()
     rows = [
         {"session_id": f"s{i}", "engine": "claude", "jsonl_path": f"/tmp/{i}.jsonl",
@@ -3571,14 +3572,22 @@ def test_detached_archive_file_delta_uses_point_lookup_when_safe(tmp_path, monke
     fresh = dict(rows[10], first_message="new transcript text")
     if case == "new":
         fresh.update(session_id="new", jsonl_path="/tmp/new.jsonl")
-        changed = fresh["jsonl_path"]
     elif case == "changed-identity":
         fresh["source"] = "other"
     elif case == "duplicate-sid":
         rows.insert(0, dict(rows[10], jsonl_path="/tmp/other.jsonl"))
+    elif case == "path-key":
+        fresh["session_id"] = changed
+        del rows[10]["session_id"]
+    fresh_rows = [fresh]
+    if case == "mixed":
+        fresh_rows = [
+            dict(fresh, session_id="second", jsonl_path="/tmp/second.jsonl"),
+            fresh,
+            dict(fresh, session_id="first", jsonl_path="/tmp/first.jsonl"),
+        ]
     old_files = {row["jsonl_path"]: (1, 1) for row in rows}
-    new_files = dict(old_files)
-    new_files[changed] = (2, 1)
+    new_files = {**old_files, **{row["jsonl_path"]: (2, 1) for row in fresh_rows}}
     snapshot = {
         "schema_version": server._ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
         "build_id": server._ARCHIVE_RESPONSE_CACHE_BUILD_ID,
@@ -3586,7 +3595,7 @@ def test_detached_archive_file_delta_uses_point_lookup_when_safe(tmp_path, monke
         "signature_maps": {"old": {"files": old_files, "extras": {}}},
     }
     archive_store.save(
-        target, snapshot, complete=True, sidebar_key=key,
+        target, snapshot, complete=True, sidebar_key=server._archive_response_cache_key(),
         sidebar_pages=(server._ARCHIVE_SIDEBAR_PACKED_VERSION, server._archive_list_pack_static),
     )
     monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", target)
@@ -3596,7 +3605,7 @@ def test_detached_archive_file_delta_uses_point_lookup_when_safe(tmp_path, monke
     monkeypatch.setattr(server, "_archive_corpus_signature_parts", lambda: ("new", new_files, {}))
     monkeypatch.setattr(server, "_save_conv_meta_cache", lambda: None)
     monkeypatch.setattr(server, "_rehydrate_archive_hot_rows", lambda rows: rows)
-    monkeypatch.setattr(server, "find_all_conversations", lambda **kw: [fresh])
+    monkeypatch.setattr(server, "find_all_conversations", lambda **kw: fresh_rows)
     statements = []
     connect = archive_store._connect
 
@@ -3606,22 +3615,25 @@ def test_detached_archive_file_delta_uses_point_lookup_when_safe(tmp_path, monke
         return con
 
     monkeypatch.setattr(archive_store, "_connect", traced)
-    _, from_cache = server._archive_compute_rows(key, {}, detached=True)
+    _, from_cache = server._archive_compute_rows(key, options, detached=True)
 
     assert from_cache
-    assert server._ARCHIVE_COMPUTE_LAST_PHASES["changed"] == 1
-    assert server._ARCHIVE_COMPUTE_LAST_PHASES.get("replace_rows") == (1 if case == "replace" else None)
+    assert server._ARCHIVE_COMPUTE_LAST_PHASES["changed"] == len(fresh_rows)
+    point_update = case in {"replace", "new", "mixed"}
+    assert server._ARCHIVE_COMPUTE_LAST_PHASES.get("point_rows") == (
+        len(fresh_rows) if point_update else None
+    )
     lookups = [sql for sql in statements if "SELECT identity,digest,position FROM rows" in sql]
-    assert len(lookups) == 1 and "AND sid=" in lookups[0]
+    assert len(lookups) == len(fresh_rows)
+    assert all("AND sid=" in sql for sql in lookups)
     scanned = any("SELECT identity,sid,digest,position FROM rows" in sql for sql in statements)
-    assert scanned == (case != "replace")
+    assert scanned is not point_update
     persisted = archive_store.load(target, key=key)["entries"][key]
     assert persisted["signature"] == "new"
-    expected = server._archive_merge_incremental_rows(rows, [fresh], [])
+    expected = server._archive_merge_incremental_rows(rows, fresh_rows, [])
     # A later occurrence can share the exact compound identity of the freshly
     # parsed row. The general merge's publication retains one canonical row.
     if case == "duplicate-sid":
-        assert server._ARCHIVE_COMPUTE_LAST_PHASES.get("replace_rows") is None
         assert {archive_store.identity(row) for row in persisted["conversations"]} == {
             archive_store.identity(row) for row in expected
         }

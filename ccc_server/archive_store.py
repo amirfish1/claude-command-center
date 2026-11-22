@@ -190,26 +190,44 @@ def _connect(cache_file, *, write=False, shared_reader=False):
                            timeout=0.5, check_same_thread=not shared_reader)
 
 
-def _replacement_positions(con, key, rows):
-    """Resolve same-identity replacements without reading the full row index."""
-    positions = {}
+def _point_update_positions(con, key, rows):
+    """Find edited rows and the append position without reading the full index."""
+    existing = {}
+    new_sids = set()
+    seen_sids = set()
     for row in rows:
         if not isinstance(row, dict):
             return None
         sid = row.get('session_id') or row.get('id')
-        if not sid:
+        if not isinstance(sid, str) or not sid or sid in seen_sids:
             return None
+        seen_sids.add(sid)
         rid = identity(row)
-        # The general merge replaces the first occurrence of a session ID in
-        # stored order. A change to that identity needs the full merge.
+        # The general merge replaces the first occurrence in stored order.
         found = con.execute("""
             SELECT identity,digest,position FROM rows
             WHERE variant=? AND sid=? ORDER BY position LIMIT 1
         """, (key, sid)).fetchone()
-        if not found or found[0] != rid or rid in positions:
+        if found is None:
+            new_sids.add(sid)
+        elif found[0] == rid:
+            existing[rid] = found[1:]
+        else:
             return None
-        positions[rid] = found[1:]
-    return positions
+
+    if not new_sids:
+        return existing, 0
+    # The general merge falls back to the transcript path for legacy rows
+    # without a session ID. A new ID matching such a key requires that merge.
+    for rid, in con.execute(
+        "SELECT identity FROM rows WHERE variant=? AND sid=''", (key,)
+    ):
+        if json.loads(rid)[3] in new_sids:
+            return None
+    position, = con.execute(
+        "SELECT COALESCE(MAX(position), -1) + 1 FROM rows WHERE variant=?", (key,)
+    ).fetchone()
+    return existing, position
 
 
 def _publish_variant_metadata(con, key, stamp, metadata):
@@ -245,17 +263,17 @@ def _read_variant_signature_maps(con, key, stamp):
 
 
 def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_pages=None,
-         base_entry=None, replace_rows=False):
+         base_entry=None, point_update=False):
     """Publish variants atomically. Return the count of changed row bodies.
 
     Only complete builder snapshots may remove absent rows. Hot snapshots
     and stale workers cannot erase cold history or a newer publication.
     With a base entry, publish only against that generation and return whether
-    the publication succeeded. A replacement-only publication accepts just
-    the changed rows and can decline when the general merge is needed.
+    the publication succeeded. A point update accepts just the changed
+    and added rows and can decline when the general merge is needed.
     """
-    if replace_rows and (base_entry is None or not complete):
-        raise ValueError("row replacements require a complete base generation")
+    if point_update and (base_entry is None or not complete):
+        raise ValueError("point updates require a complete base generation")
     changed = 0
     con = _connect(cache_file, write=True)
     try:
@@ -294,12 +312,13 @@ def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_page
                 SELECT 1 FROM sidebar_preview_generation WHERE variant=? AND cached_at=? AND version=?
             """, (key, previous[0], archive_preview.VERSION)).fetchone()
             existing = (base_entry or {}).get("_row_index")
-            if replace_rows:
+            if point_update:
                 if not projections_current or (key == sidebar_key and not preview_current):
                     return False
-                existing = _replacement_positions(con, key, entry['conversations'])
-                if existing is None:
+                positions = _point_update_positions(con, key, entry['conversations'])
+                if positions is None:
                     return False
+                existing, next_position = positions
             elif existing is None:
                 existing = {rid: (digest, position) for rid, digest, position in con.execute(
                     'SELECT identity,digest,position FROM rows WHERE variant=?', (key,))}
@@ -315,8 +334,12 @@ def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_page
                 if not isinstance(row, dict):
                     continue
                 rid = identity(row, index)
-                if replace_rows:
-                    index = existing[rid][1]
+                if point_update:
+                    if rid in existing:
+                        index = existing[rid][1]
+                    else:
+                        index = next_position
+                        next_position += 1
                 seen.add(rid)
                 if rid in existing and rid in base_rows and (
                         row is base_rows[rid] or row == base_rows[rid]):
