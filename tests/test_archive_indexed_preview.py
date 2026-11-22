@@ -534,3 +534,44 @@ def test_detached_delta_refreshes_antigravity_when_an_existing_transcript_grows(
     assert projected["last_assistant_preview"] == rows[0]["last_assistant_text"]
     persisted = archive_store.load(cache, key=key)["entries"][key]["conversations"]
     assert persisted == [unrelated, rows[0]]
+
+
+def test_packed_preview_follows_canonical_order_and_backfills(tmp_path):
+    path = tmp_path / "archive.json"
+    key = "base"
+    stamp = 20
+    version = server._ARCHIVE_SIDEBAR_PACKED_VERSION
+    before = [{"session_id": "first", "mtime": math.nextafter(5, 0)},
+              {"session_id": "second", "mtime": 5}]
+    archive_store.save(path, {
+        "schema_version": 1, "build_id": "test",
+        "entries": {key: {"cached_at": stamp, "conversations": before}},
+    }, complete=True, sidebar_key=key, sidebar_pages=(version, server._archive_list_pack_static))
+
+    def items(conn):
+        return [tuple(row) for row in archive_preview._ordered_rows(conn, key)]
+
+    with archive_store.sidebar_preview_view(path, key, schema_version=1, build_id="test") as view:
+        reader, _ = view
+        original = items(reader)
+        assert isinstance(archive_preview._ordered_rows(reader, key), list)
+        assert [row[2] for row in original] == [row["mtime"] for row in before]
+        # An old writer can move canonical rows without changing cached_at.
+        with sqlite3.connect(archive_store.database_path(path)) as writer:
+            writer.execute("UPDATE rows SET position=10 WHERE variant=? AND sid='first'", (key,))
+        assert items(reader) == original
+
+    with archive_store.sidebar_preview_view(path, key, schema_version=1, build_id="test") as view:
+        reader, _ = view
+        assert not archive_preview.packed_current(reader, key)
+        assert items(reader) == original[::-1]
+
+    with patch.object(archive_sidebar_pages, "publish", side_effect=AssertionError("already current")):
+        assert archive_store.backfill_sidebar_pages(path, key, version, server._archive_list_pack_static)
+        assert not archive_store.backfill_sidebar_pages(path, key, version, server._archive_list_pack_static)
+
+    with sqlite3.connect(archive_store.database_path(path)) as writer:
+        writer.execute("UPDATE sidebar_preview_packed SET body=? WHERE variant=?", (b"broken", key))
+    with archive_store.sidebar_preview_view(path, key, schema_version=1, build_id="test") as view:
+        reader, _ = view
+        assert items(reader) == original[::-1]

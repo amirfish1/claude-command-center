@@ -946,14 +946,20 @@ class _SidebarHistoryReader:
 _SIDEBAR_HISTORY_READER = _SidebarHistoryReader()
 
 
-def sidebar_pages_available(cache_file, key, version):
+def sidebar_pages_available(cache_file, key, version, *, require_packed_preview=False):
     """Select the packed source flight only when both sidebar readers are ready."""
     if not database_path(cache_file).exists():
         return False
     try:
         con = _connect(cache_file)
         try:
-            return _sidebar_pages_current(con, key, version)
+            if not _sidebar_pages_current(con, key, version):
+                return False
+            if require_packed_preview:
+                from ccc_server import archive_preview
+
+                return archive_preview.packed_current(con, key)
+            return True
         finally:
             con.close()
     except (OSError, sqlite3.Error):
@@ -973,7 +979,8 @@ def backfill_sidebar_pages(cache_file, key, version, project):
     """Build the derived indexes for an unchanged, already published archive."""
     from ccc_server import archive_preview, archive_sidebar_pages
 
-    if not database_path(cache_file).exists() or sidebar_pages_available(cache_file, key, version):
+    if not database_path(cache_file).exists() or sidebar_pages_available(
+            cache_file, key, version, require_packed_preview=True):
         return False
     con = _connect(cache_file, write=True)
     try:
@@ -982,9 +989,14 @@ def backfill_sidebar_pages(cache_file, key, version, project):
         with con:
             con.execute("BEGIN IMMEDIATE")
             stored = con.execute("SELECT cached_at FROM variants WHERE key=?", (key,)).fetchone()
-            if stored is None or _sidebar_pages_current(con, key, version):
+            if stored is None:
                 return False
             stamp, = stored
+            if _sidebar_pages_current(con, key, version):
+                if archive_preview.packed_current(con, key):
+                    return False
+                archive_preview.finish_publication(con, key, stamp)
+                return archive_preview.packed_current(con, key)
             indexed = archive_preview.indexed(con, key)
             rows = []
             for rid, body in con.execute(

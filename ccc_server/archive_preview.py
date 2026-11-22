@@ -6,12 +6,20 @@ from collections import defaultdict
 import heapq
 import json
 import math
+import sqlite3
+import zlib
 
 
 VERSION = 1
 _RECENT_ROWS = 500
 _MAX_BATCHED_EDGES = 8192
 _MAX_EDGE_BYTES = 512
+_MAX_PACKED_ROWS = 32768
+_MAX_PACKED_BYTES = 8 << 20
+_ORDERED_ROWS = """
+    SELECT identity,sid,activity,pinned,working,codex
+    FROM sidebar_preview_rows WHERE variant=? ORDER BY position,row_order
+"""
 
 
 def activity(row):
@@ -76,6 +84,22 @@ def setup(con):
         ) WITHOUT ROWID;
         CREATE INDEX IF NOT EXISTS sidebar_preview_parent_lookup
             ON sidebar_preview_parents(variant, parent, identity);
+        CREATE TABLE IF NOT EXISTS sidebar_preview_packed (
+            variant TEXT PRIMARY KEY, cached_at REAL NOT NULL, version INTEGER NOT NULL,
+            body BLOB
+        );
+        CREATE TRIGGER IF NOT EXISTS sidebar_preview_packed_insert
+        AFTER INSERT ON sidebar_preview_rows BEGIN
+            DELETE FROM sidebar_preview_packed WHERE variant=NEW.variant;
+        END;
+        CREATE TRIGGER IF NOT EXISTS sidebar_preview_packed_update
+        AFTER UPDATE ON sidebar_preview_rows BEGIN
+            DELETE FROM sidebar_preview_packed WHERE variant=OLD.variant OR variant=NEW.variant;
+        END;
+        CREATE TRIGGER IF NOT EXISTS sidebar_preview_packed_delete
+        AFTER DELETE ON sidebar_preview_rows BEGIN
+            DELETE FROM sidebar_preview_packed WHERE variant=OLD.variant;
+        END;
 
         CREATE TRIGGER IF NOT EXISTS sidebar_preview_insert
         AFTER INSERT ON rows BEGIN
@@ -145,6 +169,68 @@ def finish_publication(con, key, cached_at):
     if counts[0] == counts[1]:
         con.execute("INSERT OR REPLACE INTO sidebar_preview_generation VALUES (?,?,?)",
                     (key, cached_at, VERSION))
+        _publish_packed(con, key, cached_at, counts[0])
+
+
+def _publish_packed(con, key, cached_at, count):
+    # The index itself is the source of truth. Its mutation triggers only
+    # invalidate the packed copy when a new publication changes index rows.
+    if con.execute("""
+        UPDATE sidebar_preview_packed SET cached_at=? WHERE variant=? AND version=?
+    """, (cached_at, key, VERSION)).rowcount:
+        return
+    body = _pack_rows(con, key) if count <= _MAX_PACKED_ROWS else None
+    # Remember oversized generations so the detached worker does not retry
+    # unchanged input on every background refresh.
+    con.execute("INSERT OR REPLACE INTO sidebar_preview_packed VALUES (?,?,?,?)",
+                (key, cached_at, VERSION, body))
+
+
+def _pack_rows(con, key):
+    rows = []
+    text_chars = 0
+    for row in con.execute(_ORDERED_ROWS, (key,)):
+        text_chars += len(row[0]) + len(row[1])
+        if text_chars > _MAX_PACKED_BYTES:
+            return None
+        rows.append(row)
+    # Encode SQLite REAL values through Python's round-trip float serializer.
+    body = json.dumps(rows, separators=(",", ":"), ensure_ascii=False).encode()
+    return zlib.compress(body, 1) if len(body) <= _MAX_PACKED_BYTES else None
+
+
+def packed_current(con, key):
+    # This check also accepts the oversized-generation marker.
+    return con.execute("""
+        SELECT 1 FROM sidebar_preview_packed JOIN sidebar_preview_generation
+        USING (variant,cached_at,version) WHERE variant=? AND version=?
+    """, (key, VERSION)).fetchone() is not None
+
+
+def _ordered_rows(con, key):
+    # One SQLite step avoids giving up the GIL once per index entry while a
+    # simultaneous complete-history request projects archive rows.
+    try:
+        record = con.execute("""
+            SELECT body FROM sidebar_preview_packed JOIN sidebar_preview_generation
+            USING (variant,cached_at,version)
+            WHERE variant=? AND version=? AND length(body)<=?
+        """, (key, VERSION, _MAX_PACKED_BYTES)).fetchone()
+    except sqlite3.OperationalError as exc:
+        if "no such table: sidebar_preview_packed" not in str(exc):
+            raise
+        record = None
+    if record:
+        try:
+            decoder = zlib.decompressobj()
+            body = decoder.decompress(record[0], _MAX_PACKED_BYTES + 1)
+            if decoder.eof and len(body) <= _MAX_PACKED_BYTES:
+                rows = json.loads(body)
+                if isinstance(rows, list) and len(rows) <= _MAX_PACKED_ROWS:
+                    return rows
+        except (ValueError, zlib.error):
+            pass
+    return con.execute(_ORDERED_ROWS, (key,))
 
 
 class Preview:
@@ -158,11 +244,7 @@ class Preview:
         self.sources = {}
         self.cold_positions = {}
         # Use the same persisted order as the canonical override merge.
-        # SQLite returns REAL timestamps with their original precision.
-        for identity, sid, stamp, pinned, working, codex in con.execute("""
-            SELECT identity,sid,activity,pinned,working,codex
-            FROM sidebar_preview_rows WHERE variant=? ORDER BY position,row_order
-        """, (key,)):
+        for identity, sid, stamp, pinned, working, codex in _ordered_rows(con, key):
             live = overrides.pop(identity, None)
             if live is not None:
                 self.append([live], deleted_codex=deleted_codex)
