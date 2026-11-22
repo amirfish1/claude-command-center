@@ -1896,6 +1896,40 @@ def test_archive_response_cache_restores_signature_stat_map(
             server._ARCHIVE_STATMAP_BY_SIG.pop(new_sig, None)
 
 
+def test_large_archive_signature_map_is_only_read_for_the_delta_basis(tmp_path, monkeypatch):
+    import sqlite3
+
+    from ccc_server import archive_store
+
+    archive = tmp_path / "archive.json"
+    stamp = time.time()
+    rows = [{"session_id": "a", "mtime": stamp}]
+    maps = {"sig": {"files": {f"/project/{i:05}.jsonl": [i, 100] for i in range(4000)}}}
+    archive_store.save(archive, {
+        "entries": {"key": {"cached_at": stamp, "signature": "sig", "conversations": rows}},
+        "signature_maps": maps,
+    })
+    database = archive_store.database_path(archive)
+    with sqlite3.connect(database) as con:
+        metadata, = con.execute("SELECT metadata FROM variants WHERE key='key'").fetchone()
+        assert len(metadata) < 512
+        assert "signature_maps" not in json.loads(metadata)
+    assert archive_store.load(archive, metadata_only=True)["signature_maps"] == maps
+
+    def unexpected_map_read(*args):
+        pytest.fail("a hot row read decoded the transcript signature map")
+
+    with monkeypatch.context() as context:
+        context.setattr(archive_store, "_read_variant_signature_maps", unexpected_map_read)
+        hot = archive_store.load(archive, hot=True, include_signature_maps=False)
+        assert hot["entries"]["key"]["conversations"] == rows
+
+    # An older writer updates the variant without touching the side table.
+    with sqlite3.connect(database) as con:
+        con.execute("UPDATE variants SET cached_at=? WHERE key='key'", (stamp + 1,))
+    assert archive_store.load(archive, metadata_only=True)["signature_maps"] == {}
+
+
 def test_archive_cache_load_is_single_flight(isolated_archive_cache, monkeypatch):
     """CCC-1244: a caller racing the boot-time load must wait for it, not see
     an empty cache and fall through to a synchronous full archive rebuild."""

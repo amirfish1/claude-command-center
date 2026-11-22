@@ -22,10 +22,13 @@ import tempfile
 import threading
 import time
 from types import MappingProxyType
+import zlib
 
 from .bounded_cache import ByteBudgetCache
 
 HOT_SECONDS = 7 * 86400
+_SIGNATURE_MAP_COMPRESS_MIN_BYTES = 64 << 10
+_SIGNATURE_MAP_MAX_BYTES = 64 << 20
 
 # The peer inventory never consumes transcript/parser detail. Publish its
 # projection in the same transaction as each canonical row, so polling peers
@@ -148,6 +151,9 @@ def _connect(cache_file, *, write=False, shared_reader=False):
             CREATE TABLE IF NOT EXISTS variants (
                 key TEXT PRIMARY KEY, cached_at REAL NOT NULL, metadata TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS variant_signature_maps (
+                key TEXT PRIMARY KEY, cached_at REAL NOT NULL, body BLOB NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS rows (
                 variant TEXT NOT NULL, identity TEXT NOT NULL, sid TEXT NOT NULL,
                 parent TEXT NOT NULL, position INTEGER NOT NULL,
@@ -204,6 +210,38 @@ def _replacement_positions(con, key, rows):
             return None
         positions[rid] = found[1:]
     return positions
+
+
+def _publish_variant_metadata(con, key, stamp, metadata):
+    maps = metadata.get('signature_maps')
+    if maps:
+        raw = json.dumps(maps, separators=(',', ':')).encode()
+        if _SIGNATURE_MAP_COMPRESS_MIN_BYTES <= len(raw) <= _SIGNATURE_MAP_MAX_BYTES:
+            # Most readers only need the variant header. Keep the full
+            # transcript fingerprint in the same transaction, out of that path.
+            con.execute('INSERT OR REPLACE INTO variant_signature_maps VALUES(?,?,?)',
+                        (key, stamp, zlib.compress(raw, 1)))
+            metadata.pop('signature_maps')
+    con.execute('INSERT OR REPLACE INTO variants VALUES(?,?,?)',
+                (key, stamp, json.dumps(metadata, separators=(',', ':'))))
+
+
+def _read_variant_signature_maps(con, key, stamp):
+    row = con.execute('SELECT body FROM variant_signature_maps WHERE key=? AND cached_at=?',
+                      (key, stamp)).fetchone()
+    if row is None:
+        return {}
+    try:
+        decoder = zlib.decompressobj()
+        raw = decoder.decompress(row[0], _SIGNATURE_MAP_MAX_BYTES + 1)
+        if decoder.eof and len(raw) <= _SIGNATURE_MAP_MAX_BYTES:
+            maps = json.loads(raw)
+            if isinstance(maps, dict):
+                return maps
+    except (TypeError, ValueError, RecursionError, zlib.error):
+        pass
+    # Missing or damaged fingerprints only cost an incremental cache hit.
+    return {}
 
 
 def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_pages=None,
@@ -353,8 +391,7 @@ def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_page
                             (key, stamp, INVENTORY_VERSION, ATTENTION_VERSION))
             metadata = {k: v for k, v in snapshot.items() if k != 'entries'}
             metadata['entry'] = {k: v for k, v in entry.items() if k != 'conversations'}
-            con.execute('INSERT OR REPLACE INTO variants VALUES(?,?,?)',
-                        (key, stamp, json.dumps(metadata, separators=(',', ':'))))
+            _publish_variant_metadata(con, key, stamp, metadata)
             con.execute('INSERT OR REPLACE INTO attention_variants VALUES(?,?,?,?,?)',
                         (key, stamp, new_version, snapshot.get('build_id'), ATTENTION_VERSION))
             if key == sidebar_key:
@@ -1120,19 +1157,21 @@ class _RowIndexEntry(dict):
 
 
 def load(cache_file, *, hot=False, key=None, now=None, row_index=False, metadata_only=False,
-         reuse_engines=None):
+         reuse_engines=None, include_signature_maps=True):
     """Read all metadata but only requested row bodies, with ancestor context."""
     if not database_path(cache_file).exists():
         return None
     con = _connect(cache_file)
     try:
         con.execute('BEGIN')
-        variants = con.execute('SELECT key,metadata FROM variants' + (' WHERE key=?' if key else ''),
+        variants = con.execute('SELECT key,cached_at,metadata FROM variants' + (' WHERE key=?' if key else ''),
                                (key,) if key else ()).fetchall()
         if not variants:
             return None
         result = {'entries': {}, 'signature_maps': {}}
-        for variant, raw_metadata in variants:
+        has_signature_maps = include_signature_maps and con.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='variant_signature_maps'").fetchone()
+        for variant, stamp, raw_metadata in variants:
             meta = json.loads(raw_metadata)
             entry = meta.pop('entry')
             previous_version = result.get('schema_version')
@@ -1144,7 +1183,11 @@ def load(cache_file, *, hot=False, key=None, now=None, row_index=False, metadata
                     and meta.get('build_id') == str(meta['schema_version'])):
                 result['schema_version'] = min(previous_version, meta['schema_version'])
                 result['build_id'] = str(result['schema_version'])
-            result['signature_maps'].update(meta.get('signature_maps') or {})
+            if include_signature_maps:
+                maps = meta.get('signature_maps')
+                if maps is None and has_signature_maps:
+                    maps = _read_variant_signature_maps(con, variant, stamp)
+                result['signature_maps'].update(maps or {})
             if metadata_only:
                 rows = []
             elif row_index:
