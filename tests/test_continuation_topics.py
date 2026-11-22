@@ -851,6 +851,52 @@ def test_archive_projection_inputs_capture_topic_and_native_title_sources(store,
     ).fetchone() == ('External',)
 
 
+def test_archive_projection_retries_when_topic_sources_change_during_capture(store, monkeypatch):
+    root = '11111111-1111-4111-8111-111111111111'
+    topics.attach_topics([row(root), row('child', origin=root)], names={})
+    monkeypatch.setattr(server, '_conv_meta_cache', {})
+    monkeypatch.setattr(server, '_codex_titles_cache', {'data': {}})
+    lookups = []
+
+    def native_title(sid):
+        lookups.append(sid)
+        if len(lookups) == 1:
+            store.execute("INSERT INTO session_meta VALUES ('new-indexed-child', ?)", (root,))
+            store.commit()
+        return 'Native title'
+
+    monkeypatch.setattr(topics, '_native_title', native_title)
+    inputs, edges, version = topics.archive_projection_inputs(store, max_rows=20)
+    assert lookups == [root, root]
+    assert inputs[1] == {'new-indexed-child': root}
+    assert ('new-indexed-child', root) in edges
+    assert version == topics._archive_read_version(store)
+
+
+def test_archive_projection_ignores_writes_outside_tracked_topics(store, monkeypatch):
+    root = '11111111-1111-4111-8111-111111111111'
+    store.execute('PRAGMA journal_mode=WAL')
+    topics.attach_topics([row(root), row('child', origin=root)], names={})
+    store.execute("CREATE TABLE unrelated (id INTEGER PRIMARY KEY)")
+    store.commit()
+    monkeypatch.setattr(server, '_conv_meta_cache', {})
+    monkeypatch.setattr(server, '_codex_titles_cache', {'data': {}})
+    lookups = []
+    filename = store.execute("PRAGMA database_list").fetchone()[2]
+
+    def native_title(sid):
+        lookups.append(sid)
+        with sqlite3.connect(filename) as peer:
+            peer.execute("INSERT INTO unrelated DEFAULT VALUES")
+        return 'Native title'
+
+    monkeypatch.setattr(topics, '_native_title', native_title)
+    inputs, _, version = topics.archive_projection_inputs(store, max_rows=20)
+    assert lookups == [root]
+    assert inputs[-1] == {root: 'Native title'}
+    assert version == topics._archive_read_version(store)
+
+
 def test_archive_projection_collects_unloaded_detached_metadata_titles(store, tmp_path, monkeypatch):
     from contextlib import closing
 

@@ -19233,12 +19233,16 @@ def _archive_history_read_cut(key, cache_options, now, *, phases=None, check_cli
     hot, hot_tokens = snapshot
     with _ARCHIVE_RESPONSE_CACHE_LOCK:
         min_stamp = float((_ARCHIVE_RESPONSE_CACHE.get(key) or {}).get("cached_at") or 0)
-    with archive_store.sidebar_history_cut(
-        _ARCHIVE_RESPONSE_CACHE_FILE, key, schema_version=_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
-        build_id=_ARCHIVE_RESPONSE_CACHE_BUILD_ID, max_rows=archive_history_layer.MAX_ROWS,
-        min_cached_at=min_stamp,
-    ) as cut:
+    with contextlib.ExitStack() as stack:
+        with _archive_history_timing(phases, "inventory"):
+            cut = stack.enter_context(archive_store.sidebar_history_cut(
+                _ARCHIVE_RESPONSE_CACHE_FILE, key, schema_version=_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
+                build_id=_ARCHIVE_RESPONSE_CACHE_BUILD_ID, max_rows=archive_history_layer.MAX_ROWS,
+                min_cached_at=min_stamp,
+            ))
         if cut is None:
+            if phases is not None:
+                phases["unavailable"] = "inventory"
             yield None
             return
         inventory, hydrate = cut
@@ -19265,7 +19269,7 @@ def _archive_history_read_cut(key, cache_options, now, *, phases=None, check_cli
         with _archive_history_timing(phases, "topics"):
             connection = topic_reader if topic_reader is not None else continuation_topics._connection()
             topics = continuation_topics.archive_projection_inputs(
-                connection, max_rows=archive_history_layer.MAX_ROWS)
+                connection, max_rows=archive_history_layer.MAX_ROWS, diagnostics=phases)
         if topics is None:
             yield None
             return

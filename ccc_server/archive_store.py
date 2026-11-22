@@ -25,6 +25,7 @@ from types import MappingProxyType
 import zlib
 
 from .bounded_cache import ByteBudgetCache
+from .sqlite_batch import fetch_rows as _sqlite_fetch_rows
 
 HOT_SECONDS = 7 * 86400
 _SIGNATURE_MAP_COMPRESS_MIN_BYTES = 64 << 10
@@ -1108,10 +1109,13 @@ class SidebarHistoryIndex:
 
 
 def _sidebar_history_inventory(con, key, max_rows):
-    records = con.execute(
-        'SELECT sid, identity, parent, digest FROM rows '
-        'WHERE variant=? ORDER BY position,rowid LIMIT ?', (key, max_rows + 1),
-    ).fetchall()
+    # Batch the bounded cut inside SQLite. Stepping every row in Python
+    # repeatedly reacquires the GIL during a concurrent preview or startup.
+    records = _sqlite_fetch_rows(
+        con, 'SELECT sid, identity, parent, digest FROM rows '
+        'WHERE variant=? ORDER BY position,rowid LIMIT ?',
+        (key, max_rows + 1), ('sid', 'identity', 'parent', 'digest'),
+    )
     if not records or len(records) > max_rows:
         return None
     identities = {sid for sid, _, _, _ in records if sid and not sid.startswith('#')}

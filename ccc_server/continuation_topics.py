@@ -329,36 +329,41 @@ class UnavailableArchiveProjection(Exception):
 
 
 def _archive_read_version(conn):
+    token = _db_state_token(conn)
+    if token is not None and token[0] == "topics-v1":
+        # The revision is scoped to tracked topic data. The archive captures
+        # external titles separately and compares inside and outside a write.
+        return token[:5]
     return conn.total_changes, conn.execute("PRAGMA data_version").fetchone()[0]
 
 
-def archive_projection_inputs(conn, *, max_rows, max_native_roots=32):
-    """Read topic records and external titles needed to guard an archive layer."""
-    if conn.in_transaction:
-        return None
+def _archive_topic_records(conn, max_rows):
     try:
         version = _archive_read_version(conn)
         conn.execute("BEGIN")
-        records = conn.execute(
-            "SELECT sid,origin,root_sid,topic_title,user_named FROM continuation_topics LIMIT ?",
-            (max_rows + 1,),
-        ).fetchall()
-        indexed = conn.execute(
-            "SELECT sid,continuation_origin FROM session_meta WHERE continuation_origin!='' LIMIT ?",
-            (max_rows + 1,),
-        ).fetchall()
-    except sqlite3.Error:
-        return None
+        records = _sqlite_fetch_rows(
+            conn, "SELECT sid,origin,root_sid,topic_title,user_named FROM continuation_topics LIMIT ?",
+            (max_rows + 1,), ("sid", "origin", "root_sid", "topic_title", "user_named"),
+        )
+        indexed = _sqlite_fetch_rows(
+            conn, "SELECT sid,continuation_origin FROM session_meta WHERE continuation_origin!='' LIMIT ?",
+            (max_rows + 1,), ("sid", "continuation_origin"),
+        )
     finally:
         if conn.in_transaction:
             conn.rollback()
-    if len(records) > max_rows or len(indexed) > max_rows:
+    return records, indexed, version
+
+
+def archive_projection_inputs(conn, *, max_rows, max_native_roots=32, diagnostics=None):
+    """Read topic records and external titles needed to guard an archive layer."""
+    def unavailable(reason):
+        if diagnostics is not None:
+            diagnostics["topics_unavailable"] = reason
         return None
-    by_sid = {sid: (origin, root, title, named) for sid, origin, root, title, named in records}
-    edges = [(sid, edge) for sid, origin, root, _, _ in records
-             for edge in (origin, root) if edge and edge != sid]
-    edges.extend(indexed)
-    linked_roots = {root for _, origin, root, _, _ in records if origin and root}
+
+    if conn.in_transaction:
+        return unavailable("already_in_transaction")
     try:
         from ccc_server.log_parse import _archive_topic_metadata_items
 
@@ -368,16 +373,27 @@ def archive_projection_inputs(conn, *, max_rows, max_native_roots=32):
         for sid, value in codex_cache.items():
             if isinstance(value, dict) and (name := value.get('title') or value.get('agent_nickname')):
                 fallback.setdefault(sid, name)
-        native_roots = {sid for sid in linked_roots if _NATIVE_ID_RE.fullmatch(sid)
-                        and not fallback.get(sid) and not by_sid.get(sid, ('', '', '', 0))[2]}
-        if len(native_roots) > max_native_roots:
-            return None
-        native = {sid: _native_title(sid) for sid in native_roots}
-        if _archive_read_version(conn) != version:
-            return None
-    except (OSError, sqlite3.Error, RuntimeError, TypeError, ValueError):
-        return None
-    return (by_sid, dict(indexed), fallback, native), edges, version
+        for attempt in range(2):
+            records, indexed, version = _archive_topic_records(conn, max_rows)
+            if len(records) > max_rows or len(indexed) > max_rows:
+                return unavailable("row_limit")
+            by_sid = {sid: (origin, root, title, named) for sid, origin, root, title, named in records}
+            linked_roots = {root for _, origin, root, _, _ in records if origin and root}
+            native_roots = {sid for sid in linked_roots if _NATIVE_ID_RE.fullmatch(sid)
+                            and not fallback.get(sid) and not by_sid.get(sid, ('', '', '', 0))[2]}
+            if len(native_roots) > max_native_roots:
+                return unavailable("native_root_limit")
+            native = {sid: _native_title(sid) for sid in native_roots}
+            if _archive_read_version(conn) == version:
+                edges = [(sid, edge) for sid, origin, root, _, _ in records
+                         for edge in (origin, root) if edge and edge != sid]
+                edges.extend(indexed)
+                if diagnostics is not None and attempt:
+                    diagnostics["topics_retried"] = True
+                return (by_sid, dict(indexed), fallback, native), edges, version
+        return unavailable("changed_during_read")
+    except (OSError, sqlite3.Error, RuntimeError, TypeError, ValueError) as exc:
+        return unavailable(type(exc).__name__)
 
 
 class _Batch:
