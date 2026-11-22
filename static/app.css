@@ -36318,6 +36318,17 @@ body.ccc-app-embed.conversation-popout .main > .toolbar {
 @media (prefers-reduced-motion: reduce) {
   #convList.session-workspace .conv-item.is-swipe-settling { transition: none !important; }
 }
+/* Archive collapses the row (JS sets the start height inline) so the rows
+   below slide up instead of jumping. */
+.conv-item.is-archive-collapsing {
+  overflow: hidden !important; min-height: 0 !important; box-sizing: border-box;
+  padding-top: 0 !important; padding-bottom: 0 !important;
+  margin-top: 0 !important; margin-bottom: 0 !important; border-width: 0 !important;
+  opacity: 0; pointer-events: none;
+  content-visibility: visible !important; contain: none !important;
+  transition: height 240ms cubic-bezier(.2,.8,.2,1), opacity 200ms ease,
+    padding 240ms cubic-bezier(.2,.8,.2,1), margin 240ms cubic-bezier(.2,.8,.2,1) !important;
+}
 
 /* Replay: a user-role message the owner did not type (injected brief, lane
    report, worker or peer message) arrives whole, sliding in from above,

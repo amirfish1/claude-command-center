@@ -9483,7 +9483,7 @@
     let domHasDragging = false;
     if (sharedState._sidebarDragInProgress) {
       domHasDragging = !!document.querySelector(
-      '.flow-node.dragging,.kanban-card.dragging,.kanban-column-header.dragging-header,.conv-item.dragging,.conv-draft-row.dragging,.conv-folder-group-header.dragging,.is-swipe-committed,.conv-objects-splitter.is-dragging,.flow-board.is-panning,.flow-board.is-zooming'
+      '.flow-node.dragging,.kanban-card.dragging,.kanban-column-header.dragging-header,.conv-item.dragging,.conv-draft-row.dragging,.conv-folder-group-header.dragging,.is-swipe-committed,.conv-item.is-archive-collapsing,.conv-objects-splitter.is-dragging,.flow-board.is-panning,.flow-board.is-zooming'
       );
       if (!domHasDragging) sharedState._sidebarDragInProgress = false;
     }

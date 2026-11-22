@@ -56,8 +56,12 @@ test('swipe left reveals More + Archive, full swipe archives, right swipe stars,
     await new Promise(r=>setTimeout(r,250));
     await page.screenshot({path:'/tmp/ccc-mobile-swipe-open.png'});
     await page.$eval('#Bugs [data-swipe-action=archive]',el=>el.click());
+    await new Promise(r=>setTimeout(r,260));
     assert.deepEqual(await actions(),['Bugs:Archive']);
     assert.equal(await depth(),0);
+    // Archiving leaves the row slid out for the collapse; it never snaps back.
+    assert.equal(await page.$eval('#Bugs',el=>el.style.getPropertyValue('--conv-row-swipe-offset')),
+      await page.$eval('#Bugs',el=>-el.getBoundingClientRect().width+'px'));
 
     // Full left swipe archives (or restores) without a second tap.
     for (const id of ['Features','History','Simple']) {
@@ -68,6 +72,9 @@ test('swipe left reveals More + Archive, full swipe archives, right swipe stars,
       await new Promise(r=>setTimeout(r,260));
     }
     assert.deepEqual((await actions()).slice(1),['Features:Archive','History:Restore','Simple:Archive']);
+    // Restore keeps the row in the list, so it slides back.
+    assert.equal(await page.$eval('#History',el=>el.style.getPropertyValue('--conv-row-swipe-offset')),'');
+    assert.notEqual(await page.$eval('#Features',el=>el.style.getPropertyValue('--conv-row-swipe-offset')),'');
     assert.equal(await depth(),0);
 
     // Right swipe: only rows with a today star have a left tray.
@@ -184,4 +191,45 @@ test('real Simple cards archive running tasks, restore history and recover faile
     assert.equal(await page.$eval('.simple-card-archive-btn',el=>el.getBoundingClientRect().width>=44),true);
     await page.screenshot({path:'/tmp/ccc-mobile-simple-card.png'});
   } finally {await browser.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
+});
+
+test('archive collapses the row smoothly and holds redraws until it is gone', async () => {
+  const cStart = source.indexOf('  const CONV_ROW_COLLAPSE_MS');
+  const helpers = source.slice(cStart, source.indexOf('  function _swipeActionButtonForRow(row) {', cStart));
+  const server = http.createServer((req,res) => {
+    res.setHeader('Content-Type','text/html; charset=utf-8');
+    res.end(`<style>${css}#convList>.conv-item{height:80px;margin:8px}</style><div id="convList"><div id="A" class="conv-item">A</div><div id="B" class="conv-item is-swipe-committed is-swipe-armed" style="--conv-row-swipe-offset:-390px">B<div class="conv-swipe-tray"></div></div><div id="C" class="conv-item">C</div></div><script>
+      window.dragging=false; window.done=0;
+      function isSidebarDragInProgress(){return window.dragging}
+      function beginSidebarDrag(){window.dragging=true}
+      function endSidebarDrag(){window.dragging=false}
+      ${helpers}
+      window.go=()=>collapseConvRowThen(document.getElementById('B'),()=>{window.done++; window.heldAtDone=window.dragging;});
+    </script>`);
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const browser = await puppeteer.launch({executablePath:findChromePath(),args:['--no-sandbox']});
+  try {
+    const page=await browser.newPage();
+    await page.goto('http://127.0.0.1:'+server.address().port);
+    const cTop=()=>page.$eval('#C',el=>el.getBoundingClientRect().top);
+    const before=await cTop();
+    await page.evaluate(()=>go());
+    assert.equal(await page.evaluate(()=>dragging),true,'redraws held during the collapse');
+    await new Promise(r=>setTimeout(r,110));
+    const mid=await cTop();
+    assert.ok(mid<before-5 && mid>before-80, `C slides up gradually (before ${before}, mid ${mid})`);
+    assert.equal(await page.evaluate(()=>done),0);
+    await page.waitForFunction(()=>window.done===1,{timeout:2000});
+    assert.equal(await page.evaluate(()=>heldAtDone),false,'hold released before the repaint');
+    assert.equal(await page.$eval('#B',el=>el.style.display),'none');
+    assert.equal(await page.$eval('#B',el=>el.className),'conv-item','swipe state cleared so renders are not deferred');
+    assert.equal(await page.$('#B .conv-swipe-tray'),null);
+    // Restoring after a failed request brings the row back intact.
+    await page.evaluate(()=>uncollapseConvRow(document.getElementById('B')));
+    assert.equal(await page.$eval('#B',el=>Math.round(el.getBoundingClientRect().height)),80);
+  } finally {
+    await browser.close();
+    server.close();
+  }
 });

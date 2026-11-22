@@ -12294,6 +12294,45 @@
   // right reveals the row's today star. More opens a bottom sheet listing the
   // row's own action buttons. Every action proxies to the row's existing
   // button, so lifecycle rules stay in one place; swipes never trash.
+  // Archive removes a row by collapsing its height, so the list closes the
+  // gap smoothly instead of jumping. Sidebar repaints wait until it finishes.
+  const CONV_ROW_COLLAPSE_MS = 240;
+  function collapseConvRowThen(item, done) {
+    const reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const h = item && item.isConnected ? item.getBoundingClientRect().height : 0;
+    if (reduce || !h) {
+      if (item) item.style.display = 'none';
+      done();
+      return;
+    }
+    const holdRender = !isSidebarDragInProgress();
+    if (holdRender) beginSidebarDrag();
+    item.style.height = h + 'px';
+    item.getBoundingClientRect();
+    item.classList.add('is-archive-collapsing');
+    item.style.height = '0px';
+    setTimeout(() => {
+      item.style.display = 'none';
+      // A row archived by a full swipe is still marked mid-swipe, which
+      // would keep deferring every sidebar render.
+      clearConvRowSwipeState(item);
+      item.classList.remove('is-archive-collapsing');
+      if (holdRender) endSidebarDrag();
+      done();
+    }, CONV_ROW_COLLAPSE_MS);
+  }
+  function clearConvRowSwipeState(item) {
+    item.classList.remove('is-swipe-committed', 'is-swipe-left', 'is-swipe-armed', 'is-swipe-open', 'is-swipe-settling');
+    item.style.removeProperty('--conv-row-swipe-offset');
+    item.style.removeProperty('--conv-row-swipe-reveal');
+    item.querySelector(':scope > .conv-swipe-tray')?.remove();
+  }
+  function uncollapseConvRow(item) {
+    clearConvRowSwipeState(item);
+    item.classList.remove('is-archive-collapsing');
+    item.style.removeProperty('height');
+    item.style.display = '';
+  }
   function _swipeActionButtonForRow(row) {
     return row.querySelector('.conv-archive-btn:not(.is-close)');
   }
@@ -12492,26 +12531,33 @@
       if (row && row !== openRow) clearRowSwipe(row);
       if (!openRow) release();
     };
+    // Archiving (not restoring) removes the row, so it stays slid out while
+    // it collapses instead of snapping back first.
+    const removesRow = (row, key) => key === 'archive'
+      && _swipeActionButtonForRow(row)?.dataset.archived === 'true';
     const runAction = (row, key) => {
+      if (key === 'more') { closeOpen(); openRowActionSheet(row); return; }
+      if (removesRow(row, key)) { commitFull(row, -1); return; }
       const target = key === 'archive' ? _swipeActionButtonForRow(row)
         : key === 'star' ? _swipeOwnButton(row, '[data-role="today-star"]') : null;
-      if (key === 'more') { closeOpen(); openRowActionSheet(row); return; }
       closeOpen();
       if (target && !target.disabled && target.isConnected) target.click();
     };
     // Full swipe: slide the row out, then fire the action.
-    const commitFull = row => {
-      const d = row.classList.contains('is-swipe-left') ? -1 : 1;
+    const commitFull = (row, forceDir) => {
+      const d = forceDir || (row.classList.contains('is-swipe-left') ? -1 : 1);
       const key = d < 0 ? 'archive' : 'star';
+      const removing = removesRow(row, key);
       row.classList.add('is-swipe-settling', 'is-swipe-armed');
       setOffset(row, d * row.getBoundingClientRect().width);
       setTimeout(() => {
         row.classList.remove('is-swipe-settling');
         if (openRow === row) openRow = null;
-        clearRowSwipe(row);
-        release();
         const target = key === 'archive' ? _swipeActionButtonForRow(row) : _swipeOwnButton(row, '[data-role="today-star"]');
-        if (target && !target.disabled && target.isConnected) target.click();
+        const fire = target && !target.disabled && target.isConnected;
+        if (!removing || !fire) clearRowSwipe(row);
+        release();
+        if (fire) target.click();
       }, 180);
     };
     $list.addEventListener('click', e => {
@@ -30422,7 +30468,12 @@
         const priorOverrides = new Map(Array.from(knownGroup, id => [id, _optimisticOverrides.get(id)]));
         // Capture visual order before the selected row disappears. This works
         // across folder/group wrappers instead of assuming direct siblings.
-        const nextSelectId = nextArchived && currentConversation === convId
+        // On the phone list, the open chat is hidden; archiving its row must
+        // not open the neighbor's chat and jump the user out of the list.
+        const phoneListShowing = typeof isMobile === 'function' && isMobile()
+          && !document.body.classList.contains('mobile-show-main')
+          && !document.body.classList.contains('mobile-conv-open');
+        const nextSelectId = nextArchived && currentConversation === convId && !phoneListShowing
           ? _visibleConversationNeighborId(convId, item, knownGroup)
           : null;
         btn.disabled = true;
@@ -30437,13 +30488,13 @@
           }
         };
         if (nextArchived) {
-          item.style.display = 'none';
           patchArchivedNow(conversationsData, true);
           patchArchivedNow(archiveData, true);
           patchArchivedNow(currentRepoBacklogData, true);
           for (const member of knownGroup) setOptimisticOverride(member, { archived: true, explicitly_archived: true });
           if (nextSelectId) selectConversation(nextSelectId);
-          requestAnimationFrame(() => {
+          // Collapse the row in place so the rows below slide up, then repaint.
+          collapseConvRowThen(item, () => {
             renderSidebar(filterConversations($convSearch.value), { force: true });
           });
         }
@@ -30498,7 +30549,7 @@
               if (override) _optimisticOverrides.set(id, override);
               else _optimisticOverrides.delete(id);
             }
-            item.style.display = '';
+            uncollapseConvRow(item);
             renderSidebar(filterConversations($convSearch.value), { force: true });
           }
           btn.disabled = false;
