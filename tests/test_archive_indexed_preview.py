@@ -283,11 +283,12 @@ def test_packed_history_recovers_rows_that_aged_out_of_hot_snapshot(tmp_path, mo
     expired = [
         {"session_id": f"recent-{i}", "mtime": stamp - archive_store.HOT_SECONDS,
          "last_assistant_text": f"Reply {i}"}
-        for i in range(40)
+        for i in range(300)
     ]
     cold = {"session_id": "history", "mtime": stamp - 2 * archive_store.HOT_SECONDS}
     hot = {"session_id": "live", "mtime": stamp}
-    rows = [*expired[:20], cold, *expired[20:], hot]
+    cold_position = len(expired) // 2
+    rows = [*expired[:cold_position], cold, *expired[cold_position:], hot]
     archive_store.save(
         path, {"entries": {key: {"cached_at": stamp, "conversations": rows}}},
         complete=True, sidebar_key=key, sidebar_pages=(version, server._archive_list_pack_static),
@@ -304,8 +305,8 @@ def test_packed_history_recovers_rows_that_aged_out_of_hot_snapshot(tmp_path, mo
             conn, key, stamp, version, overrides.copy(), 1 << 20, page_cache,
         )
         assert [row["session_id"] for row in packed] == [row["session_id"] for row in rows]
-        assert isinstance(packed[20], archive_sidebar_pages.StoredRow)
-        assert packed[:20] + packed[21:-1] == expired
+        assert isinstance(packed[cold_position], archive_sidebar_pages.StoredRow)
+        assert packed[:cold_position] + packed[cold_position + 1:-1] == expired
         assert packed[-1] is live
 
         packed_bytes = sum(weight for weight, _ in page_cache.values())

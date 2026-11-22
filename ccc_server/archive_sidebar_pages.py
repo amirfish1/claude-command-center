@@ -14,7 +14,8 @@ from ccc_server.archive_list_replay import pack_row_layouts
 _BUCKETS = 128
 _PAGE_MAX_BYTES = 4 << 20
 _ORDER_BATCH_ITEMS = 32768
-_MAX_UNPACKED_ROWS = 256
+_MAX_UNPACKED_ROWS = 1024
+_UNPACKED_QUERY_ROWS = 256
 
 
 class StoredRow(dict):
@@ -197,15 +198,17 @@ def read(con, key, cached_at, version, current, max_bytes, page_cache, *, check_
 
     ordered = _ordered_identities(con, key)
     missing = [rid for rid in ordered if rid not in current and rid not in decoded]
-    # Publication excludes then-hot rows. Some can age out of the live
-    # snapshot before the next publication, especially during a restart.
+    # A stale publication after restart can have hundreds of formerly hot
+    # rows. Recover them within the byte budget without unpacking the rest
+    # of the archive or exceeding SQLite's older parameter limit.
     if len(missing) > _MAX_UNPACKED_ROWS:
         return None
-    if missing:
-        marks = ",".join("?" for _ in missing)
+    for start in range(0, len(missing), _UNPACKED_QUERY_ROWS):
+        batch = missing[start:start + _UNPACKED_QUERY_ROWS]
+        marks = ",".join("?" for _ in batch)
         for rid, body in con.execute(
             f"SELECT identity,body FROM rows WHERE variant=? AND identity IN ({marks})",
-            (key, *missing),
+            (key, *batch),
         ):
             if check_client is not None:
                 check_client()
