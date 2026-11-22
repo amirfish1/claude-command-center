@@ -1,4 +1,5 @@
 import json
+import math
 import sqlite3
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -79,10 +80,15 @@ def test_indexed_preview_preserves_order_counts_and_live_context(tmp_path, monke
     )["conversations"]
     expected = server._overlay_conversation_lifecycle_flags(expected) + [overlay]
     normal = server._archive_list_initial_payload(expected, window="all", now=now, cached=True)
-    indexed = server._archive_list_indexed_initial_payload({}, phases={})
+    source_phases = {}
+    indexed = server._archive_list_indexed_initial_payload({}, phases={}, source_phases=source_phases)
     assert indexed is not None
     assert seen == server._archive_overlay_existing_ids(expected) - {"new-overlay"}
     assert json.dumps(indexed) == json.dumps(normal)
+    assert set(source_phases) == {"hot", "lifecycle", "index", "engine_overlays", "selection"}
+    for timing in source_phases.values():
+        assert set(timing) == {"wall_ms", "cpu_ms"}
+        assert all(value >= 0 for value in timing.values())
 
     # Older code can publish ordinary archive updates. A direct body write
     # with the original metadata timestamp must also invalidate the index.
@@ -102,6 +108,30 @@ def test_legacy_database_allows_index_fallback(tmp_path, monkeypatch):
                         lambda *args, **kwargs: (rows, True, 1))
     assert server._archive_list_indexed_initial_payload({}, phases={}) is None
 
+
+
+@pytest.mark.parametrize("include_boundary_hot", [False, True])
+def test_indexed_preview_hot_cutoff_preserves_ties_pins_and_deletions(tmp_path,
+                                                                 include_boundary_hot):
+    path = tmp_path / "archive.json"
+    key = "base"
+    colder = {"session_id": "colder", "mtime": math.nextafter(5, 0)}
+    tied = {"session_id": "tied", "mtime": 5}
+    pinned = {"session_id": "pinned", "mtime": 1, "pinned": True}
+    deleted = {"session_id": "deleted", "engine": "codex", "mtime": 20}
+    hot = [deleted, *({"session_id": f"hot-{i}", "mtime": 10} for i in range(499))]
+    if include_boundary_hot:
+        hot.append({"session_id": "boundary-hot", "mtime": 5})
+    archive_store.save(path, {"entries": {
+        key: {"cached_at": 20, "conversations": [colder, tied, pinned, *hot]},
+    }}, complete=True, sidebar_key=key)
+    overrides = {archive_store.identity(row): row for row in hot}
+    with archive_store._connect(path) as conn:
+        preview = archive_preview.Preview(conn, key, overrides, {"deleted"}, lambda row: row)
+        selected = [row["session_id"] for row in preview.select({}, {})]
+    assert selected == ["tied", "pinned", *(f"hot-{i}" for i in range(499))]
+    assert len(preview.items) == len(hot) + 2
+    assert preview.items[0][1] == (0 if include_boundary_hot else colder["mtime"])
 
 
 def test_signature_match_backfills_existing_sidebar_generation(tmp_path, monkeypatch):

@@ -4,11 +4,13 @@
 
 from collections import defaultdict
 import heapq
+from itertools import islice
 import json
 import math
 
 
 VERSION = 1
+_RECENT_ROWS = 500
 _MAX_BATCHED_EDGES = 8192
 _MAX_EDGE_BYTES = 512
 
@@ -156,13 +158,22 @@ class Preview:
         self.items = []
         self.sources = {}
         self.cold_positions = {}
+        # A cold row older than this many surviving hot rows cannot make the
+        # recent cut. Only sample a bounded prefix and keep exact timestamps
+        # for ties. Pins and family expansion still use every indexed row.
+        hot_stamps = heapq.nlargest(_RECENT_ROWS, (
+            activity(row) for row in islice(overrides.values(), 2 * _RECENT_ROWS)
+            if row.get("engine") != "codex" or _sid(row) not in deleted_codex
+        ))
+        cutoff = (hot_stamps[-1] or None) if len(hot_stamps) == _RECENT_ROWS else None
         # Use the same persisted order as the canonical override merge.
         # Position ties can occur after an incremental hot-only write.
         groups = con.execute("""
-            SELECT json_group_array(json_array(identity,sid,printf('%!.26g',activity),pinned,working,codex))
+            SELECT json_group_array(json_array(identity,sid,
+                CASE WHEN activity < ? THEN NULL ELSE printf('%!.26g',activity) END,pinned,working,codex))
             FROM (SELECT * FROM sidebar_preview_rows WHERE variant=? ORDER BY position,row_order)
             GROUP BY position/256 ORDER BY position/256
-        """, (key,))
+        """, (cutoff, key))
         for packed, in groups:
             for identity, sid, stamp, pinned, working, codex in json.loads(packed):
                 live = overrides.pop(identity, None)
@@ -170,7 +181,8 @@ class Preview:
                     self.append([live], deleted_codex=deleted_codex)
                 elif not codex or sid not in deleted_codex:
                     offset = len(self.items)
-                    self.items.append((sid, float(stamp), pinned, working, identity))
+                    self.items.append((sid, float(stamp) if stamp is not None else 0,
+                                       pinned, working, identity))
                     self.cold_positions[identity] = offset
         self.append(overrides.values(), deleted_codex=deleted_codex)
 
@@ -212,7 +224,7 @@ class Preview:
         return children
 
     def select(self, parents, ideas):
-        recent = set(heapq.nlargest(500, range(len(self.items)), key=lambda i: self.items[i][1]))
+        recent = set(heapq.nlargest(_RECENT_ROWS, range(len(self.items)), key=lambda i: self.items[i][1]))
         children = defaultdict(list)
         positions = {}
         historical = self.cold_positions

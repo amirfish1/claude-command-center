@@ -20234,7 +20234,7 @@ def _archive_list_initial_payload(rows, *, window="all", now=None, cached=None, 
     return payload
 
 
-def _archive_list_indexed_initial_payload(cache_options, *, phases):
+def _archive_list_indexed_initial_payload(cache_options, *, phases, source_phases=None):
     """Hydrate only selected All-preview rows from an indexed generation."""
     import sqlite3
     from ccc_server import archive_store
@@ -20249,38 +20249,43 @@ def _archive_list_indexed_initial_payload(cache_options, *, phases):
             if view is None:
                 return None
             connection, cached_at = view
-            hot_rows, from_cache, _ = _archive_serve_hot_rows_versioned(
-                key, cache_options, copy_rows=False, defer_cold=True)
+            with _archive_history_timing(source_phases, "hot"):
+                hot_rows, from_cache, _ = _archive_serve_hot_rows_versioned(
+                    key, cache_options, copy_rows=False, defer_cold=True)
             with _ARCHIVE_RESPONSE_CACHE_LOCK:
                 min_cached_at = float((_ARCHIVE_RESPONSE_CACHE.get(key) or {}).get("cached_at") or 0)
             if not hot_rows or cached_at < min_cached_at:
                 return None
-            lifecycle = _conversation_lifecycle_snapshot()
-            current = {}
-            for row in hot_rows:
-                sid = row.get("session_id") or row.get("id")
-                if not isinstance(sid, str) or not sid or sid.startswith("#"):
-                    return None
-                current[archive_store.identity(row)] = row
-
             def overlay_cold(row):
                 return _overlay_conversation_lifecycle_flags(
                     [row], copy_on_change=True, snapshot=lifecycle)[0]
 
-            # Keep deleted hot identities as overrides until the indexed merge
-            # has masked their persisted body, then drop the resulting row.
-            current = {identity: overlay_cold(row) if not (
-                row.get("engine") == "codex" and _archive_row_sid(row) in lifecycle[2]
-            ) else row for identity, row in current.items()}
-            preview = _archive_preview.Preview(connection, key, current, lifecycle[2], overlay_cold)
-            existing_ids = {item[0] for item in preview.items}
-            _, extra = _archive_list_source_overlays([], existing_ids, lambda _phase: None)
-            preview.append(extra)
-            parents = _session_graph.parent_snapshot()
-            ideas = _idea_tickets.idea_ticket_rows_map()
-            initial = preview.select(parents, ideas)
-            counts = preview.counts()
-            total_count = len(preview.items)
+            with _archive_history_timing(source_phases, "lifecycle"):
+                lifecycle = _conversation_lifecycle_snapshot()
+                current = {}
+                for row in hot_rows:
+                    sid = row.get("session_id") or row.get("id")
+                    if not isinstance(sid, str) or not sid or sid.startswith("#"):
+                        return None
+                    current[archive_store.identity(row)] = row
+
+                # Keep deleted hot identities as overrides until the index has
+                # masked their persisted body and can drop the resulting row.
+                current = {identity: overlay_cold(row) if not (
+                    row.get("engine") == "codex" and _archive_row_sid(row) in lifecycle[2]
+                ) else row for identity, row in current.items()}
+            with _archive_history_timing(source_phases, "index"):
+                preview = _archive_preview.Preview(connection, key, current, lifecycle[2], overlay_cold)
+            with _archive_history_timing(source_phases, "engine_overlays"):
+                existing_ids = {item[0] for item in preview.items}
+                _, extra = _archive_list_source_overlays([], existing_ids, lambda _phase: None)
+                preview.append(extra)
+            with _archive_history_timing(source_phases, "selection"):
+                parents = _session_graph.parent_snapshot()
+                ideas = _idea_tickets.idea_ticket_rows_map()
+                initial = preview.select(parents, ideas)
+                counts = preview.counts()
+                total_count = len(preview.items)
     except (OSError, ValueError, sqlite3.Error):
         return None
 
@@ -37435,12 +37440,17 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 return
             if initial and window == "all" and stale_ok and not any(cache_options.values()):
                 indexed_phases = {}
-                indexed = _archive_list_indexed_initial_payload(cache_options, phases=indexed_phases)
+                indexed_source = {}
+                with _archive_history_timing(indexed_source, "build"):
+                    indexed = _archive_list_indexed_initial_payload(
+                        cache_options, phases=indexed_phases, source_phases=indexed_source)
                 if indexed is not None:
-                    self.send_json(indexed)
+                    with _archive_history_timing(indexed_source, "send"):
+                        self.send_json(indexed)
                     record_diag("list_server", (time.perf_counter() - _lt0) * 1000.0, {
                         "window": window, "initial": True, "indexed": True, "status": 200,
                         "rows_src": indexed["total_count"], "projection": indexed_phases,
+                        "src": {"indexed_preview": indexed_source},
                         "cpu_ms": round((time.thread_time() - _lc0) * 1000.0, 1),
                     })
                     return
