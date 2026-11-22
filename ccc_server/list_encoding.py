@@ -114,8 +114,10 @@ def representation(raw, gzip_body, accept, *, encode_gzip=None, encodings=None):
     return raw, None
 
 
-def queue_representation(payload, accept, encoded):
-    """Negotiate and memoize each encoding of a full queue snapshot."""
+def snapshot_representation(payload, accept, encoded=None):
+    """Negotiate a full JSON snapshot, reusing encodings when retained."""
+    if encoded is None:
+        encoded = {}
     accepted = static_encoding.accepted_encodings(accept, supported=("zstd", "gzip"))
     raw = None
     for encoding in (*accepted, None):

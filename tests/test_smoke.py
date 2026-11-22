@@ -8,6 +8,7 @@ import inspect
 import ast
 import fcntl
 import gc
+import gzip
 from tests.dashboard_source import dashboard_source
 from tests.conversation_source import conversation_source, conversation_function, conversation_handler
 import json
@@ -11012,7 +11013,8 @@ class TestRepoContextHelpers(unittest.TestCase):
             with mock.patch.object(
                 self.server,
                 "_archive_all_rows_cached",
-                return_value=([{"session_id": "codex-1", "engine": "codex"}], True),
+                return_value=([{"session_id": "codex-1", "engine": "codex",
+                                "last_assistant_text": "a" * 2048}], True),
             ), mock.patch.object(
                 self.server,
                 "_archive_spawned_coalesced",
@@ -11041,6 +11043,21 @@ class TestRepoContextHelpers(unittest.TestCase):
                     compact_conversations = json.loads(res.read().decode("utf-8"))
                 self.assertEqual(compact_conversations["conversations"], body["sessions"])
                 self.assertNotIn("sessions", compact_conversations)
+
+                from ccc_server import list_encoding
+
+                url = base + "/api/conversations?all=1&engine=codex&compact=1"
+                req = urllib.request.Request(url, headers={"Accept-Encoding": "zstd, gzip"})
+                expected = json.dumps(compact_conversations).encode()
+                with mock.patch.object(list_encoding, "_zstd", side_effect=lambda raw: b"zstd:" + raw):
+                    with urllib.request.urlopen(req, timeout=5) as res:
+                        self.assertEqual(res.headers.get("Content-Encoding"), "zstd")
+                        self.assertEqual(res.headers.get("Vary"), "Accept-Encoding")
+                        self.assertEqual(res.read(), b"zstd:" + expected)
+                with mock.patch.object(list_encoding, "_zstd", return_value=None):
+                    with urllib.request.urlopen(req, timeout=5) as res:
+                        self.assertEqual(res.headers.get("Content-Encoding"), "gzip")
+                        self.assertEqual(gzip.decompress(res.read()), expected)
         finally:
             httpd.shutdown()
             httpd.server_close()

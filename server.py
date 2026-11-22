@@ -34870,7 +34870,11 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 }
                 if not compact:
                     payload["sessions"] = rows
-                self.send_json(payload)
+                from ccc_server.list_encoding import snapshot_representation
+
+                body, encoding = snapshot_representation(
+                    payload, self.headers.get("Accept-Encoding", ""))
+                self._write_json_response(200, body, encoding, None, None, vary_encoding=True)
                 return
             try:
                 ctx = require_repo_context(query=qs, allow_session=False)
@@ -48412,9 +48416,9 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         self._write_json_response(status, body, enc, etag_val, write_timeout)
 
     def _queue_list_response(self, data, encoded):
-        from ccc_server.list_encoding import queue_representation
+        from ccc_server.list_encoding import snapshot_representation
 
-        body, encoding = queue_representation(data, self.headers.get("Accept-Encoding", ""), encoded)
+        body, encoding = snapshot_representation(data, self.headers.get("Accept-Encoding", ""), encoded)
         return lambda: self._write_json_response(
             200, body, encoding, None, _QUEUE_LIST_WRITE_TIMEOUT, vary_encoding=True)
 
