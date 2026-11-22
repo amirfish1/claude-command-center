@@ -25,7 +25,7 @@
       touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;
     }
     #mobileTicketRecord:focus-visible { outline:2px solid var(--text); outline-offset:3px; }
-    #mobileTicketRecord[data-state="recording"] { background:var(--red, #ff8585); }
+    body.has-mobile-bottom-nav #mobileTicketRecord[data-state="recording"] { background:var(--red, #ff8585); }
     body.has-mobile-bottom-nav #mobileTicketRecordStatus:not([hidden]):not(:empty) {
       display:block; position:fixed; right:88px; max-width:calc(100vw - 112px);
       bottom:calc(var(--ccc-mobile-app-nav-height, 70px) + 20px); z-index:9401;
