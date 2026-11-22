@@ -7,6 +7,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
+const {functionSource} = require('./conversation-source.cjs');
 
 const app = require('./legacy-dashboard-source.cjs');
 const html = fs.readFileSync('static/index.html', 'utf8');
@@ -133,6 +134,44 @@ test('render parent lookups share storage reads and the next render observes edi
   assert.equal(ctx.f2EffectiveParentSessionId('origin', '', next), 'next');
   assert.equal(ctx.f2EffectiveParentSessionId('origin', '', first), 'later');
   assert.equal(reads, 4);
+});
+
+test('archive rendering indexes continuation parents once and preserves first-row precedence', () => {
+  let reads = 0;
+  const first = {
+    get session_id() { reads++; return ' parent '; },
+    continued_from_session_id: 'first-origin',
+  };
+  const duplicate = {session_id: 'parent', continued_from_session_id: 'duplicate-origin'};
+  const archived = {id: 'parent', continued_from_session_id: 'archived-origin'};
+  const archiveOnly = {id: ' archive-only ', continued_from_session_id: 'archive-only-origin'};
+  const sharedState = {conversationsData: [null, first, duplicate], archiveData: [archived, archiveOnly]};
+  const ctx = vm.createContext({sharedState});
+  vm.runInContext(
+    'let continuationRowsByPool = null;'
+      + functionSource('withContinuationRowLookup')
+      + functionSource('_continuationRowForSid')
+      + functionSource('continuationParentId')
+      + functionSource('continuationParentIdForSid'),
+    ctx,
+  );
+
+  const renderError = new Error('cancelled render');
+  assert.throws(() => ctx.withContinuationRowLookup(() => {
+    for (let i = 0; i < 5; i++) {
+      assert.equal(ctx.continuationParentIdForSid(' parent '), 'first-origin');
+      assert.equal(ctx.continuationParentIdForSid('archive-only'), 'archive-only-origin');
+      assert.equal(ctx.continuationParentIdForSid('missing'), '');
+    }
+    assert.equal(reads, 1);
+    throw renderError;
+  }), error => error === renderError);
+
+  sharedState.conversationsData.shift();
+  sharedState.conversationsData.shift();
+  assert.equal(ctx.continuationParentIdForSid('parent'), 'duplicate-origin');
+  sharedState.conversationsData = [];
+  assert.equal(ctx.withContinuationRowLookup(() => ctx.continuationParentIdForSid('parent')), 'archived-origin');
 });
 
 test('continuations replace the from chip with an expandable earlier-session list', () => {
