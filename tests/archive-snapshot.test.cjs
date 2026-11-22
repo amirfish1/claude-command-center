@@ -668,6 +668,44 @@ test('a stale All validator cannot adopt a 304 for a different IndexedDB base', 
   } finally {await context.close();}
 });
 
+test('a committed All header can validate while the saved rows are still reading', async () => {
+  const context = await browser.createBrowserContext();
+  const page = await context.newPage();
+  try {
+    await page.evaluateOnNewDocument(() => {
+      localStorage.setItem('ccc-archive-window', 'all');
+      if (!sessionStorage.getItem('slow-snapshot-read')) return;
+      const get = IDBObjectStore.prototype.get;
+      IDBObjectStore.prototype.get = function (key) {
+        const request = get.call(this, key);
+        if (key === 'last' && this.transaction.mode === 'readonly') {
+          Object.defineProperty(request, 'onsuccess', {
+            set(handler) {
+              request.addEventListener('success', () => {
+                setTimeout(() => handler.call(request), 750);
+              }, {once:true});
+            },
+          });
+        }
+        return request;
+      };
+    });
+    await page.goto(origin, {waitUntil:'load'});
+    await page.evaluate(rows => {
+      const snapshot = window.__cccArchiveSnapshot;
+      window.__cccArchiveSettled = true;
+      snapshot.save({url:snapshot.url, rows, delta:'valid'});
+    }, rows);
+    await waitForSnapshot(page, 'valid', 'last', 'all');
+    await page.evaluate(() => sessionStorage.setItem('slow-snapshot-read', '1'));
+    await page.reload({waitUntil:'load'});
+    assert.deepEqual(await page.evaluate(async () => {
+      const snapshot = window.__cccArchiveSnapshot;
+      return {rows:(await snapshot.read)?.rows, status:(await snapshot.fetch)?.status};
+    }), {rows, status:304});
+  } finally {await context.close();}
+});
+
 test('failed or malformed complete replies release the ordinary preview', async () => {
   const context=await browser.createBrowserContext(),page=await context.newPage();
   try {

@@ -126,7 +126,8 @@
     return new Promise(resolve => {
       let done = false;
       const finish = value => { if (!done) { done = true; clearTimeout(timer); resolveHeader(null); resolve(value); } };
-      const timer = setTimeout(() => finish(null), 500);
+      const savedBodyDeadline = performance.now() + 1500;
+      let timer = setTimeout(() => finish(null), 500);
       try {
         // Both reads share one transaction. A tiny validation header can start
         // the request while IndexedDB clones the complete rows onto the page.
@@ -135,12 +136,20 @@
         const meta = store.get('header');
         meta.onerror = () => resolveHeader(null);
         meta.onsuccess = () => {
+          if (done) return;
           savedHeader = validHeader(meta.result) ? meta.result : null;
+          if (windowName === 'all' && savedHeader) {
+            // A committed header can validate while the much larger All
+            // body finishes reading. A premature abort forces a full fetch.
+            clearTimeout(timer);
+            timer = setTimeout(() => finish(null), Math.max(0, savedBodyDeadline - performance.now()));
+          }
           resolveHeader(savedHeader);
         };
         const request = store.get('last');
         request.onerror = () => finish(null);
         request.onsuccess = () => {
+          if (done) return;
           let value = request.result;
           if (!validHeader(value)) { finish(null); return; }
           // Text avoids IndexedDB's recursive structured clone of every row.
