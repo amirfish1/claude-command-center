@@ -213,6 +213,14 @@ def launch_env(account_id, env=None):
         result['CCC_ANTIGRAVITY_PRIMARY_REQUIRED_ENV'] = json.dumps(required, separators=(',', ':'))
         result['CCC_ANTIGRAVITY_PRIMARY_HOME'] = result.get('HOME') or str(Path.home())
     result['CCC_ANTIGRAVITY_ACCOUNT_ID'] = account_id
+    if not result.get('AGY_CLI_AUTO_COMPACT_OVERRIDE'):
+        # agy applies this only to models whose /model entry offers a
+        # context-window choice; Gemini 4 models offer none (agy 1.5.14),
+        # so CCC's own compaction in antigravity_compact remains the backstop.
+        try:
+            result['AGY_CLI_AUTO_COMPACT_OVERRIDE'] = str(core._spawn_auto_compact_k_tokens())
+        except Exception:
+            pass
     result['CCC_ANTIGRAVITY_LS_DIR'] = str(Path(core.COMMAND_CENTER_STATE_DIR) / 'agy-ls')
     if not result.get('CCC_SERVER'):
         try:

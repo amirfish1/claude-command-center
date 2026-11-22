@@ -259,3 +259,12 @@ def test_secondary_preserves_native_watchtower_queues_and_defaults(runtime, tmp_
     for key in ('WATCHTOWER_DATA_DIR', 'WATCHTOWER_CONFIG_FILE',
                 'WATCHTOWER_CCC_SPAWN_DEFAULTS_FILE', 'WATCHTOWER_MODEL_POLICY_FILE'):
         assert nested[key] == overrides[key]
+
+
+def test_launch_env_passes_ccc_compact_limit_to_agy(runtime, monkeypatch):
+    accounts, server = runtime
+    monkeypatch.setattr(server, '_spawn_auto_compact_k_tokens', lambda: 250000)
+    assert accounts.launch_env('primary', {})['AGY_CLI_AUTO_COMPACT_OVERRIDE'] == '250000'
+    # An explicit operator value is kept.
+    env = accounts.launch_env('primary', {'AGY_CLI_AUTO_COMPACT_OVERRIDE': '40%'})
+    assert env['AGY_CLI_AUTO_COMPACT_OVERRIDE'] == '40%'
