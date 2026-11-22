@@ -1,5 +1,5 @@
 """Request-local topic reuse must preserve concurrent database corrections."""
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 import sqlite3
 from unittest.mock import patch
 
@@ -135,3 +135,30 @@ def test_cached_records_re_resolve_existing_children_when_root_edge_appears(stor
     topics.attach_topics(rows, conn=store, names={})
     assert rows[1]['continuation_topic_root_session_id'] == 'older'
     assert rows[1]['continuation_topic_title'] == 'Older topic'
+
+
+def test_busy_writer_reuses_reads_but_retries_pending_writes(store):
+    store.execute('PRAGMA journal_mode=WAL')
+    topics.attach_topics([{'session_id': 'root'}], conn=store, names={})
+    filename = store.execute('PRAGMA database_list').fetchone()[2]
+    with closing(sqlite3.connect(filename)) as writer:
+        writer.execute('BEGIN IMMEDIATE')
+        for title, expected_reads in [('First topic', 2), ('Current topic', 0)]:
+            rows = [
+                {'session_id': 'new-root', 'display_name': title},
+                {'session_id': 'new-child', 'continued_from_session_id': 'new-root'},
+            ]
+            diagnostics = {}
+            topics.attach_topics(rows, conn=store, names={}, diagnostics=diagnostics)
+            assert diagnostics['miss_detail']['writer_busy']
+            assert diagnostics['miss_detail']['prefetch_rows'] == expected_reads
+            assert rows[1]['continuation_topic_title'] == title
+            assert store.execute("SELECT count(*) FROM continuation_topics").fetchone() == (1,)
+        writer.execute(
+            "INSERT INTO continuation_topics VALUES ('new-root', '', 'new-root', 'User title', 1)")
+        writer.commit()
+    topics.attach_topics(rows, conn=store, names={})
+    assert rows[1]['continuation_topic_title'] == 'User title'
+    persisted = store.execute(
+        "SELECT root_sid, topic_title FROM continuation_topics WHERE sid='new-child'").fetchone()
+    assert persisted == ('new-root', 'User title')

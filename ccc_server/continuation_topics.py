@@ -336,11 +336,15 @@ class _Batch:
         self.cached_titles = None
         self.titles = {}
         self.pending = {}
+        self.original_records = {}
         self.allow_native_lookup = True
         self.capture_root_titles = False
         self.ancestors = set()
+        self.read_token = None
         if reuse_cached:
             token = _db_state_token(conn)
+            if not conn.in_transaction:
+                self.read_token = token
             with _CACHE_LOCK:
                 previous = _TOPIC_CACHE.get('token')
                 if token is not None and previous is not None and previous[:-1] == token[:-1]:
@@ -420,6 +424,8 @@ class _Batch:
         value = (origin, root, title, user_named)
         previous = self.record(sid)
         if previous != value:
+            if self.read_token is not None:
+                self.original_records.setdefault(sid, previous)
             self.pending[sid] = value
             self.records[sid] = value
 
@@ -718,6 +724,29 @@ def _store_cache(conn, batch, rows, *, miss_detail=None):
             miss_detail['omitted_rows'] = omitted_rows
 
 
+def _store_busy_writer_inputs(conn, batch, read_version):
+    # Reuse committed inputs while the writer is occupied. The next request
+    # can resolve the current titles and retry its writes.
+    token = batch.read_token
+    if token is None:
+        return
+    try:
+        version = conn.total_changes, conn.execute('PRAGMA data_version').fetchone()[0]
+    except sqlite3.OperationalError:
+        return
+    if read_version != version:
+        return
+    current = _db_state_token(conn)
+    if current is None or current[:-1] != token[:-1]:
+        return
+    with _CACHE_LOCK:
+        previous = _TOPIC_CACHE.get('token')
+        if previous is None or previous[:-1] != current[:-1]:
+            _TOPIC_CACHE.update(token=current, entries={}, records={}, indexed_origins={})
+        _TOPIC_CACHE['records'].update(batch.records | batch.original_records)
+        _TOPIC_CACHE['indexed_origins'].update(batch.indexed_origins)
+
+
 def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnostics=None):
     """Project topics without waiting behind the ship index's bulk writer.
 
@@ -785,6 +814,7 @@ def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnos
             raise
         if miss_detail is not None:
             miss_detail['writer_busy'] = True
+        _store_busy_writer_inputs(conn, batch, read_version)
     if flushed and not wait_for_writer:
         _store_cache(conn, current, rows, miss_detail=miss_detail)
 
