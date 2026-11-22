@@ -663,7 +663,9 @@ def test_topic_cache_reuses_projection_with_preopened_ship_index(store, monkeypa
         new_child = row('new-child', origin='child')
         diagnostics = {}
         topics.attach_topics([row('child'), new_child], names={}, diagnostics=diagnostics)
-        assert diagnostics == {'hit': False, 'reason': 'new-session'}
+        assert diagnostics['hit'] is False
+        assert diagnostics['reason'] == 'new-session'
+        assert diagnostics['miss_detail']['missing_rows'] == 1
         assert new_child['continuation_topic_root_session_id'] == 'root'
         assert reader.execute(
             'SELECT origin, root_sid FROM continuation_topics WHERE sid=?',

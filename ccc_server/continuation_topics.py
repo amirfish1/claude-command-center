@@ -324,7 +324,8 @@ def _native_title(sid):
 
 
 class _Batch:
-    def __init__(self, conn, rows, names, *, reuse_cached=False, rows_by_sid=None):
+    def __init__(self, conn, rows, names, *, reuse_cached=False, rows_by_sid=None,
+                 miss_detail=None):
         self.conn = conn
         self.rows = (rows_by_sid if rows_by_sid is not None else
                      {sid: row for row in rows if (sid := _sid(row))})
@@ -349,7 +350,10 @@ class _Batch:
                     # this database token. External titles remain live inputs.
                     self.records = dict(_TOPIC_CACHE.get('records') or {})
                     self.indexed_origins = dict(_TOPIC_CACHE.get('indexed_origins') or {})
-        self._prefetch([sid for sid in self.rows if sid not in self.records])
+        missing = [sid for sid in self.rows if sid not in self.records]
+        if miss_detail is not None:
+            miss_detail['prefetch_rows'] = miss_detail.get('prefetch_rows', 0) + len(missing)
+        self._prefetch(missing)
 
     def _prefetch(self, sids, chunk=500):
         # Read both indexed inputs in one bounded result. Separate reads of
@@ -569,12 +573,25 @@ def _project_topics(batch, rows):
 
 
 def _try_attach_from_cache(rows, conn, names, diagnostics=None, *, rows_by_sid=None):
+    if diagnostics is not None:
+        diagnostics.pop('miss_detail', None)
+
     def miss(reason, changed=()):
         if diagnostics is not None:
             diagnostics.update(hit=False, reason=reason)
             if changed:
                 diagnostics['changed'] = changed
         return False
+
+    def miss_new_session(entries):
+        if diagnostics is not None:
+            # A preview can seed only a small fraction of a full request.
+            # Count the gap before the fallback replaces those cache entries.
+            diagnostics['miss_detail'] = {
+                'cached_entries': len(entries),
+                'missing_rows': sum(1 for item in rows if (sid := _sid(item)) and sid not in entries),
+            }
+        return miss('new-session')
 
     token = _db_state_token(conn)
     if token is None:
@@ -590,7 +607,7 @@ def _try_attach_from_cache(rows, conn, names, diagnostics=None, *, rows_by_sid=N
         if not entries:
             return miss('empty')
         if rows_by_sid is not None and not (rows_by_sid.keys() <= entries.keys()):
-            return miss('new-session')
+            return miss_new_session(entries)
         resolved_names = None
         external_titles = None
         staged = []
@@ -601,7 +618,7 @@ def _try_attach_from_cache(rows, conn, names, diagnostics=None, *, rows_by_sid=N
                 continue
             entry = entries.get(sid)
             if entry is None:
-                return miss('new-session')
+                return miss_new_session(entries)
             accepted_origins, has_persisted_title, root, topic_title = entry
             if _origin(item) not in accepted_origins:
                 return miss('origin-changed')
@@ -657,7 +674,7 @@ def _try_attach_from_cache(rows, conn, names, diagnostics=None, *, rows_by_sid=N
     return True
 
 
-def _store_cache(conn, batch, rows):
+def _store_cache(conn, batch, rows, *, miss_detail=None):
     token = _db_state_token(conn)
     if token is None:
         return
@@ -672,6 +689,7 @@ def _store_cache(conn, batch, rows):
         _TOPIC_CACHE['records'] = dict(batch.records)
         _TOPIC_CACHE['indexed_origins'] = dict(batch.indexed_origins)
         entries = _TOPIC_CACHE['entries']
+        omitted_rows = 0
         for item in rows:
             sid = _sid(item)
             if not sid:
@@ -691,10 +709,13 @@ def _store_cache(conn, batch, rows):
                     if (origin != root or canonical[:3] != ('', root, '')
                             or batch.indexed_origin(root) or _origin(batch.rows.get(root, {}))):
                         entries.pop(sid, None)
+                        omitted_rows += 1
                         continue
                 entries[sid] = (accepted_origins, True, root, topic_title)
             else:
                 entries[sid] = (accepted_origins, bool(persisted_title), '', '')
+        if miss_detail is not None:
+            miss_detail['omitted_rows'] = omitted_rows
 
 
 def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnostics=None):
@@ -727,14 +748,17 @@ def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnos
     conn = _connection(conn)
     names = _core._load_session_name_overrides() if names is None else names
     read_version = (conn.total_changes, conn.execute('PRAGMA data_version').fetchone()[0])
-    batch = _Batch(conn, rows, names, reuse_cached=not wait_for_writer, rows_by_sid=rows_by_sid)
+    miss_detail = (diagnostics.get('miss_detail') if diagnostics is not None
+                   and diagnostics.get('reason') == 'new-session' else None)
+    batch = _Batch(conn, rows, names, reuse_cached=not wait_for_writer, rows_by_sid=rows_by_sid,
+                   miss_detail=miss_detail)
     batch.capture_root_titles = wait_for_writer
     # Native title reads may perform I/O. Never do them while holding the
     # shared index's writer lock, including on a cold archive projection.
     _project_topics(batch, rows)
     if not batch.pending:
         if not wait_for_writer:
-            _store_cache(conn, batch, rows)
+            _store_cache(conn, batch, rows, miss_detail=miss_detail)
         return
     flushed = False
     try:
@@ -747,7 +771,9 @@ def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnos
             if read_version == (conn.total_changes, conn.execute('PRAGMA data_version').fetchone()[0]):
                 current = batch
             else:
-                current = _Batch(conn, rows, names)
+                if miss_detail is not None:
+                    miss_detail['writer_retry'] = True
+                current = _Batch(conn, rows, names, miss_detail=miss_detail)
                 current.allow_native_lookup = False
                 current.titles = batch.titles
                 current.cached_titles = batch.cached_titles
@@ -757,8 +783,10 @@ def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnos
     except sqlite3.OperationalError as exc:
         if wait_for_writer or getattr(exc, 'sqlite_errorcode', None) != sqlite3.SQLITE_BUSY:
             raise
+        if miss_detail is not None:
+            miss_detail['writer_busy'] = True
     if flushed and not wait_for_writer:
-        _store_cache(conn, current, rows)
+        _store_cache(conn, current, rows, miss_detail=miss_detail)
 
 
 def record_continuation(origin, sid, *, title='', conn=None):

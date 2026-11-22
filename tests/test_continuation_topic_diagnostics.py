@@ -61,12 +61,18 @@ def test_metadata_title_discovery_names_only_the_changed_dependency(store):
     assert store.execute("SELECT topic_title FROM continuation_topics WHERE sid='private-root'").fetchone()[0] == 'PRIVATE TITLE'
 
 
-def test_new_row_is_not_misreported_as_database_invalidation(store):
-    warm([{'session_id': 'existing'}])
+def test_new_session_diagnostics_count_missing_rows_without_exposing_ids(store):
+    warm([{'session_id': 'private-existing'}])
     detail = {}
-    topics.attach_topics([{'session_id': 'existing'}, {'session_id': 'new'}],
+    topics.attach_topics([{'session_id': 'private-existing'}, {'session_id': 'private-new'},
+                         {'session_id': 'private-new'}, {}],
                          names={}, diagnostics=detail)
-    assert detail == {'hit': False, 'reason': 'new-session'}
+    assert detail == {
+        'hit': False, 'reason': 'new-session',
+        'miss_detail': {'cached_entries': 1, 'missing_rows': 2,
+                        'prefetch_rows': 1, 'omitted_rows': 0},
+    }
+    assert 'private' not in json.dumps(detail)
 
 
 def test_small_cache_miss_keeps_established_entries_after_fallback_churn(store):
