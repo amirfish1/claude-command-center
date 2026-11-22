@@ -17300,10 +17300,13 @@ def _archive_refresh_read(key, **options):
     import sqlite3
 
     try:
-        data = archive_store.load(_ARCHIVE_RESPONSE_CACHE_FILE, key=key, **options)
+        restore_maps = options.get("metadata_only", False)
+        data = archive_store.load(
+            _ARCHIVE_RESPONSE_CACHE_FILE, key=key, include_signature_maps=restore_maps, **options,
+        )
         if (data and data.get("schema_version") == _ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION
                 and data.get("build_id") == _ARCHIVE_RESPONSE_CACHE_BUILD_ID):
-            if options.get("row_index") or options.get("metadata_only"):
+            if restore_maps:
                 _archive_restore_signature_maps(data)
             return data["entries"].get(key)
     except (OSError, ValueError, sqlite3.Error) as exc:
