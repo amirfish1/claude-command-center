@@ -170,7 +170,7 @@ def history_representation(payload, accept, validator, *, diagnostics=None, fing
         payload = dict(payload, conversations=rows, row_layouts=layouts)
     raw = archive_list_replay.encode_payload(
         payload, packed_runs=packed_runs if row_layouts and packed_rows is not None else None,
-        check_client=check_client)
+        compact=row_layouts, check_client=check_client)
     if check_client is not None:
         check_client()
     etag = '"' + hashlib.sha1(raw).hexdigest() + '"'

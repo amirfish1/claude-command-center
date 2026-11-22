@@ -30,6 +30,7 @@ _RUN_BOUNDARY_MASK = 63
 # Bound how many packed value arrays a conditional history request retains.
 # Larger responses still use the original run guard and pack only to send.
 _HISTORY_PACK_MAX_ROWS = 32768
+_COMPACT_JSON = json.JSONEncoder(separators=(",", ":"))
 
 
 class _GuardPickler(pickle.Pickler):
@@ -136,10 +137,10 @@ def _packed_history_fragments(rows, runs, check_client):
         key = (digest, slots)
         raw = _PACKED_RUN_CACHE.get(key)
         if raw is None:
-            raw = json.dumps(group).encode()[1:-1]
+            raw = _COMPACT_JSON.encode(group).encode()[1:-1]
             _PACKED_RUN_CACHE.put(key, raw, len(raw) + 224 + 32 * len(slots))
         if start:
-            chunks.append(b", ")
+            chunks.append(b",")
         chunks.append(raw)
     chunks.append(b"]")
     return chunks
@@ -271,21 +272,24 @@ def encode_gzip_payload(payload, raw=None):
                      b'\x03\x00', struct.pack('<II', zlib.crc32(raw), len(raw) & 0xffffffff)))
 
 
-def encode_payload(payload, *, packed_runs=None, check_client=None):
+def encode_payload(payload, *, packed_runs=None, compact=False, check_client=None):
+    compact = compact or packed_runs is not None
+    encode = _COMPACT_JSON.encode if compact else json.dumps
     if packed_runs is None and not isinstance(payload, EncodedListPayload):
-        return json.dumps(payload).encode()
+        return encode(payload).encode()
+    item_separator, key_separator = (b',', b':') if compact else (b', ', b': ')
     chunks = [b'{']
     for index, (key, value) in enumerate(payload.items()):
         if index:
-            chunks.append(b', ')
-        chunks.extend((json.dumps(key).encode(), b': '))
+            chunks.append(item_separator)
+        chunks.extend((encode(key).encode(), key_separator))
         if key == 'conversations':
             if packed_runs is None:
                 chunks.append(payload.conversations_json)
             else:
                 chunks.extend(_packed_history_fragments(value, packed_runs, check_client))
         else:
-            chunks.append(json.dumps(value).encode())
+            chunks.append(encode(value).encode())
     chunks.append(b'}')
     return b''.join(chunks)
 
