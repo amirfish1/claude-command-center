@@ -6,6 +6,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 import gzip
 import hashlib
+from itertools import chain
 import json
 import os
 from pathlib import Path
@@ -408,13 +409,17 @@ class Changes:
         self.dirty = None
         if valid:
             self.dirty = set(self.removed)
+            previous_source = previous.sources.get
             self.dirty.update(sid for sid, source in current.sources.items()
-                              if previous.sources.get(sid) != source)
+                              if previous_source(sid) != source)
             for old, new in zip(previous.overlays, current.overlays):
                 if old != new:
-                    self.dirty.update(sid for sid in old.keys() | new.keys() if old.get(sid) != new.get(sid))
-            self.add_edges(previous.edges)
-            self.add_edges(current.edges)
+                    old_value = old.get
+                    self.dirty.update(sid for sid, value in new.items() if old_value(sid) != value)
+                    self.dirty.update(sid for sid in old.keys() - new.keys() if old[sid] is not None)
+            # An edge observed in both cuts only needs one insertion. Keep
+            # edges unique to either cut so removals still dirty their family.
+            self.add_edges(set(chain(previous.edges, current.edges)))
 
     def add_edges(self, edges):
         for first, second in edges:
