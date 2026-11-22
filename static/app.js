@@ -56162,6 +56162,107 @@
   setTimeout(remeasure);
 })();
 
+// Phones: the reader toolbar (last message + speaker) above the transcript
+// scrolls away with it, like the session list header. It overlays the top of
+// the transcript instead of sitting in a grid row, so hiding it never moves or
+// resizes the scroller: iOS ends a momentum flick when that happens. Scroll
+// events only translate and clip it. It hides as you scroll either way and
+// slides back in over the last stretch above the latest message (and at the
+// very top), always 1:1 with the content.
+(function initMobileReaderScrollaway() {
+  const query = matchMedia('(max-width: 1200px)');
+  const body = document.body;
+  const STICKY = ['conv-sticky-header', 'conv-live-tool-strip', 'conv-cache-preview'];
+  const tracked = new Set();
+  const toolbarOf = pane => pane?.querySelector(':scope > .conv-presentation-toolbar');
+  const viewOf = pane => pane?.querySelector(':scope > .conversations-view');
+  // Sticky items already stick below the transcript's top padding (the
+  // toolbar's height); follow the toolbar up as it slides away.
+  const setSticky = (view, shift) => {
+    for (const cls of STICKY) for (const el of view.getElementsByClassName(cls)) {
+      const top = shift ? -shift + 'px' : '';
+      if (el.style.top !== top) el.style.top = top;
+    }
+  };
+  const clearSticky = view => {
+    for (const cls of STICKY) for (const el of view.getElementsByClassName(cls)) el.style.top = '';
+  };
+  const reset = (pane, bar, view) => {
+    pane.classList.remove('reader-scrollaway');
+    pane.style.removeProperty('--ctb-h');
+    if (bar) { bar.style.transform = ''; bar.style.clipPath = ''; bar.inert = false; }
+    if (view) { clearSticky(view); view._ctb = null; }
+  };
+  const applyShift = view => {
+    const state = view._ctb;
+    if (!state) return;
+    const top = view.scrollTop;
+    const dist = Math.max(0, view.scrollHeight - view.clientHeight - top);
+    state.hidden = Math.min(state.height, state.hidden + Math.abs(top - state.last));
+    state.last = top;
+    const focused = state.bar.contains(document.activeElement);
+    const shift = focused ? 0 : Math.round(Math.min(state.hidden, dist, Math.max(0, top)));
+    if (dist <= 0 || top <= 0) state.hidden = shift;
+    if (shift === state.shift) return;
+    state.shift = shift;
+    state.bar.style.transform = shift ? `translate3d(0,${-shift}px,0)` : '';
+    state.bar.style.clipPath = shift ? `inset(${shift}px 0 0 0)` : '';
+    state.bar.inert = shift >= state.height;
+    setSticky(view, shift);
+  };
+  // Runs only on toolbar size/class changes and viewport changes, never per scroll.
+  const measure = pane => {
+    const bar = toolbarOf(pane);
+    const view = viewOf(pane);
+    if (!bar || !view || !pane.isConnected) { tracked.delete(pane); return reset(pane, bar, view); }
+    const height = bar.offsetHeight;
+    const ok = query.matches && height > 0 && bar.classList.contains('is-reader-only')
+      && getComputedStyle(pane).display === 'grid';
+    if (!ok) return reset(pane, bar, view);
+    const prev = view._ctb?.height || 0;
+    if (!pane.classList.contains('reader-scrollaway')) pane.classList.add('reader-scrollaway');
+    pane.style.setProperty('--ctb-h', height + 'px');
+    // Keep the reading position when the padding above the transcript grows.
+    if (prev && height !== prev && view.scrollTop > 0) view.scrollTop += height - prev;
+    view._ctb = {bar, height, hidden: view._ctb?.hidden || 0, last: view.scrollTop, shift: -1};
+    applyShift(view);
+  };
+  const sizes = new ResizeObserver(entries => {
+    for (const entry of entries) { const pane = entry.target.parentElement; if (pane) measure(pane); }
+  });
+  const classes = new MutationObserver(records => {
+    for (const r of records) { const pane = r.target.parentElement; if (pane) measure(pane); }
+  });
+  const track = pane => {
+    if (!pane || tracked.has(pane)) return;
+    const bar = toolbarOf(pane);
+    if (!bar) return;
+    tracked.add(pane);
+    sizes.observe(bar);
+    classes.observe(bar, {attributes: true, attributeFilter: ['class', 'hidden']});
+    measure(pane);
+  };
+  const scan = () => { for (const pane of document.querySelectorAll('.conv-pane')) track(pane); };
+  document.addEventListener('scroll', event => {
+    const view = event.target;
+    if (!view.classList?.contains('conversations-view')) return;
+    if (!view._ctb) { track(view.parentElement); return; }
+    applyShift(view);
+  }, {capture: true, passive: true});
+  const refocus = event => {
+    const pane = event.target.closest?.('.conv-pane.reader-scrollaway');
+    const view = viewOf(pane);
+    if (view?._ctb) { view._ctb.shift = -1; applyShift(view); }
+  };
+  document.addEventListener('focusin', refocus);
+  document.addEventListener('focusout', () => setTimeout(() => {
+    for (const pane of tracked) { const view = viewOf(pane); if (view?._ctb) { view._ctb.shift = -1; applyShift(view); } }
+  }));
+  query.addEventListener('change', () => { for (const pane of [...tracked]) measure(pane); scan(); });
+  new MutationObserver(scan).observe(document.getElementById('convSplit') || body, {childList: true});
+  scan();
+})();
+
 // CI, usage and savings share one header line on phones and desktop.
 (function initMobileHomeStatus() {
   const header = document.querySelector('.sidebar-header');

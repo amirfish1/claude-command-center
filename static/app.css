@@ -36517,3 +36517,12 @@ body.ccc-app-embed.conversation-popout .main > .toolbar {
   background-image: linear-gradient(90deg, #1f2328 0%, #0969da 42%, #8250df 74%, #1a7f37 100%);
   text-shadow: none;
 }
+
+/* Phones: reader toolbar scrolls away over the transcript (initMobileReaderScrollaway).
+   Absolutely positioned inside its own grid area, so it stays put above the
+   transcript while the transcript's box never moves when it hides. */
+.conv-pane.reader-scrollaway > .conv-presentation-toolbar {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 10;
+  background: color-mix(in srgb, var(--surface) 72%, var(--bg));
+}
+.conv-pane.reader-scrollaway > .conversations-view { padding-top: var(--ctb-h, 0px); scroll-padding-top: var(--ctb-h, 0px); }

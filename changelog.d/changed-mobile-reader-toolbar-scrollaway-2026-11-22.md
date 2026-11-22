@@ -1,0 +1,1 @@
+- On phones, the read-aloud and last-message row above a session now scrolls away while you read back through the transcript and slides back in at the latest message, without interrupting momentum scrolling.

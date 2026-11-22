@@ -47,6 +47,9 @@ const fixture = `
       bubbleBottom: visible ? Math.round(bubble.getBoundingClientRect().bottom) : null,
       bubbleRight: visible ? Math.round(bubble.getBoundingClientRect().right) : null,
       viewTop: Math.round(view.getBoundingClientRect().top),
+      // Phones overlay the read-aloud row on the transcript and reserve its
+      // height as top padding (initMobileReaderScrollaway).
+      overlay: view.parentElement.classList.contains('reader-scrollaway') ? parseFloat(getComputedStyle(view).paddingTop) : 0,
     };
   };
   window.__frozenAskToolbar = (show) => {
@@ -121,10 +124,10 @@ const fixture = `
       const docked = await at('Third question');
       assert.equal(docked.visible, true, 'the ask still shows with the read-aloud row');
       assert.equal(docked.docked, true, 'it sits in the read-aloud row');
-      assert.ok(docked.bubbleBottom <= docked.viewTop, 'it no longer covers transcript text');
+      assert.ok(docked.bubbleBottom <= docked.viewTop + docked.overlay, 'it no longer covers transcript text');
       assert.ok(row.dockLeft != null && docked.bubbleRight <= row.dockLeft, 'it stays left of the speaker controls');
       assert.equal((await page.evaluate(() => window.__frozenAskToolbar(true))).height, row.height, 'the row does not grow');
-      assert.equal(docked.scrollHeight, bottom.scrollHeight, 'docking never changes the scroll height');
+      assert.equal(docked.scrollHeight - docked.overlay, bottom.scrollHeight, 'docking never changes the scroll height');
       if (process.env.CCC_FROZEN_ASK_SHOTS) await page.screenshot({path:'/tmp/ccc-frozen-ask-docked-' + width + '.png'});
       assert.equal((await at('end')).visible, false, 'the docked ask is released at the end');
       await page.evaluate(() => window.__frozenAskToolbar(false));
