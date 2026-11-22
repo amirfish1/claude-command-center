@@ -734,12 +734,36 @@ def test_reattached_zombie_checks_share_one_process_state_scan(monkeypatch):
     assert server._pid_is_zombie(33333) is False
     assert calls == [["ps", "-A", "-o", "pid=,stat="]]
 
+def test_archive_holder_sample_skips_only_the_fresh_status_probe(monkeypatch):
+    from ccc_server import codex
+
+    now = time.time()
+    holders = [{"pid": 24, "command": "codex", "file": "state.sqlite"}]
+    monkeypatch.setattr(codex, "_CODEX_SHARED_STATE_HOLDER_CACHE",
+                        {"ts": now, "sampled_at": now, "holders": holders})
+    sample = codex._codex_archive_holder_sample()
+    assert sample == {"sampled_at": now, "holders": holders}
+
+    monkeypatch.setattr(codex, "_CODEX_SHARED_STATE_HOLDER_CACHE",
+                        {"ts": 0.0, "sampled_at": 0.0, "holders": None})
+    monkeypatch.setattr(codex, "_CODEX_ARCHIVE_HOLDER_SAMPLE", None)
+    assert codex._seed_codex_archive_holders(sample)
+    probes = _count_calls(monkeypatch, "_codex_shared_state_db_holders", passthrough_return=[])
+    assert codex._codex_shared_state_db_holders_stale_ok(now + 1) == holders
+    assert not probes
+    assert codex._CODEX_SHARED_STATE_HOLDER_CACHE["holders"] is None
+    assert codex._codex_shared_state_db_holders_stale_ok(now + 6) == []
+    assert len(probes) == 1
+
+
 def test_archive_rehydrate_skips_liveness_for_old_rows(monkeypatch):
     """Warm cached-serve path: ungated probing here was the ~10s/load bug."""
     old_mtime = time.time() - 30 * 86400
     rows = [{"session_id": str(uuid.uuid4()), "mtime": old_mtime} for _ in range(300)]
     calls = _count_calls(monkeypatch, "_archive_session_is_live", passthrough_return=False)
+    marker_reads = _count_calls(monkeypatch, "_load_spawn_markers", passthrough_return={})
     server._rehydrate_archive_cached_rows(rows)
+    assert len(marker_reads) == 1
     assert len(calls) <= 10, (
         f"_archive_session_is_live called {len(calls)}x for 300 old rows — "
         "the rehydrate liveness gate regressed"

@@ -812,7 +812,7 @@ def _codex_shared_state_db_files():
     ]
 
 
-_CODEX_SHARED_STATE_HOLDER_CACHE = {"ts": 0.0, "holders": None}
+_CODEX_SHARED_STATE_HOLDER_CACHE = {"ts": 0.0, "sampled_at": 0.0, "holders": None}
 _CODEX_SHARED_STATE_HOLDER_LOCK = threading.Lock()
 _CODEX_SHARED_STATE_HOLDER_TTL_S = 5.0
 
@@ -1008,7 +1008,7 @@ def _codex_shared_state_db_holders(now=None, force=False):
         if not force and now - _CODEX_SHARED_STATE_HOLDER_CACHE["ts"] < _CODEX_SHARED_STATE_HOLDER_TTL_S:
             cached = _CODEX_SHARED_STATE_HOLDER_CACHE["holders"]
             return list(cached) if cached is not None else []
-        _CODEX_SHARED_STATE_HOLDER_CACHE["ts"] = now
+        _CODEX_SHARED_STATE_HOLDER_CACHE.update(ts=now, sampled_at=0.0)
     files = [str(p) for p in _codex_shared_state_db_files() if p.exists()]
     if not files:
         with _CODEX_SHARED_STATE_HOLDER_LOCK:
@@ -1069,8 +1069,35 @@ def _codex_shared_state_db_holders(now=None, force=False):
             unique.append(h)
     unique = _codex_filter_own_ccc_holders(unique)
     with _CODEX_SHARED_STATE_HOLDER_LOCK:
-        _CODEX_SHARED_STATE_HOLDER_CACHE["holders"] = unique
+        _CODEX_SHARED_STATE_HOLDER_CACHE.update(holders=unique, sampled_at=now)
     return unique
+
+
+def _codex_archive_holder_sample():
+    """Copy a completed sample for the dashboard's one-shot archive child."""
+    with _CODEX_SHARED_STATE_HOLDER_LOCK:
+        sampled_at = _CODEX_SHARED_STATE_HOLDER_CACHE["sampled_at"]
+        holders = _CODEX_SHARED_STATE_HOLDER_CACHE["holders"]
+        if holders is not None and 0 <= time.time() - sampled_at < _CODEX_SHARED_STATE_HOLDER_TTL_S:
+            return {"sampled_at": sampled_at, "holders": list(holders)}
+    return None
+
+
+_CODEX_ARCHIVE_HOLDER_SAMPLE = None
+
+
+def _seed_codex_archive_holders(sample):
+    """Share a still-fresh sample with the archive status reader."""
+    global _CODEX_ARCHIVE_HOLDER_SAMPLE
+    if not isinstance(sample, dict):
+        return False
+    sampled_at = sample.get("sampled_at")
+    holders = sample.get("holders")
+    if (not isinstance(sampled_at, (int, float)) or not isinstance(holders, list)
+            or not 0 <= time.time() - sampled_at < _CODEX_SHARED_STATE_HOLDER_TTL_S):
+        return False
+    _CODEX_ARCHIVE_HOLDER_SAMPLE = (sampled_at, holders)
+    return True
 
 
 _CODEX_SHARED_STATE_HOLDER_REFRESH_INFLIGHT = False
@@ -1088,6 +1115,10 @@ def _codex_shared_state_db_holders_stale_ok(now=None):
     """
     global _CODEX_SHARED_STATE_HOLDER_REFRESH_INFLIGHT
     now = time.time() if now is None else float(now)
+    if _CODEX_ARCHIVE_HOLDER_SAMPLE is not None:
+        sampled_at, holders = _CODEX_ARCHIVE_HOLDER_SAMPLE
+        if 0 <= now - sampled_at < _CODEX_SHARED_STATE_HOLDER_TTL_S:
+            return list(holders)
     with _CODEX_SHARED_STATE_HOLDER_LOCK:
         cached = _CODEX_SHARED_STATE_HOLDER_CACHE["holders"]
         fresh = now - _CODEX_SHARED_STATE_HOLDER_CACHE["ts"] < _CODEX_SHARED_STATE_HOLDER_TTL_S
@@ -4497,8 +4528,7 @@ def _codex_app_server_shutdown():
         _core._CODEX_APP_SERVER_INITIALIZING = False
         _core._CODEX_APP_SERVER_LOCK.notify_all()
     with _CODEX_SHARED_STATE_HOLDER_LOCK:
-        _CODEX_SHARED_STATE_HOLDER_CACHE["ts"] = 0.0
-        _CODEX_SHARED_STATE_HOLDER_CACHE["holders"] = None
+        _CODEX_SHARED_STATE_HOLDER_CACHE.update(ts=0.0, sampled_at=0.0, holders=None)
     if transport is not None:
         transport.close()
 

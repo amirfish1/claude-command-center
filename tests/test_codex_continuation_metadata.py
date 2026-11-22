@@ -84,7 +84,7 @@ def test_cached_codex_origin_survives_registry_pruning(tmp_path, monkeypatch):
     for name in ['_apply_pinned_conversation_fields', '_sort_pinned_conversations_first',
                  '_apply_session_lane_overrides', '_apply_spawn_markers', '_stamp_archive_state',
                  '_stamp_archive_goals', '_apply_watchtower_worker_display_names']:
-        monkeypatch.setattr(server, name, lambda *a: None)
+        monkeypatch.setattr(server, name, lambda *a, **kw: None)
     for preserved_origin in ['', origin]:
         rows = server._rehydrate_archive_cached_rows([{
             'session_id': 'child-session-123', 'engine': 'codex', 'mtime': 1,

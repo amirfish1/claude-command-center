@@ -6230,7 +6230,7 @@ def _load_spawn_markers_locked(now, marker_dir):
         # thread re-stat the files. A stat per marker is a GIL hand-off each,
         # which is what made the first post-restart list take 15s+.
         out = {
-            Path(path).name[: -len(".json")].strip(): dict(marker)
+            os.path.basename(path)[: -len(".json")].strip(): dict(marker)
             for path, (_version, marker) in list(_SPAWN_MARKER_FILE_CACHE.items())
             if marker and path.endswith(".json")
         }
@@ -20629,6 +20629,7 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
             phases["tier"] = "match"
             if indexed:
                 entry = _archive_refresh_read(key, hot=True)
+                phases["hot_read_ms"] = round((time.perf_counter() - _ph) * 1000.0, 1)
                 if entry is None:
                     raise RuntimeError("archive hot rows became unavailable")
                 rows = _rehydrate_archive_cached_rows(entry["conversations"], preselected=True)
@@ -20744,6 +20745,7 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
                         _sp = time.perf_counter()
                         if indexed:
                             hot = _archive_refresh_read(key, hot=True)
+                            phases["hot_read_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
                             if hot is None:
                                 raise RuntimeError("published archive hot rows became unavailable")
                             rows = _rehydrate_archive_cached_rows(hot["conversations"], preselected=True)
@@ -20908,6 +20910,20 @@ def _archive_refresh_worker_main(encoded_options, output_path):
 
     global _WT_DISPLAY_SNAPSHOT_ONLY
     _WT_DISPLAY_SNAPSHOT_ONLY = True
+    basis = None
+    holder_sample = None
+    try:
+        basis_path = Path(str(output_path) + ".basis")
+        if basis_path.is_file():
+            inputs = json.loads(basis_path.read_bytes())
+            if isinstance(inputs, dict):
+                basis = set(inputs["rows"])
+                holder_sample = inputs.get("codex_holders")
+            else:
+                basis = set(inputs)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        print(f"archive refresh worker could not read its input basis: {exc}", file=sys.stderr)
+        return 1
     try:
         # This is the __main__ dispatch for --archive-refresh-worker, which
         # exits via SystemExit before ever reaching main()'s normal startup
@@ -20936,12 +20952,14 @@ def _archive_refresh_worker_main(encoded_options, output_path):
         _wt0 = time.perf_counter()
         scores_file = _ARCHIVE_RESPONSE_CACHE_FILE.with_name("archive-question-scores.json")
         scores = _load_archive_question_scores(scores_file)
+        from ccc_server.codex import _seed_codex_archive_holders
+        holders_seeded = _seed_codex_archive_holders(holder_sample)
         rows, from_cache = _archive_compute_rows(key, cache_options, detached=True)
         if _SOFT_BLOCK_SCORE_MEMO != scores:
             _save_archive_question_scores(scores_file)
         from ccc_server import archive_store
         rows = archive_store.hot_rows(rows)
-        phases = dict(_ARCHIVE_COMPUTE_LAST_PHASES)
+        phases = dict(_ARCHIVE_COMPUTE_LAST_PHASES, codex_holders_seeded=holders_seeded)
         if phases.get("tier") == "match" and key == _archive_response_cache_key():
             started = time.perf_counter()
             try:
@@ -20963,8 +20981,6 @@ def _archive_refresh_worker_main(encoded_options, output_path):
     except Exception as exc:
         result = {"ok": False, "error": str(exc)}
     try:
-        basis_path = Path(str(output_path) + ".basis")
-        basis = set(json.loads(basis_path.read_bytes())) if basis_path.is_file() else None
         _write_archive_refresh_result(output_path, result, basis=basis)
     except (OSError, ValueError) as exc:
         print(f"archive refresh worker could not write its result: {exc}", file=sys.stderr)
@@ -21133,8 +21149,10 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
                 previous = _archive_serve_cache.get(key) or {}
                 basis = previous.get("transfer_rows") or {}
             basis_fd = os.open(basis_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            from ccc_server.codex import _codex_archive_holder_sample
             with os.fdopen(basis_fd, "w", encoding="ascii") as handle:
-                handle.write(json.dumps(list(basis), separators=(",", ":")))
+                json.dump({"rows": list(basis), "codex_holders": _codex_archive_holder_sample()},
+                          handle, separators=(",", ":"))
             completed = subprocess.run(
                 command,
                 cwd=str(CCC_ROOT),
@@ -21889,7 +21907,7 @@ def _rehydrate_archive_hot_rows(rows):
     hydrated.sort(key=lambda r: r.get("mtime") or r.get("modified") or 0, reverse=True)
     _sort_pinned_conversations_first(hydrated, pinned_list)
     _apply_session_lane_overrides(hydrated)
-    _apply_spawn_markers(hydrated)
+    _apply_spawn_markers(hydrated, markers=spawn_markers)
     _stamp_archive_state(hydrated)
     # Layer the current codex goal on every rehydrate (one batched, cached read)
     # so the stale_ok serve the dashboard polls reflects goal set/clear without
