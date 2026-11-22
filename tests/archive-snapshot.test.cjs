@@ -624,6 +624,49 @@ test('missing cached bodies and opt-out ignore a remaining scheduling hint', asy
   } finally {await context.close();}
 });
 
+test('a stale All validator cannot adopt a 304 for a different IndexedDB base', async () => {
+  const context = await browser.createBrowserContext(), page = await context.newPage();
+  try {
+    await page.evaluateOnNewDocument(() => {
+      localStorage.setItem('ccc-archive-window', 'all');
+      const fetch = window.fetch;
+      window.archiveBootRequests = [];
+      window.fetch = (url, init) => {
+        window.archiveBootRequests.push({url, signal:init.signal});
+        return fetch(url, init);
+      };
+    });
+    await page.goto(origin, {waitUntil:'load'});
+    await page.evaluate(rows => {
+      const snapshot = window.__cccArchiveSnapshot;
+      window.__cccArchiveSettled = true;
+      snapshot.save({url:snapshot.url, rows, delta:'newer'});
+    }, rows);
+    await waitForSnapshot(page, 'newer', 'last', 'all');
+    await page.evaluate(() => {
+      const key = 'ccc-archive-response-at:all';
+      const hint = JSON.parse(localStorage.getItem(key));
+      // The server answers 304 for this old token, as it can after a
+      // different tab commits a newer IndexedDB snapshot.
+      localStorage.setItem(key, JSON.stringify({...hint, delta:'valid'}));
+    });
+    await page.reload({waitUntil:'load'});
+    const result = await page.evaluate(async () => {
+      const snapshot = window.__cccArchiveSnapshot;
+      const early = await snapshot.fetch;
+      const request = window.archiveBootRequests.find(entry => entry.url.includes('since=valid'));
+      const recent = await window.__cccArchiveBootstrap.promise;
+      return {
+        speculative:!!request, cancelled:request?.signal.aborted, adopted:!!early,
+        stored:(await snapshot.read)?.delta, recent:(await recent.json()).conversations.length,
+      };
+    });
+    assert.deepEqual(result, {
+      speculative:true, cancelled:true, adopted:false, stored:'newer', recent:rows.length,
+    });
+  } finally {await context.close();}
+});
+
 test('failed or malformed complete replies release the ordinary preview', async () => {
   const context=await browser.createBrowserContext(),page=await context.newPage();
   try {
