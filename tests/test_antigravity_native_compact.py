@@ -209,3 +209,71 @@ def test_queue_pump_preserves_fifo_while_native_compaction_owns_session(monkeypa
         assert pending_inputs._resume_queue_engine_busy('test-session') is True
     finally:
         native._ACTIVE.discard('test-session')
+
+
+@pytest.mark.parametrize('context,should_compact', [(300000, True), (100000, False)])
+def test_idle_close_compacts_over_budget_conversation(monkeypatch, context, should_compact):
+    """An idle over-budget session compacts before the user's next message."""
+    calls = []
+    monkeypatch.setattr(server, '_antigravity_transcript_path', lambda sid: 'transcript')
+    monkeypatch.setattr(server, '_extract_antigravity_tail_meta',
+                        lambda path: {'compact_usage_sample': ('step-9', context)})
+    monkeypatch.setattr(server, '_spawn_auto_compact_k_tokens', lambda: 250000)
+    monkeypatch.setattr(native, 'compact_session',
+                        lambda sid, automatic=None: calls.append((sid, automatic)) or {'ok': True})
+    native.maybe_when_idle('idle-session')
+    if should_compact:
+        assert calls == [('idle-session', (('step-9', context), None))]
+    else:
+        assert calls == []
+
+
+def test_idle_compaction_runs_without_queueing_any_input(monkeypatch, tmp_path):
+    sid = 'idle-compact-example'
+    transcript = tmp_path / 'transcript.jsonl'
+    transcript.write_text('')
+    monkeypatch.setattr(server, '_antigravity_cli_conversation_path', lambda sid: transcript)
+    monkeypatch.setattr(server, '_antigravity_transcript_path', lambda sid: transcript)
+    monkeypatch.setattr(server, '_resolve_antigravity_bin', lambda: {'available': True})
+    monkeypatch.setattr(server, '_get_session_override', lambda sid: None)
+    monkeypatch.setattr(server, '_antigravity_command_words', lambda resolved: ['agy'])
+    monkeypatch.setattr(server, 'find_session_cwd', lambda sid: str(tmp_path))
+    monkeypatch.setattr(engines, '_antigravity_terminal_holder_pid', lambda sid: None)
+    monkeypatch.setattr(engines, '_antigravity_live_resume_pid', lambda sid: None)
+    monkeypatch.setattr(native.accounts, 'session_account', lambda sid: 'primary')
+    monkeypatch.setattr(native.accounts, 'configure_command', lambda cmd, *args: cmd)
+    monkeypatch.setattr(native.accounts, 'launch_env', lambda account: {})
+    monkeypatch.setattr(native.stream, 'state', lambda sid: None)
+    monkeypatch.setattr(native, '_AUTO_ATTEMPTED', {})
+    monkeypatch.setattr(server, '_log_activity', lambda *args: None)
+    writes = []
+    monkeypatch.setattr(server, '_apply_pending_input_operations',
+                        lambda sid, ops: writes.extend(ops) or {'ok': True})
+    ran = threading.Event()
+    monkeypatch.setattr(native, 'run_terminal', lambda *args: ran.set() or {'ok': True})
+    result = native.compact_session(sid, automatic=(('step-1', 300000), None))
+    assert result['ok'] and result['auto_compacting']
+    assert ran.wait(2)
+    assert writes == []
+    # The same usage sample never triggers a second attempt.
+    for thread in threading.enumerate():
+        if thread.name == f'agy-compact-{sid[:8]}':
+            thread.join(2)
+    assert native.compact_session(sid, automatic=(('step-1', 300000), None)) is None
+
+
+def test_idle_reaper_compacts_only_after_process_exits(monkeypatch):
+    called = threading.Event()
+    monkeypatch.setattr(native, 'maybe_when_idle', lambda sid: called.set())
+
+    class Proc:
+        exited = False
+
+        def alive(self):
+            return not self.exited
+
+    proc = Proc()
+    native.stream._compact_after_idle_close('reaped-session', proc)
+    assert not called.wait(.5)
+    proc.exited = True
+    assert called.wait(2)

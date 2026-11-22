@@ -671,3 +671,18 @@ def _reap_idle_forever():
                     if _PROCS.get(sid) is sp:
                         _PROCS.pop(sid, None)
                 sp.close()  # exits by itself once stdin is closed
+                _compact_after_idle_close(sid, sp)
+
+
+def _compact_after_idle_close(sid, sp):
+    """Compact an over-budget conversation now that nobody is waiting on it."""
+    def run():
+        deadline = time.time() + 15
+        while sp.alive() and time.time() < deadline:
+            time.sleep(.2)
+        if sp.alive():
+            return
+        from ccc_server import antigravity_compact
+        antigravity_compact.maybe_when_idle(sid)
+
+    threading.Thread(target=run, daemon=True, name=f"agy-idle-compact-{sid[:8]}").start()

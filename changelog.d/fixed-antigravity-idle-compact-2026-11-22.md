@@ -1,0 +1,1 @@
+- Antigravity sessions over the auto-compact limit now compact after 10 minutes idle, so your next message runs right away instead of waiting behind a compaction.

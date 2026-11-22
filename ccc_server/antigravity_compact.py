@@ -331,16 +331,36 @@ def _defer_input(sid, text, reason):
             'queued_reason': reason}
 
 
-def maybe_before_send(sid, text):
-    """Defer a CLI send while CCC compacts a measured over-budget context."""
+def _over_budget_sample(sid):
     path = _core._antigravity_transcript_path(sid)
     sample = _core._extract_antigravity_tail_meta(path).get('compact_usage_sample') if path else None
+    if not sample or sample[1] < _core._spawn_auto_compact_k_tokens():
+        return None
+    return tuple(sample)
+
+
+def maybe_before_send(sid, text):
+    """Defer a CLI send while CCC compacts a measured over-budget context."""
+    sample = _over_budget_sample(sid)
     if not sample:
         return None
-    threshold = _core._spawn_auto_compact_k_tokens()
-    if sample[1] < threshold:
+    return compact_session(sid, automatic=(sample, text))
+
+
+def maybe_when_idle(sid):
+    """Compact an over-budget conversation once it has gone idle.
+
+    Called when CCC closes an idle Antigravity process, so the user's next
+    message runs straight away instead of waiting behind a compaction.
+    """
+    try:
+        sample = _over_budget_sample(sid)
+        if not sample:
+            return None
+        return compact_session(sid, automatic=(sample, None))
+    except Exception as exc:  # best effort: never break the idle reaper
+        _core._log_activity('inject', 'AGY_COMPACT_FAILED', f'session={sid} idle: {exc}')
         return None
-    return compact_session(sid, automatic=(tuple(sample), text))
 
 
 def compact_session(sid, *, automatic=None):
@@ -421,7 +441,12 @@ def compact_session(sid, *, automatic=None):
         worker = threading.Thread(target=work, daemon=True, name=f'agy-compact-{sid[:8]}')
         if automatic:
             sample, text = automatic
-            queued = _defer_input(sid, text, 'Antigravity reached the auto-compact threshold.')
+            if text is None:
+                queued = {'ok': True, 'via': 'antigravity-hidden-pty', 'in_progress': True}
+                _core._log_activity('inject', 'AGY_COMPACT_IDLE',
+                                    f'session={sid} context={sample[1]} auto-compact while idle')
+            else:
+                queued = _defer_input(sid, text, 'Antigravity reached the auto-compact threshold.')
             if not queued['ok']:
                 return queued
             queued['auto_compacting'] = True
