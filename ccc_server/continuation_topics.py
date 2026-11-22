@@ -323,9 +323,63 @@ def _native_title(sid):
     return native.get('title') or native.get('agent_nickname')
 
 
+class UnavailableArchiveProjection(Exception):
+    """A title source or topic mutation needs the ordinary full reader."""
+
+
+def _archive_read_version(conn):
+    return conn.total_changes, conn.execute("PRAGMA data_version").fetchone()[0]
+
+
+def archive_projection_inputs(conn, *, max_rows, max_native_roots=32):
+    """Read topic records and external titles needed to guard an archive layer."""
+    if conn.in_transaction:
+        return None
+    try:
+        version = _archive_read_version(conn)
+        conn.execute("BEGIN")
+        records = conn.execute(
+            "SELECT sid,origin,root_sid,topic_title,user_named FROM continuation_topics LIMIT ?",
+            (max_rows + 1,),
+        ).fetchall()
+        indexed = conn.execute(
+            "SELECT sid,continuation_origin FROM session_meta WHERE continuation_origin!='' LIMIT ?",
+            (max_rows + 1,),
+        ).fetchall()
+    except sqlite3.Error:
+        return None
+    finally:
+        if conn.in_transaction:
+            conn.rollback()
+    if len(records) > max_rows or len(indexed) > max_rows:
+        return None
+    by_sid = {sid: (origin, root, title, named) for sid, origin, root, title, named in records}
+    edges = [(sid, edge) for sid, origin, root, _, _ in records
+             for edge in (origin, root) if edge and edge != sid]
+    edges.extend(indexed)
+    linked_roots = {root for _, origin, root, _, _ in records if origin and root}
+    try:
+        external = _external_titles()
+        codex_cache = getattr(_core, '_codex_titles_cache', {}).get('data') or {}
+        fallback = {sid: title for sid, title in external.items() if title}
+        for sid, value in codex_cache.items():
+            if isinstance(value, dict) and (name := value.get('title') or value.get('agent_nickname')):
+                fallback.setdefault(sid, name)
+        native_roots = {sid for sid in linked_roots if _NATIVE_ID_RE.fullmatch(sid)
+                        and not fallback.get(sid) and not by_sid.get(sid, ('', '', '', 0))[2]}
+        if len(native_roots) > max_native_roots:
+            return None
+        native = {sid: _native_title(sid) for sid in native_roots}
+        if _archive_read_version(conn) != version:
+            return None
+    except (OSError, sqlite3.Error, RuntimeError, TypeError, ValueError):
+        return None
+    return (by_sid, dict(indexed), fallback, native), edges, version
+
+
 class _Batch:
     def __init__(self, conn, rows, names, *, reuse_cached=False, rows_by_sid=None,
-                 miss_detail=None, check_client=None):
+                 miss_detail=None, check_client=None, archive_inputs=None):
         self.conn = conn
         self.check_client = check_client
         self.rows = (rows_by_sid if rows_by_sid is not None else
@@ -342,6 +396,12 @@ class _Batch:
         self.capture_root_titles = False
         self.ancestors = set()
         self.read_token = None
+        self.archive_inputs = archive_inputs
+        if archive_inputs is not None:
+            records, origins, _, _ = archive_inputs
+            self.records = dict(records)
+            self.indexed_origins = origins
+            return
         if reuse_cached:
             token = _db_state_token(conn)
             if not conn.in_transaction:
@@ -393,6 +453,8 @@ class _Batch:
                 self.indexed_origins.setdefault(sid, indexed)
 
     def record(self, sid):
+        if self.archive_inputs is not None:
+            return self.records.get(sid, ('', '', '', 0))
         if sid not in self.records:
             row = self.conn.execute(
                 'SELECT origin, root_sid, topic_title, user_named FROM continuation_topics WHERE sid=?',
@@ -409,6 +471,15 @@ class _Batch:
         title = _row_title(self.rows.get(sid, {}), self.names, sid)
         if title:
             return _topic(title)
+        if self.archive_inputs is not None:
+            _, _, cached_titles, native_titles = self.archive_inputs
+            if cached := cached_titles.get(sid):
+                return _topic(cached)
+            if sid in self.ancestors and _NATIVE_ID_RE.fullmatch(sid):
+                if sid not in native_titles:
+                    raise UnavailableArchiveProjection()
+                return _topic(native_titles[sid])
+            return ''
         # One in-memory pass per batch, only if an unloaded root needs a title.
         # Never walk directories, load transcripts, or invoke a session search.
         if self.cached_titles is None:
@@ -484,6 +555,8 @@ class _Batch:
             _REVISION_CACHE['token'] = None
 
     def indexed_origin(self, sid):
+        if self.archive_inputs is not None:
+            return self.indexed_origins.get(sid, '')
         if sid not in self.indexed_origins:
             try:
                 row = self.conn.execute(
@@ -582,6 +655,24 @@ def _project_topics(batch, rows):
             row.pop('continuation_topic_title', None)
             row.pop('continuation_topic_root_session_id', None)
             row.pop('continuation_topic_session_id', None)
+
+
+def attach_archive_topics(rows, *, conn, names, inputs, version, check_client=None, persist=True):
+    """Resolve a checked archive scope using the authoritative captured titles."""
+    batch = _Batch(conn, rows, names, check_client=check_client, archive_inputs=inputs)
+    _project_topics(batch, rows)
+    if check_client is not None:
+        check_client()
+    if not persist or not batch.pending:
+        return
+    try:
+        with _transaction(conn, wait=False):
+            if _archive_read_version(conn) != version:
+                raise UnavailableArchiveProjection()
+            batch.flush()
+    except sqlite3.OperationalError as exc:
+        if getattr(exc, 'sqlite_errorcode', None) != sqlite3.SQLITE_BUSY:
+            raise
 
 
 def _try_attach_from_cache(rows, conn, names, diagnostics=None, *, rows_by_sid=None,

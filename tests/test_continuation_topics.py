@@ -823,3 +823,29 @@ def test_topic_cache_keeps_persisted_title_when_fallback_changes(store, monkeypa
     child = row('child', origin='root')
     topics.attach_topics([child], names={})
     assert child['continuation_topic_title'] == 'BEFORE'
+
+
+def test_archive_projection_inputs_capture_topic_and_native_title_sources(store, monkeypatch):
+    root = '11111111-1111-4111-8111-111111111111'
+    topics.attach_topics([row(root), row('child', origin=root)], names={})
+    store.execute("INSERT INTO session_meta VALUES ('indexed', ?)", (root,))
+    store.commit()
+    monkeypatch.setattr(server, '_conv_meta_cache', {'/sessions/solo.jsonl': {'ai_title': 'External: agenda'}})
+    monkeypatch.setattr(server, '_codex_titles_cache', {'data': {'cached': {'agent_nickname': 'Cached'}}})
+    monkeypatch.setattr(topics, '_native_title', lambda sid: 'Native found' if sid == root else None)
+
+    inputs, edges, version = topics.archive_projection_inputs(store, max_rows=20)
+    persisted, indexed, fallback, native = inputs
+    assert persisted['child'][:2] == (root, root)
+    assert indexed == {'indexed': root}
+    assert fallback == {'solo': 'External: agenda', 'cached': 'Cached'}
+    assert native == {root: 'Native found'}
+    assert ('child', root) in edges and ('indexed', root) in edges
+    assert topics.archive_projection_inputs(store, max_rows=20, max_native_roots=0) is None
+    assert topics.archive_projection_inputs(store, max_rows=1) is None
+    rows = [row('child', origin=root), row('solo')]
+    topics.attach_archive_topics(rows, conn=store, names={}, inputs=inputs, version=version)
+    assert rows[0]['continuation_topic_title'] == 'Native found'
+    assert store.execute(
+        "SELECT topic_title FROM continuation_topics WHERE sid='solo'"
+    ).fetchone() == ('External',)

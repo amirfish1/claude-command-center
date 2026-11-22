@@ -1,5 +1,7 @@
 """Hot memory/cold disk parity and transactional archive publication."""
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import closing
+import hashlib
 import json
 import sqlite3
 import threading
@@ -7,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ccc_server import archive_store as store
+from ccc_server import archive_preview, archive_store as store
 from tests.test_archive_snapshot import snapshot
 
 NOW = 2_000_000_000
@@ -785,3 +787,43 @@ def test_inventory_generation_can_retry_failed_read(tmp_path, monkeypatch):
 
     result = store.load_inventory(target, 'base', schema_version=original['schema_version'])
     assert result['conversations'][0]['session_id'] == 'old'
+
+
+def test_sidebar_history_cut_keeps_candidate_bodies_in_the_ordered_inventory_cut(tmp_path):
+    target = tmp_path / 'archive.json'
+    original = data()
+    store.save(target, original, complete=True, sidebar_key='base')
+    updated = data(stamp=11)
+    updated['entries']['base']['conversations'][0]['first_message'] = 'new publication'
+    criteria = dict(schema_version=original['schema_version'], build_id=original['build_id'], max_rows=4)
+
+    with store.sidebar_history_cut(target, 'base', **criteria) as view:
+        inventory, hydrate = view
+        assert [row[0] for row in inventory] == ['old', 'recent', 'parent', 'pinned']
+        store.save(target, updated, complete=True, sidebar_key='base')
+        assert hydrate([{'session_id': 'new'}], {'old', 'new'}) == [
+            original['entries']['base']['conversations'][0], {'session_id': 'new'},
+        ]
+
+    with store.sidebar_history_cut(target, 'base', **criteria) as view:
+        inventory, hydrate = view
+        assert hydrate([], {'old'}) == [updated['entries']['base']['conversations'][0]]
+        last_digest = inventory[0][3]
+
+    # A complete publication can leave the generation's timestamp unchanged.
+    edited = dict(updated['entries']['base']['conversations'][0], first_message='same timestamp, new data')
+    body = json.dumps(edited)
+    rid = store.identity(edited)
+    with closing(sqlite3.connect(store.database_path(target))) as writer, writer:
+        writer.execute(
+            "UPDATE rows SET body=?, digest=? WHERE variant='base' AND identity=?",
+            (body, hashlib.sha256(body.encode()).hexdigest(), rid))
+        archive_preview.publish(writer, 'base', rid, edited)
+        archive_preview.finish_publication(writer, 'base', 11)
+    with store.sidebar_history_cut(target, 'base', **criteria) as view:
+        inventory, hydrate = view
+        assert inventory[0][3] != last_digest
+        assert hydrate([], {'old'}) == [edited]
+
+    with store.sidebar_history_cut(target, 'base', **{**criteria, 'max_rows': 3}) as view:
+        assert view is None

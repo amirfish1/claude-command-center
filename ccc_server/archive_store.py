@@ -1014,38 +1014,138 @@ def backfill_sidebar_pages(cache_file, key, version, project):
         con.close()
 
 
+def _sidebar_preview_timestamp(con, key, schema_version, build_id):
+    from ccc_server import archive_preview
+
+    stored = con.execute("""
+        SELECT v.metadata, v.cached_at FROM variants v
+        JOIN sidebar_preview_generation p ON p.variant=v.key AND p.cached_at=v.cached_at
+        WHERE v.key=? AND p.version=?
+    """, (key, archive_preview.VERSION)).fetchone()
+    if not stored:
+        return None
+    metadata = json.loads(stored[0])
+    if metadata.get("schema_version") != schema_version or metadata.get("build_id") != build_id:
+        return None
+    return stored[1]
+
+
 @contextmanager
 def sidebar_preview_view(cache_file, key, *, schema_version, build_id):
     """Expose only a complete indexed generation and its read transaction."""
-    from ccc_server import archive_preview
-
     if not database_path(cache_file).exists():
         yield None
         return
     con = _connect(cache_file)
     try:
         con.execute("BEGIN")
-        stored = con.execute("""
-            SELECT v.metadata, v.cached_at FROM variants v
-            JOIN sidebar_preview_generation p ON p.variant=v.key AND p.cached_at=v.cached_at
-            WHERE v.key=? AND p.version=?
-        """, (key, archive_preview.VERSION)).fetchone()
-        if not stored:
-            yield None
-            return
-        metadata = json.loads(stored[0])
-        if metadata.get("schema_version") != schema_version or metadata.get("build_id") != build_id:
-            yield None
-            return
-        yield con, stored[1]
+        stamp = _sidebar_preview_timestamp(con, key, schema_version, build_id)
+        yield (con, stamp) if stamp is not None else None
     finally:
         con.close()
+
+
+class SidebarHistoryIndex:
+    """One bounded inventory memo, validated on its own SQLite connection."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.conn = None
+        self.identity = None
+        self.memo = None
+
+    def _close(self):
+        if self.conn is not None:
+            self.conn.close()
+        self.conn = self.identity = self.memo = None
+
+    @contextmanager
+    def read(self, cache_file, key, *, schema_version, build_id, max_rows, min_cached_at=0):
+        """Pin inventory and candidate bodies to the same read transaction."""
+        with self.lock:
+            target = database_path(cache_file).resolve()
+            try:
+                stat = target.stat()
+            except FileNotFoundError:
+                self._close()
+                yield None
+                return
+            identity = (target, stat.st_dev, stat.st_ino)
+            if self.identity != identity:
+                self._close()
+                self.conn = _connect(cache_file, shared_reader=True)
+                self.identity = identity
+            con = self.conn
+            try:
+                guard = (con.execute("PRAGMA data_version").fetchone()[0], key, schema_version,
+                         build_id, max_rows, min_cached_at)
+                con.execute("BEGIN")
+                stamp = _sidebar_preview_timestamp(con, key, schema_version, build_id)
+                if stamp is None or stamp < min_cached_at:
+                    yield None
+                    return
+                still_current = con.execute("PRAGMA data_version").fetchone()[0] == guard[0]
+                memo = self.memo
+                if still_current and memo is not None and memo[0] == guard and memo[1] == stamp:
+                    records = memo[2]
+                else:
+                    records = _sidebar_history_inventory(con, key, max_rows)
+                    if still_current:
+                        self.memo = (guard, stamp, records)
+                yield _sidebar_history_reader(con, stamp, records, key, schema_version, build_id)
+            finally:
+                if con.in_transaction:
+                    con.rollback()
+
+
+def _sidebar_history_inventory(con, key, max_rows):
+    records = con.execute(
+        'SELECT sid, identity, parent, digest FROM rows '
+        'WHERE variant=? ORDER BY position,rowid LIMIT ?', (key, max_rows + 1),
+    ).fetchall()
+    if not records or len(records) > max_rows:
+        return None
+    identities = {sid for sid, _, _, _ in records if sid and not sid.startswith('#')}
+    return tuple(records) if len(identities) == len(records) else None
+
+
+def _sidebar_history_reader(con, stamp, records, key, schema_version, build_id):
+    if records is None:
+        return None
+
+    def hydrate(current_rows, session_ids, *, check_client=None):
+        current = _archive_override_index(current_rows, session_ids)
+        if current is None:
+            return None
+        loaded = _load_override_entry(
+            con, key, current, schema_version, build_id, stamp,
+            check_client=check_client, session_ids=session_ids,
+        )
+        return loaded[1] if loaded is not None else None
+
+    return records, hydrate
+
+
+_SIDEBAR_HISTORY_INDEX = SidebarHistoryIndex()
+sidebar_history_cut = _SIDEBAR_HISTORY_INDEX.read
+
+
+def _archive_override_index(current_rows, session_ids):
+    current = {}
+    for row in current_rows:
+        sid = row.get('session_id') or row.get('id')
+        if not isinstance(sid, str) or not sid or sid.startswith('#'):
+            return None
+        if session_ids is None or sid in session_ids:
+            current[identity(row)] = row
+    return current
 
 
 def _load_override_entry(con, key, current, schema_version, build_id, min_cached_at,
                          *, capture_layout=False, copy_history=True, packed_version=None,
                          page_cache=None, check_client=None, session_ids=None):
-    con.execute('BEGIN')
+    if not con.in_transaction:
+        con.execute('BEGIN')
     header = con.execute('SELECT metadata FROM variants WHERE key=?', (key,)).fetchone()
     if not header:
         return None
@@ -1124,14 +1224,8 @@ def load_with_overrides(cache_file, key, current_rows, *, schema_version, build_
     The caller must treat them as read-only, including during lifecycle overlays.
     A scoped read merges only the requested sessions and bypasses the full memo.
     """
-    current = {}
-    for row in current_rows:
-        sid = row.get('session_id') or row.get('id')
-        if not isinstance(sid, str) or not sid or sid.startswith('#'):
-            return None
-        if session_ids is None or sid in session_ids:
-            current[identity(row)] = row
-    if not database_path(cache_file).exists():
+    current = _archive_override_index(current_rows, session_ids)
+    if current is None or not database_path(cache_file).exists():
         return None
     if reuse_sidebar_history and session_ids is None:
         return _SIDEBAR_HISTORY_READER.read(

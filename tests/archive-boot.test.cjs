@@ -2,7 +2,8 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const {functionSource} = require('./conversation-source.cjs');
+const {functions} = require('./conversation-source.cjs');
+const archiveLoader = functions(['_decodeArchiveRowLayouts', 'loadArchiveAll']);
 const boot = fs.readFileSync(require.resolve('../static/archive-boot.js'), 'utf8');
 const defaults = fs.readFileSync(require.resolve('../static/conversation-defaults.js'), 'utf8');
 
@@ -60,7 +61,7 @@ test('normal loader adopts the early response once without issuing another reque
   assert.equal(window.__cccArchiveBootstrap,undefined);
 });
 test('list telemetry includes early request time before the loader initialized',async()=>{
-  const source = functionSource('loadArchiveAll');
+  const source = archiveLoader;
   const events=[];
   const response={ok:true,status:200,_cccArchiveTiming:{start:100,headers:200},
     headers:{get:()=>null},json:async()=>({conversations:[{id:'one'}]})};
@@ -84,7 +85,7 @@ test('list telemetry includes early request time before the loader initialized',
 });
 
 test('overlapped history fetches immediately but parses only after initial paint', async () => {
-  const source = functionSource('loadArchiveAll');
+  const source = archiveLoader;
   let releasePaint, reads = 0, parses = 0;
   const afterPaint = new Promise(resolve => { releasePaint = resolve; });
   const response = {ok: true, status: 200, headers: {get: () => null},

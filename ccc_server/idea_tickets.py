@@ -331,11 +331,11 @@ def ticket_for_session(sid):
     }
 
 
-def idea_ticket_rows_map():
+def idea_ticket_rows_map(*, data=None):
     """sid -> row payload for every ticketed session; {} when the flag is off."""
     if not _enabled():
         return {}
-    data = load_state()
+    data = load_state() if data is None else data
     out = {}
     for sid, entry in data["sessions"].items():
         ref = entry.get("ref") if isinstance(entry, dict) else None
@@ -615,7 +615,20 @@ def _auto_skip(entry):
             and str(entry.get("skip") or "").startswith(_AUTO_SKIP_PREFIX))
 
 
-def sweep_rows(rows):
+def archive_effect_row(row):
+    """Keep the inputs used by archive sweep, retitle, autopilot, and watchdog."""
+    return {field: row[field] for field in (
+        "session_id", "id", "continued_from_session_id", "parent_session_id",
+        "last_assistant_preview", "last_assistant_text", "last_event_type", "first_message",
+        "session_cwd", "folder_path", "cwd", "slug",
+        "display_name", "ai_title", "auto_titled", "name_overridden",
+        "mtime", "modified", "last_interacted", "archived", "trashed", "recently_unarchived",
+        "state", "codex_state", "sidecar_status", "sidecar_in_flight", "pending_spawn",
+        "pending_tool", "needs_approval", "question_waiting", "stale_tool_call", "session_state",
+    ) if field in row}
+
+
+def sweep_rows(rows, *, data=None):
     """List-build entry point for engines without a Stop hook (Codex etc.):
     queue ticket creation after a reply, or inherit a continuation's ticket
     as soon as its origin is known.
@@ -626,7 +639,7 @@ def sweep_rows(rows):
     """
     if not _enabled():
         return 0
-    data = load_state()
+    data = load_state() if data is None else data
     known, pending = data["sessions"], data["pending"]
 
     def _ticketed(sid):
@@ -1357,7 +1370,7 @@ def _ticket_views(rows, data):
     return views
 
 
-def autopilot_rows(rows, *, now=None):
+def autopilot_rows(rows, *, now=None, data=None):
     """List-build entry point: close+archive done tickets, hand off agent
     tails, and tick the handoff watchdog. Cheap dict work per row; wt calls
     and injects run on daemon threads, at most AUTOPILOT_MAX_PER_CALL."""
@@ -1372,7 +1385,7 @@ def autopilot_rows(rows, *, now=None):
     # CCC still closes those from the footer, so done work doesn't pile up.
     done_only = takeover_bridge.available()
     now = time.time() if now is None else now
-    data = load_state()
+    data = load_state() if data is None else data
     views = _ticket_views(rows, data)
     started = 0
     for ref, view in views.items():

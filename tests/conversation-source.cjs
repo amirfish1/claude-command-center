@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const directory = path.join(__dirname, '../static');
-const files = ['app.js', ...fs.readdirSync(directory).filter(name => /^conversation-.*\.js$/.test(name))];
+const files = ['app.js', 'archive-boot.js', ...fs.readdirSync(directory).filter(name => /^conversation-.*\.js$/.test(name))];
 const sources = files.map(name => fs.readFileSync(path.join(directory, name), 'utf8'));
 const source = sources.join('\n');
 const declarations = new Map();

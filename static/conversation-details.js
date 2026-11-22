@@ -4591,6 +4591,7 @@
     return owner ? groups[owner] : Object.assign({}, ...Object.values(groups));
   }
   function createArchiveController({ state: sharedState, helpers: hostServices, dependencies }) {
+  const {_mergeArchiveListDelta, _decodeArchiveHistoryLayer, _decodeArchiveRowLayouts} = root.CCCArchiveWire;
     const {
       _archiveWindow, _archiveRowStableKey, _archiveQuery, _queueDashboardArchiveRender,
       _renderArchiveIfLoaded, _clientLog, _releaseStartupApiReads, _whenDashboardUncovered,
@@ -4817,60 +4818,6 @@
     arm();
   }
 
-  function _mergeArchiveListDelta(prev, d, savedOrder) {
-    if (!Array.isArray(prev) || !Array.isArray(d.ids) || !Array.isArray(d.conversations)) return null;
-    const sameOrder = d.same_order === true;
-    if (sameOrder && (!savedOrder || d.order_token !== savedOrder || d.count !== prev.length)) return null;
-    const byId = new Map();
-    for (const row of prev) {
-      const id = row && (row.session_id || row.id);
-      if (id) byId.set(String(id), row);
-    }
-    if (sameOrder && byId.size !== prev.length) return null;
-    for (const row of d.conversations) {
-      const id = row && (row.session_id || row.id);
-      if (!id || (sameOrder && !byId.has(String(id)))) return null;
-      byId.set(String(id), row);
-    }
-    if (sameOrder) return [...byId.values()];
-    if (Object.hasOwn(d, 'order_spans')) {
-      // Offsets only describe the exact pre-delta array validated by the server.
-      if (d.ids.length || !savedOrder || d.base_order !== savedOrder
-          || !Array.isArray(d.order_spans) || d.order_spans.length > 256
-          || !Number.isSafeInteger(d.count) || d.count < 0
-          || d.count > prev.length + d.conversations.length) return null;
-      const rows = [], seen = new Set();
-      const append = id => {
-        if (!byId.has(id) || seen.has(id) || rows.length >= d.count) return false;
-        seen.add(id);
-        rows.push(byId.get(id));
-        return true;
-      };
-      for (const span of d.order_spans) {
-        if (typeof span === 'string') {
-          if (!append(span)) return null;
-          continue;
-        }
-        if (!Array.isArray(span) || span.length !== 2) return null;
-        const [start, count] = span;
-        if (!Number.isSafeInteger(start) || !Number.isSafeInteger(count)
-            || start < 0 || count < 1 || start + count > prev.length) return null;
-        for (let i = start; i < start + count; i++) {
-          const row = prev[i];
-          if (!row || !append(String(row.session_id || row.id || ''))) return null;
-        }
-      }
-      return rows.length === d.count ? rows : null;
-    }
-    const out = new Array(d.ids.length);
-    for (let i = 0; i < d.ids.length; i++) {
-      const row = byId.get(String(d.ids[i]));
-      if (!row) return null;
-      out[i] = row;
-    }
-    return out;
-  }
-
   async function loadArchiveAll(opts = {}) {
     const params = new URLSearchParams();
     params.set('window', opts.window || _archiveWindow());
@@ -4901,24 +4848,6 @@
     // (its ?since= varies) for the Resource Timing split (CCC-229).
     let _perfServer = null;
     let _perfFetchUrl = url;
-    const decodeRows = payload => {
-      if (!payload || !Object.hasOwn(payload, 'row_layouts')) return payload;
-      const {row_layouts: layouts, conversations, ...metadata} = payload;
-      if (!Array.isArray(layouts) || !Array.isArray(conversations)
-          || layouts.some(keys => !Array.isArray(keys) || keys.some(key => typeof key !== 'string' || key === '__proto__'))) {
-        throw new Error('Invalid archive row layouts');
-      }
-      const rows = conversations.map(encoded => {
-        const keys = Array.isArray(encoded) && Number.isInteger(encoded[0]) && layouts[encoded[0]];
-        if (!keys || !Array.isArray(encoded[1]) || keys.length !== encoded[1].length) {
-          throw new Error('Invalid archive row');
-        }
-        const row = {};
-        for (let i = 0; i < keys.length; i++) row[keys[i]] = encoded[1][i];
-        return row;
-      });
-      return {...metadata, conversations:rows};
-    };
     const _perfListLog = function (bytes, status, extra) {
       try {
         if (typeof window.__cccPerfRow !== 'function') return;
@@ -5028,7 +4957,9 @@
           if (!r && opts.initial && window.__cccArchiveSnapshot?.skippedRecent
               && url === sharedState._archiveBootstrapUrl) return null;
           if (!r) {
-            _perfFetchUrl = deltaToken ? requestUrl + '&since=' + encodeURIComponent(deltaToken) : requestUrl;
+            _perfFetchUrl = requestUrl;
+            if (!opts.initial && !opts.includePrs && params.get('window') === 'all') _perfFetchUrl += '&history_layer=1';
+            if (deltaToken) _perfFetchUrl += '&since=' + encodeURIComponent(deltaToken);
             requestedOrder = baseOrder;
             if (requestedOrder) _perfFetchUrl += '&saved_order=' + requestedOrder;
             r = await backgroundApiFetch(_perfFetchUrl, init);
@@ -5087,32 +5018,33 @@
         let raw = await (r._cccArchiveParsedBody || r.json());
         let packedBytes = r._cccArchivePackedBytes;
         if (packedBytes) delete r._cccArchivePackedBytes;
-        let d = decodeRows(raw);
+        const layered = raw?.history_layer !== undefined;
+        let d = layered ? _decodeArchiveHistoryLayer(raw) : _decodeArchiveRowLayouts(raw);
         _perfBodyMs = performance.now() - _perfHdrAt - _perfPaintWaitMs;
         let _merged = null;
         if (d && d.delta) {
           const baseRows = sharedState._archiveAllData.get(url);
           const savedOrder = baseRows === requestBase && d.since === deltaToken ? requestedOrder : null;
           _merged = _mergeArchiveListDelta(baseRows, d, savedOrder);
-          if (!_merged) {
-            // Ids we never had: resync with one full body.
-            _clientLog('[ARCHIVE-DIAG] conversations/list delta unmergeable; full refetch');
-            // A skipped saved preview is useful again while a full resync
-            // runs, including transport retries before a failure is final.
-            if (window.__cccArchiveSnapshot?.url === url) window.__cccArchiveSnapshot.onResync?.();
-            sharedState._archiveAllDelta.delete(url);
-            sharedState._archiveAllEtag.delete(url);
-            const r2 = await backgroundApiFetch(requestUrl, { signal: controller.signal });
-            if (!r2.ok) {
-              _perfListLog(0, r2.status, 'err');
-              return null;
-            }
-            etag = r2.headers.get('ETag');
-            _perfLen = parseInt(r2.headers.get('content-length') || '0', 10) || 0;
-            raw = await r2.json();
-            packedBytes = null;
-            d = decodeRows(raw);
+        }
+        if ((layered && !d) || (d?.delta && !_merged)) {
+          // Ids we never had: resync with one full body.
+          _clientLog('[ARCHIVE-DIAG] conversations/list delta unmergeable; full refetch');
+          // A skipped saved preview is useful again while a full resync
+          // runs, including transport retries before a failure is final.
+          if (window.__cccArchiveSnapshot?.url === url) window.__cccArchiveSnapshot.onResync?.();
+          sharedState._archiveAllDelta.delete(url);
+          sharedState._archiveAllEtag.delete(url);
+          const r2 = await backgroundApiFetch(requestUrl, { signal: controller.signal });
+          if (!r2.ok) {
+            _perfListLog(0, r2.status, 'err');
+            return null;
           }
+          etag = r2.headers.get('ETag');
+          _perfLen = parseInt(r2.headers.get('content-length') || '0', 10) || 0;
+          raw = await r2.json();
+          packedBytes = null;
+          d = _decodeArchiveRowLayouts(raw);
         }
         try {
           if (d && d.queue_health && typeof window.__cccPerfQueueHealth === 'function') {
@@ -5164,8 +5096,8 @@
               ids:d.same_order ? null : Object.hasOwn(d, 'order_spans')
                 ? _merged.map(row => String(row.session_id || row.id)) : d.ids,
               changes: d.conversations} : null,
-            !_merged && !d.delta && raw.row_layouts
-              ? packedBytes || [raw.row_layouts, raw.conversations] : null);
+            !_merged && !d.delta
+              ? packedBytes || (raw.row_layouts ? [raw.row_layouts, raw.conversations] : null) : null);
         }
         if (typeof opts.onValidated === 'function') opts.onValidated();
         if (typeof opts.onPage === 'function') opts.onPage(d);

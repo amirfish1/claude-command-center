@@ -299,7 +299,7 @@ def _disable_session_auto_resume(session_id):
     }
 
 
-def usage_limit_resume_at_for_session(session_id, resumes=None):
+def usage_limit_resume_at_for_session(session_id, resumes=None, *, now=None):
     """Cheap in-memory lookup for the row-serialization path: the epoch a
     stopped session will auto-resume at, or None if it isn't tracked, is
     already fired, or the time has passed (stale defensive cutoff so a
@@ -326,7 +326,7 @@ def usage_limit_resume_at_for_session(session_id, resumes=None):
     resume_at = entry.get("resume_at")
     if not isinstance(resume_at, (int, float)):
         return None
-    if time.time() - resume_at > 3600:
+    if (time.time() if now is None else now) - resume_at > 3600:
         return None
     return resume_at
 

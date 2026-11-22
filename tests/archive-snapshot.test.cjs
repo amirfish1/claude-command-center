@@ -7,7 +7,8 @@ const puppeteer = require('../require-puppeteer.js');
 const {findChromePath} = require('../puppeteer-browser-config.js');
 const boot = fs.readFileSync('static/archive-boot.js', 'utf8');
 const {functions} = require('./conversation-source.cjs');
-const archive = functions(['_mergeArchiveListDelta', 'loadArchiveAll']);
+const archive = functions(['_decodeArchiveRowLayouts', '_mergeArchiveListDelta',
+  '_decodeArchiveHistoryLayer', 'loadArchiveAll']);
 const fullUrl = '/api/conversations/list?window=7d&stale_ok=1';
 const rows = [{session_id:'recent', nested:{items:[1]}}, {session_id:'older'}];
 
@@ -91,7 +92,7 @@ test('All history requests reconstruct ordered rows from shared layouts before c
     assert.equal(f.state._archiveAllData.get(allUrl),loaded);
     assert.equal(f.state._archiveAllDelta.get(allUrl).token,'history');
     assert.equal(validated,1);
-    assert.deepEqual(f.reads.map(read => read.url),early ? [] : [allUrl + '&row_layouts=1&order_spans=1']);
+    assert.deepEqual(f.reads.map(read => read.url),early ? [] : [allUrl + '&row_layouts=1&order_spans=1&history_layer=1']);
     if (!early) assert.equal(f.reads[0].init.headers['X-CCC-Abort-On-Disconnect'], '1');
     assert.deepEqual(Array.from(f.savedLayouts[0]),[body.row_layouts,body.conversations]);
   }
@@ -114,6 +115,43 @@ test('the complete-list loader transfers the early packed buffer to the snapshot
   assert.equal(loaded[0].session_id,'recent');
   assert.equal(f.savedLayouts[0],bytes);
   assert.equal(response._cccArchivePackedBytes,undefined);
+});
+
+test('a history layer validates independently of the saved browser order', async () => {
+  const url = '/api/conversations/list?window=all&stale_ok=1';
+  const order = 'a'.repeat(64), nextOrder = 'b'.repeat(64);
+  const base = {window:'all', row_layouts:[['session_id']], count:2,
+    conversations:[[0, ['one']], [0, ['two']]], delta_token:'base', order_token:order};
+  const patch = {window:'all', delta:true, since:'base', delta_token:'next', order_token:nextOrder,
+    count:3, ids:[], base_order:order, order_spans:[[1,1], 'three', [0,1]],
+    row_layouts:[['session_id','name'],['session_id']],
+    conversations:[[0, ['one','new']], [1, ['three']]]};
+  const response = reply({history_layer:1, base, patch});
+  const bytes = new TextEncoder().encode(JSON.stringify({history_layer:1, base, patch})).buffer;
+  response._cccArchivePackedBytes = bytes;
+  const saved = {url, rows:[{session_id:'unrelated'}], delta:'other'};
+  const f = setup({snapshot:saved, response});
+  const loaded = await f.context.loadArchiveAll({window:'all'});
+  assert.deepEqual(Array.from(loaded, row=>row.session_id), ['two','three','one']);
+  assert.equal(loaded[2].name,'new');
+  assert.equal(f.state._archiveAllDelta.get(url).token,'next');
+  assert.equal(f.savedDeltas[0],null);
+  assert.equal(f.savedLayouts[0],bytes);
+});
+
+test('a malformed history layer retries the ordinary request exactly once', async () => {
+  const url = '/api/conversations/list?window=all&stale_ok=1';
+  const f = setup();
+  f.context.backgroundApiFetch = async target => {
+    f.reads.push(target);
+    if (target.includes('history_layer=1')) {
+      return reply({history_layer:1, base:{row_layouts:[['__proto__']], conversations:[[0, [{}]]]}});
+    }
+    return reply({conversations:rows});
+  };
+  assert.equal(JSON.stringify(await f.context.loadArchiveAll({window:'all'})),JSON.stringify(rows));
+  const ordinary = url + '&row_layouts=1&order_spans=1';
+  assert.deepEqual(f.reads,[ordinary + '&history_layer=1',ordinary]);
 });
 
 test('a saved-order delta merges against its validated base and persists the full order', async () => {
@@ -196,7 +234,11 @@ test('an All order delta reconstructs slices and survives the next saved-order p
     assert.deepEqual(Array.from(f.savedDeltas[0].ids),['older','new','recent']);
     assert.equal(f.reads.length,0);
     f.context.backgroundApiFetch = async url => {
-      assert.match(url,/order_spans=1&since=new&saved_order=b{64}$/);
+      const params = new URL(url,'http://localhost').searchParams;
+      assert.equal(params.get('order_spans'),'1');
+      assert.equal(params.get('history_layer'),'1');
+      assert.equal(params.get('since'),'new');
+      assert.equal(params.get('saved_order'),nextOrder);
       return reply(null,304);
     };
     assert.deepEqual(Array.from(await f.context.loadArchiveAll({window:'all'})),

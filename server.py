@@ -19005,7 +19005,7 @@ def _archive_list_preview(text, limit=140):
     return preview
 
 # Change the prefix when the stored preview or packed field semantics change.
-_ARCHIVE_SIDEBAR_PACKED_VERSION = "1:" + hashlib.sha256(repr(_ARCHIVE_LIST_FIELDS).encode()).hexdigest()
+_ARCHIVE_SIDEBAR_PACKED_VERSION = "2:" + hashlib.sha256(repr(_ARCHIVE_LIST_FIELDS).encode()).hexdigest()
 
 
 _ARCHIVE_LIST_ROW_TEMPLATES = ByteBudgetCache(
@@ -19108,7 +19108,7 @@ def _archive_list_pack_static(row, fields_by_shape):
 
 def _archive_list_project_row(row, *, resumes=None, parents=None,
                               _template=_ARCHIVE_LIST_TEMPLATE_UNREAD, _fields_by_shape=None,
-                              _retain_template=True, _prepared=None):
+                              _retain_template=True, _prepared=None, _resume_now=None):
     """Project one row, applying the current graph and resume information."""
     out = (dict(_prepared) if _prepared is not None else _archive_list_static_row(
         row, _template, _fields_by_shape, _retain_template))
@@ -19127,28 +19127,492 @@ def _archive_list_project_row(row, *, resumes=None, parents=None,
                 out["parent_session_id"] = parent
         out.update(_driver.fields(out, parent_session_id=out.get("parent_session_id")))
         if resumes is None or resumes:
-            resume_at = usage_limit_resume_at_for_session(sid, resumes=resumes)
+            resume_at = (usage_limit_resume_at_for_session(sid, resumes=resumes)
+                         if _resume_now is None else
+                         usage_limit_resume_at_for_session(sid, resumes=resumes, now=_resume_now))
             if resume_at:
                 out["usage_limit_resume_at"] = resume_at
     return out
 
 
-def _archive_list_title_overlays():
+def _archive_list_title_overlays(names=None):
     """Small live title inputs, independent of the historical row snapshot."""
     titles = {sid: {"task_title": title} for sid, title in _auto_titled_session_ids().items() if title}
-    for sid, name in _load_session_name_overrides().items():
+    for sid, name in (_load_session_name_overrides() if names is None else names).items():
         titles.setdefault(sid, {}).update(display_name=name, name_overridden=True)
     return titles
 
 
-def _archive_list_row_overlays():
+def _archive_list_row_overlays(names=None):
     # Goal changes do not touch transcript rows or their archive revision.
     # Use the same snapshot in the body and the delta context.
-    overlays = _archive_list_title_overlays()
+    overlays = _archive_list_title_overlays() if names is None else _archive_list_title_overlays(names)
     for sid, goal in _codex_goals_snapshot().items():
         overlays.setdefault(sid, {}).update(goal=goal.get("objective") or "",
                                             goal_status=goal.get("status") or "")
     return overlays
+
+
+def _capture_archive_history_sidecars(now):
+    """Capture the values used by projection and by the incremental guard."""
+    names = _load_session_name_overrides()
+    tickets = _idea_tickets.load_state() if _idea_tickets._enabled() else None
+    return {
+        "now": now,
+        "names": names,
+        "resumes": _load_usage_limit_resumes(),
+        "parents": _session_graph.parent_snapshot(),
+        "ideas": _idea_tickets.idea_ticket_rows_map(data=tickets),
+        "overlays": _archive_list_row_overlays(names),
+        "drivers": _session_graph.driver_snapshot(),
+        "tickets": tickets,
+    }
+
+
+def _archive_history_hot_snapshot(key, rows, version):
+    """Pin hot row values and reuse tokens for the exact detached row objects."""
+    from ccc_server.archive_history_layer import row_token
+
+    with _archive_serve_lock:
+        entry = _archive_serve_cache.get(key)
+        if not entry or entry.get("ver") != version or entry.get("rows") is not rows:
+            return None
+        if not rows or any(type(row) is not dict for row in rows):
+            return None
+        transfer_tokens = {id(row): token for token, row in (entry.get("transfer_rows") or {}).items()}
+        memo = entry.get("history_hot_tokens")
+        if memo is not None and memo[0] == version and memo[1] is rows:
+            transfer_tokens.update(memo[2])
+        snapshot = [(id(row), dict(row), transfer_tokens.get(id(row))) for row in rows]
+
+    by_sid = {}
+    tokens = {}
+    generated = {}
+    for row_id, row, token in snapshot:
+        sid = _archive_row_sid(row)
+        if not isinstance(sid, str) or not sid or sid in by_sid:
+            return None
+        try:
+            if token is None:
+                token = row_token(row)
+                generated[row_id] = token
+        except (TypeError, ValueError, OverflowError):
+            return None
+        by_sid[sid] = row
+        tokens[sid] = token
+    if generated:
+        with _archive_serve_lock:
+            current = _archive_serve_cache.get(key)
+            if current is not None and current.get("ver") == version and current.get("rows") is rows:
+                current["history_hot_tokens"] = (version, rows, generated)
+    return by_sid, tokens
+
+
+@contextlib.contextmanager
+def _archive_history_read_cut(key, cache_options, now, *, phases=None, check_client=None,
+                              captured_hot=None, topic_reader=None):
+    """Pin source membership, live overlays, and candidate hydration."""
+    from ccc_server import archive_history_layer, archive_store, continuation_topics
+
+    with _archive_history_timing(phases, "hot"):
+        if captured_hot is None:
+            rows, cached, version = _archive_serve_hot_rows_versioned(
+                key, cache_options, copy_rows=False, defer_cold=True)
+        else:
+            rows, version = captured_hot
+            cached = True
+        snapshot = _archive_history_hot_snapshot(key, rows, version)
+    if snapshot is None:
+        yield None
+        return
+    hot, hot_tokens = snapshot
+    with _ARCHIVE_RESPONSE_CACHE_LOCK:
+        min_stamp = float((_ARCHIVE_RESPONSE_CACHE.get(key) or {}).get("cached_at") or 0)
+    with archive_store.sidebar_history_cut(
+        _ARCHIVE_RESPONSE_CACHE_FILE, key, schema_version=_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
+        build_id=_ARCHIVE_RESPONSE_CACHE_BUILD_ID, max_rows=archive_history_layer.MAX_ROWS,
+        min_cached_at=min_stamp,
+    ) as cut:
+        if cut is None:
+            yield None
+            return
+        inventory, hydrate = cut
+        lifecycle = _conversation_lifecycle_snapshot()
+        archived, trashed, deleted, lanes = lifecycle
+        removed = set()
+        for sid, identity, _, _ in inventory:
+            if sid in deleted:
+                engine = hot[sid].get("engine") if sid in hot else json.loads(identity)[0]
+                if engine == "codex":
+                    removed.add(sid)
+        removed.update(sid for sid in deleted & hot.keys() if hot[sid].get("engine") == "codex")
+        if removed:
+            hot = {sid: row for sid, row in hot.items() if sid not in removed}
+        if check_client is not None:
+            check_client()
+        existing = {sid for sid, _, _, _ in inventory if sid not in removed} | hot.keys()
+        with _archive_history_timing(phases, "engine_rows"):
+            _, extra = _archive_list_source_overlays([], existing, lambda _phase: None)
+        extra_by_sid = {_archive_row_sid(row): row for row in extra}
+        existing = existing | extra_by_sid.keys()
+        with _archive_history_timing(phases, "sidecars"):
+            sidecars = _capture_archive_history_sidecars(now)
+        with _archive_history_timing(phases, "topics"):
+            connection = topic_reader if topic_reader is not None else continuation_topics._connection()
+            topics = continuation_topics.archive_projection_inputs(
+                connection, max_rows=archive_history_layer.MAX_ROWS)
+        if topics is None:
+            yield None
+            return
+        topic_inputs, topic_edges, topic_version = topics
+        records, origins, fallback_titles, native_titles = topic_inputs
+        sidecars["topics"] = (connection, topic_inputs, topic_version)
+        resume_entries = sidecars["resumes"]
+        resumable_ids = existing & (resume_entries.keys() | {"session_" + sid for sid in resume_entries})
+        resumes = {
+            sid: resume for sid in resumable_ids
+            if (resume := usage_limit_resume_at_for_session(sid, resumes=resume_entries, now=now))
+        }
+        parents = sidecars["parents"]
+        overlays = (
+            dict.fromkeys(archived, True), dict.fromkeys(trashed, True), lanes,
+            sidecars["names"], resumes, parents, sidecars["drivers"],
+            sidecars["ideas"], sidecars["overlays"], records, origins, fallback_titles, native_titles,
+        )
+        with _archive_history_timing(phases, "inputs"):
+            inputs = archive_history_layer.read_inputs(
+                inventory, hot, hot_tokens, extra, overlay_maps=overlays,
+                edges=(*parents.items(), *topic_edges), removed=removed,
+            )
+        if inputs is None:
+            yield None
+            return
+
+        def read_rows(session_ids):
+            wanted = None if session_ids is None and not removed else (
+                inputs.sources.keys() - extra_by_sid.keys() if session_ids is None
+                else session_ids - extra_by_sid.keys())
+            current = hydrate(hot.values(), wanted, check_client=check_client)
+            if current is None:
+                return None
+            current = _overlay_conversation_lifecycle_flags(
+                current, copy_on_change=True, snapshot=lifecycle)
+            current.extend(extra if session_ids is None else (
+                row for sid, row in extra_by_sid.items() if sid in session_ids))
+            expected = inputs.order if session_ids is None else tuple(
+                sid for sid in inputs.order if sid in session_ids)
+            return current if tuple(map(_archive_row_sid, current)) == expected else None
+
+        yield inputs, sidecars, read_rows, cached
+
+
+def _archive_history_effect_ids(inputs, previous, sidecars):
+    tickets = sidecars["tickets"]
+    if tickets is None:
+        return set()
+    session_ids = tickets["sessions"].keys()
+    ticketed = {sid for sid, entry in tickets["sessions"].items()
+                if isinstance(entry, dict) and entry.get("ref")}
+    children = {sid for sid, parent in inputs.edges if parent in ticketed}
+    if previous is not None:
+        children.update(sid for sid, parent in previous.inputs.edges if parent in ticketed)
+    return (session_ids | tickets["pending"].keys() | children) & inputs.sources.keys()
+
+
+def _archive_history_project_cut(cut, previous, *, phases=None, check_client=None, persist_topics=True):
+    """Project a complete basis or its conservative changed-row closure."""
+    from ccc_server import archive_history_layer as layer
+
+    inputs, sidecars, read_rows, cached = cut
+    now = sidecars["now"]
+    effects = _archive_history_effect_ids(inputs, previous, sidecars)
+    previous_effects = previous.effect_rows if previous is not None else {}
+    missing_effects = effects - previous_effects.keys()
+    with _archive_history_timing(phases, "changed"):
+        reusable = (previous is not None and not missing_effects
+                    and layer.same_projection(previous.inputs, inputs))
+        changes = (layer.Changes(previous.inputs, inputs, allow_shrink=True)
+                   if previous is not None and not reusable else None)
+        changed = set() if reusable else None
+    with _archive_history_timing(phases, "rows"):
+        if previous is None:
+            rows = read_rows(None)
+        elif reusable:
+            rows = []
+        else:
+            # Read the candidates against the exact same SQLite cut. New
+            # ancestry in their raw bodies can pull in otherwise unchanged
+            # cold rows, so close the scope again before projection.
+            wanted = changes.scope(missing_effects)
+            if wanted is None:
+                return None
+            for _ in range(3):
+                if phases is not None:
+                    phases.setdefault("hydrate_counts", []).append(len(wanted))
+                rows = read_rows(wanted)
+                if rows is None:
+                    return None
+                changes.add_edges(layer.row_edges(rows))
+                expanded = changes.scope(missing_effects)
+                if expanded == wanted:
+                    changed = changes.scope()
+                    break
+                if expanded is None:
+                    return None
+                wanted = expanded
+            else:
+                return None
+        if rows is None or (previous is not None and changed is None):
+            return None
+    with _archive_history_timing(phases, "projection"):
+        projected = _archive_list_project_rows(
+            rows, window="all", now=now, _sidecars=sidecars, _ticket_effects=False,
+            check_client=check_client, _topic_persist=persist_topics)
+    working = set(previous.working) if previous is not None else set()
+    activity = dict(previous.activity) if previous is not None else {}
+    if changes is not None:
+        working.difference_update(changes.removed)
+        for sid in changes.removed:
+            activity.pop(sid, None)
+    delta_rows = []
+    for raw, out in zip(rows, projected, strict=True):
+        sid = _archive_row_sid(out)
+        if changed is not None and sid not in changed:
+            continue
+        if raw.get("state") == "working" or raw.get("codex_state") == "working":
+            working.add(sid)
+        else:
+            working.discard(sid)
+        stamp = _archive_list_row_ts(out)
+        if now - stamp < _ROW_FLICKER_FRESH_WINDOW_S:
+            activity[sid] = stamp
+        else:
+            activity.pop(sid, None)
+        delta_rows.append(out)
+    for sid in list(activity):
+        if now - activity[sid] >= _ROW_FLICKER_FRESH_WINDOW_S:
+            del activity[sid]
+    metadata = {
+        "ok": True, "count": len(inputs.order), "total_count": len(inputs.order),
+        "window": "all", "fields": list(_ARCHIVE_LIST_FIELDS), "cached": bool(cached),
+        "queue_health": _queue_health_stats(None, now=now, working_snapshot=(len(working), working)),
+    }
+    inputs = layer.observed_inputs(
+        inputs, rows, projected, previous=previous.inputs if previous is not None else None,
+        changed=changed or ())
+    # Recheck after observing raw and projected ancestry. Newly discovered
+    # children are among the hydrated rows; unaffected ticket rows retain
+    # their previous inputs and are still passed to each live effect.
+    effects = _archive_history_effect_ids(inputs, previous, sidecars)
+    effect_rows = dict(previous_effects)
+    effect_rows.update((sid, row) for row in projected if (sid := _archive_row_sid(row)) in effects)
+    if not effects <= effect_rows.keys():
+        return None
+    effect_rows = {sid: effect_rows[sid] for sid in inputs.order if sid in effects}
+    current = layer.View(inputs, frozenset(working), activity, layer.view_token(), metadata, effect_rows)
+    return current, delta_rows, list(effect_rows.values())
+
+
+_ARCHIVE_HISTORY_LOCK = threading.Lock()
+_ARCHIVE_HISTORY_STATE = {"basis": None, "views": collections.OrderedDict(),
+                          "loaded": False, "artifact": None}
+_ARCHIVE_HISTORY_PUBLISH_LOCK = threading.Lock()
+_ARCHIVE_HISTORY_PUBLISH_LAST_START = None
+
+
+def _archive_history_scope(key):
+    return f"{key}:{_ARCHIVE_RESPONSE_CACHE_BUILD_ID}:{_ARCHIVE_SIDEBAR_PACKED_VERSION}"
+
+
+def _archive_history_publish_basis(key, cache_options, phases, *, captured_hot=None, topic_reader=None):
+    """Publish a guarded basis without running foreground ticket or topic effects."""
+    from ccc_server import archive_history_layer as layer
+
+    with _archive_history_read_cut(
+        key, cache_options, time.time(), phases=phases,
+        captured_hot=captured_hot, topic_reader=topic_reader,
+    ) as cut:
+        if cut is None:
+            return None
+        result = _archive_history_project_cut(cut, None, phases=phases, persist_topics=False)
+    if result is None:
+        return None
+    current, rows, _ = result
+    basis = layer.make_basis(
+        current.inputs, current.working, current.activity, dict(current.metadata, conversations=rows),
+        effect_rows={sid: _idea_tickets.archive_effect_row(row)
+                     for sid, row in current.effect_rows.items()},
+    )
+    if basis is None:
+        return None
+    target = _ARCHIVE_RESPONSE_CACHE_FILE.with_suffix(".sidebar-layer")
+    return basis if layer.write_basis(target, _archive_history_scope(key), basis) else None
+
+
+def _archive_history_artifact(target):
+    try:
+        stat = target.stat()
+    except OSError:
+        return None
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns
+
+
+def _archive_history_publisher_main():
+    """Populate an optional history basis in a detached maintenance process."""
+    from ccc_server import archive_store, cpu_priority, ship_graph
+    import sqlite3
+
+    global _WT_DISPLAY_SNAPSHOT_ONLY
+    _WT_DISPLAY_SNAPSHOT_ONLY = True
+    cpu_priority.set_background_priority("archive")
+    key = _archive_response_cache_key()
+    saved = archive_store.load(_ARCHIVE_RESPONSE_CACHE_FILE, key=key, hot=True)
+    if not saved or (saved.get("schema_version"), saved.get("build_id")) != (
+            _ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION, _ARCHIVE_RESPONSE_CACHE_BUILD_ID):
+        return False
+    entry = saved["entries"].get(key) or {}
+    hot_rows = entry.get("conversations") or ()
+    if not hot_rows:
+        return False
+    if not _archive_serve_cache_store(key, hot_rows, _archive_serve_generation,
+                                      ts=entry["cached_at"], hot_selected=True):
+        return False
+    snapshot = hot_rows, _archive_serve_cache[key]["ver"]
+    database = ship_graph._get_db_path()
+    if not database.is_file():
+        return False
+    _load_conv_meta_cache(lazy=True)
+    _session_graph.load()
+    with contextlib.closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro",
+                                            uri=True, timeout=0)) as reader:
+        return _archive_history_publish_basis(
+            key, {}, {}, captured_hot=snapshot, topic_reader=reader) is not None
+
+
+def _archive_history_start_publication():
+    from ccc_server import background_work
+
+    global _ARCHIVE_HISTORY_PUBLISH_LAST_START
+    now = time.monotonic()
+    if not _ARCHIVE_HISTORY_PUBLISH_LOCK.acquire(blocking=False):
+        return
+    if (_ARCHIVE_HISTORY_PUBLISH_LAST_START is not None
+            and now - _ARCHIVE_HISTORY_PUBLISH_LAST_START < 60):
+        _ARCHIVE_HISTORY_PUBLISH_LOCK.release()
+        return
+    _ARCHIVE_HISTORY_PUBLISH_LAST_START = now
+
+    def publish():
+        started = time.perf_counter()
+        target = _ARCHIVE_RESPONSE_CACHE_FILE.with_suffix(".sidebar-layer")
+        previous = _archive_history_artifact(target)
+        try:
+            with background_work.slot():
+                result = subprocess.run(
+                    [*_server_launch_argv(), "--archive-sidebar-basis-worker"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=_ARCHIVE_REFRESH_WATCHDOG_S, check=False,
+                )
+            updated = _archive_history_artifact(target)
+            record_diag("archive_rebuild", (time.perf_counter() - started) * 1000.0, {
+                "stage": "sidebar_basis",
+                "published": result.returncode == 0 and updated is not None and updated != previous,
+            })
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        finally:
+            _ARCHIVE_HISTORY_PUBLISH_LOCK.release()
+
+    try:
+        threading.Thread(target=publish, name="ccc-sidebar-basis", daemon=True).start()
+    except RuntimeError:
+        _ARCHIVE_HISTORY_PUBLISH_LOCK.release()
+
+
+def _archive_history_response(key, cache_options, since, saved_order, *, phases, check_client):
+    """Build one exact All response using a local stored projection basis."""
+    import sqlite3
+    from ccc_server import archive_history_layer as layer, continuation_topics
+
+    # Full reads and validators have different flight keys. Give a nearby
+    # validated projection time to finish before falling back to another
+    # expensive full reader, while bounding the delay on a busy host.
+    with _archive_history_timing(phases, "basis_lock"):
+        acquired = _ARCHIVE_HISTORY_LOCK.acquire(timeout=1)
+    if not acquired:
+        return None
+    try:
+        if check_client is not None:
+            check_client()
+        state = _ARCHIVE_HISTORY_STATE
+        target = _ARCHIVE_RESPONSE_CACHE_FILE.with_suffix(".sidebar-layer")
+        scope = _archive_history_scope(key)
+        artifact = _archive_history_artifact(target)
+        if not state["loaded"] or state["artifact"] != artifact:
+            with _archive_history_timing(phases, "load_basis"):
+                state["basis"] = layer.load_basis(target, scope)
+            state.update(loaded=True, artifact=artifact)
+        basis = state["basis"]
+        if basis is None:
+            phases["needs_basis"] = True
+            return None
+        views = state["views"]
+        previous = views.get(since) if since else None
+        if previous is None and since == basis.token:
+            previous = basis
+        delta = previous is not None
+        base = previous if delta else basis
+        now = time.time()
+        with _archive_history_timing(phases, "read_cut"):
+            with _archive_history_read_cut(
+                key, cache_options, now, phases=phases.setdefault("guard", {}),
+                check_client=check_client,
+            ) as cut:
+                if cut is None:
+                    return None
+                result = _archive_history_project_cut(
+                    cut, base, phases=phases.setdefault("projection", {}), check_client=check_client)
+                if result is None:
+                    phases["needs_basis"] = True
+                    return None
+                current, changed, effects = result
+                ticket_state = cut[1]["tickets"]
+        for view in reversed(views.values()):
+            if view.metadata == current.metadata and layer.same_projection(view.inputs, current.inputs):
+                current = layer.View(current.inputs, current.working, current.activity,
+                                     view.token, current.metadata, current.effect_rows)
+                break
+        payload = dict(current.metadata, conversations=changed)
+        with _archive_history_timing(phases, "encode"):
+            if (not changed and base.inputs.order == current.inputs.order
+                    and base.metadata == current.metadata):
+                current = layer.View(current.inputs, current.working, current.activity,
+                                     base.token, current.metadata, current.effect_rows)
+                body, encoding = (None, None) if delta else (basis.frame, "zstd")
+            else:
+                patch = layer.delta_payload(
+                    base.inputs.order, current.inputs.order, base.token, current.token, payload,
+                    saved_order=not delta or saved_order == _archive_list_order_token(base.inputs.order))
+                body = (layer.delta_representation(patch) if delta else
+                        layer.layer_representation(basis, patch))
+                if body is None:
+                    return None
+                encoding = "zstd"
+        if check_client is not None:
+            check_client()
+        _trace_row_flicker(None, now=now, activity=current.activity)
+        _archive_list_ticket_effects(effects, state=ticket_state)
+        views[current.token] = current
+        views.move_to_end(current.token)
+        while len(views) > 3:
+            views.popitem(last=False)
+        return body, encoding, '"d-' + current.token + '"'
+    except (OSError, sqlite3.Error, TypeError, ValueError,
+            continuation_topics.UnavailableArchiveProjection) as exc:
+        phases["fallback"] = type(exc).__name__
+        return None
+    finally:
+        _ARCHIVE_HISTORY_LOCK.release()
 
 
 _archive_list_parent_ids = _archive_preview.parent_ids
@@ -19200,7 +19664,7 @@ def _archive_list_window_rows(rows, cutoff, idea_tickets_by_sid, parents, *, anc
 
 def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _inputs=None,
                                _retain_templates=True, _row_overlays=None, check_client=None,
-                               _history_projection=None):
+                               _history_projection=None, _sidecars=None, _ticket_effects=True, _topic_persist=True):
     # Request-local diagnostics distinguish CPU work from GIL/lock waits on
     # the real corpus, without the per-call overhead of a Python profiler.
     phase_wall = time.perf_counter() if phases is not None else 0
@@ -19214,7 +19678,9 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _in
                             "cpu_ms": round((cpu - phase_cpu) * 1000, 1)}
             phase_wall, phase_cpu = wall, cpu
 
-    if _inputs is None:
+    if _sidecars is not None:
+        resumes, parents, idea_tickets_by_sid = (_sidecars["resumes"], _sidecars["parents"], _sidecars["ideas"])
+    elif _inputs is None:
         resumes = _load_usage_limit_resumes()
         parents = _session_graph.parent_snapshot()
         # One mtime-cached read, or {} when the plugin is disabled.
@@ -19270,7 +19736,7 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _in
         projected.append(_archive_list_project_row(
             row, resumes=resumes, parents=parents, _template=template,
             _fields_by_shape=fields_by_shape, _retain_template=_retain_templates,
-            _prepared=static))
+            _prepared=static, _resume_now=_sidecars["now"] if _sidecars is not None else None))
     phase("rows")
     if check_client is not None:
         check_client()
@@ -19281,8 +19747,14 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _in
     if phases is not None and _history_projection is not None:
         phases["history_static_rows"] = {"hits": hits, "prepared": len(pending or {})}
     # Persisted rows may predate a goal change or a title override.
-    row_overlays = _archive_list_row_overlays() if _row_overlays is None else _row_overlays
-    drivers = _session_graph.driver_snapshot()
+    if _sidecars is None:
+        row_overlays = _archive_list_row_overlays() if _row_overlays is None else _row_overlays
+        drivers = _session_graph.driver_snapshot()
+        topic_inputs = {}
+    else:
+        row_overlays = _sidecars["overlays"]
+        drivers = _sidecars["drivers"]
+        topic_inputs = {"names": _sidecars["names"]}
     for out in projected:
         sid = out.get("session_id") or out.get("id")
         if sid in drivers:
@@ -19295,29 +19767,40 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _in
     # Resolve topic identity independently of which ancestors are loaded in
     # this response, after applying the current explicit title overrides.
     from ccc_server import continuation_topics
-    continuation_topics.attach_topics(
-        projected, diagnostics=phases.setdefault('topic_cache', {}) if phases is not None else None,
-        check_client=check_client)
+    archive_topics = _sidecars.get("topics") if _sidecars is not None else None
+    if archive_topics is None:
+        continuation_topics.attach_topics(
+            projected, diagnostics=phases.setdefault('topic_cache', {}) if phases is not None else None,
+            check_client=check_client, **topic_inputs)
+    else:
+        connection, inputs, version = archive_topics
+        continuation_topics.attach_archive_topics(
+            projected, conn=connection, names=topic_inputs["names"], inputs=inputs,
+            version=version, check_client=check_client, persist=_topic_persist)
     phase("topics")
     if check_client is not None:
         check_client()
-    _archive_list_ticket_updates(projected, idea_tickets_by_sid)
+    if _ticket_effects:
+        _archive_list_ticket_updates(projected, idea_tickets_by_sid)
+    else:
+        _archive_list_attach_tickets(projected, idea_tickets_by_sid)
     phase("tickets")
     return projected
 
 
-def _archive_list_ticket_updates(projected, idea_tickets_by_sid):
+def _archive_list_ticket_effects(projected, state=None):
     """Run live ticket processing even when the archive projection replays."""
     # Engines without a Stop hook (Codex etc.) get their ticket step here,
     # gated to pending UI spawns and children of ticketed sessions.
+    snapshot = {} if state is None else {"data": state}
     try:
-        _idea_tickets.sweep_rows(projected)
+        _idea_tickets.sweep_rows(projected, **snapshot)
     except Exception:
         pass
     # Done tickets close and archive themselves; agent-owned tails are handed
     # off and watched to a close (only rows the owner needs stay visible).
     try:
-        _idea_tickets.autopilot_rows(projected)
+        _idea_tickets.autopilot_rows(projected, **snapshot)
     except Exception:
         pass
     # One-time relabel: codex successors recorded as "child" before the
@@ -19327,6 +19810,14 @@ def _archive_list_ticket_updates(projected, idea_tickets_by_sid):
         _idea_tickets.relabel_continued_once()
     except Exception:
         pass
+
+
+def _archive_list_ticket_updates(projected, idea_tickets_by_sid):
+    _archive_list_ticket_effects(projected)
+    return _archive_list_attach_tickets(projected, idea_tickets_by_sid)
+
+
+def _archive_list_attach_tickets(projected, idea_tickets_by_sid):
     changed = False
     if idea_tickets_by_sid:
         for out in projected:
@@ -20182,7 +20673,7 @@ _ROW_FLICKER_FRESH_WINDOW_S = 15 * 60   # only track recently-active sids — a
 _ROW_FLICKER_FORGET_S = 30 * 60
 
 
-def _trace_row_flicker(rows, now=None):
+def _trace_row_flicker(rows, now=None, *, activity=None):
     """Log ADD/REMOVE transitions of recently-active sids in the payload
     actually served by /api/conversations/list (window=all polls only, so
     a tab switching window scope doesn't read as a mass disappearance).
@@ -20198,16 +20689,12 @@ def _trace_row_flicker(rows, now=None):
     """
     try:
         now = time.time() if now is None else now
-        fresh_by_sid = {}
-        for r in rows or []:
-            if not isinstance(r, dict):
-                continue
-            sid = r.get("session_id") or r.get("id")
-            if not sid:
-                continue
-            if (now - _archive_list_row_ts(r)) < _ROW_FLICKER_FRESH_WINDOW_S:
-                fresh_by_sid[sid] = r
-        now_ids = set(fresh_by_sid)
+        if activity is None:
+            now_ids = {_archive_row_sid(row) for row in rows or []
+                       if isinstance(row, dict) and _archive_row_sid(row)
+                       and now - _archive_list_row_ts(row) < _ROW_FLICKER_FRESH_WINDOW_S}
+        else:
+            now_ids = set(activity)
         _ts = time.strftime("%H:%M:%S")
         for sid in now_ids:
             missing_at = _row_flicker_missing.pop(sid, None)
@@ -37760,6 +38247,36 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                             and self.headers.get("X-CCC-Abort-On-Disconnect") == "1"
                             and not phone_access.is_remote_request(self.client_address[0], self.headers)
                             else None)
+            history_needs_basis = False
+            if (not initial and window == "all" and stale_ok and not any(cache_options.values())
+                    and qs.get("history_layer", ["0"])[0] == "1"
+                    and not phone_access.is_remote_request(self.client_address[0], self.headers)):
+                from ccc_server.static_encoding import accepted_encodings
+
+                if accepted_encodings(self.headers.get("Accept-Encoding"), supported=("zstd",)):
+                    history_phases = {}
+
+                    def build_history(check_client):
+                        return _archive_history_response(
+                            list_cache_key, cache_options, since, saved_order,
+                            phases=history_phases, check_client=check_client)
+
+                    try:
+                        layer_response = _archive_list_history_projection(
+                            (list_cache_key, since, saved_order), None,
+                            build_history, history_phases, check_client)
+                    except _ArchiveListClientDisconnected:
+                        return
+                    if layer_response is not None:
+                        status = self._send_archive_list_representation(*layer_response)
+                        record_diag("list_server", (time.perf_counter() - _lt0) * 1000.0, {
+                            "window": window, "status": status, "stale_ok": stale_ok,
+                            "cpu_ms": round((time.thread_time() - _lc0) * 1000.0, 1),
+                            "history_layer": history_phases,
+                        })
+                        return
+                    history_needs_basis = bool(history_phases.get("needs_basis"))
+                    _src_phases["history_layer_fallback"] = history_phases
             source_options = {"force_refresh": not stale_ok, "phases": _src_phases, "window": window}
             if packed_version is not None:
                 source_options["packed_version"] = packed_version
@@ -37911,6 +38428,8 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     and _body_cache_diag.get("history") == "full"):
                 archive_store.renew_sidebar_history_after_full_response(_packed_history_projection)
             _lt2 = time.perf_counter()
+            if history_needs_basis and _status in (200, "delta", 304):
+                _archive_history_start_publication()
             record_diag("list_server", (_lt2 - _lt0) * 1000.0, {
                 "window": window,
                 "status": _status,
@@ -51879,6 +52398,17 @@ def _script_main():
     # Same for the identity of a Claude session the dashboard was started from.
     for _key in _INHERITED_CLAUDE_SESSION_ENV:
         os.environ.pop(_key, None)
+    if sys.argv[1:] == ["--archive-sidebar-basis-worker"]:
+        import sqlite3
+
+        if os.environ.get("CCC_GC_FREEZE", "1") != "0":
+            gc.set_threshold(_GC_GEN0_THRESHOLD, *gc.get_threshold()[1:])
+        try:
+            published = _archive_history_publisher_main()
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            print(f"archive sidebar basis worker: {exc}", file=sys.stderr)
+            published = False
+        raise SystemExit(0 if published else 1)
     if len(sys.argv) >= 2 and sys.argv[1] == "--archive-refresh-worker":
         if len(sys.argv) != 4:
             print(

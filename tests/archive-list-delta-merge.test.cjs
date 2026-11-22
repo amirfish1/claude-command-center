@@ -1,12 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const vm = require('node:vm');
 
-const app = require('./legacy-dashboard-source.cjs');
-const start = app.indexOf('  function _mergeArchiveListDelta(');
-const src = app.slice(start, app.indexOf('  // Generous: cold-cache scans', start));
-assert.ok(start > 0 && src.length > 100);
+const {functionSource} = require('./conversation-source.cjs');
+const src = functionSource('_mergeArchiveListDelta');
 const ctx = vm.createContext({});
 vm.runInContext(`${src}\nthis.merge = _mergeArchiveListDelta;`, ctx);
 

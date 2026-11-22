@@ -1,6 +1,120 @@
 // Start the dashboard's recent-row read while its larger scripts load.
 (function () {
   'use strict';
+  function _decodeArchiveRowLayouts(payload) {
+    if (!payload || !Object.hasOwn(payload, 'row_layouts')) return payload;
+    const {row_layouts: layouts, conversations, ...metadata} = payload;
+    if (!Array.isArray(layouts) || !Array.isArray(conversations)
+        || layouts.some(keys => !Array.isArray(keys) || keys.some(key => typeof key !== 'string' || key === '__proto__'))) {
+      throw new Error('Invalid archive row layouts');
+    }
+    const rows = conversations.map(encoded => {
+      const keys = Array.isArray(encoded) && Number.isInteger(encoded[0]) && layouts[encoded[0]];
+      if (!keys || !Array.isArray(encoded[1]) || keys.length !== encoded[1].length) {
+        throw new Error('Invalid archive row');
+      }
+      const row = {};
+      for (let i = 0; i < keys.length; i++) row[keys[i]] = encoded[1][i];
+      return row;
+    });
+    return {...metadata, conversations:rows};
+  }
+
+  function _mergeArchiveListDelta(prev, d, savedOrder) {
+    if (!Array.isArray(prev) || !Array.isArray(d.ids) || !Array.isArray(d.conversations)) return null;
+    const sameOrder = d.same_order === true;
+    if (sameOrder && (!savedOrder || d.order_token !== savedOrder || d.count !== prev.length)) return null;
+    const byId = new Map();
+    for (const row of prev) {
+      const id = row && (row.session_id || row.id);
+      if (id) byId.set(String(id), row);
+    }
+    if (sameOrder && byId.size !== prev.length) return null;
+    for (const row of d.conversations) {
+      const id = row && (row.session_id || row.id);
+      if (!id || (sameOrder && !byId.has(String(id)))) return null;
+      byId.set(String(id), row);
+    }
+    if (sameOrder) return [...byId.values()];
+    if (Object.hasOwn(d, 'order_spans')) {
+      // Offsets only describe the exact pre-delta array validated by the server.
+      if (d.ids.length || !savedOrder || d.base_order !== savedOrder
+          || !Array.isArray(d.order_spans) || d.order_spans.length > 256
+          || !Number.isSafeInteger(d.count) || d.count < 0
+          || d.count > prev.length + d.conversations.length) return null;
+      const rows = [], seen = new Set();
+      const append = id => {
+        if (!byId.has(id) || seen.has(id) || rows.length >= d.count) return false;
+        seen.add(id);
+        rows.push(byId.get(id));
+        return true;
+      };
+      for (const span of d.order_spans) {
+        if (typeof span === 'string') {
+          if (!append(span)) return null;
+          continue;
+        }
+        if (!Array.isArray(span) || span.length !== 2) return null;
+        const [start, count] = span;
+        if (!Number.isSafeInteger(start) || !Number.isSafeInteger(count)
+            || start < 0 || count < 1 || start + count > prev.length) return null;
+        for (let i = start; i < start + count; i++) {
+          const row = prev[i];
+          if (!row || !append(String(row.session_id || row.id || ''))) return null;
+        }
+      }
+      return rows.length === d.count ? rows : null;
+    }
+    const out = new Array(d.ids.length);
+    for (let i = 0; i < d.ids.length; i++) {
+      const row = byId.get(String(d.ids[i]));
+      if (!row) return null;
+      out[i] = row;
+    }
+    return out;
+  }
+
+  function _decodeArchiveHistoryLayer(raw) {
+    if (raw.history_layer !== 1) return null;
+    let base, patch;
+    try {
+      base = _decodeArchiveRowLayouts(raw.base);
+      patch = _decodeArchiveRowLayouts(raw.patch);
+    } catch (_) { return null; }
+    if (!Array.isArray(base?.conversations)
+        || base.window !== 'all' || base.initial || base.delta
+        || patch?.window !== 'all' || patch.delta !== true || !base.delta_token
+        || patch.since !== base.delta_token || !patch.delta_token
+        || base.count !== base.conversations.length
+        || !Array.isArray(patch.conversations) || !Array.isArray(patch.ids)
+        || !/^[0-9a-f]{64}$/.test(base.order_token || '')
+        || !/^[0-9a-f]{64}$/.test(patch.order_token || '')) {
+      return null;
+    }
+    const validIds = (items, key) => {
+      const seen = new Set();
+      for (const item of items) {
+        const id = key(item);
+        if (typeof id !== 'string' || !id || seen.has(id)) return false;
+        seen.add(id);
+      }
+      return true;
+    };
+    const rowId = row => row?.session_id || row?.id;
+    if (!validIds(base.conversations, rowId) || !validIds(patch.conversations, rowId)
+        || !validIds(patch.ids, id => id)) return null;
+    const rows = _mergeArchiveListDelta(base.conversations, patch, base.order_token);
+    if (!rows || rows.length !== patch.count) return null;
+    // The layer is self-contained. Keep the current token and materialized
+    // complete rows for conditional reads and IndexedDB, like an ordinary 200.
+    const {delta, since, ids, order_spans, base_order, same_order, ...metadata} = patch;
+    return {...metadata, conversations: rows};
+  }
+
+  window.CCCArchiveWire = Object.freeze({
+    _decodeArchiveRowLayouts, _mergeArchiveListDelta, _decodeArchiveHistoryLayer,
+  });
+
   if (window.self !== window.top) return;
   const params = new URLSearchParams(location.search);
   const app = params.get('ccc_app');
@@ -79,22 +193,16 @@
     if (!(bytes instanceof ArrayBuffer) || !bytes.byteLength || bytes.byteLength > maxBytes) return null;
     const packed = JSON.parse(new TextDecoder('utf-8', {fatal:true}).decode(bytes));
     if (!packed || packed.delta || packed.initial) return null;
+    if (packed.history_layer !== undefined) {
+      if (packed.base?.count > maxRows || packed.patch?.count > maxRows) return null;
+      return _decodeArchiveHistoryLayer(packed)?.conversations || null;
+    }
     // Older snapshots store the layout pair. A complete boot response can
-    // be stored directly, without serializing its decoded rows again.
+    // be stored directly without serializing its decoded rows again.
     const [layouts, encodedRows] = Array.isArray(packed)
       ? packed : [packed.row_layouts, packed.conversations];
-    if (!Array.isArray(layouts) || !Array.isArray(encodedRows) || encodedRows.length > maxRows
-        || layouts.some(keys => !Array.isArray(keys)
-          || keys.some(key => typeof key !== 'string' || key === '__proto__'))) return null;
-    return encodedRows.map(encoded => {
-      const keys = Array.isArray(encoded) && Number.isInteger(encoded[0]) && layouts[encoded[0]];
-      if (!keys || !Array.isArray(encoded[1]) || keys.length !== encoded[1].length) {
-        throw new Error('Invalid saved archive row');
-      }
-      const row = {};
-      for (let i = 0; i < keys.length; i++) row[keys[i]] = encoded[1][i];
-      return row;
-    });
+    if (!Array.isArray(encodedRows) || encodedRows.length > maxRows) return null;
+    return _decodeArchiveRowLayouts({row_layouts:layouts, conversations:encodedRows}).conversations;
   };
   let dbPromise;
   const open = () => dbPromise || (dbPromise = new Promise(resolve => {
@@ -296,7 +404,7 @@
     const payload = JSON.parse(new TextDecoder().decode(bytes));
     // An early response for a different view may never be consumed. Keep
     // the extra buffer only when the complete-list loader has picked it up.
-    if (snapshot.consumed && !payload?.delta && !payload?.initial && Array.isArray(payload?.row_layouts)
+    if (snapshot.consumed && !payload?.delta && !payload?.initial && (Array.isArray(payload?.row_layouts) || payload?.history_layer === 1)
         && bytes.byteLength <= maxBytes) {
       response._cccArchivePackedBytes = bytes;
     }
@@ -323,7 +431,7 @@
       let target = value?.delta ? fullUrl + '&since=' + encodeURIComponent(value.delta) : fullUrl;
       const savedOrder = value?.delta && /^[0-9a-f]{64}$/.test(value.order) ? value.order : '';
       if (savedOrder) target += '&saved_order=' + savedOrder;
-      if (windowName === 'all') target += '&row_layouts=1&order_spans=1';
+      if (windowName === 'all') target += '&row_layouts=1&order_spans=1&history_layer=1';
       const headers = value?.etag ? {'If-None-Match':value.etag} : {};
       headers['X-CCC-Abort-On-Disconnect'] = '1';
       const matchesBase = base => base && base.etag === value.etag && base.delta === value.delta
