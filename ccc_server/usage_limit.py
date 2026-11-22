@@ -739,12 +739,16 @@ _USAGE_LIMIT_CLAUDE_SCAN = {"full_at": 0.0, "root": None, "dirs": {}, "recent": 
 
 def _usage_limit_claude_dir_scan(d, now, recent):
     try:
-        for p in d.glob("*.jsonl"):
-            try:
-                if now - p.stat().st_mtime <= _USAGE_LIMIT_CANDIDATE_WINDOW_SECS:
-                    recent.add(p)
-            except OSError:
-                continue
+        with os.scandir(d) as entries:
+            for entry in entries:
+                if not os.path.normcase(entry.name).endswith(".jsonl"):
+                    continue
+                try:
+                    # Only recent transcripts need a Path for the next pass.
+                    if now - entry.stat().st_mtime <= _USAGE_LIMIT_CANDIDATE_WINDOW_SECS:
+                        recent.add(d / entry.name)
+                except OSError:
+                    continue
     except OSError:
         pass
 
