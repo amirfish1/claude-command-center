@@ -4868,6 +4868,36 @@ FILE_EXT_TO_CATEGORY = {
 PREVIEW_TEXT_EXTENSIONS = frozenset({".txt", ".log", ".json"})
 
 
+MESSAGE_MD_DIR = Path.home() / ".claude" / "command-center" / "message-md"
+_MESSAGE_MD_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _save_message_markdown(text, title="", base_dir=None):
+    """Write a conversation message to a fresh .md file and return its path.
+
+    Backs the "Copy and open as MD" message action. Files land in a CCC-owned
+    directory with a server-chosen name, so the client never picks a path."""
+    body = str(text or "")
+    if not body.strip():
+        raise ValueError("empty text")
+    if len(body.encode("utf-8")) > _MESSAGE_MD_MAX_BYTES:
+        raise ValueError("text too large")
+    slug = re.sub(r"[^a-z0-9]+", "-", str(title or "").lower()).strip("-")[:40]
+    if not slug:
+        first = next((ln for ln in body.splitlines() if ln.strip()), "")
+        slug = re.sub(r"[^a-z0-9]+", "-", first.lower()).strip("-")[:40] or "message"
+    out_dir = Path(base_dir) if base_dir else MESSAGE_MD_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    path = out_dir / f"{stamp}-{slug}.md"
+    n = 2
+    while path.exists():
+        path = out_dir / f"{stamp}-{slug}-{n}.md"
+        n += 1
+    path.write_text(body if body.endswith("\n") else body + "\n", encoding="utf-8")
+    return path
+
+
 def _categorize_file_target(target, *, preview=False):
     """Return the category name for `target` (a path or URL), or None
     if its extension is not in the whitelist. Case-insensitive on the
@@ -43539,6 +43569,24 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 handler = nextjs_stop
             result, status = handler(ctx["repo_path"], ctx.get("cwd"))
             self.send_json(result, status)
+        elif path == "/api/message-md":
+            # "Copy and open as MD": save one message as a markdown file in
+            # CCC's own message-md dir; the client previews it via read-file.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            try:
+                saved = _save_message_markdown(payload.get("text"), payload.get("title") or "")
+                self.send_json({"ok": True, "path": str(saved), "name": saved.name})
+            except ValueError as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+            except OSError as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/read-file":
             # Reads file content for the Files-panel preview / transcript
             # link preview. Sandbox checks were removed alongside /api/open

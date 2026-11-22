@@ -1,0 +1,1 @@
+- Assistant messages get a 📝 "Copy and open as MD file" icon that copies the message, saves it as a Markdown file, and opens it in the file preview.

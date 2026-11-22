@@ -201,6 +201,7 @@
     return '<span class="assistant-message-actions" data-role="assistant-message-actions">'
       + '<button type="button" class="assistant-message-action" data-read-assistant-message title="Read assistant message aloud" aria-label="Read assistant message aloud">&#128266;</button>'
       + '<button type="button" class="assistant-message-action" data-copy-assistant-message title="Copy assistant message" aria-label="Copy assistant message">&#128203;</button>'
+      + '<button type="button" class="assistant-message-action" data-open-assistant-md title="Copy and open as MD file" aria-label="Copy and open as MD file">&#128221;</button>'
       + '</span>';
   }
 

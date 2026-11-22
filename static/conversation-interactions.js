@@ -971,6 +971,37 @@ document.addEventListener('click', async (ev) => {
   });
   }
 
+  function installConversationInteraction31b() {
+document.addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('[data-open-assistant-md]');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const eventEl = btn.closest('.event.assistant') || btn.closest('.kimi-answer-meta') || btn.closest('.ask-turn-a');
+    const text = (0, sharedState.assistantNodeTextForCopy)(eventEl);
+    if (!text) {
+      (0, sharedState.showOpToast)('No assistant message to open', 'error');
+      return;
+    }
+    const copied = await (0, sharedState.copyTextValue)(text);
+    let saved;
+    try {
+      const r = await fetch('/api/message-md', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({text}),
+      });
+      saved = await r.json().catch(() => ({ok: false, error: 'HTTP ' + r.status}));
+      if (!r.ok || !saved.ok) throw new Error(saved.error || ('HTTP ' + r.status));
+      await (0, sharedState.loadMarkdownIntoFileViewer)(saved.path, saved.name);
+    } catch (e) {
+      (0, sharedState.showOpToast)('Open as MD failed: ' + (e && e.message || e), 'error');
+      return;
+    }
+    (0, sharedState.showOpToast)((copied ? 'Copied and opened ' : 'Opened ') + saved.name, 'ok');
+  });
+  }
+
   function installConversationInteraction32() {
 document.addEventListener('click', async (ev) => {
     const btn = ev.target.closest('[data-copy-user-message]');
@@ -4009,6 +4040,7 @@ document.addEventListener('keydown', (ev) => {
     installConversationInteraction29();
     installConversationInteraction30();
     installConversationInteraction31();
+    installConversationInteraction31b();
     installConversationInteraction32();
     installConversationInteraction33();
     installConversationInteraction34();
