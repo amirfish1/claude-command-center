@@ -3493,6 +3493,80 @@ def test_archive_indexed_update_leaves_unchanged_compound_identities_undecoded(
     assert len(identity_reads) == 1
 
 
+@pytest.mark.parametrize("case", ["replace", "new", "changed-identity", "duplicate-sid"])
+def test_detached_archive_file_delta_uses_point_lookup_when_safe(tmp_path, monkeypatch, case):
+    from ccc_server import archive_store
+
+    target = tmp_path / "archive.json"
+    key = server._archive_response_cache_key()
+    now = time.time()
+    rows = [
+        {"session_id": f"s{i}", "engine": "claude", "jsonl_path": f"/tmp/{i}.jsonl",
+         "mtime": now if i == 10 else now - 30 * 86400}
+        for i in range(300)
+    ]
+    changed = rows[10]["jsonl_path"]
+    fresh = dict(rows[10], first_message="new transcript text")
+    if case == "new":
+        fresh.update(session_id="new", jsonl_path="/tmp/new.jsonl")
+        changed = fresh["jsonl_path"]
+    elif case == "changed-identity":
+        fresh["source"] = "other"
+    elif case == "duplicate-sid":
+        rows.insert(0, dict(rows[10], jsonl_path="/tmp/other.jsonl"))
+    old_files = {row["jsonl_path"]: (1, 1) for row in rows}
+    new_files = dict(old_files)
+    new_files[changed] = (2, 1)
+    snapshot = {
+        "schema_version": server._ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
+        "build_id": server._ARCHIVE_RESPONSE_CACHE_BUILD_ID,
+        "entries": {key: {"cached_at": now - 10, "signature": "old", "conversations": rows}},
+        "signature_maps": {"old": {"files": old_files, "extras": {}}},
+    }
+    archive_store.save(
+        target, snapshot, complete=True, sidebar_key=key,
+        sidebar_pages=(server._ARCHIVE_SIDEBAR_PACKED_VERSION, server._archive_list_pack_static),
+    )
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", target)
+    monkeypatch.setattr(server, "_ARCHIVE_SIG_TTL", 0)
+    monkeypatch.setattr(server, "_ARCHIVE_SERVE_TTL", 0)
+    monkeypatch.setattr(server, "_ARCHIVE_STATMAP_BY_SIG", {})
+    monkeypatch.setattr(server, "_archive_corpus_signature_parts", lambda: ("new", new_files, {}))
+    monkeypatch.setattr(server, "_save_conv_meta_cache", lambda: None)
+    monkeypatch.setattr(server, "_rehydrate_archive_hot_rows", lambda rows: rows)
+    monkeypatch.setattr(server, "find_all_conversations", lambda **kw: [fresh])
+    statements = []
+    connect = archive_store._connect
+
+    def traced(*args, **kwargs):
+        con = connect(*args, **kwargs)
+        con.set_trace_callback(statements.append)
+        return con
+
+    monkeypatch.setattr(archive_store, "_connect", traced)
+    _, from_cache = server._archive_compute_rows(key, {}, detached=True)
+
+    assert from_cache
+    assert server._ARCHIVE_COMPUTE_LAST_PHASES["changed"] == 1
+    assert server._ARCHIVE_COMPUTE_LAST_PHASES.get("replace_rows") == (1 if case == "replace" else None)
+    lookups = [sql for sql in statements if "SELECT identity,digest,position FROM rows" in sql]
+    assert len(lookups) == 1 and "AND sid=" in lookups[0]
+    scanned = any("SELECT identity,sid,digest,position FROM rows" in sql for sql in statements)
+    assert scanned == (case != "replace")
+    persisted = archive_store.load(target, key=key)["entries"][key]
+    assert persisted["signature"] == "new"
+    expected = server._archive_merge_incremental_rows(rows, [fresh], [])
+    # A later occurrence can share the exact compound identity of the freshly
+    # parsed row. The general merge's publication retains one canonical row.
+    if case == "duplicate-sid":
+        assert server._ARCHIVE_COMPUTE_LAST_PHASES.get("replace_rows") is None
+        assert {archive_store.identity(row) for row in persisted["conversations"]} == {
+            archive_store.identity(row) for row in expected
+        }
+    else:
+        assert persisted["conversations"] == expected
+
+
 def test_archive_signature_dedupes_symlinked_project_dirs(big_projects, tmp_path):
     """A symlink to an existing Claude project must not double-stat its corpus."""
     n, _ = big_projects

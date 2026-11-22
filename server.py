@@ -17302,14 +17302,14 @@ def _archive_refresh_read(key, **options):
         data = archive_store.load(_ARCHIVE_RESPONSE_CACHE_FILE, key=key, **options)
         if (data and data.get("schema_version") == _ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION
                 and data.get("build_id") == _ARCHIVE_RESPONSE_CACHE_BUILD_ID):
-            if options.get("row_index"):
+            if options.get("row_index") or options.get("metadata_only"):
                 _archive_restore_signature_maps(data)
             return data["entries"].get(key)
     except (OSError, ValueError, sqlite3.Error) as exc:
         print(f"  [archive-cache] incremental read unavailable: {exc}")
 
 
-def _publish_archive_delta(key, base, merged, signature):
+def _publish_archive_delta(key, base, merged, signature, *, replace_rows=False):
     from ccc_server import archive_store
 
     entry = {"cached_at": time.time(), "conversations": merged, "signature": signature}
@@ -17317,10 +17317,13 @@ def _publish_archive_delta(key, base, merged, signature):
         _ARCHIVE_RESPONSE_CACHE_FILE, _archive_response_snapshot({key: entry}),
         complete=True, sidebar_key=_archive_response_cache_key(),
         sidebar_pages=(_ARCHIVE_SIDEBAR_PACKED_VERSION, _archive_list_pack_static),
-        base_entry=base,
+        base_entry=base, replace_rows=replace_rows,
     ):
+        if replace_rows:
+            return False
         raise RuntimeError("archive response changed while its delta was being built")
     note_archive_build(entry["cached_at"])
+    return True
 
 
 def _archive_response_cache_get(key):
@@ -20621,7 +20624,7 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
     lock = _archive_build_lock(key)
     with lock:
         _ph = time.perf_counter()
-        indexed = _archive_refresh_read(key, row_index=True) if detached else None
+        indexed = _archive_refresh_read(key, metadata_only=True) if detached else None
         entry = indexed or _archive_response_cache_build_get(key)
         phases["cache_get_ms"] = round((time.perf_counter() - _ph) * 1000.0, 1)
         _ph = time.perf_counter()
@@ -20671,10 +20674,24 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
                                 resolve_worktree_dirty=cache_options.get("resolve_worktree_dirty", False),
                                 only_jsonl_paths=changed[offset:offset + batch_size],
                             ))
-                        merged = _archive_merge_incremental_rows(
-                            entry.get("conversations") or [], fresh, removed,
+                        publish_start = time.perf_counter()
+                        published = indexed and not removed and not refresh_engines and _publish_archive_delta(
+                            key, indexed, fresh, publication_sig, replace_rows=True,
                         )
-                        phases["parse_merge_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
+                        publish_seconds = time.perf_counter() - publish_start
+                        if published:
+                            phases["replace_rows"] = len(fresh)
+                        elif indexed:
+                            row_index = _archive_refresh_read(key, row_index=True)
+                            if not row_index or row_index["cached_at"] != entry["cached_at"]:
+                                raise RuntimeError("archive response changed before merging its delta")
+                            indexed = row_index
+                        merged = None if published else _archive_merge_incremental_rows(
+                            (indexed or entry).get("conversations") or [], fresh, removed,
+                        )
+                        phases["parse_merge_ms"] = round(
+                            (time.perf_counter() - _sp - publish_seconds) * 1000.0, 1,
+                        )
                         phases["engines"] = sorted(refresh_engines)
                         _sp = time.perf_counter()
                         reuse_source = merged
@@ -20737,11 +20754,13 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
                             )
                         phases["engine_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
                         _sp = time.perf_counter()
-                        if indexed:
+                        if indexed and not published:
                             _publish_archive_delta(key, indexed, merged, publication_sig)
-                        else:
+                        elif not indexed:
                             _archive_response_cache_put(key, merged, signature=sig)
-                        phases["cache_put_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
+                        phases["cache_put_ms"] = round(
+                            (time.perf_counter() - _sp + publish_seconds) * 1000.0, 1,
+                        )
                         _sp = time.perf_counter()
                         if indexed:
                             hot = _archive_refresh_read(key, hot=True)

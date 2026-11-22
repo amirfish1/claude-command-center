@@ -184,15 +184,40 @@ def _connect(cache_file, *, write=False, shared_reader=False):
                            timeout=0.5, check_same_thread=not shared_reader)
 
 
+def _replacement_positions(con, key, rows):
+    """Resolve same-identity replacements without reading the full row index."""
+    positions = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            return None
+        sid = row.get('session_id') or row.get('id')
+        if not sid:
+            return None
+        rid = identity(row)
+        # The general merge replaces the first occurrence of a session ID in
+        # stored order. A change to that identity needs the full merge.
+        found = con.execute("""
+            SELECT identity,digest,position FROM rows
+            WHERE variant=? AND sid=? ORDER BY position LIMIT 1
+        """, (key, sid)).fetchone()
+        if not found or found[0] != rid or rid in positions:
+            return None
+        positions[rid] = found[1:]
+    return positions
+
+
 def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_pages=None,
-         base_entry=None):
+         base_entry=None, replace_rows=False):
     """Publish variants atomically. Return the count of changed row bodies.
 
     Only complete builder snapshots may remove absent rows. Hot snapshots
     and stale workers cannot erase cold history or a newer publication.
     With a base entry, publish only against that generation and return whether
-    the publication succeeded.
+    the publication succeeded. A replacement-only publication accepts just
+    the changed rows and can decline when the general merge is needed.
     """
+    if replace_rows and (base_entry is None or not complete):
+        raise ValueError("row replacements require a complete base generation")
     changed = 0
     con = _connect(cache_file, write=True)
     try:
@@ -216,10 +241,6 @@ def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_page
                 if base_entry is not None:
                     return False
                 continue
-            existing = (base_entry or {}).get("_row_index")
-            if existing is None:
-                existing = {rid: (digest, position) for rid, digest, position in con.execute(
-                    'SELECT identity,digest,position FROM rows WHERE variant=?', (key,))}
             projections_current = base_entry is not None and con.execute("""
                 SELECT 1 FROM row_projection_versions
                 WHERE variant=? AND cached_at=? AND inventory=? AND attention=?
@@ -234,6 +255,16 @@ def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_page
             preview_current = base_entry is not None and key == sidebar_key and con.execute("""
                 SELECT 1 FROM sidebar_preview_generation WHERE variant=? AND cached_at=? AND version=?
             """, (key, previous[0], archive_preview.VERSION)).fetchone()
+            existing = (base_entry or {}).get("_row_index")
+            if replace_rows:
+                if not projections_current or (key == sidebar_key and not preview_current):
+                    return False
+                existing = _replacement_positions(con, key, entry['conversations'])
+                if existing is None:
+                    return False
+            elif existing is None:
+                existing = {rid: (digest, position) for rid, digest, position in con.execute(
+                    'SELECT identity,digest,position FROM rows WHERE variant=?', (key,))}
             preview_ids = archive_preview.indexed(con, key) if key == sidebar_key and not preview_current else None
             previous_hot = None
             previous_changed, inserted = set(), set()
@@ -246,6 +277,8 @@ def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_page
                 if not isinstance(row, dict):
                     continue
                 rid = identity(row, index)
+                if replace_rows:
+                    index = existing[rid][1]
                 seen.add(rid)
                 if rid in existing and rid in base_rows and (
                         row is base_rows[rid] or row == base_rows[rid]):
@@ -1086,7 +1119,8 @@ class _RowIndexEntry(dict):
         return super().get(key, default)
 
 
-def load(cache_file, *, hot=False, key=None, now=None, row_index=False, reuse_engines=None):
+def load(cache_file, *, hot=False, key=None, now=None, row_index=False, metadata_only=False,
+         reuse_engines=None):
     """Read all metadata but only requested row bodies, with ancestor context."""
     if not database_path(cache_file).exists():
         return None
@@ -1111,7 +1145,9 @@ def load(cache_file, *, hot=False, key=None, now=None, row_index=False, reuse_en
                 result['schema_version'] = min(previous_version, meta['schema_version'])
                 result['build_id'] = str(result['schema_version'])
             result['signature_maps'].update(meta.get('signature_maps') or {})
-            if row_index:
+            if metadata_only:
+                rows = []
+            elif row_index:
                 records = con.execute("""
                     SELECT identity,sid,digest,position FROM rows WHERE variant=? ORDER BY position
                 """, (variant,))
