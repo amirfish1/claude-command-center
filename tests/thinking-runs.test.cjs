@@ -22,6 +22,9 @@ test('real renderers replace consecutive thoughts in a steady slot, then preserv
       if (respondConversationAsset(request)) return;
       if (url.pathname === '/static/app.js') return request.respond({ status: 200, contentType: 'application/javascript', body: exposed });
       if (url.pathname === '/static/app.css') return request.respond({ status: 200, contentType: 'text/css', body: css });
+      // Serve any other real script (e.g. archive helpers) the page loads.
+      const staticFile = /^\/static\/[\w.-]+\.js$/.test(url.pathname) && require('node:path').join(__dirname, '..', url.pathname);
+      if (staticFile && fs.existsSync(staticFile)) return request.respond({ status: 200, contentType: 'application/javascript', body: fs.readFileSync(staticFile, 'utf8') });
       return request.respond({ status: 200, contentType: 'application/json', body: '[]' });
     });
     await page.goto('http://ccc-thinking.test/', { waitUntil: 'load' });
@@ -147,9 +150,18 @@ test('real renderers replace consecutive thoughts in a steady slot, then preserv
           const html = view.innerHTML;
           h._syncThinkingRuns(view);
           const idempotent = html === view.innerHTML;
+          // Narration followed by more work joins the turn's one block as its
+          // live note; only a user message starts a new block.
           render([{kind:'text',text:'Playback speed is fixed.'}]);
+          const pendingVisible = [...view.querySelectorAll('.assistant-text')].pop().checkVisibility();
           render([{kind:'tool_use',name:'Bash',id:'activity-after-reply',detail:'Run the tests'}]);
-          const replyBoundary = view.querySelectorAll('.activity-run').length === 2;
+          const narrationFolded = pendingVisible && view.querySelectorAll('.activity-run').length === 1
+            && slot.querySelector('.activity-run-note').textContent === 'Playback speed is fixed.'
+            && slot.querySelector('.activity-run-preview').textContent === 'Run the tests...'
+            && ![...view.querySelectorAll('.assistant-text')].some(el => el.checkVisibility());
+          h.renderConversationEvents([{type:'user',line:++line,text:'Also add a test'}],paneId,{initialLoad:true});
+          render([{kind:'tool_use',name:'Bash',id:'activity-next-turn',detail:'Write the test'}]);
+          const replyBoundary = narrationFolded && view.querySelectorAll('.activity-run').length === 2;
           render([{kind:'tool_use',name:'AskUserQuestion',id:'activity-question',detail:'Which voice do you prefer?'}]);
           const question = [...view.querySelectorAll('.tool-call, .kimi-tool')].find(el=>el.textContent.includes('Which voice'));
           const questionVisible = !!question?.checkVisibility();

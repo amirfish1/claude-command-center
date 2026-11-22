@@ -1861,10 +1861,15 @@
 
   // Keep the transcript sources in place for reconciliation, paging and tool
   // result routing. Only their collapsed presentation is replaced by a slot.
+  // One turn reads as one "Working" block: narration that is followed by more
+  // activity folds into it and shows as its live note, replaced in place. Text
+  // after the last activity (the answer, or narration not yet followed by a
+  // tool) stays visible below the block. User messages end the block.
   function _syncActivityRuns(view) {
     const stale = new Set(view.querySelectorAll('.activity-run'));
     const sources = new Set(view.querySelectorAll('.activity-run-source'));
     let members = [];
+    let pendingText = [];
     const flush = () => {
       if (!members.length) return;
       const first = members[0];
@@ -1874,6 +1879,7 @@
         slot.className = 'activity-run';
         slot.innerHTML = '<div class="activity-run-header"><button type="button" class="activity-run-toggle" aria-expanded="false">Working</button>'
           + '<span class="activity-run-orchestration"></span></div>'
+          + '<div class="activity-run-note" dir="auto"></div>'
           + '<div class="activity-run-preview" dir="auto"></div>';
         slot.querySelector('button').addEventListener('click', () => {
           const open = slot.classList.toggle('is-expanded');
@@ -1889,7 +1895,13 @@
         member.classList.add('activity-run-source');
         member.classList.toggle('activity-run-open', slot.classList.contains('is-expanded'));
       }
-      const latest = members[members.length - 1];
+      const narration = members.filter(member => member.matches('.assistant-text'));
+      const activity = members.filter(member => !member.matches('.assistant-text'));
+      const lastNote = narration[narration.length - 1];
+      const noteText = lastNote ? (lastNote.textContent || '').trim().split(/\n\s*\n/).filter(Boolean).pop() || '' : '';
+      const note = slot.querySelector('.activity-run-note');
+      if (note.textContent !== noteText) note.textContent = noteText;
+      const latest = activity[activity.length - 1];
       const calls = latest.matches('.tool-call, .kimi-tool') ? [latest] : Array.from(latest.querySelectorAll('.tool-call, .kimi-tool'));
       const lastCall = calls[calls.length - 1];
       const detail = latest.matches('.thinking-run') ? latest.querySelector('.thinking-run-preview')
@@ -1903,7 +1915,7 @@
       slot.classList.toggle('has-error', failed);
       const title = failed ? 'Tool failed — show activity history' : 'Show activity history';
       if (slot.querySelector('button').title !== title) slot.querySelector('button').title = title;
-      const labels = _ccOrchLabels(members.map(el => ({ el })));
+      const labels = _ccOrchLabels(activity.map(el => ({ el })));
       const chips = slot.querySelector('.activity-run-orchestration');
       const visibleLabels = labels.slice(0, 4);
       if (labels.length > 4) visibleLabels.push('+' + (labels.length - 4));
@@ -1931,13 +1943,18 @@
         el.querySelector(':scope > .kimi-tool-group-head')?.setAttribute('aria-expanded', 'true');
       }
       if (!needsAttention && el.matches('.thinking-run, .tool-call-group, .tool-call, .kimi-tool-group, .kimi-tool')) {
-        members.push(el);
+        members.push(...pendingText, el);
+        pendingText = [];
+      } else if (el.matches('.assistant-text') && !el.closest('.ccc-video-cleared')) {
+        // Held until we know whether more activity follows in this turn.
+        pendingText.push(el);
       } else {
         flush();
+        pendingText = [];
       }
     };
     for (const event of Array.from(view.children)) {
-      if (event.matches('.activity-run, .conv-codex-state, .conv-live-tool-inline, .conv-live-tool-strip')) continue;
+      if (event.matches('.activity-run, .conv-codex-state, .conv-live-tool-inline, .conv-live-tool-strip, .spawn-stats')) continue;
       if (event.matches('.event.assistant, .kimi-turn') && !event.classList.contains('ccc-video-cleared')) {
         for (const child of Array.from(event.children)) visit(child);
       } else visit(event);

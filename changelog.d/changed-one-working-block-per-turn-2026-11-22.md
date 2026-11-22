@@ -1,0 +1,1 @@
+- A turn now shows a single "Working" block: the latest narration and the latest command replace each other in place under it, instead of a new "Working" row after every message. Expand it to see the full history.
