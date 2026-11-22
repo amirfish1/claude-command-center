@@ -3707,6 +3707,50 @@ def test_archive_point_refresh_only_repacks_changed_preview_pages(tmp_path, monk
         assert list(archive_preview._ordered_rows(con, key)) == expected
 
 
+def test_archive_point_update_batches_wal_checkpoint(tmp_path):
+    from contextlib import closing
+
+    from ccc_server import archive_store
+
+    cache = tmp_path / "archive.json"
+    database = archive_store.database_path(cache)
+    key = "base"
+    original = {"session_id": "one", "mtime": 1}
+
+    def snapshot(stamp, row):
+        return {
+            "schema_version": 1, "build_id": "test",
+            "entries": {key: {"cached_at": stamp, "conversations": [row]}},
+        }
+
+    with closing(sqlite3.connect(database)) as keeper:
+        keeper.execute("PRAGMA page_size=4096")
+        keeper.execute("VACUUM")
+        archive_store.save(cache, snapshot(1, original), complete=True)
+        keeper.execute("SELECT count(*) FROM variants").fetchone()
+        # Retain an idle connection, as the dashboard does, and seed a WAL
+        # larger than the default auto-checkpoint with a separate writer.
+        with closing(sqlite3.connect(database)) as writer, writer:
+            writer.execute("PRAGMA wal_autocheckpoint=0")
+            writer.execute("CREATE TABLE checkpoint_probe (body BLOB)")
+            writer.execute("INSERT INTO checkpoint_probe VALUES (zeroblob(?))", (5 << 20,))
+        before = database.stat().st_size
+
+        replacement = dict(original, mtime=2)
+        assert archive_store.save(
+            cache, snapshot(2, replacement), complete=True,
+            base_entry={"cached_at": 1}, point_update=True,
+        )
+        assert database.stat().st_size == before
+        entry = archive_store.load(cache, key=key)["entries"][key]
+        assert entry["cached_at"] == 2
+        assert entry["conversations"] == [replacement]
+
+        # General publications still use SQLite's ordinary threshold.
+        archive_store.save(cache, snapshot(3, dict(original, mtime=3)), complete=True)
+        assert database.stat().st_size >= before + (5 << 20)
+
+
 def test_archive_signature_dedupes_symlinked_project_dirs(big_projects, tmp_path):
     """A symlink to an existing Claude project must not double-stat its corpus."""
     n, _ = big_projects

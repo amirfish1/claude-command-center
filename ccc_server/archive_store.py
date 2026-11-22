@@ -29,6 +29,7 @@ from .bounded_cache import ByteBudgetCache
 HOT_SECONDS = 7 * 86400
 _SIGNATURE_MAP_COMPRESS_MIN_BYTES = 64 << 10
 _SIGNATURE_MAP_MAX_BYTES = 64 << 20
+_POINT_WAL_CHECKPOINT_BYTES = 32 << 20
 
 # The peer inventory never consumes transcript/parser detail. Publish its
 # projection in the same transaction as each canonical row, so polling peers
@@ -279,6 +280,14 @@ def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_page
     changed = 0
     con = _connect(cache_file, write=True)
     try:
+        if point_update:
+            # Batch checkpoint work across small publications. A point write
+            # can otherwise pay for megabytes left in the WAL by a prior
+            # generation. The connection retains SQLite's durability mode.
+            page_size, = con.execute('PRAGMA page_size').fetchone()
+            default_pages, = con.execute('PRAGMA wal_autocheckpoint').fetchone()
+            checkpoint_pages = max(default_pages, _POINT_WAL_CHECKPOINT_BYTES // page_size)
+            con.execute(f'PRAGMA wal_autocheckpoint={checkpoint_pages}')
         from ccc_server import archive_preview, archive_sidebar_pages
         if sidebar_key is not None:
             archive_preview.setup(con)
