@@ -978,6 +978,10 @@ def _sync_watchtower(conn: sqlite3.Connection) -> None:
     with conn:
         conn.execute("DELETE FROM tickets")
         conn.execute("DELETE FROM tickets_fts")
+        # Build once in the ticket writer. The shared edge table can contain
+        # millions of commit mentions that this refresh never replaces.
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_edge_resolves ON edges(kind) "
+                     "WHERE kind = 'resolves'")
         conn.execute("DELETE FROM edges WHERE kind = 'resolves'")
         conn.executemany("INSERT INTO tickets VALUES (?,?,?,?,?,?,?,?,?)", tickets_rows)
         conn.executemany("INSERT INTO tickets_fts VALUES (?,?,?,?,?,?)", fts_rows)

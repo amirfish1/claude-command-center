@@ -1,0 +1,1 @@
+- Shorten the database lock held during WatchTower refreshes on large ship graphs by indexing ticket resolution edges.

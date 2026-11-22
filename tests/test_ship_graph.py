@@ -1264,3 +1264,34 @@ def test_commit_owner_edge_lookup_uses_partial_index(tmp_path):
         plan = " ".join(r[-1] for r in conn.execute("EXPLAIN QUERY PLAN " + sql, args))
         assert "idx_edge_dst_owner" in plan, plan
     conn.close()
+
+
+def test_watchtower_sync_replaces_only_resolution_edges(mock_graph_env):
+    with sqlite3.connect(mock_graph_env["db_path"]) as conn:
+        ship_graph._init_db(conn)
+        rows = [
+            ("ticket:AUTH-101", "commit:old", "resolves", 1.0),
+            ("ticket:AUTH-101", "commit:old", "mentioned", 1.0),
+            ("session-001", "ticket:AUTH-101", "ref", 1.0),
+        ]
+        conn.executemany("INSERT INTO edges VALUES (?,?,?,?)", rows)
+
+        ship_graph._sync_watchtower(conn)
+
+        plan = conn.execute(
+            "EXPLAIN QUERY PLAN DELETE FROM edges WHERE kind = 'resolves'"
+        ).fetchall()
+        assert any("idx_edge_resolves" in step[-1] for step in plan)
+        assert set(conn.execute("SELECT * FROM edges")) == {
+            *rows[1:],
+            ("ticket:AUTH-101", "commit:" + mock_graph_env["commit_sha"], "resolves", 1.0),
+        }
+
+        source_path = mock_graph_env["wt_db_path"]
+        previous_mtime = source_path.stat().st_mtime
+        with sqlite3.connect(source_path) as source:
+            source.execute("DELETE FROM items WHERE ref='AUTH-101'")
+        os.utime(source_path, (previous_mtime + 1, previous_mtime + 1))
+        ship_graph._sync_watchtower(conn)
+
+        assert set(conn.execute("SELECT * FROM edges")) == set(rows[1:])
