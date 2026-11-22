@@ -21,8 +21,8 @@ the child exits when its parent goes away.
   The index is on-disk SQLite, so dashboard reads see the result.
 * session-fts-warm: ``fts_sync`` does the same for the recall index
   (MEMORY-20); the dashboard re-reads vectors only when ``semb`` changed.
-* daily throughput: ``throughput_ticket_counts`` reads and aggregates all
-  queues here, returning just the four count fields to the dashboard.
+* daily throughput: ``throughput_turn_stats`` scans transcripts and returns
+  the daily summary. ``throughput_ticket_counts`` aggregates the queues.
 * productivity: ``productivity_snapshot`` builds the 16-week datasets here;
   the dashboard retains refresh state, publication and live sampler health.
 * runaway detection: ``runaway_scan`` scans active transcripts and returns
@@ -404,6 +404,12 @@ class _Child:
         return {"ok": True, "data": usage_stats._throughput_daily_ticket_counts_local(
             float(req["start_epoch"]), float(req["end_epoch"]))}
 
+    def throughput_turn_stats(self, req):
+        from ccc_server import usage_stats
+        return {"ok": True, "data": usage_stats._throughput_daily_turn_stats_local(
+            float(req["start_epoch"]), float(req["end_epoch"]), req["engine"], req["final"],
+        )}
+
     def productivity_snapshot(self, req):
         # Importing server does not run the dashboard startup loader. Seed
         # the parser cache before the first historical scan in this process.
@@ -445,6 +451,7 @@ class _Child:
                   "live_activity": self.live_activity,
                   "system_health": self.system_health,
                   "throughput_ticket_counts": self.throughput_ticket_counts,
+                  "throughput_turn_stats": self.throughput_turn_stats,
                   "worker_closure": self.worker_closure,
                   "productivity_snapshot": self.productivity_snapshot,
                   "runaway_scan": self.runaway_scan,

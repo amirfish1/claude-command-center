@@ -103,6 +103,47 @@ def test_daily_ticket_counts_use_helper_wire_protocol(helper, monkeypatch):
     assert calls == [(100.0, 200.0)]
 
 
+@pytest.mark.parametrize("engine", ["claude", "codex", "kimi"])
+@pytest.mark.parametrize("is_final", [False, True])
+def test_daily_turn_stats_match_local_calculation(helper, monkeypatch, engine, is_final):
+    calls = []
+    turns = [{
+        "session_id": "session-a", "engine": engine, "model": "test-model",
+        "t_start": "2026-01-01T00:59:50Z", "t_end": "2026-01-01T01:00:00Z",
+        "tokens_in": 50, "tokens_out": 10, "dur_sec": 10,
+    }]
+
+    def window(start, end, selected_engine):
+        calls.append((start, end, selected_engine, threading.get_ident()))
+        return turns
+
+    monkeypatch.setattr(usage_stats, "_throughput_window_turns", window)
+    monkeypatch.setattr(usage_stats.time, "time", lambda: 1767229400.0)
+    start, end = 1767225600, 1767312000
+    local = usage_stats._throughput_daily_turn_stats_local(start, end, engine, is_final)
+    caller = threading.get_ident()
+    monkeypatch.setenv("CCC_BG_HELPER", "1")
+    assert usage_stats._throughput_daily_turn_stats(start, end, engine, is_final) == local
+    assert [call[:3] for call in calls] == [(start, end, engine)] * 2
+    assert calls[0][3] == caller and calls[1][3] != caller
+    assert local["totals"]["turns"] == 1
+    assert local["active_sessions_last_hour"] == int(not is_final)
+
+    monkeypatch.setenv("CCC_BG_HELPER", "0")
+    assert usage_stats._throughput_daily_turn_stats(start, end, engine, is_final) == local
+    assert calls[-1][3] == caller
+
+
+def test_daily_turn_stats_fall_back_when_helper_unavailable(monkeypatch):
+    monkeypatch.setattr(bg_helper, "enabled", lambda: True)
+    monkeypatch.setattr(bg_helper, "is_child", lambda: False)
+    monkeypatch.setattr(bg_helper, "call", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        usage_stats, "_throughput_daily_turn_stats_local", lambda *args: {"totals": {}}
+    )
+    assert usage_stats._throughput_daily_turn_stats(100, 200, "claude", True) == {"totals": {}}
+
+
 def test_gh_proxy_mirrors_board_and_version(helper):
     fake, child = helper
     fake.set_board([{"ref": "CCC-1"}, {"ref": "CCC-2"}])

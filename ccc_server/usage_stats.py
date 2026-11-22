@@ -3509,6 +3509,50 @@ def _throughput_daily_compare_block(iso_date, engine, now):
     }
 
 
+def _throughput_daily_turn_stats_local(start_epoch, end_epoch, engine, is_final):
+    turns = _throughput_window_turns(start_epoch, end_epoch, engine)
+    summary = _core._throughput_summary(turns)
+    top_sessions, session_count = _throughput_sessions_from_turns(turns, limit=20)
+    active_last_hour = set()
+    if not is_final:
+        active_cutoff = time.time() - 3600
+        for turn in turns:
+            t_end = _stats_parse_ts(turn.get("t_end"))
+            if t_end and t_end.timestamp() >= active_cutoff:
+                active_last_hour.add(turn.get("session_id") or "")
+    return {
+        "totals": {
+            "turns": summary.get("total_turns") or 0,
+            "sessions": session_count,
+            "cache_adjusted_tokens": round(
+                (summary.get("total_effective_input_tokens") or 0.0)
+                + (summary.get("total_output_tokens") or 0),
+                2,
+            ),
+            "raw_context_tokens": summary.get("total_raw_context_tokens") or 0,
+            "output_tokens": summary.get("total_output_tokens") or 0,
+            "cost_usd": summary.get("cost_usd") or 0.0,
+            "active_duration_sec": summary.get("total_active_duration_sec") or 0.0,
+            "cache_hit_ratio": summary.get("cache_hit_ratio") or 0.0,
+        },
+        "per_model": summary.get("per_model") or [],
+        "hourly": summary.get("hourly") or [],
+        "top_sessions": top_sessions,
+        "sessions_truncated": max(0, session_count - len(top_sessions)),
+        "active_sessions_last_hour": len(active_last_hour),
+    }
+
+
+def _throughput_daily_turn_stats(start_epoch, end_epoch, engine, is_final):
+    from ccc_server import bg_helper
+    if bg_helper.enabled() and not bg_helper.is_child():
+        reply = bg_helper.call("throughput_turn_stats", start_epoch=start_epoch,
+                               end_epoch=end_epoch, engine=engine, final=is_final)
+        if reply is not None and isinstance(reply.get("data"), dict):
+            return reply["data"]
+    return _throughput_daily_turn_stats_local(start_epoch, end_epoch, engine, is_final)
+
+
 def _throughput_daily_payload(date_str=None, engine_filter=None, force_refresh=False):
     """Daily throughput digest: sessions, tokens by model, top lanes, tickets.
 
@@ -3547,16 +3591,7 @@ def _throughput_daily_payload(date_str=None, engine_filter=None, force_refresh=F
         ):
             return cached["payload"], cached["status"]
 
-        turns = _throughput_window_turns(start_epoch, end_epoch, engine)
-        summary = _core._throughput_summary(turns)
-        top_sessions, session_count = _throughput_sessions_from_turns(turns, limit=20)
-        active_cutoff = time.time() - 3600
-        active_last_hour = set()
-        if not is_final:
-            for t in turns:
-                t_end = _stats_parse_ts(t.get("t_end"))
-                if t_end and t_end.timestamp() >= active_cutoff:
-                    active_last_hour.add(t.get("session_id") or "")
+        turn_stats = _throughput_daily_turn_stats(start_epoch, end_epoch, engine, is_final)
         payload = {
             "ok": True,
             "schema": _THROUGHPUT_DAILY_SCHEMA,
@@ -3566,25 +3601,7 @@ def _throughput_daily_payload(date_str=None, engine_filter=None, force_refresh=F
             "final": is_final,
             "day_start_epoch": start_epoch,
             "day_end_epoch": end_epoch,
-            "totals": {
-                "turns": summary.get("total_turns") or 0,
-                "sessions": session_count,
-                "cache_adjusted_tokens": round(
-                    (summary.get("total_effective_input_tokens") or 0.0)
-                    + (summary.get("total_output_tokens") or 0),
-                    2,
-                ),
-                "raw_context_tokens": summary.get("total_raw_context_tokens") or 0,
-                "output_tokens": summary.get("total_output_tokens") or 0,
-                "cost_usd": summary.get("cost_usd") or 0.0,
-                "active_duration_sec": summary.get("total_active_duration_sec") or 0.0,
-                "cache_hit_ratio": summary.get("cache_hit_ratio") or 0.0,
-            },
-            "per_model": summary.get("per_model") or [],
-            "hourly": summary.get("hourly") or [],
-            "top_sessions": top_sessions,
-            "sessions_truncated": max(0, session_count - len(top_sessions)),
-            "active_sessions_last_hour": len(active_last_hour),
+            **turn_stats,
             "tickets": _throughput_daily_ticket_counts(start_epoch, end_epoch),
         }
         _THROUGHPUT_DAILY_CACHE[key] = {
