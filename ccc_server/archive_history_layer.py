@@ -282,6 +282,7 @@ def row_edges(rows):
 
 
 _INVENTORY = (None, frozenset(), None)
+_PINNED_OVERLAY_GUARDS = ((), ())
 
 
 def _canonical_inputs(inventory, removed):
@@ -309,7 +310,20 @@ def _canonical_inputs(inventory, removed):
     return guard
 
 
-def read_inputs(inventory, hot, hot_tokens, extra, *, overlay_maps, edges, removed=frozenset()):
+def _overlay_guards(overlay_maps, pinned):
+    """Reuse encoded guards for maps owned by one immutable read snapshot."""
+    global _PINNED_OVERLAY_GUARDS
+    previous, encoded = _PINNED_OVERLAY_GUARDS
+    if len(pinned) != len(previous) or any(a is not b for a, b in zip(pinned, previous)):
+        encoded = tuple({sid: _guard_value(value) for sid, value in values.items()} for values in pinned)
+        _PINNED_OVERLAY_GUARDS = pinned, encoded
+    by_identity = {id(values): guard for values, guard in zip(pinned, encoded)}
+    return tuple(guard if (guard := by_identity.get(id(values))) is not None else
+                 {sid: _guard_value(value) for sid, value in values.items()} for values in overlay_maps)
+
+
+def read_inputs(inventory, hot, hot_tokens, extra, *, overlay_maps, edges,
+                removed=frozenset(), pinned_overlays=()):
     """Build guards from the same sources the complete reader would merge."""
     canonical = _canonical_inputs(inventory, removed)
     if canonical is None:
@@ -334,8 +348,7 @@ def read_inputs(inventory, hot, hot_tokens, extra, *, overlay_maps, edges, remov
 
     observed_edges.extend(row_edges(hot.values()))
     observed_edges.extend(row_edges(extra))
-    overlays = tuple({sid: _guard_value(value) for sid, value in values.items()}
-                     for values in overlay_maps)
+    overlays = _overlay_guards(overlay_maps, pinned_overlays)
     return Inputs(tuple(sources), sources, overlays, tuple(observed_edges))
 
 
@@ -355,7 +368,8 @@ class Changes:
             self.dirty.update(sid for sid, source in current.sources.items()
                               if previous.sources.get(sid) != source)
             for old, new in zip(previous.overlays, current.overlays):
-                self.dirty.update(sid for sid in old.keys() | new.keys() if old.get(sid) != new.get(sid))
+                if old != new:
+                    self.dirty.update(sid for sid in old.keys() | new.keys() if old.get(sid) != new.get(sid))
             self.add_edges(previous.edges)
             self.add_edges(current.edges)
 

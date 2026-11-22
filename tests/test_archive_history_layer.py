@@ -241,6 +241,27 @@ def test_inventory_memo_changes_when_the_pinned_cut_or_exclusion_changes():
     assert layer.candidates(restored, updated) == {"b"}
 
 
+def test_pinned_topic_guards_refresh_with_the_snapshot_and_live_overlays():
+    from types import MappingProxyType
+
+    source = tuple(inventory("a", "b"))
+    topics = MappingProxyType({"a": ("", "", "old", 1)})
+    live = {"b": False}
+
+    def read(records):
+        return layer.read_inputs(source, {}, {}, (), overlay_maps=(records, live),
+                                 edges=(), pinned_overlays=(records,))
+
+    first = read(topics)
+    live["b"] = 0
+    second = read(topics)
+    assert first.overlays[0] is second.overlays[0]
+    assert layer.candidates(first, second) == {"b"}
+
+    third = read(MappingProxyType({"a": ("", "", "new", 1)}))
+    assert layer.candidates(second, third) == {"a"}
+
+
 def test_cold_read_pins_the_selected_hot_rows_after_a_row_ages_out(tmp_path, monkeypatch):
     import time
 
