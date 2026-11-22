@@ -18,6 +18,8 @@ _MAX_PACKED_ROWS = 32768
 _MAX_PACKED_BYTES = 8 << 20
 _PACKED_PAGE_SHIFT = 9
 _PACKED_PAGE_SIZE = 1 << _PACKED_PAGE_SHIFT
+_MAX_MEMO_PAGES = 128
+_packed_page_memo = {}
 _ORDERED_ROWS = """
     SELECT identity,sid,activity,pinned,working,codex
     FROM sidebar_preview_rows WHERE variant=? ORDER BY position,row_order
@@ -286,6 +288,8 @@ def _decode_packed(body, limit):
 
 
 def _read_packed_rows(con, key):
+    global _packed_page_memo
+
     marker = con.execute("""
         SELECT body FROM sidebar_preview_packed JOIN sidebar_preview_generation
         USING (variant,cached_at,version)
@@ -303,16 +307,31 @@ def _read_packed_rows(con, key):
         return None
     rows = []
     remaining = _MAX_PACKED_BYTES
-    for body, in con.execute("""
-        SELECT CASE WHEN length(body)<=? THEN body END
+    previous = _packed_page_memo
+    memo = {}
+    memo_bytes = 0
+    for page_id, body in con.execute("""
+        SELECT page, CASE WHEN length(body)<=? THEN body END
         FROM sidebar_preview_pack_pages WHERE variant=? ORDER BY page
     """, (_MAX_PACKED_BYTES, key)):
-        page, size = _decode_packed(body, remaining)
-        if len(rows) + len(page) > manifest[0]:
+        entry = previous.get(page_id)
+        # Read the current compressed bytes from the pinned transaction.
+        # A peer can publish a changed page under the same cached_at.
+        if entry is None or entry[0] != body:
+            decoded, size = _decode_packed(body, remaining)
+            entry = body, tuple(map(tuple, decoded)), size
+        _, page, size = entry
+        if size > remaining or len(rows) + len(page) > manifest[0]:
             return None
         rows.extend(page)
         remaining -= size
-    return rows if len(rows) == manifest[0] else None
+        if len(memo) < _MAX_MEMO_PAGES and memo_bytes + len(body) <= _MAX_PACKED_BYTES:
+            memo[page_id] = entry
+            memo_bytes += len(body)
+    if len(rows) != manifest[0]:
+        return None
+    _packed_page_memo = memo
+    return rows
 
 
 def _ordered_rows(con, key):

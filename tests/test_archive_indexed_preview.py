@@ -575,3 +575,50 @@ def test_packed_preview_follows_canonical_order_and_backfills(tmp_path):
     with archive_store.sidebar_preview_view(path, key, schema_version=1, build_id="test") as view:
         reader, _ = view
         assert items(reader) == original[::-1]
+
+
+def test_preview_reuses_only_byte_identical_packed_pages(tmp_path, monkeypatch):
+    path = tmp_path / "archive.json"
+    key = "base"
+    stamp = 20
+    version = server._ARCHIVE_SIDEBAR_PACKED_VERSION
+    rows = [{"session_id": f"session-{index}", "mtime": index + 1}
+            for index in range(archive_preview._PACKED_PAGE_SIZE + 1)]
+
+    assert archive_store.save(path, {
+        "schema_version": 1, "build_id": "test",
+        "entries": {key: {"cached_at": stamp, "conversations": rows}},
+    }, complete=True, sidebar_key=key, sidebar_pages=(version, server._archive_list_pack_static))
+
+    def read(reader):
+        packed = archive_preview._read_packed_rows(reader, key)
+        assert packed is not None
+        assert list(map(tuple, packed)) == reader.execute(archive_preview._ORDERED_ROWS, (key,)).fetchall()
+        return packed
+
+    monkeypatch.setattr(archive_preview, "_packed_page_memo", {})
+    with patch.object(archive_preview, "_decode_packed", wraps=archive_preview._decode_packed) as decode:
+        with archive_store.sidebar_preview_view(path, key, schema_version=1, build_id="test") as view:
+            reader, _ = view
+            before = read(reader)
+            assert decode.call_count == 2
+            with sqlite3.connect(archive_store.database_path(path)) as writer:
+                writer.execute("UPDATE sidebar_preview_rows SET activity=2000 WHERE variant=? AND sid=?",
+                               (key, rows[-1]["session_id"]))
+                archive_preview.finish_publication(writer, key, stamp)
+            assert read(reader) == before
+            assert decode.call_count == 2
+
+        with archive_store.sidebar_preview_view(path, key, schema_version=1, build_id="test") as view:
+            reader, _ = view
+            assert read(reader)[-1][2] == 2000
+            assert decode.call_count == 3
+
+        with sqlite3.connect(archive_store.database_path(path)) as writer:
+            writer.execute("UPDATE sidebar_preview_pack_pages SET body=? WHERE variant=? AND page=1",
+                           (b"broken", key))
+        with archive_store.sidebar_preview_view(path, key, schema_version=1, build_id="test") as view:
+            reader, _ = view
+            assert list(archive_preview._ordered_rows(reader, key)) == reader.execute(
+                archive_preview._ORDERED_ROWS, (key,)).fetchall()
+            assert decode.call_count == 4
