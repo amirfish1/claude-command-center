@@ -6489,3 +6489,61 @@ def test_indexed_hot_change_skips_cold_sidebar_page_scan(tmp_path, monkeypatch):
         assert observed == expected
         assert observed[0]["first_message"] == "cold edit"
         assert isinstance(observed[-2], archive_sidebar_pages.StoredRow)
+
+
+def test_archive_scoped_spawn_markers_stat_only_requested_sessions(monkeypatch, tmp_path):
+    from contextlib import contextmanager
+
+    import server
+
+    marker_dir = tmp_path / "markers"
+    marker_dir.mkdir()
+    requested = marker_dir / " selected .json"
+    requested.write_text('{"spawned_via":"ui"}')
+    for index in range(20):
+        (marker_dir / f"other-{index}.json").write_text('{"spawned_via":"api"}')
+    monkeypatch.setattr(server, "SPAWN_MARKERS_DIR", marker_dir)
+    monkeypatch.setattr(server, "_SPAWN_MARKER_MEMO", {"dir": None, "ts": 0, "out": {}})
+    monkeypatch.setattr(server, "_SPAWN_MARKER_FILE_CACHE", {})
+    monkeypatch.setattr(server, "_SPAWN_MARKER_INDEX_LOADED", set())
+    monkeypatch.setattr(server, "_SPAWN_MARKER_INDEX_DIR_MTIME", {})
+
+    scans = []
+    real_scandir = os.scandir
+
+    class Entry:
+        def __init__(self, entry):
+            self.entry = entry
+            self.name = entry.name
+            self.path = entry.path
+
+        def is_file(self):
+            return self.entry.is_file()
+
+        def stat(self):
+            scans.append(self.name)
+            return self.entry.stat()
+
+    @contextmanager
+    def track_scandir(directory):
+        with real_scandir(directory) as entries:
+            yield (Entry(entry) if directory == marker_dir else entry for entry in entries)
+
+    monkeypatch.setattr(os, "scandir", track_scandir)
+    assert server._load_spawn_markers([]) == {}
+    assert scans == []
+    scoped = server._load_spawn_markers(["selected", "missing"])
+    assert scoped == {"selected": {"lane": "workers", "spawned_via": "ui"}}
+    assert scans == [requested.name]
+    assert not server._spawn_marker_index_path().exists()
+
+    full = server._load_spawn_markers()
+    assert len(full) == 21
+    assert full["selected"] == scoped["selected"]
+    assert server._spawn_marker_index_path().is_file()
+
+    scans.clear()
+    scoped = server._load_spawn_markers(["selected"])
+    scoped["selected"]["spawned_via"] = "changed"
+    assert server._load_spawn_markers(["selected"]) == {"selected": full["selected"]}
+    assert scans == []

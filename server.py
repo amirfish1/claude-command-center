@@ -6175,12 +6175,23 @@ def _save_spawn_marker_index(dir_mtime_ns=None):
         pass
 
 
-def _load_spawn_markers():
+def _copy_spawn_markers(markers, session_ids):
+    if session_ids is None:
+        return {sid: dict(marker) for sid, marker in markers.items()}
+    return {sid: dict(markers[sid]) for sid in session_ids if sid in markers}
+
+
+def _load_spawn_markers(session_ids=None):
     """Return typed metadata from SPAWN_MARKERS_DIR/<sid>.json files.
 
     Revalidating means a stat per marker file, so the result is memoized for a
     few seconds (callers poll continuously) and decoded markers persist to a
-    disk index so a restart does not re-read every file."""
+    disk index so a restart does not re-read every file. Scoped reads reuse
+    the full memo when available and otherwise only stat matching files."""
+    if session_ids is not None:
+        session_ids = set(session_ids)
+        if not session_ids:
+            return {}
     now = time.monotonic()
     try:
         # Directory mtime moves on every create/delete/rename-over, so new
@@ -6196,27 +6207,27 @@ def _load_spawn_markers():
             _SPAWN_MARKER_MEMO["dir"] == marker_dir
             and now - _SPAWN_MARKER_MEMO["ts"] < ttl
         ):
-            return {sid: dict(m) for sid, m in _SPAWN_MARKER_MEMO["out"].items()}
+            return _copy_spawn_markers(_SPAWN_MARKER_MEMO["out"], session_ids)
     # Single-flight: concurrent pollers reuse the last map for one call
     # instead of each re-stat'ing every marker file at once.
     if not _SPAWN_MARKER_SCAN_LOCK.acquire(blocking=False):
         with _SPAWN_MARKER_MEMO_LOCK:
             if _SPAWN_MARKER_MEMO["dir"] is not None:
-                return {sid: dict(m) for sid, m in _SPAWN_MARKER_MEMO["out"].items()}
+                return _copy_spawn_markers(_SPAWN_MARKER_MEMO["out"], session_ids)
         _SPAWN_MARKER_SCAN_LOCK.acquire()
     try:
-        return _load_spawn_markers_locked(now, marker_dir)
+        return _load_spawn_markers_locked(now, marker_dir, session_ids)
     finally:
         _SPAWN_MARKER_SCAN_LOCK.release()
 
 
-def _load_spawn_markers_locked(now, marker_dir):
+def _load_spawn_markers_locked(now, marker_dir, session_ids=None):
     with _SPAWN_MARKER_MEMO_LOCK:
         if (
             _SPAWN_MARKER_MEMO["dir"] == marker_dir
             and now - _SPAWN_MARKER_MEMO["ts"] < _SPAWN_MARKER_MEMO_TTL_S
         ):
-            return {sid: dict(m) for sid, m in _SPAWN_MARKER_MEMO["out"].items()}
+            return _copy_spawn_markers(_SPAWN_MARKER_MEMO["out"], session_ids)
     _load_spawn_marker_index()
     with _SPAWN_MARKER_MEMO_LOCK:
         cold = _SPAWN_MARKER_MEMO["dir"] is None
@@ -6251,7 +6262,7 @@ def _load_spawn_markers_locked(now, marker_dir):
                     _SPAWN_MARKER_REVALIDATING.clear()
 
             threading.Thread(target=_revalidate, daemon=True).start()
-        return {sid: dict(m) for sid, m in out.items()}
+        return _copy_spawn_markers(out, session_ids)
     out = {}
     scan_started_ns = time.time_ns()
     try:
@@ -6266,7 +6277,7 @@ def _load_spawn_markers_locked(now, marker_dir):
         if not name.endswith(".json"):
             continue
         sid = name[: -len(".json")].strip()
-        if not sid:
+        if not sid or (session_ids is not None and sid not in session_ids):
             continue
         try:
             if not entry.is_file():
@@ -6283,6 +6294,10 @@ def _load_spawn_markers_locked(now, marker_dir):
             decoded += 1
         if hit[1]:
             out[sid] = dict(hit[1])
+    if session_ids is not None:
+        # These files cannot advance the full directory generation or evict
+        # unvisited entries from its decoded-file index.
+        return out
     stale = [k for k in _SPAWN_MARKER_FILE_CACHE if k not in seen]
     for k in stale:
         _SPAWN_MARKER_FILE_CACHE.pop(k, None)
@@ -16157,9 +16172,12 @@ def find_all_conversations(
     except Exception:
         repo_pins = {}
     spawn_registry_by_sid = _spawn_registry_entries_by_session(engine="claude")
-    # One read for the whole corpus scan — never per row.
     try:
-        spawn_markers = _load_spawn_markers()
+        if files_by_project is None:
+            spawn_markers = _load_spawn_markers()
+        else:
+            spawn_markers = _load_spawn_markers(
+                path.stem.strip() for paths in files_by_project.values() for path in paths)
     except Exception:
         spawn_markers = {}
     try:
@@ -16765,7 +16783,7 @@ def find_all_conversations(
         _apply_pinned_conversation_fields(out, pinned_list)
         _apply_watchtower_worker_display_names(out)
         _apply_session_lane_overrides(out)
-        _apply_spawn_markers(out)
+        _apply_spawn_markers(out, markers=spawn_markers)
         return out
 
     # Claude can have a live process registry entry before it has written
@@ -20996,6 +21014,7 @@ def _archive_refresh_worker_main(encoded_options, output_path):
         }
         key = _archive_response_cache_key(**cache_options)
         _wt0 = time.perf_counter()
+        _cpu0 = time.thread_time()
         scores_file = _ARCHIVE_RESPONSE_CACHE_FILE.with_name("archive-question-scores.json")
         scores = _load_archive_question_scores(scores_file)
         from ccc_server.codex import _seed_codex_archive_holders
@@ -21017,6 +21036,7 @@ def _archive_refresh_worker_main(encoded_options, output_path):
             except (OSError, ValueError, sqlite3.Error) as exc:
                 print(f"  [archive-cache] sidebar backfill deferred: {exc}", file=sys.stderr)
         phases["compute_ms"] = round((time.perf_counter() - _wt0) * 1000.0, 1)
+        phases["compute_thread_cpu_ms"] = round((time.thread_time() - _cpu0) * 1000.0, 1)
         result = {
             "ok": True,
             "key": key,
@@ -21662,6 +21682,8 @@ def _rehydrate_archive_cached_rows(rows, *, preselected=False):
 
 def _rehydrate_archive_hot_rows(rows):
     """Apply fast-changing state to cached archive rows before responding."""
+    if not isinstance(rows, (list, tuple)):
+        rows = list(rows or ())
     try:
         name_overrides = _load_session_name_overrides()
     except Exception:
@@ -21690,9 +21712,12 @@ def _rehydrate_archive_hot_rows(rows):
     except Exception:
         idea_tickets_by_sid = {}
     drivers = _session_graph.driver_snapshot()
-    # One read for the whole list, never per row (same rule as the registry).
+    # The archive refresh only needs markers for rows it will hydrate.
     try:
-        spawn_markers = _load_spawn_markers()
+        spawn_markers = _load_spawn_markers(
+            str(row.get("session_id") or row.get("id") or "").strip()
+            for row in rows or [] if isinstance(row, dict)
+        )
     except Exception:
         spawn_markers = {}
     # Effort lives in a side file the model picker rewrites, so a cached row
