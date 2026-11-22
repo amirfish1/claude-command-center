@@ -74,7 +74,7 @@ def test_cached_codex_origin_survives_registry_pruning(tmp_path, monkeypatch):
                  '_spawn_registry_entries_by_session', '_load_spawn_markers',
                  '_load_session_overrides', '_load_session_registry',
                  '_codex_titles_snapshot', '_auto_titled_session_ids']:
-        monkeypatch.setattr(server, name, lambda: {})
+        monkeypatch.setattr(server, name, lambda **kw: {})
     for name in ['_load_verified_conversations', '_load_pinned_conversations',
                  '_discover_live_session_ids', '_codex_deleted_thread_ids']:
         monkeypatch.setattr(server, name, lambda: set())

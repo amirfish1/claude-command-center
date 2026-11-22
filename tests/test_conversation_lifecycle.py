@@ -63,7 +63,7 @@ def test_archive_cache_rehydrate_refreshes_trashed_state(monkeypatch):
     )
     monkeypatch.setattr(server, "_load_verified_conversations", lambda: [])
     monkeypatch.setattr(server, "_load_pinned_conversations", lambda: [])
-    monkeypatch.setattr(server, "_spawn_registry_entries_by_session", lambda: {})
+    monkeypatch.setattr(server, "_spawn_registry_entries_by_session", lambda **kw: {})
     monkeypatch.setattr(server, "_discover_live_session_ids", lambda: set())
 
     rows = server._rehydrate_archive_cached_rows([

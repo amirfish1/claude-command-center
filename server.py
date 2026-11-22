@@ -21701,8 +21701,13 @@ def _rehydrate_archive_hot_rows(rows):
     except Exception:
         pinned_list = []
     pinned_rank = _pinned_rank_map(pinned_list)
+    session_ids = {
+        str(row.get("session_id") or row.get("id") or "").strip()
+        for row in rows if isinstance(row, dict)
+    }
+    session_ids.discard("")
     try:
-        spawn_registry_by_sid = _spawn_registry_entries_by_session()
+        spawn_registry_by_sid = _spawn_registry_entries_by_session(session_ids=session_ids)
     except Exception:
         spawn_registry_by_sid = {}
     # Experimental idea tickets: one mtime-cached file read for the whole
@@ -21712,12 +21717,8 @@ def _rehydrate_archive_hot_rows(rows):
     except Exception:
         idea_tickets_by_sid = {}
     drivers = _session_graph.driver_snapshot()
-    # The archive refresh only needs markers for rows it will hydrate.
     try:
-        spawn_markers = _load_spawn_markers(
-            str(row.get("session_id") or row.get("id") or "").strip()
-            for row in rows or [] if isinstance(row, dict)
-        )
+        spawn_markers = _load_spawn_markers(session_ids)
     except Exception:
         spawn_markers = {}
     # Effort lives in a side file the model picker rewrites, so a cached row
@@ -51885,6 +51886,11 @@ def _script_main():
                 file=sys.stderr,
             )
             raise SystemExit(2)
+        # Temporary decoded snapshots contain thousands of live objects.
+        # Use the dashboard's allocation threshold while this one-shot process
+        # builds the archive, and let process exit reclaim its working set.
+        if os.environ.get("CCC_GC_FREEZE", "1") != "0":
+            gc.set_threshold(_GC_GEN0_THRESHOLD, *gc.get_threshold()[1:])
         raise SystemExit(_archive_refresh_worker_main(sys.argv[2], sys.argv[3]))
     from ccc_server import restart_audit
     if not os.environ.get("CCC_EPHEMERAL") and not test_isolation_active():

@@ -770,6 +770,22 @@ def test_archive_rehydrate_skips_liveness_for_old_rows(monkeypatch):
     )
 
 
+
+def test_archive_rehydrate_scopes_spawn_metadata_to_selected_sessions(monkeypatch):
+    registry = _count_calls(monkeypatch, "_spawn_registry_entries_by_session", passthrough_return={})
+    markers = _count_calls(monkeypatch, "_load_spawn_markers", passthrough_return={})
+    server._rehydrate_archive_hot_rows([
+        {"session_id": "current", "mtime": 1},
+        {"id": "legacy", "mtime": 2},
+        {"session_id": "current", "mtime": 3},
+        {"mtime": 4},
+    ])
+
+    wanted = {"current", "legacy"}
+    assert registry == [((), {"session_ids": wanted})]
+    assert markers == [((wanted,), {})]
+
+
 def test_archive_build_skips_liveness_for_old_sessions(big_projects, monkeypatch):
     """Cold-build path: same gate, in find_all_conversations."""
     n, _ = big_projects

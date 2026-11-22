@@ -23,7 +23,7 @@ def _rehydrate_one(sid, monkeypatch):
     monkeypatch.setattr(server, "_load_session_name_overrides", lambda: {})
     monkeypatch.setattr(server, "_load_verified_conversations", lambda: [])
     monkeypatch.setattr(server, "_load_pinned_conversations", lambda: [])
-    monkeypatch.setattr(server, "_spawn_registry_entries_by_session", lambda: {})
+    monkeypatch.setattr(server, "_spawn_registry_entries_by_session", lambda **kw: {})
     monkeypatch.setattr(server, "_discover_live_session_ids", lambda: set())
     return server._rehydrate_archive_cached_rows([
         {"session_id": sid, "engine": "codex", "mtime": 1, "archived": False, "trashed": False}
