@@ -1359,7 +1359,8 @@ def test_conv_meta_cache_roundtrip_avoids_reparse(big_projects, monkeypatch, tmp
                  resolve_worktree_dirty=False)
     server.find_all_conversations(**flags)   # cold build populates the cache
     server._save_conv_meta_cache()           # persist
-    assert cache_file.is_file(), "conv-meta cache was not persisted"
+    from ccc_server import conv_meta_store
+    assert conv_meta_store.database_path(cache_file).is_file(), "conv-meta cache was not persisted"
 
     server._conv_meta_cache.clear()          # simulate a restart
     server._load_conv_meta_cache()           # reload from disk

@@ -11661,7 +11661,7 @@ def _extract_codex_tail_meta(path):
         cached = dict(cached, meta_version=_CODEX_META_VERSION)
         with _core._conv_meta_cache_lock:
             _core._conv_meta_cache[spath] = cached
-            _core._conv_meta_cache_dirty = True
+            _core._mark_conv_meta_dirty(spath)
     if (
         cached
         and cached.get("mtime") == mtime
@@ -12136,7 +12136,7 @@ def _extract_codex_tail_meta(path):
             "pending_calls": pending_calls,
             "meta": meta,
         }
-        _core._conv_meta_cache_dirty = True
+        _core._mark_conv_meta_dirty(spath)
     return meta
 
 

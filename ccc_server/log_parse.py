@@ -7,12 +7,12 @@ in server.py are reached via `_core` at call time."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone, time as datetime_time
-from itertools import islice
 from pathlib import Path
 import contextlib
 import json
 import os
 import re
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -23,6 +23,7 @@ try:
 except ImportError:  # Windows: no cross-process lock; delta writes still apply
     _fcntl = None
 
+from ccc_server import conv_meta_store
 from ccc_server import core as _core
 from ccc_server import session_driver as _driver
 from ccc_server import test_isolation_active as _test_isolation_active
@@ -913,43 +914,82 @@ def _relocation_budget_exhausted():
     return False
 
 
-def _load_conv_meta_cache():
-    """Best-effort load of _conv_meta_cache from disk on startup.
+class _DetachedConvMetaCache(dict):
+    """Load metadata on first use in the one-shot archive builder."""
 
-    Drops the entire payload (and re-extracts on demand) when the schema
-    version doesn't match — small one-time cost in exchange for forward
-    compatibility on shape changes.
-    """
-    if not _core._CONV_META_CACHE_FILE.is_file():
-        return
+    def __init__(self, connection):
+        super().__init__()
+        self.connection = connection
+        self.missing = set()
+        self.read_lock = threading.Lock()
+
+    def get(self, key, default=None):
+        if key not in self and key not in self.missing:
+            with self.read_lock:
+                if key not in self and key not in self.missing:
+                    try:
+                        value = conv_meta_store.get(self.connection, _CONV_META_SCHEMA_VERSION, key)
+                    except (sqlite3.Error, ValueError):
+                        return default
+                    if value is None:
+                        self.missing.add(key)
+                    else:
+                        self.setdefault(key, value)
+        return super().get(key, default)
+
+
+def _load_conv_meta_cache(*, lazy=False):
+    """Read the row store, importing a compatible legacy snapshot once."""
+    target = _core._CONV_META_CACHE_FILE
     try:
-        with _core._CONV_META_CACHE_FILE.open("r") as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError, ValueError):
-        return
-    if not isinstance(data, dict):
-        return
-    if data.get("schema_version") not in _CONV_META_COMPAT_SCHEMA_VERSIONS:
-        return
-    entries = data.get("entries")
-    if not isinstance(entries, dict):
-        return
-    keep = {
-        k: v for k, v in entries.items()
-        if isinstance(v, dict) and "mtime" in v
-    }
-    # JSON has no tuple type, so a cache_key saved as (mtime_ns, size) comes
-    # back as a list. The freshness check in _extract_tail_meta compares it
-    # against a freshly built tuple, and [a, b] == (a, b) is always False —
-    # so without this coercion the disk cache NEVER hits and every restart
-    # re-parses all ~1k+ transcripts (tens of seconds at 100% CPU, which
-    # starves every other request thread via the GIL and wedges the server).
-    for v in keep.values():
-        ck = v.get("cache_key")
-        if isinstance(ck, list):
-            v["cache_key"] = tuple(ck)
+        conn = conv_meta_store.open_reader(target)
+    except sqlite3.Error:
+        conn = None
+    if conn is not None:
+        try:
+            if conv_meta_store.ready(conn, _CONV_META_SCHEMA_VERSION):
+                if lazy:
+                    with _core._conv_meta_cache_lock:
+                        _core._conv_meta_cache = _DetachedConvMetaCache(conn)
+                    conn = None
+                else:
+                    entries = conv_meta_store.load(conn, _CONV_META_SCHEMA_VERSION)
+                    with _core._conv_meta_cache_lock:
+                        _core._conv_meta_cache.update(entries)
+                return
+        except (sqlite3.Error, ValueError):
+            pass
+        finally:
+            if conn is not None:
+                conn.close()
+    keep = _read_legacy_conv_meta_cache(target)
     with _core._conv_meta_cache_lock:
         _core._conv_meta_cache.update(keep)
+    if keep:
+        try:
+            conv_meta_store.save(target, _CONV_META_SCHEMA_VERSION, keep, migration=True)
+        except (OSError, sqlite3.Error) as exc:
+            print(f"  [conv-meta-cache] migration deferred: {exc}")
+
+
+def _read_legacy_conv_meta_cache(target):
+    try:
+        with target.open("r") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict) or data.get("schema_version") not in _CONV_META_COMPAT_SCHEMA_VERSIONS:
+        return {}
+    entries = data.get("entries")
+    if not isinstance(entries, dict):
+        return {}
+    keep = {}
+    for path, meta in entries.items():
+        if isinstance(meta, dict) and "mtime" in meta:
+            if isinstance(meta.get("cache_key"), list):
+                meta["cache_key"] = tuple(meta["cache_key"])
+            keep[path] = meta
+    return keep
 
 
 def _env_int(name, default):
@@ -1081,58 +1121,39 @@ def _gc_scratch_jsonls(max_age_days=7):
         )
 
 
-def _write_conv_meta_cache(handle, entries):
-    # json.dump uses the Python incremental encoder. Small independent
-    # dictionaries use the C encoder without making a second copy of the
-    # entire cache in memory. Keep the existing JSON layout and ordering.
-    handle.write('{"schema_version": ' + json.dumps(_CONV_META_SCHEMA_VERSION) + ', "entries": {')
-    items = iter(entries.items())
-    separator = ""
-    while batch := dict(islice(items, 64)):
-        handle.write(separator + json.dumps(batch)[1:-1])
-        separator = ", "
-    handle.write("}}")
+_conv_meta_dirty_paths = set()
+
+
+def _mark_conv_meta_dirty(path):
+    """Call with the metadata lock held, after changing this path."""
+    _conv_meta_dirty_paths.add(path)
+    _core._conv_meta_cache_dirty = True
 
 
 def _save_conv_meta_cache():
-    """Save dirty metadata atomically without holding the readers' lock."""
-    global _conv_meta_cache_dirty
-    if not (_conv_meta_cache_dirty or _core._conv_meta_cache_dirty):
+    """Persist changed paths without replacing another process's unrelated entries."""
+    if not _core._conv_meta_cache_dirty:
         return
     with _conv_meta_cache_save_lock:
         with _core._conv_meta_cache_lock:
-            # Local parsers mark this module dirty and other engines mark
-            # the core binding. Recheck both after any earlier writer.
-            if not (_conv_meta_cache_dirty or _core._conv_meta_cache_dirty):
-                return
-            entries = dict(_core._conv_meta_cache)
-            _conv_meta_cache_dirty = False
+            paths = set(_conv_meta_dirty_paths)
+            changes = {}
+            for path in paths:
+                meta = _core._conv_meta_cache.get(path)
+                changes[path] = dict(meta) if meta is not None else None
+            _conv_meta_dirty_paths.difference_update(paths)
             _core._conv_meta_cache_dirty = False
-        target = _core._CONV_META_CACHE_FILE
-        temporary = None
+        if not changes:
+            return
         try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            # The detached archive builder and dashboard have independent
-            # locks. A unique temp file prevents crossed writes or renames.
-            with tempfile.NamedTemporaryFile(
-                mode="w", encoding="ascii", dir=target.parent, prefix=f".{target.name}.",
-                suffix=".tmp", delete=False,
-            ) as handle:
-                temporary = Path(handle.name)
-                _write_conv_meta_cache(handle, entries)
-            temporary.replace(target)
-            temporary = None
-        except (OSError, TypeError, ValueError) as exc:
+            conv_meta_store.save(_core._CONV_META_CACHE_FILE, _CONV_META_SCHEMA_VERSION, changes)
+        except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
             with _core._conv_meta_cache_lock:
-                _conv_meta_cache_dirty = True
+                _conv_meta_dirty_paths.update(paths)
                 _core._conv_meta_cache_dirty = True
-            if not isinstance(exc, OSError):
+            if not isinstance(exc, (OSError, sqlite3.Error)):
                 raise
             print(f"  [conv-meta-cache] save failed: {exc}")
-        finally:
-            if temporary is not None:
-                with contextlib.suppress(OSError):
-                    temporary.unlink()
 
 
 _META_MARKERS = (
@@ -1693,10 +1714,9 @@ def _extract_tail_meta(path):
             for tid in last_ids if tid in _subagent_by_id
         ]
     meta["cache_key"] = cache_key
-    global _conv_meta_cache_dirty
     with _core._conv_meta_cache_lock:
         _core._conv_meta_cache[str(path)] = meta
-        _conv_meta_cache_dirty = True
+        _mark_conv_meta_dirty(str(path))
     return meta
 
 

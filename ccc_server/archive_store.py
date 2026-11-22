@@ -91,6 +91,8 @@ def activity(row):
 
 
 def identity(row, index=0):
+    if isinstance(row, _RowIndexEntry):
+        return row.rid
     sid = row.get('session_id') or row.get('id')
     return json.dumps([row.get('engine'), row.get('source'), sid or f'#{index}',
                        row.get('jsonl_path')], separators=(',', ':'))
@@ -167,6 +169,10 @@ def _connect(cache_file, *, write=False, shared_reader=False):
                 key TEXT PRIMARY KEY, cached_at REAL NOT NULL,
                 schema_version INTEGER, build_id TEXT, version TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS row_projection_versions (
+                variant TEXT PRIMARY KEY, cached_at REAL NOT NULL,
+                inventory TEXT NOT NULL, attention TEXT NOT NULL
+            );
         ''')
         return con
     # Read-only connections never create an empty store that hides the JSON
@@ -175,11 +181,14 @@ def _connect(cache_file, *, write=False, shared_reader=False):
                            timeout=0.5, check_same_thread=not shared_reader)
 
 
-def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_pages=None):
+def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_pages=None,
+         base_entry=None):
     """Publish variants atomically. Return the count of changed row bodies.
 
     Only complete builder snapshots may remove absent rows. Hot snapshots
     and stale workers cannot erase cold history or a newer publication.
+    With a base entry, publish only against that generation and return whether
+    the publication succeeded.
     """
     changed = 0
     con = _connect(cache_file, write=True)
@@ -194,37 +203,70 @@ def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_page
         for key, entry in _entries(snapshot).items():
             stamp = float(entry.get('cached_at') or 0)
             previous = con.execute('SELECT cached_at,metadata FROM variants WHERE key=?', (key,)).fetchone()
+            if base_entry is not None and (
+                    previous is None or previous[0] != base_entry.get("cached_at")):
+                return False
             old_version = json.loads(previous[1]).get('schema_version') if previous else None
             new_version = snapshot.get('schema_version')
             downgrade = isinstance(old_version, int) and isinstance(new_version, int) and old_version > new_version
             if downgrade or (previous and previous[0] >= stamp):
+                if base_entry is not None:
+                    return False
                 continue
-            existing = {rid: (digest, position) for rid, digest, position in con.execute(
-                'SELECT identity,digest,position FROM rows WHERE variant=?', (key,))}
-            inventory = {rid: digest for rid, digest in con.execute(
-                'SELECT identity,digest FROM session_inventory WHERE variant=?', (key,))}
-            attention = {rid: digest for rid, digest in con.execute(
-                'SELECT identity,digest FROM session_attention WHERE variant=?', (key,))}
-            preview_ids = archive_preview.indexed(con, key) if key == sidebar_key else None
+            existing = (base_entry or {}).get("_row_index")
+            if existing is None:
+                existing = {rid: (digest, position) for rid, digest, position in con.execute(
+                    'SELECT identity,digest,position FROM rows WHERE variant=?', (key,))}
+            projections_current = base_entry is not None and con.execute("""
+                SELECT 1 FROM row_projection_versions
+                WHERE variant=? AND cached_at=? AND inventory=? AND attention=?
+            """, (key, previous[0], INVENTORY_VERSION, ATTENTION_VERSION)).fetchone()
+            if projections_current:
+                inventory = attention = None
+            else:
+                inventory = dict(con.execute(
+                    'SELECT identity,digest FROM session_inventory WHERE variant=?', (key,)))
+                attention = dict(con.execute(
+                    'SELECT identity,digest FROM session_attention WHERE variant=?', (key,)))
+            preview_current = base_entry is not None and key == sidebar_key and con.execute("""
+                SELECT 1 FROM sidebar_preview_generation WHERE variant=? AND cached_at=? AND version=?
+            """, (key, previous[0], archive_preview.VERSION)).fetchone()
+            preview_ids = archive_preview.indexed(con, key) if key == sidebar_key and not preview_current else None
+            base_rows = {identity(row, index): row
+                         for index, row in enumerate((base_entry or {}).get('conversations', ()))}
             seen = set()
             for index, row in enumerate(entry.get('conversations') or []):
                 if not isinstance(row, dict):
                     continue
                 rid = identity(row, index)
                 seen.add(rid)
+                if rid in existing and rid in base_rows and (
+                        row is base_rows[rid] or row == base_rows[rid]):
+                    digest, position = existing[rid]
+                    if ((projections_current or (inventory.get(rid) == INVENTORY_VERSION + digest
+                                                 and attention.get(rid) == ATTENTION_VERSION + digest))
+                            and (preview_ids is None or rid in preview_ids)):
+                        if position != index:
+                            con.execute('UPDATE rows SET position=? WHERE variant=? AND identity=?',
+                                        (index, key, rid))
+                        continue
+                    if isinstance(row, _RowIndexEntry):
+                        body, = con.execute('SELECT body FROM rows WHERE variant=? AND identity=?',
+                                            (key, rid)).fetchone()
+                        row = json.loads(body)
                 body = json.dumps(row, separators=(',', ':'), sort_keys=True)
                 digest = hashlib.sha256(body.encode()).hexdigest()
+                same_body = existing.get(rid, (None,))[0] == digest
                 attention_digest = ATTENTION_VERSION + digest
-                if attention.get(rid) != attention_digest:
+                if (not same_body if projections_current else attention.get(rid) != attention_digest):
                     projected = json.dumps(attention_row(row), separators=(',', ':'), sort_keys=True)
                     con.execute('INSERT OR REPLACE INTO session_attention VALUES(?,?,?,?)',
                                 (key, rid, attention_digest, projected))
                 inventory_digest = INVENTORY_VERSION + digest
-                if inventory.get(rid) != inventory_digest:
+                if (not same_body if projections_current else inventory.get(rid) != inventory_digest):
                     projected = json.dumps(inventory_row(row), separators=(',', ':'), sort_keys=True)
                     con.execute('INSERT OR REPLACE INTO session_inventory VALUES(?,?,?,?)',
                                 (key, rid, inventory_digest, projected))
-                same_body = existing.get(rid, (None,))[0] == digest
                 if same_body:
                     if existing[rid][1] != index:
                         con.execute('UPDATE rows SET position=? WHERE variant=? AND identity=?', (index, key, rid))
@@ -237,27 +279,35 @@ def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_page
                     str(row.get('parent_session_id') or row.get('hermes_parent_session_id') or ''),
                     index, row_activity, int(sticky(row, stamp=row_activity)), digest, body,
                 ))
-                if preview_ids is not None:
+                if key == sidebar_key:
                     archive_preview.publish(con, key, rid, row)
                 changed += 1
             if complete:
                 con.executemany('DELETE FROM rows WHERE variant=? AND identity=?',
                                 ((key, rid) for rid in existing.keys() - seen))
+                inventory_keys = existing.keys() if projections_current else inventory.keys()
+                attention_keys = existing.keys() if projections_current else attention.keys()
                 con.executemany('DELETE FROM session_inventory WHERE variant=? AND identity=?',
-                                ((key, rid) for rid in inventory.keys() - seen))
+                                ((key, rid) for rid in inventory_keys - seen))
                 con.executemany('DELETE FROM session_attention WHERE variant=? AND identity=?',
-                                ((key, rid) for rid in attention.keys() - seen))
+                                ((key, rid) for rid in attention_keys - seen))
+                con.execute('INSERT OR REPLACE INTO row_projection_versions VALUES(?,?,?,?)',
+                            (key, stamp, INVENTORY_VERSION, ATTENTION_VERSION))
             metadata = {k: v for k, v in snapshot.items() if k != 'entries'}
             metadata['entry'] = {k: v for k, v in entry.items() if k != 'conversations'}
             con.execute('INSERT OR REPLACE INTO variants VALUES(?,?,?)',
                         (key, stamp, json.dumps(metadata, separators=(',', ':'))))
             con.execute('INSERT OR REPLACE INTO attention_variants VALUES(?,?,?,?,?)',
                         (key, stamp, new_version, snapshot.get('build_id'), ATTENTION_VERSION))
-            if preview_ids is not None:
+            if key == sidebar_key:
                 archive_preview.finish_publication(con, key, stamp)
                 if complete and sidebar_pages is not None:
                     version, project = sidebar_pages
-                    hot = {identity(row) for row in hot_rows(entry.get('conversations') or [], now=stamp)}
+                    if base_entry is None:
+                        hot = {identity(row) for row in hot_rows(entry.get('conversations') or [], now=stamp)}
+                    else:
+                        hot = {rid for rid, in con.execute(
+                            _HOT_ROW_QUERY.format(columns="r.identity"), _hot_params(key, stamp))}
                     archive_sidebar_pages.publish(con, key, stamp, version, hot, project)
         con.commit()
     except BaseException:
@@ -265,7 +315,7 @@ def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_page
         raise
     finally:
         con.close()
-    return changed
+    return True if base_entry is not None else changed
 
 
 class _AttentionReader:
@@ -974,7 +1024,32 @@ def renew_sidebar_history_after_full_response(projection):
     _SIDEBAR_HISTORY_READER.renew_after_full_response(projection)
 
 
-def load(cache_file, *, hot=False, key=None, now=None):
+_HOT_ROW_QUERY = """WITH RECURSIVE selected(identity,sid,parent) AS (
+    SELECT identity,sid,parent FROM rows
+    WHERE variant=? AND (activity>=? OR sticky=1)
+    UNION
+    SELECT r.identity,r.sid,r.parent FROM selected s CROSS JOIN rows r
+    WHERE r.variant=? AND r.sid=s.parent AND s.parent!=''
+) SELECT {columns} FROM selected s CROSS JOIN rows r
+  WHERE r.variant=? AND r.identity=s.identity ORDER BY r.position
+"""
+
+
+def _hot_params(key, now=None):
+    cutoff = (time.time() if now is None else now) - HOT_SECONDS
+    return key, cutoff, key, key
+
+
+class _RowIndexEntry(dict):
+    """Minimal row for merging a refresh without decoding historical bodies."""
+
+    def __init__(self, rid, sid):
+        engine, source, _, path = json.loads(rid)
+        super().__init__(engine=engine, source=source, session_id=sid, jsonl_path=path)
+        self.rid = rid
+
+
+def load(cache_file, *, hot=False, key=None, now=None, row_index=False, reuse_engines=None):
     """Read all metadata but only requested row bodies, with ancestor context."""
     if not database_path(cache_file).exists():
         return None
@@ -999,18 +1074,27 @@ def load(cache_file, *, hot=False, key=None, now=None):
                 result['schema_version'] = min(previous_version, meta['schema_version'])
                 result['build_id'] = str(result['schema_version'])
             result['signature_maps'].update(meta.get('signature_maps') or {})
-            if hot:
-                cutoff = (time.time() if now is None else now) - HOT_SECONDS
-                query = '''WITH RECURSIVE selected(identity,sid,parent) AS (
-                    SELECT identity,sid,parent FROM rows
-                    WHERE variant=? AND (activity>=? OR sticky=1)
-                    UNION
-                    SELECT r.identity,r.sid,r.parent FROM selected s CROSS JOIN rows r
-                    WHERE r.variant=? AND r.sid=s.parent AND s.parent!=''
-                ) SELECT r.body FROM selected s CROSS JOIN rows r
-                  WHERE r.variant=? AND r.identity=s.identity ORDER BY r.position'''
-                bodies = con.execute(query, (variant, cutoff, variant, variant))
-                rows = [json.loads(body) for (body,) in bodies]
+            if row_index:
+                records = con.execute("""
+                    SELECT identity,sid,digest,position FROM rows WHERE variant=? ORDER BY position
+                """, (variant,))
+                index = {}
+                rows = []
+                for rid, sid, digest, position in records:
+                    rows.append(_RowIndexEntry(rid, sid))
+                    index[rid] = (digest, position)
+                entry['_row_index'] = index
+            elif hot:
+                bodies = con.execute(_HOT_ROW_QUERY.format(columns="r.body"), _hot_params(variant, now))
+                rows = _decode_full_bodies(bodies)
+            elif reuse_engines:
+                predicates = " OR ".join("identity LIKE ?" for _ in reuse_engines)
+                prefixes = ["[" + json.dumps(engine) + ",%" for engine in reuse_engines]
+                bodies = con.execute(f"""
+                    SELECT body FROM rows WHERE variant=? AND ({predicates})
+                    ORDER BY position
+                """, (variant, *prefixes))
+                rows = _decode_full_bodies(bodies)
             else:
                 bodies = con.execute('SELECT body FROM rows WHERE variant=? ORDER BY position', (variant,))
                 rows = _decode_full_bodies(bodies)

@@ -81,9 +81,9 @@ def test_archive_worker_enables_snapshot_only_before_computing(server, monkeypat
 
     monkeypatch.setattr(cpu_priority, 'set_background_priority', lambda *a: None)
     monkeypatch.setattr(server, '_WT_DISPLAY_SNAPSHOT_ONLY', False)
-    monkeypatch.setattr(server, '_load_conv_meta_cache', lambda: None)
+    monkeypatch.setattr(server, '_load_conv_meta_cache', lambda **kwargs: None)
 
-    def compute(*args):
+    def compute(*args, **kwargs):
         assert server._WT_DISPLAY_SNAPSHOT_ONLY
         return [], True
 

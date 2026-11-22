@@ -149,8 +149,8 @@ def test_signature_match_backfills_existing_sidebar_generation(tmp_path, monkeyp
     before = archive_store.load(path)
     assert not archive_store.sidebar_pages_available(path, key, version)
     monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", path)
-    monkeypatch.setattr(server, "_load_conv_meta_cache", lambda: None)
-    monkeypatch.setattr(server, "_archive_compute_rows", lambda *args: (rows, True))
+    monkeypatch.setattr(server, "_load_conv_meta_cache", lambda **kwargs: None)
+    monkeypatch.setattr(server, "_archive_compute_rows", lambda *args, **kwargs: (rows, True))
     monkeypatch.setattr(server, "_ARCHIVE_COMPUTE_LAST_PHASES", {"tier": "match"})
     monkeypatch.setattr(server, "_WT_DISPLAY_SNAPSHOT_ONLY", False)
     with patch("ccc_server.cpu_priority.set_background_priority"):
@@ -392,3 +392,74 @@ def test_packed_history_order_is_exact_at_batch_limit(monkeypatch):
         assert archive_sidebar_pages._ordered_identities(conn, "missing") == []
         monkeypatch.setattr(archive_sidebar_pages, "_ORDER_BATCH_ITEMS", 2)
         assert archive_sidebar_pages._ordered_identities(conn, "scope") == expected
+
+
+def test_detached_delta_publishes_every_batch_without_rewriting_legacy(tmp_path, monkeypatch):
+    import json
+    import time
+
+    path = tmp_path / "archive.json"
+    path.write_text('{"legacy":true}')
+    key = server._archive_response_cache_key()
+    now = time.time()
+    old_files = {"remove.jsonl": (1, 1), "historical.jsonl": (1, 1), "edit.jsonl": (1, 1)}
+    new_files = dict(old_files, **{"edit.jsonl": (2, 1), **{f"new-{i}.jsonl": (2, 1) for i in range(5)}})
+    del new_files["remove.jsonl"]
+    historical = {"session_id": "historical", "jsonl_path": "historical.jsonl", "mtime": 1,
+                  "first_message": "the cold canonical body"}
+    extras = {"ccc-codex-captures": "0" * 64}
+    old = {
+        "schema_version": server._ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
+        "build_id": server._ARCHIVE_RESPONSE_CACHE_BUILD_ID,
+        "entries": {key: {"cached_at": now - 10, "signature": "old", "conversations": [
+            {"session_id": "remove", "jsonl_path": "remove.jsonl", "mtime": now},
+            historical,
+            {"session_id": "edit", "jsonl_path": "edit.jsonl", "mtime": now},
+        ]}},
+        "signature_maps": {"old": {"files": old_files, "extras": extras}},
+    }
+    archive_store.save(path, old, complete=True, sidebar_key=key,
+                       sidebar_pages=(server._ARCHIVE_SIDEBAR_PACKED_VERSION, server._archive_list_pack_static))
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", path)
+    monkeypatch.setattr(server, "_ARCHIVE_SIG_TTL", 0)
+    monkeypatch.setattr(server, "_ARCHIVE_INCR_MAX_FILES", 2)
+    monkeypatch.setattr(server, "_ARCHIVE_SERVE_TTL", 0)
+    monkeypatch.setattr(server, "_ARCHIVE_STATMAP_BY_SIG", {})
+    monkeypatch.setattr(server, "_archive_corpus_signature_parts", lambda: ("new", new_files, extras))
+    monkeypatch.setattr(server, "_save_conv_meta_cache", lambda: None)
+    monkeypatch.setattr(server, "_rehydrate_archive_hot_rows", lambda rows: rows)
+    batches = []
+
+    def parse(**options):
+        batch = options["only_jsonl_paths"]
+        batches.append(batch)
+        return [{"session_id": name.removesuffix(".jsonl"), "jsonl_path": name,
+                 "mtime": now, "first_message": "parsed change"} for name in batch]
+
+    monkeypatch.setattr(server, "find_all_conversations", parse)
+    def no_full_build(**options):
+        raise AssertionError("large transcript delta fell through to a full rebuild")
+    monkeypatch.setattr(server, "_build_archive_conversations", no_full_build)
+    monkeypatch.setattr(server, "find_codex_conversations", no_full_build)
+
+    for remaining in (4, 2, None):
+        monkeypatch.setattr(server, "_ARCHIVE_STATMAP_BY_SIG", {})
+        rows, from_cache = server._archive_compute_rows(key, {}, detached=True)
+        assert from_cache
+        assert server._ARCHIVE_COMPUTE_LAST_PHASES.get("remaining") == remaining
+        checkpoint = archive_store.load(path, key=key)["entries"][key]
+        assert (checkpoint["signature"] == "new") is (remaining is None)
+        assert all(row["session_id"] != "remove" for row in checkpoint["conversations"])
+    assert [len(batch) for batch in batches] == [2, 2, 2]
+    assert {row["session_id"] for row in rows} == {"edit", *(f"new-{i}" for i in range(5))}
+    persisted = archive_store.load(path, key=key)["entries"][key]
+    assert persisted["signature"] == "new"
+    assert persisted["conversations"] == [historical, *rows]
+    assert archive_store.sidebar_pages_available(path, key, server._ARCHIVE_SIDEBAR_PACKED_VERSION)
+    assert json.loads(path.read_text()) == {"legacy": True}
+
+    stale = server._archive_response_snapshot({key: dict(persisted, cached_at=time.time())})
+    assert archive_store.save(path, stale, complete=True, base_entry=old["entries"][key]) is False
+    assert archive_store.load(path, key=key)["entries"][key] == persisted
+    server._ARCHIVE_STATMAP_BY_SIG["changed-capture"] = (new_files, {"ccc-codex-captures": "1" * 64})
+    assert server._archive_signature_delta("new", "changed-capture") == ([], [], {"codex"})

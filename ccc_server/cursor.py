@@ -423,7 +423,7 @@ def _extract_cursor_tail_meta(path):
             "pending_tool": pending_tool,
             "meta": meta,
         }
-        _core._conv_meta_cache_dirty = True
+        _core._mark_conv_meta_dirty(spath)
     return meta
 
 

@@ -980,7 +980,7 @@ def _extract_gemini_tail_meta(path):
         meta["last_meaningful_ts"] = _iso_ts_epoch(data.get("lastUpdated")) or mtime
     with _core._conv_meta_cache_lock:
         _core._conv_meta_cache[str(path)] = meta
-        _core._conv_meta_cache_dirty = True
+        _core._mark_conv_meta_dirty(str(path))
     return meta
 
 

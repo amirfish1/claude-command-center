@@ -53,3 +53,25 @@ def test_failed_worker_result_has_no_rows(tmp_path):
     path = tmp_path / "out.json"
     server._write_archive_refresh_result(path, {"ok": False, "error": "boom"})
     assert server._read_archive_refresh_result(path)[0] == {"ok": False, "error": "boom"}
+
+
+def test_delta_round_trips_changed_reordered_and_duplicate_rows(tmp_path):
+    path = tmp_path / "out.json"
+    result = _result(200)
+    server._write_archive_refresh_result(path, result, basis=set())
+    previous, full_size = server._read_archive_refresh_result(path)
+    basis = previous.pop("transfer_rows")
+    assert previous == result
+
+    survivor = result["rows"][199]
+    changed = dict(result["rows"][0], title="updated")
+    result["rows"] = [survivor, changed, survivor, *result["rows"][2:199]]
+    server._write_archive_refresh_result(path, result, basis=set(basis))
+    with pytest.raises(ValueError, match="unknown row"):
+        server._read_archive_refresh_result(path)
+    decoded, delta_size = server._read_archive_refresh_result(path, basis=basis)
+    assert len(decoded.pop("transfer_rows")) == 199
+    assert decoded == result
+    assert decoded["rows"][0] is previous["rows"][199]
+    assert json.loads(path.read_text().splitlines()[0])["row_count"] == 1
+    assert delta_size < full_size

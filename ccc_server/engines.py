@@ -2009,7 +2009,7 @@ def _extract_antigravity_tail_meta(path_or_session_id):
             "cwd_candidates": cwd_candidates,
             "meta": meta,
         }
-        _core._conv_meta_cache_dirty = True
+        _core._mark_conv_meta_dirty(spath)
     return meta
 
 
@@ -6130,9 +6130,9 @@ def _transcript_lineage_head(path):
         # A concurrent append/rewrite must not certify a partially read head.
         if (after.st_mtime_ns, after.st_size) == (st.st_mtime_ns, st.st_size):
             with _core._conv_meta_cache_lock:
-                entry = _core._conv_meta_cache.setdefault(key, {"mtime": st.st_mtime})
-                entry["lineage_head"] = {"token": token, **result}
-                _core._conv_meta_cache_dirty = True
+                entry = _core._conv_meta_cache.get(key) or {"mtime": st.st_mtime}
+                _core._conv_meta_cache[key] = dict(entry, lineage_head={"token": token, **result})
+                _core._mark_conv_meta_dirty(key)
         return result
     except (OSError, UnicodeDecodeError, TypeError, ValueError):
         return empty

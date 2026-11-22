@@ -16103,22 +16103,14 @@ def find_all_conversations(
     resolve_codex_activity: historical aggregations can omit per-thread live
     activity RPCs while retaining transcript metadata and tail-derived state.
     """
-    _only_dirs = None
+    files_by_project = None
     if only_jsonl_paths is not None:
-        # Canonicalize: project_dirs below are resolved (_archive_canonical_
-        # project_dirs), so compare in canonical space — callers may hand us
-        # paths through symlinked prefixes (e.g. /var → /private/var on macOS).
-        only_jsonl_paths = {os.path.realpath(str(p)) for p in only_jsonl_paths}
-        _only_dirs = {os.path.dirname(p) for p in only_jsonl_paths}
-        # Task-tool subagent transcripts nest at
-        # <project>/<sid>/subagents/agent-*.jsonl — their dirname is the
-        # subagents dir, not the project dir, so a dirname-only filter would
-        # skip every project dir and the incremental rebuild would silently
-        # drop subagent-file deltas. Admit that file's project dir too.
-        for _p in only_jsonl_paths:
-            _pd = os.path.dirname(_p)
-            if os.path.basename(_pd) == "subagents":
-                _only_dirs.add(os.path.dirname(os.path.dirname(_pd)))
+        files_by_project = {}
+        for path in sorted({Path(os.path.realpath(p)) for p in only_jsonl_paths}):
+            project = path.parent
+            if project.name == "subagents":
+                project = project.parent.parent
+            files_by_project.setdefault(project, []).append(path)
     projects_root = Path.home() / ".claude" / "projects"
     projects_root_exists = projects_root.is_dir()
 
@@ -16218,7 +16210,7 @@ def find_all_conversations(
         print(f"  [archive] cold scan: parsing {_total_transcripts} transcripts…")
 
     for project_dir in project_dirs:
-        if _only_dirs is not None and str(project_dir) not in _only_dirs:
+        if files_by_project is not None and project_dir not in files_by_project:
             continue
         if _is_scratch_project_dir(project_dir):
             continue
@@ -16261,44 +16253,55 @@ def find_all_conversations(
         try:
             jsonls = []
             subagent_files = []  # (parent_sid, agent-*.jsonl Path)
-            for f in project_dir.iterdir():
-                # Session subdirs (<sid>/subagents/...) fall out of the same
-                # iterdir for free (DirEntry d_type, no extra stat). One
-                # is_dir probe each keeps _ARCHIVE_WORKFLOW_SESSION_DIRS to
-                # genuine workflow owners only.
-                if f.is_dir():
-                    _subagents_dir = f / "subagents"
-                    if (_subagents_dir / "workflows").is_dir():
-                        _ARCHIVE_WORKFLOW_SESSION_DIRS[f.name] = f
-                    # Claude Task-tool subagent transcripts: the same
-                    # <sid>/subagents/agent-*.jsonl shape the SessionGraph's
-                    # lazy enrichment globs. One scandir per session dir —
-                    # sessions that never spawned a subagent have no
-                    # subagents dir, so this raises FileNotFoundError and
-                    # skips at syscall cost only.
-                    try:
-                        for _af in _subagents_dir.iterdir():
-                            if (
-                                _af.is_file()
-                                and _af.name.startswith("agent-")
-                                and _af.name.endswith(".jsonl")
-                            ):
-                                if (
-                                    only_jsonl_paths is not None
-                                    and str(_af) not in only_jsonl_paths
-                                ):
-                                    continue
-                                subagent_files.append((f.name, _af))
-                    except OSError:
-                        pass
-                    continue
-                if only_jsonl_paths is not None and str(f) not in only_jsonl_paths:
-                    continue
-                if f.is_file() and f.name.endswith(".jsonl"):
-                    try:
-                        jsonls.append((f, f.stat()))
-                    except OSError:
+            if files_by_project is not None:
+                for path in files_by_project[project_dir]:
+                    if path.parent == project_dir and path.name.endswith(".jsonl"):
+                        try:
+                            if path.is_file():
+                                jsonls.append((path, path.stat()))
+                        except OSError:
+                            continue
+                        owner = project_dir / path.stem
+                    elif (path.parent.name == "subagents" and path.name.startswith("agent-")
+                          and path.name.endswith(".jsonl") and path.is_file()):
+                        owner = path.parent.parent
+                        subagent_files.append((owner.name, path))
+                    else:
                         continue
+                    if (owner / "subagents" / "workflows").is_dir():
+                        _ARCHIVE_WORKFLOW_SESSION_DIRS[owner.name] = owner
+            else:
+                for f in project_dir.iterdir():
+                    # Session subdirs (<sid>/subagents/...) fall out of the same
+                    # iterdir for free (DirEntry d_type, no extra stat). One
+                    # is_dir probe each keeps _ARCHIVE_WORKFLOW_SESSION_DIRS to
+                    # genuine workflow owners only.
+                    if f.is_dir():
+                        _subagents_dir = f / "subagents"
+                        if (_subagents_dir / "workflows").is_dir():
+                            _ARCHIVE_WORKFLOW_SESSION_DIRS[f.name] = f
+                        # Claude Task-tool subagent transcripts: the same
+                        # <sid>/subagents/agent-*.jsonl shape the SessionGraph's
+                        # lazy enrichment globs. One scandir per session dir —
+                        # sessions that never spawned a subagent have no
+                        # subagents dir, so this raises FileNotFoundError and
+                        # skips at syscall cost only.
+                        try:
+                            for _af in _subagents_dir.iterdir():
+                                if (
+                                    _af.is_file()
+                                    and _af.name.startswith("agent-")
+                                    and _af.name.endswith(".jsonl")
+                                ):
+                                    subagent_files.append((f.name, _af))
+                        except OSError:
+                            pass
+                        continue
+                    if f.is_file() and f.name.endswith(".jsonl"):
+                        try:
+                            jsonls.append((f, f.stat()))
+                        except OSError:
+                            continue
         except OSError:
             continue
 
@@ -17129,6 +17132,32 @@ def _read_archive_response_cache_file():
     entries = data.get("entries")
     if not isinstance(entries, dict):
         return
+    keep = {}
+    for key, entry in entries.items():
+        if not isinstance(key, str) or not isinstance(entry, dict):
+            continue
+        if not isinstance(entry.get("conversations"), list):
+            continue
+        keep[key] = {
+            "cached_at": float(entry.get("cached_at") or 0),
+            "conversations": entry.get("conversations") or [],
+            "signature": entry.get("signature") or None,
+        }
+    if keep:
+        with _ARCHIVE_RESPONSE_CACHE_LOCK:
+            if legacy_import_done is not None and legacy_import_done.is_set():
+                for entry in keep.values():
+                    entry["conversations"] = archive_store.hot_rows(entry["conversations"])
+            _ARCHIVE_RESPONSE_CACHE.update(keep)
+        try:
+            for _entry in keep.values():
+                note_archive_build(_entry.get("cached_at"))  # perf_events warm/cold ledger
+        except NameError:
+            pass
+    _archive_restore_signature_maps(data)
+
+
+def _archive_restore_signature_maps(data):
     signature_maps = data.get("signature_maps")
     restored_signature_maps = {}
     if isinstance(signature_maps, dict):
@@ -17153,29 +17182,10 @@ def _read_archive_response_cache_file():
                 for extra_path, mtime in raw_extras.items()
                 if isinstance(extra_path, str) and isinstance(mtime, (int, float))
             }
+            capture = raw_extras.get("ccc-codex-captures")
+            if isinstance(capture, str) and re.fullmatch(r"[0-9a-f]{64}", capture):
+                extras["ccc-codex-captures"] = capture
             restored_signature_maps[signature] = (files, extras)
-    keep = {}
-    for key, entry in entries.items():
-        if not isinstance(key, str) or not isinstance(entry, dict):
-            continue
-        if not isinstance(entry.get("conversations"), list):
-            continue
-        keep[key] = {
-            "cached_at": float(entry.get("cached_at") or 0),
-            "conversations": entry.get("conversations") or [],
-            "signature": entry.get("signature") or None,
-        }
-    if keep:
-        with _ARCHIVE_RESPONSE_CACHE_LOCK:
-            if legacy_import_done is not None and legacy_import_done.is_set():
-                for entry in keep.values():
-                    entry["conversations"] = archive_store.hot_rows(entry["conversations"])
-            _ARCHIVE_RESPONSE_CACHE.update(keep)
-        try:
-            for _entry in keep.values():
-                note_archive_build(_entry.get("cached_at"))  # perf_events warm/cold ledger
-        except NameError:
-            pass
     if restored_signature_maps:
         with _archive_sig_lock:
             _ARCHIVE_STATMAP_BY_SIG.update(restored_signature_maps)
@@ -17228,6 +17238,23 @@ def _persist_archive_response_cache(force=False, *, complete=False):
         return
     with _ARCHIVE_RESPONSE_CACHE_LOCK:
         entries = dict(_ARCHIVE_RESPONSE_CACHE)
+    snapshot = _archive_response_snapshot(entries)
+    try:
+        archive_store.save(_ARCHIVE_RESPONSE_CACHE_FILE, snapshot, complete=complete,
+                           sidebar_key=_archive_response_cache_key(),
+                           sidebar_pages=(_ARCHIVE_SIDEBAR_PACKED_VERSION, _archive_list_pack_static))
+        hot_entries = {key: dict(entry, conversations=archive_store.hot_rows(entry.get("conversations") or []))
+                       for key, entry in entries.items()}
+        snapshot = dict(snapshot, entries=hot_entries)
+        archive_store.backup_legacy(_ARCHIVE_RESPONSE_CACHE_FILE)
+        if archive_snapshot.save(_ARCHIVE_RESPONSE_CACHE_FILE, snapshot):
+            _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT = time.time()
+            return True
+    except (OSError, ValueError, sqlite3.Error) as e:
+        print(f"  [archive-cache] save failed: {e}")
+
+
+def _archive_response_snapshot(entries):
     referenced_signatures = {
         entry.get("signature")
         for entry in entries.values()
@@ -17245,25 +17272,41 @@ def _persist_archive_response_cache(force=False, *, complete=False):
             for signature, (files, extras) in _ARCHIVE_STATMAP_BY_SIG.items()
             if signature in referenced_signatures
         }
-    snapshot = {
+    return {
         "schema_version": _ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
         "build_id": _ARCHIVE_RESPONSE_CACHE_BUILD_ID,
         "entries": entries,
         "signature_maps": signature_maps,
     }
+
+
+def _archive_refresh_read(key, **options):
+    from ccc_server import archive_store
+    import sqlite3
+
     try:
-        archive_store.save(_ARCHIVE_RESPONSE_CACHE_FILE, snapshot, complete=complete,
-                           sidebar_key=_archive_response_cache_key(),
-                           sidebar_pages=(_ARCHIVE_SIDEBAR_PACKED_VERSION, _archive_list_pack_static))
-        hot_entries = {key: dict(entry, conversations=archive_store.hot_rows(entry.get("conversations") or []))
-                       for key, entry in entries.items()}
-        snapshot = dict(snapshot, entries=hot_entries)
-        archive_store.backup_legacy(_ARCHIVE_RESPONSE_CACHE_FILE)
-        if archive_snapshot.save(_ARCHIVE_RESPONSE_CACHE_FILE, snapshot):
-            _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT = time.time()
-            return True
-    except (OSError, ValueError, sqlite3.Error) as e:
-        print(f"  [archive-cache] save failed: {e}")
+        data = archive_store.load(_ARCHIVE_RESPONSE_CACHE_FILE, key=key, **options)
+        if (data and data.get("schema_version") == _ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION
+                and data.get("build_id") == _ARCHIVE_RESPONSE_CACHE_BUILD_ID):
+            if options.get("row_index"):
+                _archive_restore_signature_maps(data)
+            return data["entries"].get(key)
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        print(f"  [archive-cache] incremental read unavailable: {exc}")
+
+
+def _publish_archive_delta(key, base, merged, signature):
+    from ccc_server import archive_store
+
+    entry = {"cached_at": time.time(), "conversations": merged, "signature": signature}
+    if not archive_store.save(
+        _ARCHIVE_RESPONSE_CACHE_FILE, _archive_response_snapshot({key: entry}),
+        complete=True, sidebar_key=_archive_response_cache_key(),
+        sidebar_pages=(_ARCHIVE_SIDEBAR_PACKED_VERSION, _archive_list_pack_static),
+        base_entry=base,
+    ):
+        raise RuntimeError("archive response changed while its delta was being built")
+    note_archive_build(entry["cached_at"])
 
 
 def _archive_response_cache_get(key):
@@ -17422,9 +17465,7 @@ _archive_sig_lock = threading.Lock()
 # every few seconds and only the cached response entries' signatures matter.
 _ARCHIVE_STATMAP_BY_SIG = {}
 _ARCHIVE_STATMAP_MAX = 16
-# A delta larger than this falls back to the full rebuild — the incremental
-# path exists for the steady-state "a handful of sessions wrote" case, not to
-# re-implement the builder for bulk changes (restores, migrations, first run).
+# A positive value bounds each incremental parse batch. Zero disables the tier.
 try:
     _ARCHIVE_INCR_MAX_FILES = max(0, int(os.environ.get("CCC_ARCHIVE_INCR_MAX_FILES", "200")))
 except ValueError:
@@ -17473,7 +17514,7 @@ def _archive_signature_delta(old_sig, new_sig):
     a full rebuild is required: unknown signature (restart, LRU eviction), a
     non-Claude engine source changed that we cannot rebuild in isolation
     (those are dir-granularity in the signature, so no file diff exists), or
-    the delta is too large to be worth the incremental path.
+    incremental refreshes are disabled.
 
     Hermes is the one engine source with an isolated refresh path: its
     state.db mtime flips per internal event, and treating that like the
@@ -17517,9 +17558,23 @@ def _archive_signature_delta(old_sig, new_sig):
     removed = [p for p in old_files if p not in new_files]
     if not changed and not removed and not refresh_engines:
         return None
-    if _ARCHIVE_INCR_MAX_FILES <= 0 or len(changed) > _ARCHIVE_INCR_MAX_FILES:
+    if _ARCHIVE_INCR_MAX_FILES <= 0:
         return None
     return changed, removed, refresh_engines
+
+
+def _archive_partial_signature(old_sig, target_sig, changed, removed):
+    """Checkpoint a bounded transcript batch with the exact files it applied."""
+    digest = "partial:" + hashlib.sha256(repr((old_sig, target_sig, changed)).encode()).hexdigest()
+    with _archive_sig_lock:
+        old_files, old_extras = _ARCHIVE_STATMAP_BY_SIG[old_sig]
+        target_files, _ = _ARCHIVE_STATMAP_BY_SIG[target_sig]
+        files = dict(old_files)
+        for path in removed:
+            files.pop(path, None)
+        files.update((path, target_files[path]) for path in changed)
+        _ARCHIVE_STATMAP_BY_SIG[digest] = (files, old_extras)
+    return digest
 
 
 def _archive_merge_engine_rows(cached_rows, engine, fresh_rows):
@@ -18110,6 +18165,8 @@ def _archive_refresh_slot_available(key, now):
     # A new transcript still refreshes at once (the gate-bypass grace).
     if now < _ARCHIVE_REFRESH_GATE_BYPASS_UNTIL[0]:
         return True
+    if (_archive_serve_cache.get(key) or {}).get("partial_refresh"):
+        return True
     last = _archive_refresh_last_start.get(key)
     return last is None or (now - last) >= _ARCHIVE_REFRESH_MIN_GAP_S
 
@@ -18118,6 +18175,10 @@ def _archive_refresh_mark_started(key, now):
     """Record a refresh start (call with _archive_serve_lock held)."""
     _archive_serve_refreshing[key] = now
     _archive_refresh_last_start[key] = now
+    if key in _archive_serve_cache:
+        # One fast continuation per successful batch. A failed continuation
+        # observes the ordinary retry interval.
+        _archive_serve_cache[key].pop("partial_refresh", None)
 
 
 # CCC-1154 option C: when the box itself is saturated, the detached
@@ -18163,7 +18224,7 @@ def _archive_refresh_load_blocked(now):
     return True
 
 
-def _archive_serve_cache_store(key, rows, generation, ts=None):
+def _archive_serve_cache_store(key, rows, generation, ts=None, *, transfer_rows=None, partial=False):
     """Store rows only if no lifecycle mutation invalidated their build.
 
     `ts` defaults to now (a genuine fresh build). The cold-restart path
@@ -18203,12 +18264,15 @@ def _archive_serve_cache_store(key, rows, generation, ts=None):
         if diff is not None and diff["identical"]:
             prev["ts"] = stamp
             prev["rows"] = diff["rows"]
+            prev["transfer_rows"] = transfer_rows
+            prev["partial_refresh"] = partial
             return True
         _archive_serve_version += 1
         ver = _archive_serve_version
         # row_rev: session id -> version its row last changed (absent = at or
         # before track_since). Feeds the ?since= delta /list.
-        entry = {"ts": stamp, "rows": rows, "ver": ver, "track_since": ver, "row_rev": {}}
+        entry = {"ts": stamp, "rows": rows, "ver": ver, "track_since": ver, "row_rev": {},
+                 "transfer_rows": transfer_rows, "partial_refresh": partial}
         if diff is not None:
             entry["rows"] = diff["rows"]
             if prev.get("track_since") and prev.get("row_rev") is not None and not diff["untracked"]:
@@ -18573,6 +18637,7 @@ def _restamp_archive_serve_cache_after_mutation(archived_set=None, trashed_set=N
                             entry["row_rev"][sid] = _archive_serve_version
                 entry["ts"] = 0.0
                 entry["ver"] = _archive_serve_version
+                entry.pop("transfer_rows", None)
             _archive_serve_refreshing.clear()
             return
 
@@ -20522,7 +20587,7 @@ def _stamp_archive_goals(rows):
 _ARCHIVE_COMPUTE_LAST_PHASES = {}
 
 
-def _archive_compute_rows(key, cache_options, serve_generation=None, progress_step=None):
+def _archive_compute_rows(key, cache_options, serve_generation=None, progress_step=None, *, detached=False):
     """Produce archive rows under the per-key build lock (single-flight).
 
     Signature-gated: unchanged transcript corpus → rehydrate the persisted rows
@@ -20543,12 +20608,19 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
     lock = _archive_build_lock(key)
     with lock:
         _ph = time.perf_counter()
-        entry = _archive_response_cache_build_get(key)
+        indexed = _archive_refresh_read(key, row_index=True) if detached else None
+        entry = indexed or _archive_response_cache_build_get(key)
         phases["cache_get_ms"] = round((time.perf_counter() - _ph) * 1000.0, 1)
         _ph = time.perf_counter()
         if entry and entry.get("signature") == sig:
             phases["tier"] = "match"
-            rows = _rehydrate_archive_cached_rows(entry.get("conversations") or [])
+            if indexed:
+                entry = _archive_refresh_read(key, hot=True)
+                if entry is None:
+                    raise RuntimeError("archive hot rows became unavailable")
+                rows = _rehydrate_archive_cached_rows(entry["conversations"], preselected=True)
+            else:
+                rows = _rehydrate_archive_cached_rows(entry.get("conversations") or [])
             phases["rehydrate_ms"] = round((time.perf_counter() - _ph) * 1000.0, 1)
             from_cache = True
         else:
@@ -20567,21 +20639,41 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
                 if delta is not None:
                     changed, removed, refresh_engines = delta
                     phases["tier"] = "incremental"
+                    publication_sig = sig
+                    if indexed and len(changed) > _ARCHIVE_INCR_MAX_FILES:
+                        phases["remaining"] = len(changed) - _ARCHIVE_INCR_MAX_FILES
+                        changed = changed[:_ARCHIVE_INCR_MAX_FILES]
+                        refresh_engines = set()
+                        publication_sig = _archive_partial_signature(entry["signature"], sig, changed, removed)
                     phases["changed"] = len(changed)
                     try:
                         _sp = time.perf_counter()
-                        fresh = find_all_conversations(
-                            resolve_pr_states=cache_options.get("resolve_pr_states", False),
-                            resolve_effective=cache_options.get("resolve_effective", False),
-                            resolve_worktree_dirty=cache_options.get("resolve_worktree_dirty", False),
-                            only_jsonl_paths=set(changed),
-                        ) if changed else []
+                        fresh = []
+                        batch_size = _ARCHIVE_INCR_MAX_FILES
+                        for offset in range(0, len(changed), batch_size):
+                            fresh.extend(find_all_conversations(
+                                resolve_pr_states=cache_options.get("resolve_pr_states", False),
+                                resolve_effective=cache_options.get("resolve_effective", False),
+                                resolve_worktree_dirty=cache_options.get("resolve_worktree_dirty", False),
+                                only_jsonl_paths=changed[offset:offset + batch_size],
+                            ))
                         merged = _archive_merge_incremental_rows(
                             entry.get("conversations") or [], fresh, removed,
                         )
                         phases["parse_merge_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
                         phases["engines"] = sorted(refresh_engines)
                         _sp = time.perf_counter()
+                        reuse_source = merged
+                        if indexed and refresh_engines:
+                            scoped = _archive_refresh_read(key, reuse_engines=refresh_engines)
+                            if not scoped or scoped["cached_at"] != entry["cached_at"]:
+                                raise RuntimeError("archive response changed before the engine refresh")
+                            from ccc_server import archive_store
+                            engine_rows = {archive_store.identity(r): r for r in scoped["conversations"]}
+                            indexed = dict(indexed, conversations=[
+                                engine_rows.get(archive_store.identity(r), r) for r in indexed["conversations"]
+                            ])
+                            reuse_source = scoped["conversations"]
                         if "hermes" in refresh_engines:
                             merged = _archive_merge_engine_rows(
                                 merged,
@@ -20609,7 +20701,7 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
                                     # CCC-142: reuse rows whose rollout is unchanged.
                                     reuse_rows={
                                         (r.get("session_id") or r.get("id")): r
-                                        for r in merged
+                                        for r in reuse_source
                                         if isinstance(r, dict) and r.get("engine") == "codex"
                                         and r.get("source") == "codex"
                                     },
@@ -20620,13 +20712,24 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
                             )
                         phases["engine_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
                         _sp = time.perf_counter()
-                        _archive_response_cache_put(key, merged, signature=sig)
+                        if indexed:
+                            _publish_archive_delta(key, indexed, merged, publication_sig)
+                        else:
+                            _archive_response_cache_put(key, merged, signature=sig)
                         phases["cache_put_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
                         _sp = time.perf_counter()
-                        rows = _rehydrate_archive_cached_rows(merged)
+                        if indexed:
+                            hot = _archive_refresh_read(key, hot=True)
+                            if hot is None:
+                                raise RuntimeError("published archive hot rows became unavailable")
+                            rows = _rehydrate_archive_cached_rows(hot["conversations"], preselected=True)
+                        else:
+                            rows = _rehydrate_archive_cached_rows(merged)
                         phases["rehydrate_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
                         from_cache = True
                     except Exception as e:
+                        if indexed:
+                            raise
                         print(f"  [archive-cache] incremental refresh failed, rebuilding: {e}")
                         rows = None
             if rows is None:
@@ -20791,7 +20894,7 @@ def _archive_refresh_worker_main(encoded_options, output_path):
         # enough to hit the subprocess timeout in the first place.
         from ccc_server.cpu_priority import set_background_priority
         set_background_priority("archive")
-        _load_conv_meta_cache()
+        _load_conv_meta_cache(lazy=True)
         raw_options = base64.urlsafe_b64decode(encoded_options.encode("ascii"))
         cache_options = json.loads(raw_options.decode("utf-8"))
         if not isinstance(cache_options, dict):
@@ -20807,7 +20910,7 @@ def _archive_refresh_worker_main(encoded_options, output_path):
         }
         key = _archive_response_cache_key(**cache_options)
         _wt0 = time.perf_counter()
-        rows, from_cache = _archive_compute_rows(key, cache_options)
+        rows, from_cache = _archive_compute_rows(key, cache_options, detached=True)
         from ccc_server import archive_store
         rows = archive_store.hot_rows(rows)
         phases = dict(_ARCHIVE_COMPUTE_LAST_PHASES)
@@ -20832,8 +20935,10 @@ def _archive_refresh_worker_main(encoded_options, output_path):
     except Exception as exc:
         result = {"ok": False, "error": str(exc)}
     try:
-        _write_archive_refresh_result(output_path, result)
-    except OSError as exc:
+        basis_path = Path(str(output_path) + ".basis")
+        basis = set(json.loads(basis_path.read_bytes())) if basis_path.is_file() else None
+        _write_archive_refresh_result(output_path, result, basis=basis)
+    except (OSError, ValueError) as exc:
         print(f"archive refresh worker could not write its result: {exc}", file=sys.stderr)
         return 1
     return 0 if result.get("ok") else 1
@@ -20847,21 +20952,44 @@ def _archive_refresh_worker_main(encoded_options, output_path):
 _ARCHIVE_RESULT_ROWS_PER_LINE = 64
 
 
-def _write_archive_refresh_result(output_path, result):
-    """Line 1 is the result without its rows, then the rows in small chunks."""
+def _write_archive_refresh_result(output_path, result, *, basis=None):
+    """Send changed bodies and their order when the dashboard has a basis."""
     rows = result.get("rows")
     header = {k: v for k, v in result.items() if k != "rows"}
+    chunks = None
     if isinstance(rows, list):
-        header["row_count"] = len(rows)
+        if basis is not None:
+            order, chunks, chunk = [], [], []
+            for row in rows:
+                encoded = json.dumps(row, separators=(",", ":"))
+                token = hashlib.blake2b(encoded.encode("ascii"), digest_size=16).hexdigest()
+                order.append(token)
+                if token in basis:
+                    continue
+                basis.add(token)
+                chunk.append(f'["{token}",{encoded}]')
+                if len(chunk) == _ARCHIVE_RESULT_ROWS_PER_LINE:
+                    chunks.append(chunk)
+                    chunk = []
+            if chunk:
+                chunks.append(chunk)
+            header["row_order"] = order
+            header["row_count"] = sum(map(len, chunks))
+        else:
+            header["row_count"] = len(rows)
     with open(output_path, "w", encoding="utf-8") as output_file:
         output_file.write(json.dumps(header, separators=(",", ":")) + "\n")
-        for start in range(0, len(rows or ()), _ARCHIVE_RESULT_ROWS_PER_LINE):
-            chunk = rows[start:start + _ARCHIVE_RESULT_ROWS_PER_LINE]
-            output_file.write(json.dumps(chunk, separators=(",", ":")) + "\n")
+        if chunks is not None:
+            for chunk in chunks:
+                output_file.write("[" + ",".join(chunk) + "]\n")
+        else:
+            for start in range(0, len(rows or ()), _ARCHIVE_RESULT_ROWS_PER_LINE):
+                chunk = rows[start:start + _ARCHIVE_RESULT_ROWS_PER_LINE]
+                output_file.write(json.dumps(chunk, separators=(",", ":")) + "\n")
 
 
-def _read_archive_refresh_result(output_path):
-    """Returns (result, bytes read). Raises ValueError on a truncated result."""
+def _read_archive_refresh_result(output_path, *, basis=None):
+    """Return the full ordered view and reject an incomplete worker result."""
     with open(output_path, "r", encoding="utf-8") as result_file:
         header_line = result_file.readline()
         size = len(header_line)
@@ -20874,6 +21002,17 @@ def _read_archive_refresh_result(output_path):
             rows.extend(json.loads(line))
     if len(rows) != result.pop("row_count"):
         raise ValueError("archive refresh result is truncated")
+    order = result.pop("row_order", None)
+    if order is not None:
+        received = dict(rows)
+        previous = basis or {}
+        if len(received) != len(rows) or received.keys() - set(order):
+            raise ValueError("archive refresh result has invalid row tokens")
+        try:
+            rows = [received[token] if token in received else previous[token] for token in order]
+        except KeyError as exc:
+            raise ValueError("archive refresh result omitted an unknown row") from exc
+        result["transfer_rows"] = dict(zip(order, rows))
     result["rows"] = rows
     return result, size
 
@@ -20901,7 +21040,7 @@ def _sweep_stale_archive_refresh_results(root=None, now=None):
         with os.scandir(root) as entries:
             for entry in entries:
                 if not (entry.name.startswith(_ARCHIVE_REFRESH_RESULT_PREFIX)
-                        and entry.name.endswith(".json")):
+                        and entry.name.endswith((".json", ".json.basis"))):
                     continue
                 try:
                     st = entry.stat(follow_symlinks=False)
@@ -20929,6 +21068,7 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
         prefix=_ARCHIVE_REFRESH_RESULT_PREFIX, suffix=".json", dir=_archive_refresh_result_dir(),
     )
     os.close(output_fd)
+    basis_path = output_name + ".basis"
     encoded_options = base64.urlsafe_b64encode(
         json.dumps(cache_options, sort_keys=True).encode("utf-8")
     ).decode("ascii")
@@ -20961,6 +21101,12 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
             )
         _rphase["lock_wait_ms"] = round((time.perf_counter() - _rt0) * 1000.0, 1)
         try:
+            with _archive_serve_lock:
+                previous = _archive_serve_cache.get(key) or {}
+                basis = previous.get("transfer_rows") or {}
+            basis_fd = os.open(basis_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(basis_fd, "w", encoding="ascii") as handle:
+                handle.write(json.dumps(list(basis), separators=(",", ":")))
             completed = subprocess.run(
                 command,
                 cwd=str(CCC_ROOT),
@@ -20976,7 +21122,7 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
         _rt1 = time.perf_counter()
         _rphase["worker_ms"] = round((_rt1 - _rt0) * 1000.0 - _rphase["lock_wait_ms"], 1)
         try:
-            result, _rphase["result_bytes"] = _read_archive_refresh_result(output_name)
+            result, _rphase["result_bytes"] = _read_archive_refresh_result(output_name, basis=basis)
         except (OSError, ValueError) as exc:
             detail = (completed.stderr or completed.stdout or "").strip()[-500:]
             raise RuntimeError(
@@ -20995,7 +21141,12 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
         _rt2 = time.perf_counter()
         _rphase["decode_ms"] = round((_rt2 - _rt1) * 1000.0, 1)
         if _ARCHIVE_SERVE_TTL > 0:
-            _archive_serve_cache_store(key, rows, serve_generation)
+            # An incomplete batch serves its published rows immediately. The
+            # next ordinary read can pick up the remainder under the usual
+            # load guard and single-flight lock.
+            pending = (result.get("phases") or {}).get("remaining")
+            _archive_serve_cache_store(key, rows, serve_generation, ts=0 if pending else None,
+                                       transfer_rows=result.get("transfer_rows"), partial=bool(pending))
         _rt3 = time.perf_counter()
         _rphase["store_ms"] = round((_rt3 - _rt2) * 1000.0, 1)
         _rphase["rows"] = len(rows)
@@ -21004,10 +21155,11 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
         record_diag("archive_rebuild", (_rt3 - _rt0) * 1000.0, _rphase)
         return rows, bool(result.get("from_cache"))
     finally:
-        try:
-            os.unlink(output_name)
-        except OSError:
-            pass
+        for filename in (output_name, basis_path):
+            try:
+                os.unlink(filename)
+            except OSError:
+                pass
 
 
 def _archive_serve_refresh(key, cache_options, serve_generation, started_at):
@@ -21170,7 +21322,7 @@ def _archive_serve_rows_versioned(key, cache_options, *, copy_rows=True, force_r
                                 sc.pop(field, None)
                         version = sc.get("ver", 0)
                 rows = entry["conversations"]
-                if borrow_history:
+                if not copy_rows:
                     with _archive_history_timing(history_phases, "lifecycle_apply"):
                         return _overlay_conversation_lifecycle_flags(
                             rows, copy_on_change=True, snapshot=lifecycle), cached, version
@@ -21302,10 +21454,11 @@ def _archive_serve_hot_rows_versioned(
             dict(row) for row in (entry.get("conversations") or [])
             if isinstance(row, dict)
         ])
+        partial = not borrowed_base_snapshot and str(entry.get("signature") or "").startswith("partial:")
         stored = _archive_serve_cache_store(
-            key, rows, serve_generation, ts=entry.get("cached_at"),
+            key, rows, serve_generation, ts=0 if partial else entry.get("cached_at"), partial=partial,
         )
-        entry_stale = (now - float(entry.get("cached_at") or 0)) >= _ARCHIVE_SERVE_TTL
+        entry_stale = partial or (now - float(entry.get("cached_at") or 0)) >= _ARCHIVE_SERVE_TTL
         with _archive_serve_lock:
             if (
                 stored
@@ -21388,11 +21541,11 @@ def _spawn_is_recent(spawn_entry, now=None):
     return 0 <= ((now or time.time()) - ts) <= _SPAWN_RECENT_WINDOW_SEC
 
 
-def _rehydrate_archive_cached_rows(rows):
+def _rehydrate_archive_cached_rows(rows, *, preselected=False):
     from ccc_server import archive_store
-    if not archive_store.database_path(_ARCHIVE_RESPONSE_CACHE_FILE).exists():
+    if not preselected and not archive_store.database_path(_ARCHIVE_RESPONSE_CACHE_FILE).exists():
         return _rehydrate_archive_hot_rows(rows)
-    selected = archive_store.hot_rows(rows or [])
+    selected = (rows or []) if preselected else archive_store.hot_rows(rows or [])
     selected_ids = {archive_store.identity(row) for row in selected}
     fresh = {archive_store.identity(row): row for row in _rehydrate_archive_hot_rows(selected)}
     # Historical sessions are for recall. Preserve their parsed metadata;
