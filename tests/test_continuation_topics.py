@@ -851,6 +851,31 @@ def test_archive_projection_inputs_capture_topic_and_native_title_sources(store,
     ).fetchone() == ('External',)
 
 
+@pytest.mark.parametrize("title, named", [
+    ('Normal "title"\n with unicode é', -9223372036854775808),
+    ("Embedded\0separator", 1),
+    (b"\xfflegacy blob", "legacy flag"),
+])
+def test_archive_topic_batch_preserves_types_and_order(store, title, named):
+    topics._connection(store)
+    root = '11111111-1111-4111-8111-111111111111'
+    store.executemany("INSERT INTO continuation_topics VALUES (?,?,?,?,?)", [
+        ('child', root, root, title, named),
+        ('self', 'self', 'self', '', 0),
+    ])
+    store.execute("INSERT INTO session_meta VALUES (?,?)", ('indexed', root))
+
+    by_sid, indexed, roots, edges = topics._archive_topic_records(store, 2)
+    assert list(by_sid.items()) == [
+        ('child', (root, root, title, named)),
+        ('self', ('self', 'self', '', 0)),
+    ]
+    assert indexed == {'indexed': root}
+    assert roots == {root}
+    assert edges == (('child', root), ('child', root), ('indexed', root))
+    assert topics._archive_topic_records(store, 1) is None
+
+
 def test_archive_projection_reuses_committed_records_but_refreshes_titles(store, monkeypatch):
     from contextlib import closing
 

@@ -375,24 +375,55 @@ def archive_connection():
     return conn
 
 
-def _archive_topic_records(conn, max_rows):
-    records = _sqlite_fetch_rows(
-        conn, "SELECT sid,origin,root_sid,topic_title,user_named FROM continuation_topics LIMIT ?",
-        (max_rows + 1,), ("sid", "origin", "root_sid", "topic_title", "user_named"),
+def _archive_topic_rows(conn, max_rows):
+    columns = ("sid", "origin", "root_sid", "topic_title", "user_named")
+    query = "SELECT sid,origin,root_sid,topic_title,user_named FROM continuation_topics LIMIT ?"
+    params = (max_rows + 1,)
+    # Pack each bounded column once to skip per-row JSON arrays and escaping.
+    expected_types = ("text", "text", "text", "text", "integer")
+    wrong_type = " OR ".join(
+        f"typeof({column})!='{kind}'" for column, kind in zip(columns, expected_types)
     )
+    fields = ", ".join(
+        f"CASE WHEN max({wrong_type})=0 THEN group_concat({column}, char(0)) END"
+        for column in columns
+    )
+    count, *packed = conn.execute(f"SELECT count(*), {fields} FROM ({query})", params).fetchone()
+    if count > max_rows:
+        return None
+    if not count:
+        return ()
+    # Legacy scalars and embedded delimiters need the typed reader.
+    if packed[0] is not None:
+        values = [column.split("\0") for column in packed]
+        if all(len(column) == count for column in values):
+            return zip(*values[:4], map(int, values[4]))
+    return _sqlite_fetch_rows(conn, query, params, columns)
+
+
+def _archive_topic_records(conn, max_rows):
+    records = _archive_topic_rows(conn, max_rows)
+    if records is None:
+        return None
     indexed = _sqlite_fetch_rows(
         conn, "SELECT sid,continuation_origin FROM session_meta WHERE continuation_origin!='' LIMIT ?",
         (max_rows + 1,), ("sid", "continuation_origin"),
     )
-    if len(records) > max_rows or len(indexed) > max_rows:
+    if len(indexed) > max_rows:
         return None
-    by_sid = {sid: (origin, root, title, named) for sid, origin, root, title, named in records}
-    linked_roots = frozenset(root for _, origin, root, _, _ in records
-                             if origin and root and _NATIVE_ID_RE.fullmatch(root))
-    edges = [(sid, edge) for sid, origin, root, _, _ in records
-             for edge in (origin, root) if edge and edge != sid]
+    by_sid, linked_roots, edges = {}, set(), []
+    is_native_id = _NATIVE_ID_RE.fullmatch
+    for sid, origin, root, title, named in records:
+        by_sid[sid] = (origin, root, title, named)
+        if origin:
+            if origin != sid:
+                edges.append((sid, origin))
+            if root and is_native_id(root):
+                linked_roots.add(root)
+        if root and root != sid:
+            edges.append((sid, root))
     edges.extend(indexed)
-    return MappingProxyType(by_sid), MappingProxyType(dict(indexed)), linked_roots, tuple(edges)
+    return MappingProxyType(by_sid), MappingProxyType(dict(indexed)), frozenset(linked_roots), tuple(edges)
 
 
 def _archive_fallback_titles():
