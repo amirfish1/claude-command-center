@@ -164,6 +164,8 @@ def _connect(cache_file, *, write=False, shared_reader=False):
             CREATE INDEX IF NOT EXISTS rows_activity ON rows(variant, activity);
             CREATE INDEX IF NOT EXISTS rows_sid ON rows(variant, sid);
             CREATE INDEX IF NOT EXISTS rows_position ON rows(variant, position);
+            CREATE INDEX IF NOT EXISTS rows_hot_roots
+                ON rows(variant, activity, sticky, sid, parent, position);
             CREATE TABLE IF NOT EXISTS session_inventory (
                 variant TEXT NOT NULL, identity TEXT NOT NULL,
                 digest TEXT NOT NULL, body TEXT NOT NULL,
@@ -426,7 +428,7 @@ def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_page
                         archive_sidebar_pages.publish(con, key, stamp, version, hot, project)
                     else:
                         hot_rows_by_id = dict(con.execute(
-                            _HOT_ROW_QUERY.format(columns="r.identity,r.rowid"), _hot_params(key, stamp)))
+                            _HOT_ROW_QUERY.format(columns="r.identity,r.rowid"), (*_hot_params(key, stamp), key)))
                         archive_sidebar_pages.publish(
                             con, key, stamp, version, hot_rows_by_id, project,
                             hot_rowids=set(hot_rows_by_id.values()), previous_hot=previous_hot,
@@ -1147,20 +1149,45 @@ def renew_sidebar_history_after_full_response(projection):
     _SIDEBAR_HISTORY_READER.renew_after_full_response(projection)
 
 
-_HOT_ROW_QUERY = """WITH RECURSIVE selected(identity,sid,parent) AS (
-    SELECT identity,sid,parent FROM rows
+_HOT_ROWS_CTE = """WITH RECURSIVE selected(rowid,sid,parent,position) AS (
+    SELECT rowid,sid,parent,position FROM rows
     WHERE variant=? AND (activity>=? OR sticky=1)
     UNION
-    SELECT r.identity,r.sid,r.parent FROM selected s CROSS JOIN rows r
+    SELECT r.rowid,r.sid,r.parent,r.position
+    FROM selected s CROSS JOIN rows r INDEXED BY rows_sid
     WHERE r.variant=? AND r.sid=s.parent AND s.parent!=''
-) SELECT {columns} FROM selected s CROSS JOIN rows r
-  WHERE r.variant=? AND r.identity=s.identity ORDER BY r.position
+) """
+_HOT_ROW_QUERY = _HOT_ROWS_CTE + """SELECT {columns} FROM selected s CROSS JOIN rows r
+  WHERE r.variant=? AND r.rowid=s.rowid ORDER BY s.position
 """
 
 
 def _hot_params(key, now=None):
     cutoff = (time.time() if now is None else now) - HOT_SECONDS
-    return key, cutoff, key, key
+    return key, cutoff, key
+
+
+def _load_hot_bodies(con, key, now):
+    # Sort the small database keys before loading row bodies. SQLite otherwise
+    # copies all hot JSON into a temporary sorter that can spill to disk.
+    # The caller's read transaction keeps the ordered rowids and bodies paired.
+    ordered = [rowid for rowid, in con.execute(
+        _HOT_ROWS_CTE + "SELECT rowid FROM selected ORDER BY position",
+        _hot_params(key, now),
+    )]
+    # Rowid order keeps SQLite's table seeks in storage order even after
+    # a point update writes the replacement at a new physical key.
+    physical = sorted(ordered)
+    rows = {}
+    for offset in range(0, len(physical), 192):
+        rowids = physical[offset:offset + 192]
+        marks = ",".join("?" for _ in rowids)
+        records = con.execute(
+            f"SELECT rowid,body FROM rows WHERE rowid IN ({marks}) ORDER BY rowid", rowids,
+        ).fetchall()
+        ids, bodies = zip(*records)
+        rows.update(zip(ids, _decode_full_batch(bodies)))
+    return [rows[rowid] for rowid in ordered]
 
 
 class _RowIndexEntry(dict):
@@ -1224,8 +1251,7 @@ def load(cache_file, *, hot=False, key=None, now=None, row_index=False, metadata
                     index[rid] = (digest, position)
                 entry['_row_index'] = index
             elif hot:
-                bodies = con.execute(_HOT_ROW_QUERY.format(columns="r.body"), _hot_params(variant, now))
-                rows = _decode_full_bodies(bodies)
+                rows = _load_hot_bodies(con, variant, now)
             elif reuse_engines:
                 predicates = " OR ".join("identity LIKE ?" for _ in reuse_engines)
                 prefixes = ["[" + json.dumps(engine) + ",%" for engine in reuse_engines]

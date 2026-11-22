@@ -6491,6 +6491,43 @@ def test_indexed_hot_change_skips_cold_sidebar_page_scan(tmp_path, monkeypatch):
         assert isinstance(observed[-2], archive_sidebar_pages.StoredRow)
 
 
+@pytest.mark.parametrize("legacy_index", [False, True])
+def test_archive_hot_body_reads_sort_only_row_ids(tmp_path, monkeypatch, legacy_index):
+    """Keep hot archive bodies out of SQLite's temporary sorter."""
+    from ccc_server import archive_store
+
+    now = 2_000_000_000
+    target = tmp_path / "archive.json"
+    rows = [{"session_id": f"row-{i}", "mtime": now} for i in range(400)]
+    archive_store.save(target, {
+        "entries": {"base": {"cached_at": 9, "conversations": rows}},
+    }, complete=True)
+    conn = archive_store._connect(target, write=True)
+    try:
+        with conn:
+            conn.execute("UPDATE rows SET position = 399 - position")
+            if legacy_index:
+                conn.execute("DROP INDEX rows_hot_roots")
+    finally:
+        conn.close()
+    connect = archive_store._connect
+    statements = []
+
+    def traced(*args, **kwargs):
+        con = connect(*args, **kwargs)
+        con.set_trace_callback(statements.append)
+        return con
+
+    monkeypatch.setattr(archive_store, "_connect", traced)
+    snapshot = archive_store.load(target, hot=True, now=now)
+    assert snapshot["entries"]["base"]["conversations"] == rows[::-1]
+    ordered = next(sql for sql in statements if "ORDER BY position" in sql)
+    assert "SELECT rowid FROM selected" in ordered
+    assert "body" not in ordered
+    body_reads = [sql for sql in statements if "SELECT rowid,body FROM rows" in sql]
+    assert len(body_reads) == 3
+
+
 def test_archive_scoped_spawn_markers_stat_only_requested_sessions(monkeypatch, tmp_path):
     from contextlib import contextmanager
 
