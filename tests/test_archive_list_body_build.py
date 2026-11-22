@@ -437,6 +437,76 @@ def test_all_list_disconnect_abandons_only_opted_in_reads(monkeypatch, tmp_path,
     assert dispositions == [200, 'abandoned']
 
 
+def test_all_list_disconnect_stops_unpacked_archive_merge(monkeypatch, tmp_path):
+    import http.client
+    import server
+    from ccc_server import archive_store, continuation_topics
+
+    rows = [{'session_id': f'row-{index}'} for index in range(420)]
+    key = server._archive_response_cache_key()
+    archive = tmp_path / 'archive.json'
+    entry = {'cached_at': time.time(), 'conversations': rows}
+    archive_store.save(archive, {
+        'schema_version': server._ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
+        'build_id': server._ARCHIVE_RESPONSE_CACHE_BUILD_ID,
+        'entries': {key: entry},
+    }, complete=True)
+    assert not archive_store.sidebar_pages_available(
+        archive, key, server._ARCHIVE_SIDEBAR_PACKED_VERSION)
+    monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE_FILE', archive)
+    monkeypatch.setattr(server, '_archive_response_cache_get', lambda _key: entry)
+    monkeypatch.setattr(server, '_archive_list_disk_candidate', lambda *a: None)
+    monkeypatch.setattr(server, '_archive_serve_hot_rows_versioned',
+                        lambda *a, **kw: (rows[:1], True, 0))
+    monkeypatch.setattr(server, '_archive_list_source_overlays', lambda rows, *a: (rows, []))
+    monkeypatch.setattr(server, '_archive_list_ticket_updates', lambda *a: None)
+    monkeypatch.setattr(continuation_topics, 'attach_topics', lambda *a, **kw: None)
+
+    entered = threading.Event()
+    disconnected = threading.Event()
+    batches = []
+    decode = archive_store._decode_full_batch
+
+    def pause_first_batch(bodies):
+        batches.append(len(bodies))
+        if len(batches) == 1:
+            entered.set()
+            assert disconnected.wait(5)
+        return decode(bodies)
+
+    monkeypatch.setattr(archive_store, '_decode_full_batch', pause_first_batch)
+    url = '/api/conversations/list?window=all&stale_ok=1'
+    headers = {'X-CCC-Abort-On-Disconnect': '1'}
+    httpd = server.http.server.ThreadingHTTPServer(('127.0.0.1', 0), server.CommandCenterHandler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with socket.create_connection(httpd.server_address, timeout=5) as client:
+            client.sendall((f'GET {url} HTTP/1.1\r\nHost: localhost\r\n'
+                            'Connection: close\r\nX-CCC-Abort-On-Disconnect: 1\r\n\r\n').encode())
+            assert entered.wait(5)
+            client.shutdown(socket.SHUT_WR)
+            disconnected.set()
+            assert client.recv(1) == b''
+        assert len(batches) == 1
+
+        conn = http.client.HTTPConnection(*httpd.server_address, timeout=5)
+        try:
+            conn.request('GET', url, headers=headers)
+            response = conn.getresponse()
+            assert response.status == 200
+            assert [row['session_id'] for row in json.load(response)['conversations']] == [
+                row['session_id'] for row in rows]
+        finally:
+            conn.close()
+        assert len(batches) > 2
+    finally:
+        disconnected.set()
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+
 @pytest.mark.parametrize('stage', ['source', 'projection'])
 def test_bounded_list_disconnect_leaves_versioned_body_available_to_next_reader(
         monkeypatch, tmp_path, stage):

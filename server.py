@@ -37691,8 +37691,9 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             source_options = {"force_refresh": not stale_ok, "phases": _src_phases, "window": window}
             if packed_version is not None:
                 source_options["packed_version"] = packed_version
-                if check_client is not None:
-                    source_options["check_client"] = check_client
+            if window == "all" and check_client is not None:
+                # The canonical SQLite fallback can also stop between batches.
+                source_options["check_client"] = check_client
             try:
                 rows, from_cache, body_ver = _archive_list_source_rows_cached(
                     cache_options, **source_options)
