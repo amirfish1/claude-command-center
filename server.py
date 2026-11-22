@@ -18276,7 +18276,14 @@ def _archive_serve_cache_store(key, rows, generation, ts=None, *, transfer_rows=
             # on the rows it just built) but with the reused row dicts.
             rows[:] = diff["rows"]
             diff["rows"] = rows
+        history_tokens = {}
+        if diff is not None and (memo := prev.get("history_hot_tokens")) is not None:
+            if memo[0] == prev["ver"] and memo[1] is prev["rows"]:
+                # The diff retained these exact, unmodified row objects.
+                history_tokens = {id(row): memo[2][id(row)] for row in rows if id(row) in memo[2]}
         if diff is not None and diff["identical"]:
+            if history_tokens:
+                prev["history_hot_tokens"] = (prev["ver"], rows, history_tokens)
             prev["ts"] = stamp
             prev["rows"] = diff["rows"]
             prev["transfer_rows"] = transfer_rows
@@ -18297,6 +18304,8 @@ def _archive_serve_cache_store(key, rows, generation, ts=None, *, transfer_rows=
                 for sid in diff["removed"]:
                     row_rev.pop(sid, None)
                 entry.update(track_since=prev["track_since"], row_rev=row_rev)
+        if history_tokens:
+            entry["history_hot_tokens"] = (ver, rows, history_tokens)
         _archive_serve_cache[key] = entry
         return True
 
@@ -19171,7 +19180,7 @@ def _capture_archive_history_sidecars(now):
 
 def _archive_history_hot_snapshot(key, captured=None):
     """Pin the published hot rows, or verify a publisher's explicit source cut."""
-    from ccc_server.archive_history_layer import row_token
+    from ccc_server.archive_history_layer import hot_row_token
 
     with _archive_serve_lock:
         entry = _archive_serve_cache.get(key)
@@ -19182,11 +19191,9 @@ def _archive_history_hot_snapshot(key, captured=None):
             return None
         if not rows or any(type(row) is not dict for row in rows):
             return None
-        transfer_tokens = {id(row): token for token, row in (entry.get("transfer_rows") or {}).items()}
         memo = entry.get("history_hot_tokens")
-        if memo is not None and memo[0] == version and memo[1] is rows:
-            transfer_tokens.update(memo[2])
-        snapshot = [(id(row), dict(row), transfer_tokens.get(id(row))) for row in rows]
+        tokens_by_row = memo[2] if memo is not None and memo[0] == version and memo[1] is rows else {}
+        snapshot = [(id(row), dict(row), tokens_by_row.get(id(row))) for row in rows]
 
     by_sid = {}
     tokens = {}
@@ -19197,7 +19204,7 @@ def _archive_history_hot_snapshot(key, captured=None):
             return None
         try:
             if token is None:
-                token = row_token(row)
+                token = hot_row_token(row)
                 generated[row_id] = token
         except (TypeError, ValueError, OverflowError):
             return None
@@ -19207,7 +19214,7 @@ def _archive_history_hot_snapshot(key, captured=None):
         with _archive_serve_lock:
             current = _archive_serve_cache.get(key)
             if current is not None and current.get("ver") == version and current.get("rows") is rows:
-                current["history_hot_tokens"] = (version, rows, generated)
+                current["history_hot_tokens"] = (version, rows, tokens_by_row | generated)
     return by_sid, tokens
 
 

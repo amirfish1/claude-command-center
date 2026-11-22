@@ -53,6 +53,51 @@ def test_hot_replacement_requires_exact_identity_and_a_content_token():
     assert valid.sources["b"] == ("hot", "token")
 
 
+def test_history_hot_guard_ignores_top_level_order_across_refresh(monkeypatch):
+    persisted = {"all_lane_override": "", "archived": False, "session_id": "a",
+                 "subagent_recent": [{"id": "child", "type": "task"}]}
+    refreshed = dict(reversed(tuple(persisted.items())))
+    refreshed_rows = [refreshed]
+    entry = {"rows": [persisted], "ver": 1}
+    monkeypatch.setattr(server, "_archive_serve_cache", {"base": entry})
+    _, persisted_tokens = server._archive_history_hot_snapshot("base")
+
+    entry.update(rows=refreshed_rows, ver=2, transfer_rows={layer.row_token(refreshed): refreshed})
+    _, refreshed_tokens = server._archive_history_hot_snapshot("base")
+    assert persisted_tokens == refreshed_tokens
+    assert server._archive_history_hot_snapshot("base")[1] == refreshed_tokens
+
+    nested_change = dict(refreshed, subagent_recent=[{"type": "task", "id": "child"}])
+    entry.update(rows=[nested_change], ver=3)
+    assert server._archive_history_hot_snapshot("base")[1] != refreshed_tokens
+
+
+def test_history_hot_guard_reuses_tokens_for_unchanged_published_rows(monkeypatch):
+    monkeypatch.setattr(server, "_archive_serve_cache", {})
+    monkeypatch.setattr(server, "_archive_serve_version", 0)
+    gen = server._archive_serve_generation
+    unchanged = {"session_id": "stable"}
+    changed = {"session_id": "changed", "display_name": "Before"}
+    assert server._archive_serve_cache_store("base", [unchanged, changed], gen, hot_selected=True)
+    _, before = server._archive_history_hot_snapshot("base")
+
+    hashed = []
+    original = layer.hot_row_token
+
+    def counted(row):
+        hashed.append(row["session_id"])
+        return original(row)
+
+    monkeypatch.setattr(layer, "hot_row_token", counted)
+    changed = dict(changed, display_name="After")
+    assert server._archive_serve_cache_store("base", [dict(unchanged), changed], gen, hot_selected=True)
+    _, after = server._archive_history_hot_snapshot("base")
+    assert after["stable"] == before["stable"]
+    assert after["changed"] != before["changed"]
+    assert server._archive_history_hot_snapshot("base")[1] == after
+    assert hashed == ["changed"]
+
+
 def test_layer_never_adopts_duplicate_overlay_identity():
     source = inventory("a")
     assert layer.read_inputs(source, {}, {}, [{"session_id": "a"}],
