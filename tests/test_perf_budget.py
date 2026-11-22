@@ -3658,6 +3658,55 @@ def test_detached_archive_file_delta_uses_point_lookup_when_safe(tmp_path, monke
         assert persisted["conversations"] == expected
 
 
+def test_archive_point_refresh_only_repacks_changed_preview_pages(tmp_path, monkeypatch):
+    from ccc_server import archive_preview, archive_store
+
+    path = tmp_path / "archive.json"
+    key = "base"
+    stamp = 20
+    page_size = archive_preview._PACKED_PAGE_SIZE
+    rows = [{"session_id": f"s{i}", "mtime": i} for i in range(3 * page_size)]
+    store_options = dict(complete=True, sidebar_key=key)
+
+    def snapshot(stamp, rows):
+        return {
+            "schema_version": 1, "build_id": "test",
+            "entries": {key: {"cached_at": stamp, "conversations": rows}},
+        }
+
+    archive_store.save(path, snapshot(stamp, rows), **store_options)
+    packed_pages = []
+    pack_page = archive_preview._pack_page
+
+    def record_page(con, key, page):
+        packed_pages.append(page)
+        return pack_page(con, key, page)
+
+    monkeypatch.setattr(archive_preview, "_pack_page", record_page)
+    replacement = dict(rows[page_size + 1], mtime=10000)
+    assert archive_store.save(
+        path, snapshot(stamp + 1, [replacement]), base_entry={"cached_at": stamp},
+        point_update=True, **store_options,
+    )
+    assert packed_pages == [1]
+
+    with sqlite3.connect(archive_store.database_path(path)) as con:
+        expected = list(con.execute(archive_preview._ORDERED_ROWS, (key,)))
+        assert [tuple(row) for row in archive_preview._ordered_rows(con, key)] == expected
+        # A legacy writer can change positions without publishing packed pages.
+        con.execute("UPDATE rows SET position=? WHERE variant=? AND sid=?",
+                    (3 * page_size, key, replacement["session_id"]))
+        assert not archive_preview.packed_current(con, key)
+        expected = list(con.execute(archive_preview._ORDERED_ROWS, (key,)))
+        assert list(archive_preview._ordered_rows(con, key)) == expected
+        archive_preview.finish_publication(con, key, stamp + 1)
+        assert set(packed_pages[1:]) == {1, 3}
+        assert [tuple(row) for row in archive_preview._ordered_rows(con, key)] == expected
+        con.execute("UPDATE sidebar_preview_pack_pages SET body=? WHERE variant=? AND page=1",
+                    (b"broken", key))
+        assert list(archive_preview._ordered_rows(con, key)) == expected
+
+
 def test_archive_signature_dedupes_symlinked_project_dirs(big_projects, tmp_path):
     """A symlink to an existing Claude project must not double-stat its corpus."""
     n, _ = big_projects

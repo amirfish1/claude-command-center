@@ -16,6 +16,8 @@ _MAX_BATCHED_EDGES = 8192
 _MAX_EDGE_BYTES = 512
 _MAX_PACKED_ROWS = 32768
 _MAX_PACKED_BYTES = 8 << 20
+_PACKED_PAGE_SHIFT = 9
+_PACKED_PAGE_SIZE = 1 << _PACKED_PAGE_SHIFT
 _ORDERED_ROWS = """
     SELECT identity,sid,activity,pinned,working,codex
     FROM sidebar_preview_rows WHERE variant=? ORDER BY position,row_order
@@ -66,7 +68,7 @@ def _working(row):
 
 def setup(con):
     """Create separate metadata tables so old canonical readers still work."""
-    con.executescript("""
+    con.executescript(f"""
         CREATE TABLE IF NOT EXISTS sidebar_preview_generation (
             variant TEXT PRIMARY KEY, cached_at REAL NOT NULL, version INTEGER NOT NULL
         );
@@ -88,6 +90,39 @@ def setup(con):
             variant TEXT PRIMARY KEY, cached_at REAL NOT NULL, version INTEGER NOT NULL,
             body BLOB
         );
+        CREATE TABLE IF NOT EXISTS sidebar_preview_pack_manifest (
+            variant TEXT PRIMARY KEY, row_count INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS sidebar_preview_pack_pages (
+            variant TEXT NOT NULL, page INTEGER NOT NULL, body BLOB,
+            PRIMARY KEY(variant, page)
+        ) WITHOUT ROWID;
+        CREATE TRIGGER IF NOT EXISTS sidebar_preview_page_insert
+        AFTER INSERT ON sidebar_preview_rows
+        WHEN EXISTS (SELECT 1 FROM sidebar_preview_pack_manifest WHERE variant=NEW.variant)
+        BEGIN
+            INSERT INTO sidebar_preview_pack_pages VALUES
+                (NEW.variant, NEW.position >> {_PACKED_PAGE_SHIFT}, NULL)
+                ON CONFLICT(variant, page) DO UPDATE SET body=NULL;
+        END;
+        CREATE TRIGGER IF NOT EXISTS sidebar_preview_page_update
+        AFTER UPDATE ON sidebar_preview_rows BEGIN
+            INSERT INTO sidebar_preview_pack_pages
+                SELECT OLD.variant, OLD.position >> {_PACKED_PAGE_SHIFT}, NULL
+                WHERE EXISTS (SELECT 1 FROM sidebar_preview_pack_manifest WHERE variant=OLD.variant)
+                UNION
+                SELECT NEW.variant, NEW.position >> {_PACKED_PAGE_SHIFT}, NULL
+                WHERE EXISTS (SELECT 1 FROM sidebar_preview_pack_manifest WHERE variant=NEW.variant)
+                ON CONFLICT(variant, page) DO UPDATE SET body=NULL;
+        END;
+        CREATE TRIGGER IF NOT EXISTS sidebar_preview_page_delete
+        AFTER DELETE ON sidebar_preview_rows
+        WHEN EXISTS (SELECT 1 FROM sidebar_preview_pack_manifest WHERE variant=OLD.variant)
+        BEGIN
+            INSERT INTO sidebar_preview_pack_pages VALUES
+                (OLD.variant, OLD.position >> {_PACKED_PAGE_SHIFT}, NULL)
+                ON CONFLICT(variant, page) DO UPDATE SET body=NULL;
+        END;
         CREATE TRIGGER IF NOT EXISTS sidebar_preview_packed_insert
         AFTER INSERT ON sidebar_preview_rows BEGIN
             DELETE FROM sidebar_preview_packed WHERE variant=NEW.variant;
@@ -179,24 +214,54 @@ def _publish_packed(con, key, cached_at, count):
         UPDATE sidebar_preview_packed SET cached_at=? WHERE variant=? AND version=?
     """, (cached_at, key, VERSION)).rowcount:
         return
-    body = _pack_rows(con, key) if count <= _MAX_PACKED_ROWS else None
-    # Remember oversized generations so the detached worker does not retry
-    # unchanged input on every background refresh.
+    if count > _MAX_PACKED_ROWS:
+        con.execute("DELETE FROM sidebar_preview_pack_manifest WHERE variant=?", (key,))
+        con.execute("DELETE FROM sidebar_preview_pack_pages WHERE variant=?", (key,))
+    else:
+        initialized = con.execute(
+            "SELECT 1 FROM sidebar_preview_pack_manifest WHERE variant=?", (key,),
+        ).fetchone()
+        if initialized:
+            pages = con.execute("""
+                SELECT page FROM sidebar_preview_pack_pages WHERE variant=? AND body IS NULL
+            """, (key,)).fetchall()
+        else:
+            pages = con.execute("""
+                SELECT DISTINCT position >> ? FROM sidebar_preview_rows WHERE variant=?
+            """, (_PACKED_PAGE_SHIFT, key)).fetchall()
+        for page, in pages:
+            body = _pack_page(con, key, page)
+            if body is None:
+                con.execute("DELETE FROM sidebar_preview_pack_pages WHERE variant=? AND page=?",
+                            (key, page))
+            else:
+                con.execute("INSERT OR REPLACE INTO sidebar_preview_pack_pages VALUES (?,?,?)",
+                            (key, page, body))
+        con.execute("INSERT OR REPLACE INTO sidebar_preview_pack_manifest VALUES (?,?)",
+                    (key, count))
+    # Old readers use the row index when the single-blob body is absent.
     con.execute("INSERT OR REPLACE INTO sidebar_preview_packed VALUES (?,?,?,?)",
-                (key, cached_at, VERSION, body))
+                (key, cached_at, VERSION, None))
 
 
-def _pack_rows(con, key):
+def _pack_page(con, key, page):
     rows = []
     text_chars = 0
-    for row in con.execute(_ORDERED_ROWS, (key,)):
+    start = page * _PACKED_PAGE_SIZE
+    for row in con.execute("""
+        SELECT identity,sid,activity,pinned,working,codex
+        FROM sidebar_preview_rows WHERE variant=? AND position BETWEEN ? AND ?
+        ORDER BY position,row_order
+    """, (key, start, start + _PACKED_PAGE_SIZE - 1)):
         text_chars += len(row[0]) + len(row[1])
         if text_chars > _MAX_PACKED_BYTES:
-            return None
+            return b""
         rows.append(row)
+    if not rows:
+        return None
     # Encode SQLite REAL values through Python's round-trip float serializer.
     body = json.dumps(rows, separators=(",", ":"), ensure_ascii=False).encode()
-    return zlib.compress(body, 1) if len(body) <= _MAX_PACKED_BYTES else None
+    return zlib.compress(body, 1) if len(body) <= _MAX_PACKED_BYTES else b""
 
 
 def packed_current(con, key):
@@ -207,29 +272,64 @@ def packed_current(con, key):
     """, (key, VERSION)).fetchone() is not None
 
 
+def _decode_packed(body, limit):
+    if not body:
+        raise ValueError("missing packed preview body")
+    decoder = zlib.decompressobj()
+    data = decoder.decompress(body, limit + 1)
+    if not decoder.eof or len(data) > limit:
+        raise ValueError("invalid packed preview size")
+    rows = json.loads(data)
+    if not isinstance(rows, list):
+        raise ValueError("invalid packed preview rows")
+    return rows, len(data)
+
+
+def _read_packed_rows(con, key):
+    marker = con.execute("""
+        SELECT body FROM sidebar_preview_packed JOIN sidebar_preview_generation
+        USING (variant,cached_at,version)
+        WHERE variant=? AND version=? AND (body IS NULL OR length(body)<=?)
+    """, (key, VERSION, _MAX_PACKED_BYTES)).fetchone()
+    if not marker:
+        return None
+    if marker[0] is not None:
+        rows, _ = _decode_packed(marker[0], _MAX_PACKED_BYTES)
+        return rows if len(rows) <= _MAX_PACKED_ROWS else None
+    manifest = con.execute(
+        "SELECT row_count FROM sidebar_preview_pack_manifest WHERE variant=?", (key,),
+    ).fetchone()
+    if not manifest or not 0 <= manifest[0] <= _MAX_PACKED_ROWS:
+        return None
+    rows = []
+    remaining = _MAX_PACKED_BYTES
+    for body, in con.execute("""
+        SELECT CASE WHEN length(body)<=? THEN body END
+        FROM sidebar_preview_pack_pages WHERE variant=? ORDER BY page
+    """, (_MAX_PACKED_BYTES, key)):
+        page, size = _decode_packed(body, remaining)
+        if len(rows) + len(page) > manifest[0]:
+            return None
+        rows.extend(page)
+        remaining -= size
+    return rows if len(rows) == manifest[0] else None
+
+
 def _ordered_rows(con, key):
-    # One SQLite step avoids giving up the GIL once per index entry while a
-    # simultaneous complete-history request projects archive rows.
+    # The read transaction guards the generation, pages, and fallback index.
     try:
-        record = con.execute("""
-            SELECT body FROM sidebar_preview_packed JOIN sidebar_preview_generation
-            USING (variant,cached_at,version)
-            WHERE variant=? AND version=? AND length(body)<=?
-        """, (key, VERSION, _MAX_PACKED_BYTES)).fetchone()
+        rows = _read_packed_rows(con, key)
+        if rows is not None:
+            return rows
+    except (TypeError, ValueError, RecursionError, zlib.error):
+        pass
     except sqlite3.OperationalError as exc:
-        if "no such table: sidebar_preview_packed" not in str(exc):
+        if str(exc) not in (
+            "no such table: sidebar_preview_packed",
+            "no such table: sidebar_preview_pack_manifest",
+            "no such table: sidebar_preview_pack_pages",
+        ):
             raise
-        record = None
-    if record:
-        try:
-            decoder = zlib.decompressobj()
-            body = decoder.decompress(record[0], _MAX_PACKED_BYTES + 1)
-            if decoder.eof and len(body) <= _MAX_PACKED_BYTES:
-                rows = json.loads(body)
-                if isinstance(rows, list) and len(rows) <= _MAX_PACKED_ROWS:
-                    return rows
-        except (ValueError, zlib.error):
-            pass
     return con.execute(_ORDERED_ROWS, (key,))
 
 
