@@ -249,6 +249,9 @@ class _AcpProc:
         self._next_id = 0
         self._waiters = {}   # request id -> [threading.Event, response]
         self._prompts = {}   # session/prompt request id -> text, oldest first
+        self.prompt_started_at = 0.0
+        self.last_activity_at = 0.0
+        self.active_tools = {}  # toolCallId -> name, in start order
 
     def alive(self):
         return not self.exited and self.proc.poll() is None
@@ -333,6 +336,28 @@ class _AcpProc:
         except (OSError, ValueError):
             pass
 
+    def _note_activity(self, params):
+        if not isinstance(params, dict) or params.get("sessionId") != self.sid:
+            return
+        update = params.get("update")
+        if not isinstance(update, dict):
+            return
+        kind = update.get("sessionUpdate")
+        if kind not in ("agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update"):
+            return
+        with self.lock:
+            if not self.busy:
+                return
+            self.last_activity_at = time.time()
+            call_id = update.get("toolCallId")
+            if isinstance(call_id, str) and kind in ("tool_call", "tool_call_update"):
+                status = update.get("status")
+                name = update.get("name")
+                if status in ("completed", "failed"):
+                    self.active_tools.pop(call_id, None)
+                elif isinstance(name, str) and name and status in (None, "pending", "in_progress"):
+                    self.active_tools[call_id] = name[:80]
+
     def _read(self):
         try:
             for raw in self.proc.stdout:
@@ -348,6 +373,8 @@ class _AcpProc:
                 if not isinstance(msg, dict):
                     continue
                 if "method" in msg:
+                    if msg["method"] == "session/update":
+                        self._note_activity(msg.get("params"))
                     if "id" in msg:
                         self._answer(msg)
                     continue
@@ -406,8 +433,11 @@ class _AcpProc:
         with self.lock:
             if only_if_idle and self.busy:
                 return False
+            self.prompt_started_at = time.time()
+            self.last_activity_at = self.prompt_started_at
+            self.active_tools.clear()
             if not self.busy:
-                self.busy_since = time.time()
+                self.busy_since = self.prompt_started_at
             self._prompts[rid] = text
             self.busy = True
             self.inflight = text
@@ -471,6 +501,28 @@ def state(sid):
         "key": sp.key, "idle_for_s": 0.0 if sp.busy else time.time() - sp.idle_since,
         "last_result": sp.last_result,
     }
+
+
+def acp_session_ids():
+    with _LOCK:
+        return {sid for sid, proc in _PROCS.items() if isinstance(proc, _AcpProc) and proc.alive()}
+
+
+def acp_activity(sid):
+    """Read the attached process without altering its turn or queue."""
+    with _LOCK:
+        proc = _PROCS.get(sid)
+    if not isinstance(proc, _AcpProc) or not proc.alive():
+        return None
+    with proc.lock:
+        if not proc.busy:
+            return {"busy": False, "ts": proc.idle_since}
+        last_tool_id = next(reversed(proc.active_tools), None)
+        return {
+            "busy": True, "ts": proc.last_activity_at,
+            "working_since": proc.prompt_started_at,
+            "tool": proc.active_tools.get(last_tool_id),
+        }
 
 
 def owns_pid(pid):

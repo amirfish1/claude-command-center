@@ -12134,7 +12134,10 @@ def _discover_live_session_ids():
                     sids.add(sid)
         except OSError:
             pass
+    from ccc_server.antigravity_stream import acp_session_ids as antigravity_acp_ids
+
     sids.update(_acp_attached_session_ids())
+    sids.update(antigravity_acp_ids())
     return sids
 
 
@@ -12342,9 +12345,9 @@ def _live_activity_entry_for_session(session_id):
     elif engine == "antigravity":
         path = _antigravity_transcript_path(session_id)
         tail = _extract_antigravity_tail_meta(path) if path else {}
-        entry.update(_antigravity_activity_fields_from_tail(tail, True))
         entry["pending_tool"] = tail.get("pending_tool")
         entry["pending_file"] = tail.get("pending_file")
+        entry.update(_antigravity_activity_fields_from_tail(tail, True, session_id=session_id))
         entry["last_event_type"] = tail.get("last_event_type")
     elif engine in ("kimi", "grok"):
         entry.update(_acp_live_activity_fields(engine, session_id))
@@ -14272,7 +14275,9 @@ def _live_state_only_in_dashboard():
     started. A helper process cannot see either, so these are always built
     here; without that they would read idle or ended."""
     sids = set()
-    for fn in (_acp_attached_session_ids, _spawned_engine_session_ids):
+    from ccc_server.antigravity_stream import acp_session_ids as antigravity_acp_ids
+
+    for fn in (_acp_attached_session_ids, _spawned_engine_session_ids, antigravity_acp_ids):
         try:
             sids.update(fn())
         except Exception:
@@ -35696,7 +35701,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             elif is_antigravity_status:
                 path = _antigravity_transcript_path(sid)
                 tail = _extract_antigravity_tail_meta(path) if path else {}
-                status.update(_antigravity_activity_fields_from_tail(tail, status.get("live")))
+                status.update(_antigravity_activity_fields_from_tail(tail, status.get("live"), session_id=sid))
             elif is_hermes_status:
                 status.update({
                     "live": bool(status.get("live")),

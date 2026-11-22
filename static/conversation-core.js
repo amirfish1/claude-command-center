@@ -890,7 +890,10 @@
     const live = _applyLiveOverlayToRow(c);
     const sending = sessionIsOptimisticallySending(sid);
     const raw = String(c.last_assistant_text || c.last_assistant_preview || '');
+    const antigravityAcp = (c.engine === 'antigravity' || c.source === 'antigravity')
+      && live.is_live && live.acp_status === 'running';
     const stale = c.last_event_type === 'user' || preSendPreviewFor(sid) === raw
+      || (antigravityAcp && _ultraFreshTime(live.working_since) > _ultraFreshTime(c.modified || c.mtime))
       || (live.last_event_type === 'user'
         && _ultraFreshTime(live.last_event_ts) > _ultraFreshTime(c.modified || c.mtime));
     const text = stale ? '' : raw.replace(/(?:<!--\s*)?<session-state>[\s\S]*$/, '')
@@ -921,8 +924,20 @@
         text: planText,
       };
     }
-    if (working) return Object.assign(base, { label: 'Working', kind: 'working',
-      text: text || (sending ? 'Sent, waiting for the first reply…' : 'Working…') });
+    if (working) {
+      let activity = '';
+      if (antigravityAcp) {
+        const age = Math.floor((Date.now() - _ultraFreshTime(live.sidecar_ts)) / 60000);
+        if (live.sidecar_ts && age >= 5) activity = 'No agent activity for ' + age + ' min';
+        else if (!text && live.sidecar_tool) activity = liveActivityToolLabel(live.sidecar_tool);
+        else if (!text && !sending && live.sidecar_ts > live.working_since) {
+          activity = age > 0 ? 'Last agent activity ' + age + ' min ago' : 'Agent activity just now';
+        }
+        else if (!text && !sending) activity = 'Waiting for agent output…';
+      }
+      return Object.assign(base, { label: 'Working', kind: 'working',
+        text: activity || text || (sending ? 'Sent, waiting for the first reply…' : 'Working…') });
+    }
     // A reopened task's plan outranks retained automatic closure. Deliberate
     // Archive and Trash still win until the owner resumes the conversation.
     if (c.trashed || (c.archived && (!plan || (c.explicitly_archived ?? c.idea_ticket?.explicitly_archived)))) return Object.assign(base, { label: (c.trashed || (c.explicitly_archived ?? c.idea_ticket?.explicitly_archived)) ? 'Archived' : '✓', kind: 'ready',
@@ -2353,6 +2368,9 @@
       for (const k of sharedState._LIVE_OVERLAY_KEYS) {
         if (ov[k] !== undefined) merged[k] = ov[k];
       }
+      if ((c.engine === 'antigravity' || c.source === 'antigravity') && ov.is_live && ov.acp_status) {
+        merged.state = ov.acp_status === 'running' ? 'working' : 'idle';
+      }
     }
     return merged;
   }
@@ -2645,7 +2663,8 @@
       let _turnEnded = false;
       for (const [sid, fields] of Object.entries(sessions)) {
         const prev = sharedState._sessionLiveOverlay.get(sid);
-        if (prev && prev.state === 'working' && fields && fields.state && fields.state !== 'working') _turnEnded = true;
+        if (prev && fields && ((prev.state === 'working' && fields.state && fields.state !== 'working')
+          || (prev.acp_status === 'running' && fields.acp_status === 'idle'))) _turnEnded = true;
         _rememberLiveOverlay(sid, fields);
       }
       // A turn just ended: its next step / final reply only arrives with the
@@ -4461,8 +4480,8 @@
     const name = String(tool || '');
     if (name === 'Bash') return 'Bash command';
     if (name === 'exec' || name === 'exec_command' || name === 'shell_command' || name === 'run_shell_command' || name === 'run_command') return 'Shell command';
-    if (name === 'Read') return 'Reading file';
-    if (name === 'Edit' || name === 'MultiEdit') return 'Editing file';
+    if (name === 'Read' || name === 'read_file') return 'Reading file';
+    if (name === 'Edit' || name === 'MultiEdit' || name === 'edit_file') return 'Editing file';
     if (name === 'Write') return 'Writing file';
     if (name === 'WebFetch') return 'Fetching URL';
     if (name === 'WebSearch') return 'Searching web';

@@ -2023,7 +2023,7 @@ def _extract_antigravity_cwd(session_id):
     return meta.get("cwd") or ""
 
 
-def _antigravity_activity_fields_from_tail(tail, live):
+def _antigravity_activity_fields_from_tail(tail, live, *, session_id=None):
     fields = {
         "sidecar_status": None,
         "sidecar_has_writes": False,
@@ -2039,6 +2039,20 @@ def _antigravity_activity_fields_from_tail(tail, live):
         "question_option_details": [],
     }
     if not live:
+        return fields
+    activity = _antigravity_stream.acp_activity(session_id) if session_id else None
+    if activity is not None:
+        busy = activity["busy"]
+        fields.update(
+            acp_status="running" if busy else "idle",
+            sidecar_status="active" if busy else "idle",
+            sidecar_in_flight=busy,
+            sidecar_ts=activity["ts"],
+            sidecar_tool=activity.get("tool"),
+            working_since=activity.get("working_since"),
+            pending_tool=activity.get("tool"),
+            pending_file=None,
+        )
         return fields
     ts = tail.get("last_meaningful_ts") or int(time.time()) if tail else int(time.time())
     pending_tool = tail.get("pending_tool") if tail else None
@@ -2286,7 +2300,7 @@ def find_antigravity_conversations(
                 and _core._antigravity_cli_conversation_path(sid).is_file()
             ),
             "can_app_resume": bool(_core._antigravity_app_conversation_path(sid)),
-            **_antigravity_activity_fields_from_tail(tail, is_live),
+            **_antigravity_activity_fields_from_tail(tail, is_live, session_id=sid),
             "needs_approval": False,
             "needs_approval_message": "",
             "model": tail.get("model") or cli_meta.get("model") or spawn_info.get("model") or "",

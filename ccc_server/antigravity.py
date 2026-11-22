@@ -54,6 +54,17 @@ def _cli_process_logs(pid):
             and Path(p).name.startswith('cli-') and p.endswith('.log')}
 
 
+def _command_session_ids(command):
+    from ccc_server.session_graph import _antigravity_acp_session
+
+    acp_sid = _antigravity_acp_session(command)
+    if acp_sid and _core._SESSION_UUID_RE.fullmatch(acp_sid):
+        return {acp_sid}
+    return {word for word in _core._command_tokens(command)
+            if _core._SESSION_UUID_RE.fullmatch(word)
+            and _core._command_targets_engine_session(command, word, 'antigravity')}
+
+
 def live_cli_session_ids():
     """Discover resumed and plain `agy` sessions without cwd guessing.
 
@@ -83,11 +94,7 @@ def live_cli_session_ids():
         if owned:
             sids.update(owned)
             continue
-        words = _core._command_tokens(command)
-        for word in words:
-            if (_core._SESSION_UUID_RE.fullmatch(word)
-                    and _core._command_targets_engine_session(command, word, 'antigravity')):
-                sids.add(word)
+        sids.update(_command_session_ids(command))
     return sids
 
 
@@ -109,11 +116,7 @@ def archive_terminal_overlay(rows, *, existing_ids=None):
                 owned[sid] = meta
         # A switched chat's log identity wins over the original resume argv.
         if not owned:
-            command = proc.get('command') or ''
-            for word in _core._command_tokens(command):
-                if (_core._SESSION_UUID_RE.fullmatch(word)
-                        and _core._command_targets_engine_session(command, word, 'antigravity')):
-                    owned[word] = {}
+            owned = {sid: {} for sid in _command_session_ids(proc.get('command') or '')}
         for sid, meta in owned.items():
             if sid not in excluded:
                 candidates[sid] = (proc, meta)
@@ -148,7 +151,7 @@ def archive_terminal_overlay(rows, *, existing_ids=None):
             'last_assistant_text': tail.get('last_assistant_text'),
             'session_state': _antigravity_response_state(
                 tail.get('last_assistant_text'), tail.get('turn_complete')),
-            **_core._antigravity_activity_fields_from_tail(tail, True),
+            **_core._antigravity_activity_fields_from_tail(tail, True, session_id=sid),
             'can_headless_resume': bool(
                 _core._antigravity_cli_conversation_path(sid).is_file()),
             'can_app_resume': bool(_core._antigravity_app_conversation_path(sid)),

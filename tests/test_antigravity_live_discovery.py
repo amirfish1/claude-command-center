@@ -27,6 +27,16 @@ def test_plain_terminal_session_reaches_bulk_discovery(tmp_path):
             assert server._archive_session_is_live_uncached(SID)
 
 
+def test_ccc_acp_resume_reaches_bulk_discovery_without_open_cli_log(monkeypatch):
+    command = f'agy acp --log-file /test/acp-antigravity-{SID}-start.log'
+    monkeypatch.setattr(server, '_scan_engine_processes', lambda: [('123', '?', 'agy', command)])
+    monkeypatch.setattr(antigravity, '_cli_process_logs', lambda pid: set())
+    monkeypatch.setattr(server, '_raw_engine_process_commands', lambda engine: [])
+    monkeypatch.setattr(server, '_spawned_engine_session_ids', lambda: set())
+    monkeypatch.setattr(server, '_engine_live_sids_cache', {'ts': 0, 'sids': frozenset()})
+    assert server._live_engine_session_ids() == {SID}
+
+
 def test_current_log_identity_wins_over_original_resume_argument():
     with mock.patch.object(server, '_scan_engine_processes', return_value=[
         ('123', 'pts/1', 'agy', f'agy --conversation {OTHER}'),

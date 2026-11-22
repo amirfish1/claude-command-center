@@ -413,7 +413,7 @@
     'codex_state', 'codex_fresh', 'codex_state_reason',
     'codex_writer', 'codex_desktop_attached',
     'transcript_mtime', 'last_event_ts', 'pending_tool_ts', 'codex_app_server_last_activity_at',
-    'working_since',
+    'working_since', 'acp_status',
   ];
         return _LIVE_OVERLAY_KEYS;
       },

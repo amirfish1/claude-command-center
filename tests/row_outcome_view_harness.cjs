@@ -15,7 +15,7 @@ function fnSource(name) {
 
 function loadRowOutcomeView(stubs = {}) {
   const src = ['_ultraFreshTime', 'sidebarSessionWorking', 'sessionReadyToClose',
-    'sessionQuickAction', 'decisionQuickActions', 'sessionQuickActions', 'rowOutcomeView']
+    'sessionQuickAction', 'decisionQuickActions', 'sessionQuickActions', 'liveActivityToolLabel', 'rowOutcomeView']
     .map(fnSource).join('\n') + '\nrowOutcomeView;';
   return vm.runInNewContext(src, Object.assign({
     _applyLiveOverlayToRow: row => row,

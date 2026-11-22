@@ -70,3 +70,28 @@ test('a running Antigravity Gemini row shows its thought preview', () => {
   assert.doesNotMatch(html, /Working…|\*\*/);
   assert.match(renderOutcome({ ...preview, last_event_type: 'user' }), /data-label="Working">Working…<\/span>/);
 });
+
+
+test('a resumed Antigravity ACP row shows current activity before its transcript catches up', () => {
+  const now = Date.now() / 1000;
+  const old = {
+    id: 'antigravity-resume', source: 'antigravity', modified: now - 600,
+    last_event_type: 'result', state: 'ended',
+    last_assistant_text: 'I will start once the earlier check finishes.',
+  };
+  const live = {
+    ...old, state: 'working', is_live: true, acp_status: 'running',
+    sidecar_in_flight: true, sidecar_ts: now, working_since: now - 70,
+    sidecar_tool: 'edit_file',
+  };
+  assert.match(renderOutcome(old, live), /data-label="Working">Editing file<\/span>/);
+  const betweenTools = { ...live, sidecar_tool: null };
+  assert.match(renderOutcome(old, betweenTools), /Agent activity just now/);
+  const noOutput = { ...betweenTools, sidecar_ts: live.working_since };
+  assert.match(renderOutcome(old, noOutput), /Waiting for agent output/);
+  const newReply = { ...old, modified: now - 25, last_event_type: 'assistant',
+    last_assistant_text: 'I have started changing the settings.' };
+  assert.match(renderOutcome(newReply, live), /I have started changing the settings/);
+  const quiet = { ...live, working_since: now - 500, sidecar_ts: now - 380 };
+  assert.match(renderOutcome(old, quiet), /No agent activity for 6 min/);
+});

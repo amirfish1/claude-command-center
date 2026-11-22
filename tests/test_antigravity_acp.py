@@ -62,7 +62,13 @@ for line in sys.stdin:
         if text == "perm":
             out({"jsonrpc": "2.0", "id": "perm-1", "method": "session/request_permission", "params": {
                 "options": [{"optionId": "yes", "kind": "allow_once"}, {"optionId": "no", "kind": "reject_once"}]}})
-        delay = 1.0 if text.startswith("slow") else 0.3
+        if text == "report tool":
+            out({"jsonrpc": "2.0", "method": "session/update", "params": {
+                "sessionId": params["sessionId"], "update": {
+                    "sessionUpdate": "tool_call", "toolCallId": "1", "status": "in_progress",
+                    "name": "edit_file", "title": "Sensitive tool input",
+                }}})
+        delay = 1.0 if text.startswith("slow") or text == "report tool" else 0.3
         threading.Timer(delay, finish, (rid, text)).start()
 """
 
@@ -110,6 +116,40 @@ def test_prompt_marks_busy_until_answered_and_process_is_reused(stream, tmp_path
     assert stream.send(SID, "two")["ok"]
     assert stream.state(SID)["pid"] == sp.proc.pid
     assert _wait(lambda: "DONE:two" in _log(tmp_path))
+
+
+def test_live_activity_reflects_acp_tool_and_turn_end_before_transcript_updates(stream, tmp_path):
+    import server
+
+    sp = _start(stream, tmp_path)
+    persisted_tail = {"last_event_type": "result", "turn_complete": True, "last_meaningful_ts": 1}
+    with mock.patch.object(server, "_archive_session_is_live", return_value=True), \
+         mock.patch.object(server, "_detect_session_engine", return_value="antigravity"), \
+         mock.patch.object(server, "_antigravity_transcript_path", return_value=tmp_path / "old"), \
+         mock.patch.object(server, "_extract_antigravity_tail_meta", return_value=persisted_tail):
+        assert SID in server._live_state_only_in_dashboard()
+        assert stream.send(SID, "report tool")["ok"]
+        assert _wait(lambda: stream.acp_activity(SID).get("tool") == "edit_file")
+        entry = server._live_activity_entry_for_session(SID)
+        assert server._session_state_label(entry) == "working"
+        assert entry["sidecar_tool"] == entry["pending_tool"] == "edit_file"
+        assert entry["sidecar_ts"] >= entry["working_since"] > persisted_tail["last_meaningful_ts"]
+        assert entry["sidecar_file"] is None
+
+        # A completion update records progress even while the prompt stays open.
+        sp._note_activity({"sessionId": SID, "update": {
+            "sessionUpdate": "tool_call_update", "toolCallId": "1", "status": "completed",
+        }})
+        entry = server._live_activity_entry_for_session(SID)
+        assert entry["sidecar_in_flight"]
+        assert entry["pending_tool"] is None
+
+        assert _wait(lambda: not stream.acp_activity(SID)["busy"])
+        entry = server._live_activity_entry_for_session(SID)
+        assert server._session_state_label(entry) == "idle"
+        assert not entry["sidecar_in_flight"]
+        assert entry["working_since"] is None
+        assert entry["pending_tool"] is None
 
 
 def test_steer_lands_in_the_running_turn(stream, tmp_path):
