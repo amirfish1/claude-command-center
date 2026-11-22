@@ -66,8 +66,16 @@ def fetch(queue_module, timeout=90, *, snapshot_path=None, previous=None):
                 # The child does the expensive encoding; only this parent
                 # publishes, after validating every row and the completion.
                 if staged is not None:
-                    with contextlib.suppress(OSError):
+                    try:
+                        generation = staged.stat()
                         os.replace(staged, destination)
+                    except OSError:
+                        pass
+                    else:
+                        # Alert polls need only status fields. Associate them
+                        # with the published inode to avoid re-decoding history.
+                        from ccc_server.wt_alerts import remember_ticket_snapshot
+                        remember_ticket_snapshot(destination, generation, items)
                 if isinstance(previous, _Snapshot) and len(previous) == len(items) and all(
                     old is new for old, new in zip(previous, items)
                 ):

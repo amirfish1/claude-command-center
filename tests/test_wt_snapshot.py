@@ -106,6 +106,28 @@ def test_real_child_publishes_complete_display_snapshot(tmp_path):
     assert list(destination.parent.iterdir()) == [destination]
 
 
+def test_alert_index_matches_the_published_snapshot_generation(tmp_path, monkeypatch):
+    from ccc_server import wt_alerts
+
+    queue = package(tmp_path, "def list_items(): return [{'ref': 'TEST-1', 'status': 'in_review'}]")
+    destination = tmp_path / "snapshot.json"
+    wt_snapshot.fetch(queue, snapshot_path=destination)
+    with monkeypatch.context() as patch:
+        def fail_load(*args):
+            raise AssertionError("alert poll decoded the full published snapshot")
+        patch.setattr(wt_alerts.json, "load", fail_load)
+        assert wt_alerts._alert_ticket_snapshot(destination)["TEST-1"]["status"] == "in_review"
+
+    # Same size and mtime, different inode. The index must not suppress
+    # alerts using the old ticket's state after an independent replacement.
+    generation = destination.stat()
+    replacement = tmp_path / "replacement.json"
+    replacement.write_text(destination.read_text().replace('"in_review"', '"closed"   '))
+    os.utime(replacement, ns=(generation.st_atime_ns, generation.st_mtime_ns))
+    replacement.replace(destination)
+    assert wt_alerts._alert_ticket_snapshot(destination)["TEST-1"]["status"] == "closed"
+
+
 def test_failed_child_keeps_existing_disk_snapshot(tmp_path):
     destination = tmp_path / "snapshot.json"
     previous = '{"items": [{"ref": "TEST-1"}]}'

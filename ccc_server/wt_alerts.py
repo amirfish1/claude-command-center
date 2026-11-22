@@ -354,6 +354,22 @@ def _ticket_snapshot_path():
         return Path.home() / ".claude" / "command-center" / "wt_items_snapshot.json"
 
 
+def _ticket_snapshot_key(path, stat):
+    return str(path), stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size
+
+
+def remember_ticket_snapshot(path, stat, rows):
+    """Index the decoded rows for this exact display-file generation."""
+    items = {
+        str(row["ref"]): {k: row.get(k) for k in
+                          ("status", "needs_input", "updated_at")}
+        for row in rows if isinstance(row, dict) and row.get("ref")
+    }
+    with _lock:
+        _ticket_snapshot_cache.update(key=_ticket_snapshot_key(path, stat), items=items)
+    return items
+
+
 def _alert_ticket_snapshot(path):
     """Read the existing display snapshot, never fetch tickets on an alert poll.
 
@@ -365,26 +381,22 @@ def _alert_ticket_snapshot(path):
         st = path.stat()
     except OSError:
         return {}
-    key = (str(path), st.st_mtime_ns, st.st_size)
+    key = _ticket_snapshot_key(path, st)
     with _lock:
         if _ticket_snapshot_cache["key"] == key:
             return _ticket_snapshot_cache["items"]
     try:
         with path.open(encoding="utf-8") as f:
+            opened = os.fstat(f.fileno())
             data = json.load(f)
+            if _ticket_snapshot_key(path, os.fstat(f.fileno())) != _ticket_snapshot_key(path, opened):
+                return {}
     except (OSError, ValueError):
         return {}
     rows = data.get("items") if isinstance(data, dict) else None
     if not isinstance(rows, list):
         return {}
-    items = {
-        str(row["ref"]): {k: row.get(k) for k in
-                          ("status", "needs_input", "updated_at")}
-        for row in rows if isinstance(row, dict) and row.get("ref")
-    }
-    with _lock:
-        _ticket_snapshot_cache.update(key=key, items=items)
-    return items
+    return remember_ticket_snapshot(path, opened, rows)
 
 
 def _current_dead_notices(alerts, items, now):
