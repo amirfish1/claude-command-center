@@ -40,3 +40,11 @@ test('every rule is scoped to the narrow class', () => {
 test('the usage strip keeps the shared one-line status when narrow', () => {
   assert.doesNotMatch(css, /headroom-bars|hb-/);
 });
+
+test('narrow rows keep only the name and status line', () => {
+  for (const cls of ['conv-idea-avatar', 'conv-auto-switch', 'conv-meta-col', 'conv-pct-badge',
+    'conv-quick-action-slot', 'conv-attn-chip', 'conv-signal', 'conv-orch-lanes-chip', 'conv-family-details']) {
+    assert.match(css, new RegExp('\\.' + cls + '\\b'), cls);
+  }
+  assert.match(css, /\.conv-main-row > \.conv-row-end \{\s*position: absolute;/);
+});

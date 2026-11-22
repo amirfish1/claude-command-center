@@ -1,0 +1,1 @@
+- Narrow sidebar rows now show only the session name and its status line; ticket, AUTO, context %, lanes, earlier-sessions, PR and suggested-action chips are hidden there.

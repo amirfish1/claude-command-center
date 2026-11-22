@@ -120,3 +120,32 @@
   white-space: nowrap;
 }
 .sidebar.is-narrow .sidebar-footer-tool { position: relative; }
+
+/* Rows carry only the session name and its status line. Ticket avatar, AUTO
+   switch, context %, lanes, earlier-sessions, PR/signal chips and suggested
+   action chips all leave; the row menu floats over the top-right corner
+   instead of holding its own line. Everything stays in the open session. */
+.sidebar.is-narrow #convList#convList .conv-item .conv-main-row > .conv-idea-avatar,
+.sidebar.is-narrow #convList#convList .conv-item .conv-main-row > .conv-auto-switch,
+.sidebar.is-narrow #convList#convList .conv-item .conv-main-row > .conv-meta-col,
+.sidebar.is-narrow #convList#convList .conv-item .conv-main-row > .conv-pct-badge,
+.sidebar.is-narrow #convList#convList .conv-item .conv-main-row > .conv-row-meta,
+.sidebar.is-narrow #convList#convList .conv-item .conv-row-actions > .conv-pct-badge,
+.sidebar.is-narrow #convList#convList .conv-item .conv-quick-action-slot,
+.sidebar.is-narrow #convList#convList .conv-item .conv-attn-chip,
+.sidebar.is-narrow #convList#convList .conv-item .conv-signal,
+.sidebar.is-narrow #convList#convList .conv-item .conv-orch-lanes-chip,
+.sidebar.is-narrow #convList#convList .conv-item .conv-family-details,
+.sidebar.is-narrow #convList#convList .conv-item .conv-summary-toggle {
+  display: none !important;
+}
+.sidebar.is-narrow #convList#convList .conv-item .conv-main-row { position: relative; }
+.sidebar.is-narrow #convList#convList .conv-item .conv-main-row > .conv-row-end {
+  position: absolute;
+  top: 0;
+  right: 0;
+  margin: 0;
+  z-index: 6;
+}
+.sidebar.is-narrow #convList#convList .conv-item > .conv-worker-no-tickets,
+.sidebar.is-narrow #convList#convList .conv-item > .conv-worker-history { display: none; }
