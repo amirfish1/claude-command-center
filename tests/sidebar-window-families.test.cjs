@@ -11,6 +11,20 @@ vm.runInNewContext(['_isOtherUtilityRow', '_continuationFoldMaps', 'sidebarRowsW
   'sidebarRowsWithWindowFamilies'].map(fn).join('\n'), context);
 const select = (rows, pool) => Array.from(context.sidebarRowsWithWindowFamilies(rows, pool), r => r.session_id);
 
+test('unfiltered pools preserve row order and duplicates without scanning for IDs', () => {
+  let lookups = 0;
+  const child = {get session_id() { lookups++; return 'child'; }, parent_session_id: 'parent'};
+  const parent = {get session_id() { lookups++; return 'parent'; }};
+  const pool = [child, parent, child];
+  for (const expand of [context.sidebarRowsWithParentAnchors, context.sidebarRowsWithWindowFamilies]) {
+    const result = expand(pool, pool);
+    assert.notEqual(result, pool);
+    assert.equal(result.length, pool.length);
+    pool.forEach((row, index) => assert.equal(result[index], row));
+  }
+  assert.equal(lookups, 0);
+});
+
 test('recent topic retains old earlier legs and all nested lanes across windows', () => {
   const origin = {session_id: 'origin', modified: 1};
   const head = {session_id: 'head', continued_from_session_id: 'origin', modified: 100};

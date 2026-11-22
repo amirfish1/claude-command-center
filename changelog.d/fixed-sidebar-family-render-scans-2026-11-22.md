@@ -1,0 +1,1 @@
+- Skip redundant family membership scans when the sidebar already contains the complete archive.

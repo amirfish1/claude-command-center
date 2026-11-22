@@ -7274,14 +7274,14 @@
   // section drops the older parent, and follow its continuation to the head.
   function sidebarRowsWithParentAnchors(rows, pool) {
     if (!rows || !rows.length) return [];
-    const result = (rows || []).slice();
+    const result = rows.slice();
+    if (rows === pool) return result;
     const idOf = row => String(row && (row.session_id || row.id) || '').trim();
+    const included = new Set(result.map(idOf));
+    // If all the pool IDs are already present, no parent can be added.
+    if ((pool || []).every(row => included.has(idOf(row)))) return result;
     const byId = new Map((pool || []).map(row => [idOf(row), row]));
     result.forEach(row => byId.set(idOf(row), row));
-    const included = new Set(result.map(idOf));
-    // Full-list renders already contain every possible parent. Avoid
-    // rebuilding continuation chains just to rediscover those same rows.
-    if (Array.from(byId.keys()).every(id => included.has(id))) return result;
     const fold = _continuationFoldMaps([...byId.values()], idOf);
     for (let i = 0; i < result.length; i++) {
       const row = result[i];
@@ -7310,11 +7310,13 @@
   // Keep this separate from lane/search anchors: those filters still choose
   // which unrelated topics belong in the view.
   function sidebarRowsWithWindowFamilies(rows, pool) {
+    // An unfiltered window already contains every loaded relative.
+    if (rows && rows === pool) return rows.slice();
     const result = sidebarRowsWithParentAnchors(rows, pool);
     const idOf = row => String(row && (row.session_id || row.id) || '').trim();
-    const byId = new Map((pool || []).map(row => [idOf(row), row]));
     const included = new Set(result.map(idOf));
-    if (Array.from(byId.keys()).every(id => included.has(id))) return result;
+    if ((pool || []).every(row => included.has(idOf(row)))) return result;
+    const byId = new Map((pool || []).map(row => [idOf(row), row]));
     const children = new Map();
     const parentsOf = row => [...new Set([
       row.parent_session_id, row.hermes_parent_session_id,
