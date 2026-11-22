@@ -1029,6 +1029,7 @@ def test_archive_projection_collects_unloaded_detached_metadata_titles(store, tm
     conv_meta_store.save(metadata, version, {
         'alpha.jsonl': {'ai_title': 'Alpha title'},
         'beta.jsonl': {'custom_title': 'Beta title', 'ai_title': 'Lower priority'},
+        'legacy.jsonl': {'agent_name': 'Legacy title', 'elapsed': float('nan')},
     })
     topics._connection(store)
     monkeypatch.setattr(server, '_codex_titles_cache', {'data': {}})
@@ -1037,5 +1038,9 @@ def test_archive_projection_collects_unloaded_detached_metadata_titles(store, tm
         detached['alpha.jsonl'] = {'agent_name': 'Updated title in this process'}
         monkeypatch.setattr(server, '_conv_meta_cache', detached)
         inputs, _, _ = topics.archive_projection_inputs(store, max_rows=20)
-        assert inputs[2] == {'alpha': 'Updated title in this process', 'beta': 'Beta title'}
+        assert inputs[2] == {
+            'alpha': 'Updated title in this process',
+            'beta': 'Beta title',
+            'legacy': 'Legacy title',
+        }
         assert set(detached) == {'alpha.jsonl'}

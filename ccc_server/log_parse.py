@@ -947,12 +947,12 @@ class _DetachedConvMetaCache(dict):
             self.legacy_lineage[key] = head
         return head
 
-    def metadata_items(self):
+    def title_items(self):
         # The sidebar publisher needs the full title inventory without keeping
         # every transcript's parsed tail and previews alive in this process.
         with self.read_lock:
             loaded = self.copy()
-            for path, meta in conv_meta_store.entries(self.connection, _CONV_META_SCHEMA_VERSION):
+            for path, meta in conv_meta_store.title_entries(self.connection, _CONV_META_SCHEMA_VERSION):
                 yield path, loaded.pop(path, meta)
             yield from loaded.items()
 
@@ -974,7 +974,7 @@ class _DetachedConvMetaCache(dict):
 def _archive_topic_metadata_items():
     cache = _core._conv_meta_cache
     if isinstance(cache, _DetachedConvMetaCache):
-        return cache.metadata_items()
+        return cache.title_items()
     return list(cache.items())
 
 

@@ -53,6 +53,27 @@ def entries(conn, version):
         yield path, decode(body)
 
 
+def title_entries(conn, version):
+    """Read only the metadata fields the detached sidebar title pass uses."""
+    try:
+        # Python-written legacy bodies may contain non-standard floats.
+        # Leave them to the existing decoder when SQLite would reject them.
+        rows = conn.execute("""
+            SELECT path, CASE WHEN json_valid(body) THEN json_object(
+                'custom_title', body -> '$.custom_title',
+                'agent_name', body -> '$.agent_name',
+                'ai_title', body -> '$.ai_title'
+            ) ELSE body END
+            FROM metadata WHERE version=?
+        """, (version,))
+    except sqlite3.OperationalError as exc:
+        message = str(exc).lower()
+        if not (message.startswith("no such function: ") or message == 'near ">": syntax error'):
+            raise
+        return entries(conn, version)
+    return ((path, decode(body)) for path, body in rows)
+
+
 def load(conn, version):
     return dict(entries(conn, version))
 
