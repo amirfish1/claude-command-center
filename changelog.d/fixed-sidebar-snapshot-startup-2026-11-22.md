@@ -1,0 +1,1 @@
+- Keep the complete archive snapshot on its fast path after startup by capturing all cached title inputs and the selected recent rows.

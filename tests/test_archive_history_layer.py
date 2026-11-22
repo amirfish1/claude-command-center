@@ -163,3 +163,43 @@ def test_inventory_memo_changes_when_the_pinned_cut_or_exclusion_changes():
     assert excluded.order == ("a",)
     assert first == restored
     assert layer.candidates(restored, updated) == {"b"}
+
+
+def test_cold_read_pins_the_selected_hot_rows_after_a_row_ages_out(tmp_path, monkeypatch):
+    import time
+
+    from ccc_server import continuation_topics
+
+    now = time.time()
+    hot = {"session_id": "recent", "mtime": now}
+    aged = {"session_id": "aged", "mtime": now - archive_store.HOT_SECONDS - 5}
+    persisted = {"cached_at": now - 10, "conversations": [hot, aged]}
+    path = tmp_path / "archive.json"
+    key = server._archive_response_cache_key()
+    archive_store.save(path, {
+        "schema_version": server._ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
+        "build_id": server._ARCHIVE_RESPONSE_CACHE_BUILD_ID,
+        "entries": {key: persisted},
+    }, complete=True, sidebar_key=key)
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", path)
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE", {key: persisted})
+    monkeypatch.setattr(server, "_archive_serve_cache", {})
+    monkeypatch.setattr(server, "_archive_serve_version", 0)
+    monkeypatch.setattr(server, "_archive_response_cache_get", lambda key: persisted)
+    monkeypatch.setattr(server, "_archive_refresh_load_blocked", lambda now: True)
+    monkeypatch.setattr(server, "_conversation_lifecycle_snapshot", lambda: (set(), set(), set(), {}))
+    monkeypatch.setattr(server, "_overlay_conversation_lifecycle_flags", lambda rows, **kwargs: rows)
+    monkeypatch.setattr(server, "_archive_list_source_overlays", lambda *_: ([], []))
+    monkeypatch.setattr(server, "_capture_archive_history_sidecars", lambda _: dict.fromkeys(
+        ("resumes", "parents", "names", "drivers", "ideas", "overlays"), {}))
+    monkeypatch.setattr(layer, "_INVENTORY", (None, frozenset(), None))
+    reader = object()
+    monkeypatch.setattr(continuation_topics, "archive_projection_inputs",
+                        lambda conn, **kwargs: (({}, {}, {}, {}), [], 0))
+
+    with server._archive_history_read_cut(key, {}, now, topic_reader=reader) as cut:
+        assert cut is not None
+        inputs, _, hydrate, _ = cut
+        assert inputs.sources["recent"][0] == "hot"
+        assert inputs.sources["aged"][0] == "canonical"
+        assert hydrate(None) == [hot, aged]

@@ -48,9 +48,13 @@ def get_lineage(conn, version, transcript_path):
     return json.loads(found[0]) if found else None
 
 
+def entries(conn, version):
+    for path, body in conn.execute("SELECT path,body FROM metadata WHERE version=?", (version,)):
+        yield path, decode(body)
+
+
 def load(conn, version):
-    return {path: decode(body) for path, body in conn.execute(
-        "SELECT path,body FROM metadata WHERE version=?", (version,))}
+    return dict(entries(conn, version))
 
 
 def save(legacy, version, entries, *, migration=False, legacy_lineage=None):

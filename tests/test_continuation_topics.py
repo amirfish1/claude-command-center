@@ -849,3 +849,25 @@ def test_archive_projection_inputs_capture_topic_and_native_title_sources(store,
     assert store.execute(
         "SELECT topic_title FROM continuation_topics WHERE sid='solo'"
     ).fetchone() == ('External',)
+
+
+def test_archive_projection_collects_unloaded_detached_metadata_titles(store, tmp_path, monkeypatch):
+    from contextlib import closing
+
+    from ccc_server import conv_meta_store, log_parse
+
+    metadata = tmp_path / 'conversation-meta.json'
+    version = log_parse._CONV_META_SCHEMA_VERSION
+    conv_meta_store.save(metadata, version, {
+        'alpha.jsonl': {'ai_title': 'Alpha title'},
+        'beta.jsonl': {'custom_title': 'Beta title', 'ai_title': 'Lower priority'},
+    })
+    topics._connection(store)
+    monkeypatch.setattr(server, '_codex_titles_cache', {'data': {}})
+    with closing(conv_meta_store.open_reader(metadata)) as connection:
+        detached = log_parse._DetachedConvMetaCache(connection)
+        detached['alpha.jsonl'] = {'agent_name': 'Updated title in this process'}
+        monkeypatch.setattr(server, '_conv_meta_cache', detached)
+        inputs, _, _ = topics.archive_projection_inputs(store, max_rows=20)
+        assert inputs[2] == {'alpha': 'Updated title in this process', 'beta': 'Beta title'}
+        assert set(detached) == {'alpha.jsonl'}

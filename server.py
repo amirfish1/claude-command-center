@@ -19169,13 +19169,16 @@ def _capture_archive_history_sidecars(now):
     }
 
 
-def _archive_history_hot_snapshot(key, rows, version):
-    """Pin hot row values and reuse tokens for the exact detached row objects."""
+def _archive_history_hot_snapshot(key, captured=None):
+    """Pin the published hot rows, or verify a publisher's explicit source cut."""
     from ccc_server.archive_history_layer import row_token
 
     with _archive_serve_lock:
         entry = _archive_serve_cache.get(key)
-        if not entry or entry.get("ver") != version or entry.get("rows") is not rows:
+        if not entry:
+            return None
+        rows, version = entry.get("rows"), entry.get("ver")
+        if captured is not None and (rows is not captured[0] or version != captured[1]):
             return None
         if not rows or any(type(row) is not dict for row in rows):
             return None
@@ -19215,14 +19218,16 @@ def _archive_history_read_cut(key, cache_options, now, *, phases=None, check_cli
     from ccc_server import archive_history_layer, archive_store, continuation_topics
 
     with _archive_history_timing(phases, "hot"):
+        cached = True
         if captured_hot is None:
-            rows, cached, version = _archive_serve_hot_rows_versioned(
+            _, cached, _ = _archive_serve_hot_rows_versioned(
                 key, cache_options, copy_rows=False, defer_cold=True)
-        else:
-            rows, version = captured_hot
-            cached = True
-        snapshot = _archive_history_hot_snapshot(key, rows, version)
+        # A cold read can publish a narrowed list as older rows age out.
+        # Pin the stored selection, including its exact transfer tokens.
+        snapshot = _archive_history_hot_snapshot(key, captured_hot)
     if snapshot is None:
+        if phases is not None:
+            phases["unavailable"] = "hot_snapshot"
         yield None
         return
     hot, hot_tokens = snapshot
@@ -19345,6 +19350,8 @@ def _archive_history_project_cut(cut, previous, *, phases=None, check_client=Non
             # cold rows, so close the scope again before projection.
             wanted = changes.scope(missing_effects)
             if wanted is None:
+                if phases is not None:
+                    phases["scope_rejected"] = len(changes.dirty or ())
                 return None
             for _ in range(3):
                 if phases is not None:
@@ -19471,7 +19478,7 @@ def _archive_history_publisher_main():
             _ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION, _ARCHIVE_RESPONSE_CACHE_BUILD_ID):
         return False
     entry = saved["entries"].get(key) or {}
-    hot_rows = entry.get("conversations") or ()
+    hot_rows = _overlay_conversation_lifecycle_flags(entry.get("conversations") or [])
     if not hot_rows:
         return False
     if not _archive_serve_cache_store(key, hot_rows, _archive_serve_generation,

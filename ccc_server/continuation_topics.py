@@ -301,12 +301,13 @@ def _row_title(row, names, sid):
     return names.get(sid) or row.get('display_name') or row.get('custom_title') or row.get('ai_title')
 
 
-def _external_titles():
+def _external_titles(items=None):
+    if items is None:
+        items = list(getattr(_core, '_conv_meta_cache', {}).items())
     return {
         _metadata_session_id(filename): (meta.get('custom_title')
                                          or meta.get('agent_name') or meta.get('ai_title'))
-        for filename, meta in list(getattr(_core, '_conv_meta_cache', {}).items())
-        if isinstance(meta, dict)
+        for filename, meta in items if isinstance(meta, dict)
     }
 
 
@@ -359,7 +360,9 @@ def archive_projection_inputs(conn, *, max_rows, max_native_roots=32):
     edges.extend(indexed)
     linked_roots = {root for _, origin, root, _, _ in records if origin and root}
     try:
-        external = _external_titles()
+        from ccc_server.log_parse import _archive_topic_metadata_items
+
+        external = _external_titles(_archive_topic_metadata_items())
         codex_cache = getattr(_core, '_codex_titles_cache', {}).get('data') or {}
         fallback = {sid: title for sid, title in external.items() if title}
         for sid, value in codex_cache.items():
