@@ -1906,16 +1906,33 @@
       slot._activityMembers = members;
       for (const member of members) {
         sources.delete(member);
+        if (member.matches('.thinking-run')) {
+          // Thinking stays visible (in full) even while Working is collapsed;
+          // only tool calls fold away.
+          member.classList.remove('activity-run-source', 'activity-run-open');
+          if (!member._thinkingAutoOpened) {
+            member._thinkingAutoOpened = true;
+            member.classList.add('is-expanded');
+            member.querySelector('button')?.setAttribute('aria-expanded', 'true');
+            const body = member.querySelector('.t-body');
+            const teaser = member.querySelector('.thinking-run-preview');
+            if (body) body.hidden = false;
+            if (teaser) teaser.hidden = true;
+          }
+          continue;
+        }
         member.classList.add('activity-run-source');
         member.classList.toggle('activity-run-open', slot.classList.contains('is-expanded'));
       }
       const narration = members.filter(member => member.matches('.assistant-text'));
       const activity = members.filter(member => !member.matches('.assistant-text'));
+      const toolActivity = activity.filter(member => !member.matches('.thinking-run'));
       const lastNote = narration[narration.length - 1];
       const noteText = lastNote ? (lastNote.textContent || '').trim().split(/\n\s*\n/).filter(Boolean).pop() || '' : '';
       const note = slot.querySelector('.activity-run-note');
       if (note.textContent !== noteText) note.textContent = noteText;
-      const latest = activity[activity.length - 1];
+      // Thinking is shown on its own; the preview line tracks the latest tool.
+      const latest = toolActivity[toolActivity.length - 1] || activity[activity.length - 1];
       const calls = latest.matches('.tool-call, .kimi-tool') ? [latest] : Array.from(latest.querySelectorAll('.tool-call, .kimi-tool'));
       const lastCall = calls[calls.length - 1];
       const detail = latest.matches('.thinking-run') ? latest.querySelector('.thinking-run-preview')
@@ -1923,7 +1940,7 @@
       const preview = slot.querySelector('.activity-run-preview');
       const failed = members.some(member => member.matches('.tool-call-fail, .kimi-tool.err')
         || member.querySelector('.tool-call-fail, .kimi-tool-status.error'));
-      const text = (detail?.textContent || latest.textContent || '').trim();
+      const text = toolActivity.length ? (detail?.textContent || latest.textContent || '').trim() : '';
       const value = (failed ? 'Failed: ' : '') + (text ? text.replace(/[.…]+$/u, '') + '...' : '');
       if (preview.textContent !== value) preview.textContent = value;
       slot.classList.toggle('has-error', failed);

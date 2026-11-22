@@ -147,7 +147,10 @@ test('real renderers replace consecutive thoughts in a steady slot, then preserv
           const newestCommand = slot.querySelector('.activity-run-preview').textContent.startsWith('Check how rate is used');
           render([{kind:'thinking',text:'Now implement pitch-preserving speed.'}]);
           const thoughtStable = stable();
-          const latestThought = slot.querySelector('.activity-run-preview').textContent === 'Now implement pitch-preserving speed...';
+          // Thinking shows in full on its own while Working is collapsed; the
+          // preview line keeps tracking the latest tool.
+          const latestThought = slot.querySelector('.activity-run-preview').textContent.startsWith('Check how rate is used')
+            && [...view.querySelectorAll('.thinking-run')].some(el => el.checkVisibility() && el.textContent.includes('Now implement pitch-preserving speed'));
           const collapsedSources = [...view.querySelectorAll('.activity-run-source')].every(el=>!el.checkVisibility());
           heading.click();
           const historyVisible = [...view.querySelectorAll('.activity-run-source')].every(el=>el.checkVisibility());
@@ -239,7 +242,8 @@ test('real renderers replace consecutive thoughts in a steady slot, then preserv
             && view.querySelectorAll('.activity-run-preview').length === 1;
           const overflow = view.scrollWidth > view.clientWidth + 1;
           const oneHeading = !view.querySelector('.cc-run-chip, .cc-run-preview')
-            && [...view.querySelectorAll('.tool-call-group-header, .kimi-tool-group-head, .thinking-run')].every(el=>!el.checkVisibility());
+            && [...view.querySelectorAll('.tool-call-group-header, .kimi-tool-group-head')].every(el=>!el.checkVisibility())
+            && [...view.querySelectorAll('.thinking-run')].every(el=>el.checkVisibility());
           slot.querySelector('button').click();
           const expanded = !latest.checkVisibility()
             && [...view.querySelectorAll('.tool-call-group-header, .kimi-tool-group-head, .thinking-run')].every(row=>row.checkVisibility());
@@ -252,7 +256,7 @@ test('real renderers replace consecutive thoughts in a steady slot, then preserv
           document.body.dataset.convView = 'compact';
           return {first,thought,second,stable,description,newestOnly,oneHeading,overflow,expanded,collapsed,normal};
         }, {merged, narration});
-        assert.deepEqual(result,{first:'Read the report...',thought:'Compare the report with the recorded activity...',
+        assert.deepEqual(result,{first:'Read the report...',thought:'Read the report...',
           second:'Look up the OAuth project owner...',stable:true,description:true,newestOnly:true,
           oneHeading:true,overflow:false,expanded:true,collapsed:true,normal:true},
           JSON.stringify({width,merged,narration}));

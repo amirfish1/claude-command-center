@@ -2319,7 +2319,7 @@
     display: block; margin: 6px 0; padding: 0 10px;
   }
   body:not([data-conv-view="verbose"]) .conversations-view .activity-run-source:not(.activity-run-open) { display: none !important; }
-  body:not([data-conv-view="verbose"]) .event.assistant:has(> .activity-run-source):not(:has(> .activity-run, > .activity-run-open, > .assistant-text:not(.activity-run-source))) { display: none !important; }
+  body:not([data-conv-view="verbose"]) .event.assistant:has(> .activity-run-source):not(:has(> .activity-run, > .activity-run-open, > .thinking-run, > .assistant-text:not(.activity-run-source))) { display: none !important; }
   body:not([data-conv-view="verbose"]) .event.assistant.thinking-run-event:not(:has(> .thinking-run)):has(> .activity-run) { display: block !important; }
   body:not([data-conv-view="verbose"]) .event.assistant.thinking-run-event > .activity-run { display: block !important; }
   .activity-run-orchestration { display: none; }
