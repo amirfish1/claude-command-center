@@ -4433,7 +4433,6 @@
     }
     if (e.target.closest('#q2ClosedBtn')) { state.showClosed = !state.showClosed; renderTickets({ force: true }); return; }
     if (e.target.closest('#q2EditPromptBtn')) { showQueueLearningsInDetail(); return; }
-    if (e.target.closest('#q2ThemeBtn')) { toggleTheme(); return; }
     if (e.target.closest('[data-q2-modal-close]')) { closeModal(); return; }
     if (e.target.closest('#q2NewTicketBtn')) { openNewTicket(); return; }
     if (e.target.closest('#q2NewQueueBtn')) { openQueueConfig(''); return; }
@@ -4491,22 +4490,6 @@
       renderTickets({ force: true });
     });
   }
-
-  function toggleTheme() {
-    var next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
-    document.documentElement.setAttribute('data-theme', next);
-    try { localStorage.setItem('ccc-q2-theme', next); } catch (_) {}
-    var btn = $('q2ThemeBtn');
-    if (btn) btn.textContent = next === 'light' ? 'Dark' : 'Light';
-  }
-
-  (function initTheme() {
-    var saved = 'dark';
-    try { saved = localStorage.getItem('ccc-q2-theme') || 'dark'; } catch (_) {}
-    document.documentElement.setAttribute('data-theme', saved);
-    var btn = $('q2ThemeBtn');
-    if (btn) btn.textContent = saved === 'light' ? 'Dark' : 'Light';
-  })();
 
   // ── column resizers ──────────────────────────────────────────────────────
   // Both handles drive a CSS custom property on :root, so the grid is the only

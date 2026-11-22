@@ -6,16 +6,48 @@
 <script src="/static/restart-transport.js"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Queues</title>
-  <link rel="stylesheet" href="/static/q2.css">
-  <link rel="stylesheet" href="/static/ticket-prose.css">
-  <link rel="stylesheet" href="/static/issue-flow.css">
   <script>
     // When the dashboard hosts this page in #cccCoreAppFrame the parent
     // already has the rail and the Sessions/Queues bar. Mark framed so
     // CSS can hide the duplicates before first paint.
     try { if (window.self !== window.top) document.documentElement.classList.add('ccc-framed'); }
     catch (e) {}
+
+    (() => {
+      const themeKey = 'ccc-theme';
+      const systemTheme = window.matchMedia('(prefers-color-scheme: light)');
+      const root = document.documentElement;
+      let pref;
+      function applyTheme() {
+        const light = pref === 'light' || (pref === 'system' && systemTheme.matches);
+        root.dataset.theme = light ? 'light' : 'dark';
+        const button = document.getElementById('q2ThemeBtn');
+        if (button) button.textContent = light ? 'Dark' : 'Light';
+      }
+
+      function syncTheme() {
+        try { pref = localStorage.getItem(themeKey); } catch (_) {}
+        applyTheme();
+      }
+
+      syncTheme();
+      systemTheme.addEventListener('change', applyTheme);
+      window.addEventListener('storage', event => {
+        if (event.key === themeKey || event.key === null) syncTheme();
+      });
+      document.addEventListener('DOMContentLoaded', () => {
+        syncTheme();
+        document.getElementById('q2ThemeBtn').addEventListener('click', () => {
+          pref = root.dataset.theme === 'light' ? 'dark' : 'light';
+          try { localStorage.setItem(themeKey, pref); } catch (_) {}
+          applyTheme();
+        });
+      });
+    })();
   </script>
+  <link rel="stylesheet" href="/static/q2.css">
+  <link rel="stylesheet" href="/static/ticket-prose.css">
+  <link rel="stylesheet" href="/static/issue-flow.css">
 </head>
 <body>
   <header class="q2-topbar">

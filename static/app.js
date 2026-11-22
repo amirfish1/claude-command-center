@@ -51026,6 +51026,11 @@
   _systemThemeMQ.addEventListener && _systemThemeMQ.addEventListener('change', () => {
     if (getThemePref() === 'system') applyTheme('system');
   });
+  window.addEventListener('storage', event => {
+    if (event.key !== 'ccc-theme' && event.key !== null) return;
+    applyTheme(getThemePref());
+    refreshAppearanceChecks();
+  });
 
   // Spawn defaults (CCC-902) live inline in the Sessions & Spawning section
   // now, not behind a "Configure…" modal launcher, so refreshing the row
