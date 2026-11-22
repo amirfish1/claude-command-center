@@ -20,8 +20,9 @@ _MAX_UNPACKED_ROWS = 1024
 _UNPACKED_QUERY_ROWS = 64
 _UNPACKED_BATCH_BODY_LIMIT = 32 << 10
 _DEFERRED_COLD_BUCKET = -1
-_MAX_DEFERRED_COLD_ROWS = 32
+_MAX_DEFERRED_COLD_ROWS = _BUCKETS
 _MAX_DEFERRED_COLD_BODY = 16 << 10
+_MAX_DEFERRED_COLD_BYTES = 512 << 10
 
 
 class StoredRow(dict):
@@ -142,17 +143,23 @@ def publish(con, key, cached_at, version, hot_ids, project, *,
     deferred = []
     excluded = hot_rowids
     if previous_hot is not None:
-        # A few rows crossing the age cutoff can dirty many otherwise
+        # Rows crossing the age cutoff can dirty many otherwise
         # unchanged pages. Pack small cooled rows together with fixed count
-        # and byte bounds, then fold them into ordinary pages when full.
+        # and byte bounds. The byte budget admits more small rows without
+        # increasing the maximum amount of raw data on this page.
         cooled = (previous_hot - hot_rowids).difference(previous_changed, inserted)
         if 0 < len(cooled) <= _MAX_DEFERRED_COLD_ROWS:
             marks = ",".join("?" for _ in cooled)
-            deferred = [(rid, rowid, digest) for rowid, rid, digest in con.execute(
-                f"""SELECT rowid,identity,digest FROM rows WHERE rowid IN ({marks})
+            remaining_bytes = _MAX_DEFERRED_COLD_BYTES
+            for rowid, rid, digest, size in con.execute(
+                f"""SELECT rowid,identity,digest,length(CAST(body AS BLOB))
+                    FROM rows WHERE rowid IN ({marks})
                     AND length(CAST(body AS BLOB)) <= ? ORDER BY rowid""",
                 (*sorted(cooled), _MAX_DEFERRED_COLD_BODY),
-            )]
+            ):
+                if size <= remaining_bytes:
+                    deferred.append((rid, rowid, digest))
+                    remaining_bytes -= size
         excluded = hot_rowids | {rowid for _, rowid, _ in deferred}
         # Replaced hot rows often acquire a new rowid. Neither end of a hot
         # replacement was in a cold page, so it does not dirty a bucket.

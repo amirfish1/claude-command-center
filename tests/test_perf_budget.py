@@ -6626,6 +6626,80 @@ def test_indexed_hot_change_skips_cold_sidebar_page_scan(tmp_path, monkeypatch):
         ).fetchone() is None
 
 
+@pytest.mark.parametrize("body_size", [10, 12_000])
+def test_point_update_cools_many_small_rows_within_page_byte_budget(tmp_path, monkeypatch, body_size):
+    from ccc_server import archive_sidebar_pages, archive_store
+
+    stamp = 2_000_000_000
+    cache_file = tmp_path / "archive.json"
+    cold = [
+        {"session_id": f"cold-{index}", "mtime": stamp - 30 * 86400}
+        for index in range(300)
+    ]
+    cooling = [
+        {"session_id": f"cooling-{index}", "mtime": stamp - archive_store.HOT_SECONDS + 5,
+         "first_message": "a" * body_size}
+        for index in range(48)
+    ]
+    recent = {"session_id": "recent", "mtime": stamp}
+    version = server._ARCHIVE_SIDEBAR_PACKED_VERSION
+    project = server._archive_list_pack_static
+
+    def publish(at, rows, base=None):
+        return archive_store.save(cache_file, {
+            "schema_version": 1, "build_id": "1",
+            "entries": {_ALL_KEY: {"cached_at": at, "conversations": rows}},
+        }, base_entry=base, point_update=base is not None, complete=True,
+            sidebar_key=_ALL_KEY, sidebar_pages=(version, project))
+
+    assert publish(stamp, [*cold, *cooling, recent]) == 349
+    first = archive_store.load(cache_file, key=_ALL_KEY, metadata_only=True)["entries"][_ALL_KEY]
+    assert publish(stamp + 1, [dict(recent, first_message="prime")], first)
+    base = archive_store.load(cache_file, key=_ALL_KEY, metadata_only=True)["entries"][_ALL_KEY]
+
+    reads = []
+    build_bucket = archive_sidebar_pages._build_bucket
+
+    def count_build(con, group, project):
+        reads.append(len(group))
+        return build_bucket(con, group, project)
+
+    monkeypatch.setattr(archive_sidebar_pages, "_build_bucket", count_build)
+    finished = stamp + 6
+    assert publish(finished, [dict(recent, first_message="updated")], base)
+    if body_size == 10:
+        assert reads == [48], "ordinary cold buckets were read after a hot-only update"
+
+    conn = archive_store._connect(cache_file, write=True)
+    try:
+        payload, = conn.execute(
+            "SELECT payload FROM sidebar_pages WHERE variant=? AND bucket=?",
+            (_ALL_KEY, archive_sidebar_pages._DEFERRED_COLD_BUCKET),
+        ).fetchone()
+        _, cooled = archive_sidebar_pages._decode_page(payload)
+        assert 0 < len(cooled) <= len(cooling)
+        if body_size == 12_000:
+            assert len(cooled) < len(cooling)
+        raw_bytes = sum(len(conn.execute(
+            "SELECT CAST(body AS BLOB) FROM rows WHERE variant=? AND identity=?",
+            (_ALL_KEY, rid),
+        ).fetchone()[0]) for rid in cooled)
+        assert raw_bytes <= 512 << 10
+
+        hot = archive_store.load(cache_file, key=_ALL_KEY, hot=True, now=finished)
+        current = {archive_store.identity(row): row for row in hot["entries"][_ALL_KEY]["conversations"]}
+        packed, _ = archive_sidebar_pages.read(conn, _ALL_KEY, finished, version, dict(current), 1 << 24, {})
+        conn.execute("BEGIN")
+        archive_sidebar_pages.publish(conn, _ALL_KEY, finished, version, current, project)
+        rebuilt, _ = archive_sidebar_pages.read(conn, _ALL_KEY, finished, version, dict(current), 1 << 24, {})
+        assert packed == rebuilt
+        assert [row["session_id"] for row in packed] == [
+            row["session_id"] for row in [*cold, *cooling, recent]
+        ]
+    finally:
+        conn.close()
+
+
 @pytest.mark.parametrize("legacy_index", [False, True])
 def test_archive_hot_body_reads_sort_only_row_ids(tmp_path, monkeypatch, legacy_index):
     """Keep hot archive bodies out of SQLite's temporary sorter."""
