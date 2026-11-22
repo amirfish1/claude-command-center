@@ -6,10 +6,14 @@ from unittest.mock import patch
 import pytest
 
 import server
-from ccc_server import archive_sidebar_pages, archive_store, continuation_topics
+from ccc_server import archive_preview, archive_sidebar_pages, archive_store, continuation_topics
 
 
-def test_indexed_preview_preserves_order_counts_and_live_context(tmp_path, monkeypatch):
+@pytest.mark.parametrize("edge_limit, byte_limit", [(8192, 512), (1, 512), (8192, 1)])
+def test_indexed_preview_preserves_order_counts_and_live_context(tmp_path, monkeypatch,
+                                                                 edge_limit, byte_limit):
+    monkeypatch.setattr(archive_preview, "_MAX_BATCHED_EDGES", edge_limit)
+    monkeypatch.setattr(archive_preview, "_MAX_EDGE_BYTES", byte_limit)
     now = 2_000_000_000
     key = server._archive_response_cache_key()
     path = tmp_path / "archive.json"
@@ -39,6 +43,7 @@ def test_indexed_preview_preserves_order_counts_and_live_context(tmp_path, monke
     older = [
         {"session_id": "old-root", "mtime": now - 20_000, "state": "working"},
         {"session_id": "old-lane", "mtime": 2, "continued_from_session_id": "old-root"},
+        {"session_id": "old-grandchild", "mtime": 3, "parent_session_id": "old-lane"},
         {"session_id": "graph-child", "mtime": 3},
         {"session_id": "pin", "mtime": 5, "pinned": True},
         {"session_id": "trashed-child", "mtime": 6, "parent_session_id": "old-root"},

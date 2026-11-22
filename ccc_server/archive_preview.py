@@ -9,6 +9,8 @@ import math
 
 
 VERSION = 1
+_MAX_BATCHED_EDGES = 8192
+_MAX_EDGE_BYTES = 512
 
 
 def activity(row):
@@ -189,11 +191,32 @@ class Preview:
             row = self.sources[offset] = self.overlay_cold(json.loads(body))
         return row
 
+    def _indexed_children(self):
+        # A bounded read avoids stepping SQLite once per selected session,
+        # including each newly discovered family member. For larger graphs
+        # retain the indexed lookup only for the parents we actually visit.
+        packed, = self.con.execute("""
+            SELECT json_group_array(CASE
+                WHEN length(CAST(parent AS BLOB)) + length(CAST(identity AS BLOB)) <= ?
+                THEN json_array(parent, identity) END)
+            FROM (SELECT parent,identity FROM sidebar_preview_parents WHERE variant=? LIMIT ?)
+        """, (_MAX_EDGE_BYTES, self.key, _MAX_BATCHED_EDGES + 1)).fetchone()
+        edges = json.loads(packed)
+        if len(edges) > _MAX_BATCHED_EDGES or None in edges:
+            return None
+        children = defaultdict(list)
+        for parent, identity in edges:
+            offset = self.cold_positions.get(identity)
+            if offset is not None:
+                children[parent].append(offset)
+        return children
+
     def select(self, parents, ideas):
         recent = set(heapq.nlargest(500, range(len(self.items)), key=lambda i: self.items[i][1]))
         children = defaultdict(list)
         positions = {}
         historical = self.cold_positions
+        indexed_children = self._indexed_children()
         for offset, (sid, _, pinned, _, identity) in enumerate(self.items):
             positions[sid] = offset
             if pinned:
@@ -212,9 +235,12 @@ class Preview:
             row = self._row(offset)
             sid = _sid(row)
             relatives = [positions[parent] for parent in parent_ids(row, parents) if parent in positions]
-            cold_children = (historical[child] for child, in self.con.execute("""
-                SELECT identity FROM sidebar_preview_parents WHERE variant=? AND parent=?
-            """, (self.key, sid)) if child in historical)
+            if indexed_children is None:
+                cold_children = (historical[child] for child, in self.con.execute("""
+                    SELECT identity FROM sidebar_preview_parents WHERE variant=? AND parent=?
+                """, (self.key, sid)) if child in historical)
+            else:
+                cold_children = indexed_children.get(sid, ())
             relatives.extend(sorted(set(children[sid]).union(cold_children)))
             for member in relatives:
                 member_id = self.items[member][0]
