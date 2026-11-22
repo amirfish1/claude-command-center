@@ -50,6 +50,10 @@ test('real renderers replace consecutive thoughts in a steady slot, then preserv
           // Reveal the work sequence before exercising its thought disclosure.
           view.querySelector('.activity-run-toggle').click();
           const slot = view.querySelector('.thinking-run'), heading = slot.querySelector('button');
+          // Opening the Working history shows thinking in full; put it back so
+          // the preview checks below still run against the collapsed state.
+          if (heading.getAttribute('aria-expanded') !== 'true' || !slot.querySelector('.t-body').checkVisibility()) throw new Error('thinking not expanded with history');
+          heading.click();
           const before = heading.getBoundingClientRect().top, height = slot.getBoundingClientRect().height;
           render([thought('Earlier paragraph\n\nNewest thought ' + 'with details '.repeat(80))]);
           const latestParagraph = slot.querySelector('.thinking-run-preview').textContent.startsWith('Newest thought');
@@ -92,6 +96,8 @@ test('real renderers replace consecutive thoughts in a steady slot, then preserv
         await page.evaluate(() => {
           const activity = document.querySelector('.activity-run-toggle[aria-expanded="false"]');
           if (!document.querySelector('.thinking-run > button').checkVisibility()) activity?.click();
+          const thinking = document.querySelector('.thinking-run > button');
+          if (thinking.getAttribute('aria-expanded') === 'true') thinking.click();
           document.querySelector('.thinking-run > button').scrollIntoView({block:'center'});
         });
         await page.waitForFunction(() => {

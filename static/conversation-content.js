@@ -1885,7 +1885,20 @@
         slot.querySelector('button').addEventListener('click', () => {
           const open = slot.classList.toggle('is-expanded');
           slot.querySelector('button').setAttribute('aria-expanded', String(open));
-          for (const member of slot._activityMembers) member.classList.toggle('activity-run-open', open);
+          for (const member of slot._activityMembers) {
+            member.classList.toggle('activity-run-open', open);
+            // Opening history shows the thinking text in full; tool calls stay
+            // collapsed (they open one by one on demand).
+            if (open && member.matches('.thinking-run') && !member.classList.contains('is-expanded')) {
+              member.classList.add('is-expanded');
+              member.querySelector('button')?.setAttribute('aria-expanded', 'true');
+              const body = member.querySelector('.t-body');
+              const teaser = member.querySelector('.thinking-run-preview');
+              if (body) body.hidden = false;
+              if (teaser) teaser.hidden = true;
+            }
+            if (open && member.matches('.tool-call-group, .kimi-tool-group')) member.classList.add('collapsed');
+          }
         });
         first.before(slot);
       }
