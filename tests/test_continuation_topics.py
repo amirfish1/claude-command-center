@@ -949,6 +949,42 @@ def test_archive_projection_retries_when_topic_sources_change_during_capture(sto
     assert version == topics._archive_read_version(store)
 
 
+def test_archive_projection_includes_peer_commit_before_snapshot_without_retry(store, monkeypatch):
+    from contextlib import closing
+
+    store.execute('PRAGMA journal_mode=WAL')
+    topics._connection(store)
+    reads = []
+    fetch = topics._archive_topic_records
+
+    def record_read(conn, max_rows):
+        reads.append(max_rows)
+        return fetch(conn, max_rows)
+
+    monkeypatch.setattr(topics, '_archive_topic_records', record_read)
+    filename = store.execute("PRAGMA database_list").fetchone()[2]
+    with closing(sqlite3.connect(filename)) as peer:
+        def commit_before_snapshot(sql):
+            if sql == 'BEGIN' and not peer.total_changes:
+                with peer:
+                    peer.execute("INSERT INTO session_meta VALUES ('child', 'root')")
+
+        store.set_trace_callback(commit_before_snapshot)
+        try:
+            details = {}
+            inputs, edges, version = topics.archive_projection_inputs(
+                store, max_rows=20, diagnostics=details)
+        finally:
+            store.set_trace_callback(None)
+
+    assert reads == [20]
+    assert inputs[1] == {'child': 'root'}
+    assert ('child', 'root') in edges
+    assert version == topics._archive_read_version(store)
+    assert 'topics_retried' not in details
+    assert not store.in_transaction
+
+
 def test_archive_projection_ignores_writes_outside_tracked_topics(store, monkeypatch):
     root = '11111111-1111-4111-8111-111111111111'
     store.execute('PRAGMA journal_mode=WAL')

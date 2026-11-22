@@ -82,11 +82,12 @@ def _install_topic_tracking(conn):
         conn.execute(f'PRAGMA busy_timeout={timeout}')
 
 
-def _precise_topic_token(conn, db_path, broad):
-    with _CACHE_LOCK:
-        if broad in _PRECISE_TOKENS:
-            _PRECISE_TOKENS.move_to_end(broad)
-            return _PRECISE_TOKENS[broad]
+def _precise_topic_token(conn, db_path, broad, *, pinned=False):
+    if not pinned:
+        with _CACHE_LOCK:
+            if broad in _PRECISE_TOKENS:
+                _PRECISE_TOKENS.move_to_end(broad)
+                return _PRECISE_TOKENS[broad]
     reader = None
     try:
         if conn is None:
@@ -110,11 +111,12 @@ def _precise_topic_token(conn, db_path, broad):
     finally:
         if reader is not None:
             reader.close()
-    with _CACHE_LOCK:
-        _PRECISE_TOKENS[broad] = token
-        _PRECISE_TOKENS.move_to_end(broad)
-        while len(_PRECISE_TOKENS) > 128:
-            _PRECISE_TOKENS.popitem(last=False)
+    if not pinned:
+        with _CACHE_LOCK:
+            _PRECISE_TOKENS[broad] = token
+            _PRECISE_TOKENS.move_to_end(broad)
+            while len(_PRECISE_TOKENS) > 128:
+                _PRECISE_TOKENS.popitem(last=False)
     return token
 
 
@@ -182,7 +184,7 @@ def _external_title_cache_sig():
     )
 
 
-def _db_state_token(conn=None):
+def _db_state_token(conn=None, *, pinned=False):
     global _CACHE_GEN
     if conn is None:
         if _sg._get_connection is not _ORIG_GET_CONNECTION:
@@ -213,7 +215,7 @@ def _db_state_token(conn=None):
     file_sig = _file_stat_sig(db_path) if db_path else (conn_id, changes)
     tx_sig = (conn_id, changes) if conn.in_transaction else ()
     broad = (db_path or conn_id, file_sig, gen, tx_sig, _external_title_cache_sig())
-    return _precise_topic_token(conn, db_path, broad)
+    return _precise_topic_token(conn, db_path, broad, pinned=pinned)
 
 
 def _connection(conn=None):
@@ -331,8 +333,8 @@ class UnavailableArchiveProjection(Exception):
     """A title source or topic mutation needs the ordinary full reader."""
 
 
-def _archive_read_version(conn):
-    token = _db_state_token(conn)
+def _archive_read_version(conn, *, pinned=False):
+    token = _db_state_token(conn, pinned=pinned)
     if token is not None and token[0] == "topics-v1":
         # The revision is scoped to tracked topic data. The archive captures
         # external titles separately and compares inside and outside a write.
@@ -373,19 +375,14 @@ def archive_connection():
 
 
 def _archive_topic_records(conn, max_rows):
-    try:
-        conn.execute("BEGIN")
-        records = _sqlite_fetch_rows(
-            conn, "SELECT sid,origin,root_sid,topic_title,user_named FROM continuation_topics LIMIT ?",
-            (max_rows + 1,), ("sid", "origin", "root_sid", "topic_title", "user_named"),
-        )
-        indexed = _sqlite_fetch_rows(
-            conn, "SELECT sid,continuation_origin FROM session_meta WHERE continuation_origin!='' LIMIT ?",
-            (max_rows + 1,), ("sid", "continuation_origin"),
-        )
-    finally:
-        if conn.in_transaction:
-            conn.rollback()
+    records = _sqlite_fetch_rows(
+        conn, "SELECT sid,origin,root_sid,topic_title,user_named FROM continuation_topics LIMIT ?",
+        (max_rows + 1,), ("sid", "origin", "root_sid", "topic_title", "user_named"),
+    )
+    indexed = _sqlite_fetch_rows(
+        conn, "SELECT sid,continuation_origin FROM session_meta WHERE continuation_origin!='' LIMIT ?",
+        (max_rows + 1,), ("sid", "continuation_origin"),
+    )
     if len(records) > max_rows or len(indexed) > max_rows:
         return None
     by_sid = {sid: (origin, root, title, named) for sid, origin, root, title, named in records}
@@ -418,13 +415,20 @@ def archive_projection_inputs(conn, *, max_rows, max_native_roots=32, diagnostic
             if isinstance(value, dict) and (name := value.get('title') or value.get('agent_nickname')):
                 fallback.setdefault(sid, name)
         for attempt in range(2):
-            version = _archive_read_version(conn)
-            # After replacement, an older connection may still read the
-            # previous inode. Reuse only on the connection that read the cut.
-            owner, cached_version, snapshot = _ARCHIVE_TOPIC_SNAPSHOT
-            reused = owner is conn and cached_version == version
+            # A replaced database can leave an older reader on its previous
+            # inode. Reuse only on the connection that read the cut.
+            owner, version, snapshot = _ARCHIVE_TOPIC_SNAPSHOT
+            reused = owner is conn and _archive_read_version(conn) == version
             if not reused:
-                snapshot = _archive_topic_records(conn, max_rows)
+                conn.execute("BEGIN")
+                try:
+                    # The revision SELECT establishes the same SQLite
+                    # snapshot that supplies records. A commit before it
+                    # is in the cut and need not force a second bulk read.
+                    version = _archive_read_version(conn, pinned=True)
+                    snapshot = _archive_topic_records(conn, max_rows)
+                finally:
+                    conn.rollback()
             if snapshot is None:
                 return unavailable("row_limit")
             by_sid, indexed, linked_roots, edges = snapshot
