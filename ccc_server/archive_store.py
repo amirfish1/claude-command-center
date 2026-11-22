@@ -1124,17 +1124,33 @@ class SidebarHistoryIndex:
 
 
 def _sidebar_history_inventory(con, key, max_rows):
-    # Batch the bounded cut inside SQLite. Stepping every row in Python
-    # repeatedly reacquires the GIL during a concurrent preview or startup.
-    records = _sqlite_fetch_rows(
-        con, 'SELECT sid, identity, parent, digest FROM rows '
-        'WHERE variant=? ORDER BY position,rowid LIMIT ?',
-        (key, max_rows + 1), ('sid', 'identity', 'parent', 'digest'),
+    # Batch the bounded cut without asking SQLite to JSON-escape every
+    # identity (already JSON) and Python to decode that second layer.
+    columns = ('sid', 'identity', 'parent', 'digest')
+    query = ('SELECT sid, identity, parent, digest FROM rows '
+             'WHERE variant=? ORDER BY position,rowid LIMIT ?')
+    params = (key, max_rows + 1)
+    fields = ', '.join(
+        f"group_concat(CASE WHEN typeof({column}) = 'text' THEN {column} END, char(0))"
+        for column in columns
     )
-    if not records or len(records) > max_rows:
+    nontext = ' OR '.join(f"typeof({column}) != 'text'" for column in columns)
+    count, has_nontext, *packed = con.execute(
+        f'SELECT count(*), max({nontext}), {fields} FROM ({query})', params,
+    ).fetchone()
+    if not count or count > max_rows:
         return None
+    records = None
+    if not has_nontext:
+        values = [column.split('\0') for column in packed]
+        if all(len(column) == count for column in values):
+            records = tuple(zip(*values))
+    # Each selected column is text in the current store. Fall back to the
+    # typed reader on a legacy scalar or an embedded separator.
+    if records is None:
+        records = tuple(_sqlite_fetch_rows(con, query, params, columns))
     identities = {sid for sid, _, _, _ in records if sid and not sid.startswith('#')}
-    return tuple(records) if len(identities) == len(records) else None
+    return records if len(identities) == count else None
 
 
 def _sidebar_history_reader(con, stamp, records, key, schema_version, build_id):

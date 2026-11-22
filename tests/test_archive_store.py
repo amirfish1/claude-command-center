@@ -827,3 +827,15 @@ def test_sidebar_history_cut_keeps_candidate_bodies_in_the_ordered_inventory_cut
 
     with store.sidebar_history_cut(target, 'base', **{**criteria, 'max_rows': 3}) as view:
         assert view is None
+
+
+@pytest.mark.parametrize('parent', ['parent\0id', b'\xff', None])
+def test_sidebar_history_inventory_preserves_values_outside_text_batch(parent):
+    with closing(sqlite3.connect(':memory:')) as con:
+        con.execute('CREATE TABLE rows (variant, position, sid, identity, parent, digest)')
+        rows = [('child', 'child-identity', parent, 'child-digest'),
+                ('parent', 'parent-identity', '', 'parent-digest')]
+        con.execute('INSERT INTO rows VALUES (?, ?, ?, ?, ?, ?)', ('base', 1, *rows[1]))
+        con.execute('INSERT INTO rows VALUES (?, ?, ?, ?, ?, ?)', ('base', 0, *rows[0]))
+
+        assert store._sidebar_history_inventory(con, 'base', 2) == tuple(rows)
