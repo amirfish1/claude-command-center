@@ -73,7 +73,12 @@
   };
   const readPackedRows = bytes => {
     if (!(bytes instanceof ArrayBuffer) || !bytes.byteLength || bytes.byteLength > maxBytes) return null;
-    const [layouts, encodedRows] = JSON.parse(new TextDecoder('utf-8', {fatal:true}).decode(bytes));
+    const packed = JSON.parse(new TextDecoder('utf-8', {fatal:true}).decode(bytes));
+    if (!packed || packed.delta || packed.initial) return null;
+    // Older snapshots store the layout pair. A complete boot response can
+    // be stored directly, without serializing its decoded rows again.
+    const [layouts, encodedRows] = Array.isArray(packed)
+      ? packed : [packed.row_layouts, packed.conversations];
     if (!Array.isArray(layouts) || !Array.isArray(encodedRows) || encodedRows.length > maxRows
         || layouts.some(keys => !Array.isArray(keys)
           || keys.some(key => typeof key !== 'string' || key === '__proto__'))) return null;
@@ -210,9 +215,12 @@
         const writeFull = () => {
           // The All feed already negotiated shared row layouts. Preserve
           // that format when a coalesced or oversized delta needs its own base.
-          const layouts = packed || (windowName === 'all' ? packRows(rows) : null);
-          const encoded = layouts ? new TextEncoder().encode(JSON.stringify(layouts)) : null;
-          const storage = encoded ? {packedRows:encoded.buffer} : {rowsJson:JSON.stringify(rows)};
+          let encoded = packed instanceof ArrayBuffer ? packed : null;
+          if (!encoded) {
+            const layouts = packed || (windowName === 'all' ? packRows(rows) : null);
+            if (layouts) encoded = new TextEncoder().encode(JSON.stringify(layouts)).buffer;
+          }
+          const storage = encoded ? {packedRows:encoded} : {rowsJson:JSON.stringify(rows)};
           const bytes = encoded ? encoded.byteLength : 2 * storage.rowsJson.length;
           if (bytes > maxBytes) return;
           store.put({...metadata, ...storage, bytes, at}, 'last');
@@ -263,6 +271,18 @@
     else window.addEventListener('ccc:archive-settled', arm, {once:true});
   };
   header.then(value => { if (!value) startRecent(); });
+  const parseFullResponse = async response => {
+    if (windowName !== 'all') return response.json();
+    const bytes = await response.arrayBuffer();
+    const payload = JSON.parse(new TextDecoder().decode(bytes));
+    // An early response for a different view may never be consumed. Keep
+    // the extra buffer only when the complete-list loader has picked it up.
+    if (snapshot.consumed && !payload?.delta && !payload?.initial && Array.isArray(payload?.row_layouts)
+        && bytes.byteLength <= maxBytes) {
+      response._cccArchivePackedBytes = bytes;
+    }
+    return payload;
+  };
   snapshot = {read, save, url:fullUrl, recentStart, startRecent,
     cancelRecent() {
       snapshot.recentCancelled = true;
@@ -291,7 +311,7 @@
       if (response.ok && response.status !== 304) {
         // Drain the early response while the application initializes. Leaving
         // it unread behind the preview paint can stall a large full reply.
-        body = response._cccArchiveParsedBody = response.json();
+        body = response._cccArchiveParsedBody = parseFullResponse(response);
         body.finally(() => clearTimeout(timeout)).catch(() => {});
       }
       const base = await read;
@@ -299,6 +319,7 @@
       // An unconditional full response needs no saved base.
       if (value && (!base || base.etag !== value.etag || base.delta !== value.delta
           || base.at !== value.at || (savedOrder && base.order !== savedOrder))) {
+        body?.then(() => { delete response._cccArchivePackedBytes; }, () => {});
         startRecent(); return null;
       }
       if (savedOrder) response._cccArchiveSavedOrder = savedOrder;

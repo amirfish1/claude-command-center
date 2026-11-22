@@ -100,6 +100,22 @@ test('All history requests reconstruct ordered rows from shared layouts before c
   assert.equal(invalid.state._archiveAllData.size,0);
 });
 
+test('the complete-list loader transfers the early packed buffer to the snapshot save', async () => {
+  const url = '/api/conversations/list?window=all&stale_ok=1';
+  const payload = {
+    row_layouts:[['session_id']], conversations:[[0, ['recent']]], delta_token:'current',
+  };
+  const bytes = new TextEncoder().encode(JSON.stringify(payload)).buffer;
+  const response = reply(payload);
+  response._cccArchiveParsedBody = Promise.resolve(payload);
+  response._cccArchivePackedBytes = bytes;
+  const f = setup({snapshot:{url}, early:Promise.resolve(response)});
+  const loaded = await f.context.loadArchiveAll({window:'all'});
+  assert.equal(loaded[0].session_id,'recent');
+  assert.equal(f.savedLayouts[0],bytes);
+  assert.equal(response._cccArchivePackedBytes,undefined);
+});
+
 test('a saved-order delta merges against its validated base and persists the full order', async () => {
   const order = 'a'.repeat(64);
   const snapshot = {url:fullUrl, rows, delta:'old', order};
@@ -286,6 +302,11 @@ test('superseding an early preview aborts it without a replacement request and r
   assert.equal(metric.detail.settle_delay_ms,500,'later handler delay remains visible');
 });
 
+const allPackedBody = JSON.stringify({
+  row_layouts:[['session_id', 'name'], ['session_id']],
+  conversations:[[0, ['recent', 'שלום']], [1, ['older']]],
+  delta_token:'valid',
+}, null, 1);
 let browser, server, origin, slowPreview=false, coldFullFailure='';
 before(async () => {
   server = http.createServer((req,res) => {
@@ -303,6 +324,9 @@ before(async () => {
         res.on('close',()=>clearTimeout(timer));return;
       }
       if (req.url.includes('since=valid')) {res.writeHead(304);res.end();return;}
+      if (req.url.includes('row_layouts=1') && req.url.includes('window=all')) {
+        res.setHeader('Content-Type','application/json');res.end(allPackedBody);return;
+      }
       res.setHeader('Content-Type','application/json');res.end(JSON.stringify({conversations:rows}));return;
     }
     res.setHeader('Content-Type','text/html');res.end('<script src="/archive-boot.js"></script>');
@@ -395,6 +419,41 @@ test('All reload validates a packed UTF-8 base after applying an ordered patch',
       return {rows:value?.rows, status:(await h.fetch)?.status};
     });
     assert.deepEqual(state,{rows:[{session_id:'older',name:'updated'},{session_id:'recent',name:'שלום'}],status:304});
+  } finally {await context.close();}
+});
+
+test('All startup stores its original packed response bytes and restores them on reload', async () => {
+  const context = await browser.createBrowserContext(), page = await context.newPage();
+  try {
+    await page.evaluateOnNewDocument(() => {
+      localStorage.setItem('ccc-archive-window', 'all');
+      window.addEventListener('DOMContentLoaded', () => {
+        window.__cccArchiveSnapshot.consumed = true;
+      }, {once:true});
+    });
+    await page.goto(origin, {waitUntil:'load'});
+    const original = await page.evaluate(async () => {
+      const snapshot = window.__cccArchiveSnapshot;
+      const response = await snapshot.fetch;
+      const payload = await response._cccArchiveParsedBody;
+      const bytes = response._cccArchivePackedBytes;
+      window.__cccArchiveSettled = true;
+      const rows = [{session_id:'recent',name:'שלום'}, {session_id:'older'}];
+      snapshot.save({url:snapshot.url, delta:payload.delta_token, rows}, null, bytes);
+      return new TextDecoder().decode(bytes);
+    });
+    assert.equal(original,allPackedBody);
+    await waitForSnapshot(page, 'valid', 'last', 'all');
+    await page.reload({waitUntil:'load'});
+    const restored = await page.evaluate(async () => {
+      const snapshot = window.__cccArchiveSnapshot;
+      const saved = await snapshot.read;
+      return {rows:saved?.rows, bytes:saved?.bytes, status:(await snapshot.fetch)?.status};
+    });
+    assert.deepEqual(restored,{
+      rows:[{session_id:'recent',name:'שלום'}, {session_id:'older'}],
+      bytes:Buffer.byteLength(allPackedBody), status:304,
+    });
   } finally {await context.close();}
 });
 

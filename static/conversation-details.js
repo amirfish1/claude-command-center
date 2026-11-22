@@ -5080,6 +5080,8 @@
           _perfPaintWaitMs = performance.now() - waitStart;
         }
         let raw = await (r._cccArchiveParsedBody || r.json());
+        let packedBytes = r._cccArchivePackedBytes;
+        if (packedBytes) delete r._cccArchivePackedBytes;
         let d = decodeRows(raw);
         _perfBodyMs = performance.now() - _perfHdrAt - _perfPaintWaitMs;
         let _merged = null;
@@ -5103,6 +5105,7 @@
             etag = r2.headers.get('ETag');
             _perfLen = parseInt(r2.headers.get('content-length') || '0', 10) || 0;
             raw = await r2.json();
+            packedBytes = null;
             d = decodeRows(raw);
           }
         }
@@ -5156,7 +5159,8 @@
               ids:d.same_order ? null : Object.hasOwn(d, 'order_spans')
                 ? _merged.map(row => String(row.session_id || row.id)) : d.ids,
               changes: d.conversations} : null,
-            !_merged && !d.delta && raw.row_layouts ? [raw.row_layouts, raw.conversations] : null);
+            !_merged && !d.delta && raw.row_layouts
+              ? packedBytes || [raw.row_layouts, raw.conversations] : null);
         }
         if (typeof opts.onValidated === 'function') opts.onValidated();
         if (typeof opts.onPage === 'function') opts.onPage(d);
