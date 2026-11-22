@@ -1,0 +1,1 @@
+- Avoid unnecessary sidebar layout measurements while opening the desktop dashboard.

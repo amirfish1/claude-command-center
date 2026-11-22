@@ -17,15 +17,18 @@
     if (!sidebar || typeof root.ResizeObserver !== 'function') return;
     var mq = root.matchMedia ? root.matchMedia(DESKTOP_QUERY) : null;
     var last = null;
+    var width = 0;
     function apply() {
-      var next = isNarrow(sidebar.getBoundingClientRect().width, mq ? mq.matches : true);
+      var next = isNarrow(width, mq ? mq.matches : true);
       if (next === last) return;
       last = next;
       sidebar.classList.toggle('is-narrow', next);
     }
-    new root.ResizeObserver(apply).observe(sidebar);
+    new root.ResizeObserver(function (entries) {
+      width = entries[0]?.borderBoxSize?.[0]?.inlineSize ?? sidebar.getBoundingClientRect().width;
+      apply();
+    }).observe(sidebar, { box: 'border-box' });
     if (mq && mq.addEventListener) mq.addEventListener('change', apply);
-    apply();
   }
 
   if (typeof module !== 'undefined' && module.exports) {

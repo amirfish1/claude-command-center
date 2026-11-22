@@ -56091,7 +56091,7 @@
   let measuring = false;
   // Layout work happens only on view, size and header changes, never per scroll.
   const measure = () => {
-    if (measuring) return;
+    if (measuring || (!query.matches && !body.classList.contains('mobile-home-scrollaway'))) return;
     measuring = true;
     try {
       const top = list.scrollTop;
@@ -56132,7 +56132,9 @@
   window.addEventListener('resize', remeasure);
   // Only view switches matter; other body classes change often and a
   // remeasure mid-flick would end the momentum this mode protects.
-  const viewKey = () => [body.classList.contains('mobile-show-main'), body.classList.contains('ccc-simple-mode'), panel.getClientRects().length > 0].join();
+  const viewKey = () => query.matches
+    ? [body.classList.contains('mobile-show-main'), body.classList.contains('ccc-simple-mode'), panel.getClientRects().length > 0].join()
+    : '';
   let lastViewKey = viewKey();
   new MutationObserver(() => {
     if (measuring) return;
