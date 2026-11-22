@@ -316,7 +316,7 @@
       if (savedOrder) target += '&saved_order=' + savedOrder;
       if (windowName === 'all') target += '&row_layouts=1&order_spans=1';
       const headers = value?.etag ? {'If-None-Match':value.etag} : {};
-      if (windowName === 'all') headers['X-CCC-Abort-On-Disconnect'] = '1';
+      headers['X-CCC-Abort-On-Disconnect'] = '1';
       const matchesBase = base => base && base.etag === value.etag && base.delta === value.delta
         && base.at === value.at && (!savedOrder || base.order === savedOrder);
       // Start from the committed hint while IndexedDB opens. A concurrent

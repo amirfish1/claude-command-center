@@ -4991,8 +4991,7 @@
         try {
           const init = { signal: controller.signal };
           if (prevEtag) init.headers = { 'If-None-Match': prevEtag };
-          if (!opts.initial && !opts.includePrs && opts.staleOk !== false
-              && params.get('window') === 'all') {
+          if (!opts.initial && !opts.includePrs && opts.staleOk !== false) {
             (init.headers ||= {})['X-CCC-Abort-On-Disconnect'] = '1';
           }
           if (!sharedState._archiveBootstrapConsumed && url === sharedState._archiveBootstrapUrl && !prevEtag) {

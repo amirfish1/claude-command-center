@@ -437,6 +437,77 @@ def test_all_list_disconnect_abandons_only_opted_in_reads(monkeypatch, tmp_path,
     assert dispositions == [200, 'abandoned']
 
 
+@pytest.mark.parametrize('stage', ['source', 'projection'])
+def test_bounded_list_disconnect_leaves_versioned_body_available_to_next_reader(
+        monkeypatch, tmp_path, stage):
+    import http.client
+    import server
+    from ccc_server import continuation_topics
+
+    entered = threading.Event()
+    disconnected = threading.Event()
+    topic_work = []
+    dispositions = []
+    rows = [{'session_id': 'row', 'pinned': True}]
+
+    def pause_first_read():
+        if not entered.is_set():
+            entered.set()
+            assert disconnected.wait(5)
+
+    def source(*args, **kwargs):
+        if stage == 'source':
+            pause_first_read()
+        return rows, True, 42
+
+    original = server._archive_list_project_row
+
+    def project(*args, **kwargs):
+        if stage == 'projection':
+            pause_first_read()
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_DISK_DIR', tmp_path)
+    monkeypatch.setattr(server, '_archive_list_disk_candidate', lambda *a: None)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_CACHE', server.ByteBudgetCache(1 << 20, 8))
+    monkeypatch.setattr(server, '_archive_list_source_rows_cached', source)
+    monkeypatch.setattr(server, '_archive_list_delta_state', lambda *a: None)
+    monkeypatch.setattr(server, '_archive_list_project_row', project)
+    monkeypatch.setattr(continuation_topics, 'attach_topics',
+                        lambda *a, **kw: topic_work.append(True))
+    monkeypatch.setattr(server, 'record_diag',
+                        lambda kind, ms, detail: dispositions.append(detail['status'])
+                        if kind == 'list_server' else None)
+    url = '/api/conversations/list?window=7d&stale_ok=1'
+    httpd = server.http.server.ThreadingHTTPServer(('127.0.0.1', 0), server.CommandCenterHandler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with socket.create_connection(httpd.server_address, timeout=5) as client:
+            client.sendall((f'GET {url} HTTP/1.1\r\nHost: localhost\r\n'
+                            'X-CCC-Abort-On-Disconnect: 1\r\n\r\n').encode())
+            assert entered.wait(5)
+            client.shutdown(socket.SHUT_WR)
+            disconnected.set()
+            assert client.recv(1) == b''
+        connection = http.client.HTTPConnection(*httpd.server_address, timeout=5)
+        try:
+            connection.request('GET', url, headers={'X-CCC-Abort-On-Disconnect': '1'})
+            response = connection.getresponse()
+            assert response.status == 200
+            body = json.loads(response.read())
+            assert [row['session_id'] for row in body['conversations']] == ['row']
+        finally:
+            connection.close()
+    finally:
+        disconnected.set()
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+    assert topic_work == [True]
+    assert dispositions == ['abandoned', 200]
+
+
 def test_history_encoding_builds_gzip_only_when_requested_or_needed(monkeypatch):
     from ccc_server import list_encoding
 

@@ -20405,14 +20405,15 @@ def _archive_list_projection_diag(window, key, hit):
             "budget_bytes": cache.max_bytes}
 
 
-def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=None, phases=None):
+def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=None, phases=None,
+                                 check_client=None):
     row_overlays = delta.get("row_overlays") if delta else None
     if not delta or not delta.get("extra"):
         # Unversioned All reads sweep the cold store. Reuse matching templates
         # without letting that sweep evict the scoped sidebar's working set.
         return _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
                                      _retain_templates=window != "all" or bool(delta),
-                                     _row_overlays=row_overlays)
+                                     _row_overlays=row_overlays, check_client=check_client)
     window = _archive_list_window(window)
     now = time.time() if now is None else now
     try:
@@ -20422,7 +20423,7 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
                          for sid in resumes}
     except Exception:
         return _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
-                                     _row_overlays=row_overlays)
+                                     _row_overlays=row_overlays, check_client=check_client)
     parents = _session_graph.parent_snapshot()
     selected = _archive_list_window_rows(
         rows, _archive_list_window_cutoff(window, now=now), ideas, parents)
@@ -20434,7 +20435,7 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
     if (not all(ids) or len(set(ids)) != len(ids) or not all(overlay_ids)
             or len(set(overlay_ids)) != len(overlay_ids) or base_ids.intersection(overlay_ids)):
         return _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
-                                     _row_overlays=row_overlays)
+                                     _row_overlays=row_overlays, check_client=check_client)
     # These two fields are copied by projection, not used by topic/driver
     # resolution. Window membership is checked separately on every request.
     # Keep presence in the guard, and every other overlay field unchanged.
@@ -20459,7 +20460,9 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
     if entry is None:
         payload = _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
                                        _inputs=(resumes, parents, ideas, selected),
-                                       _row_overlays=row_overlays)
+                                       _row_overlays=row_overlays, check_client=check_client)
+        if check_client is not None:
+            check_client()
         entry = _list_replay.encode_rows(payload["conversations"], overlay_set)
         raw = entry[0]
         if projection_ctx is not None:
@@ -37635,7 +37638,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 ):
                     packed_version = _ARCHIVE_SIDEBAR_PACKED_VERSION
             check_client = (self._check_archive_list_client
-                            if window == "all" and not initial and stale_ok
+                            if not initial and stale_ok
                             and self.headers.get("X-CCC-Abort-On-Disconnect") == "1"
                             and not phone_access.is_remote_request(self.client_address[0], self.headers)
                             else None)
@@ -37647,6 +37650,10 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             try:
                 rows, from_cache, body_ver = _archive_list_source_rows_cached(
                     cache_options, **source_options)
+                if window != "all" and check_client is not None:
+                    # The source is shared. An abandoned bounded request can
+                    # stop before computing its own delta or projecting rows.
+                    check_client()
             except _ArchiveListClientDisconnected:
                 record_diag("list_server", (time.perf_counter() - _lt0) * 1000.0, {
                     "window": window, "status": "abandoned", "stale_ok": stale_ok, "src": _src_phases,
@@ -37721,7 +37728,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     elif _since_diag == "ok":
                         _since_diag = "unmergeable"
 
-            _check_client = check_client if not body_ver else None
+            _check_client = check_client if window != "all" or not body_ver else None
 
             _packed_history_projection = None
 
@@ -37750,8 +37757,13 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                             return _archive_list_history_projection(
                                 list_cache_key, rows, prepare_history, _payload_phases, _check_client)
                         return prepare_history()
+                    if _check_client is not None:
+                        _check_client()
                     payload = _archive_list_replay_payload(
-                        rows, _delta, window=window, cached=from_cache, phases=_payload_phases)
+                        rows, _delta, window=window, cached=from_cache, phases=_payload_phases,
+                        check_client=_check_client)
+                    if _check_client is not None:
+                        _check_client()
                     if _delta is not None:
                         payload["order_token"] = _archive_list_order_token(
                             [_archive_row_sid(row) for row in payload["conversations"]])
@@ -48462,8 +48474,11 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             status = self._send_archive_list_representation(body, encoding, etag)
             return "delta" if is_delta and status == 200 else status
 
-        raw, gzip_body, etag_val = _archive_list_body_get_or_build(
-            cache_key, window, from_cache, build_payload, snap_ver, diagnostics=diagnostics)
+        try:
+            raw, gzip_body, etag_val = _archive_list_body_get_or_build(
+                cache_key, window, from_cache, build_payload, snap_ver, diagnostics=diagnostics)
+        except _ArchiveListClientDisconnected:
+            return "abandoned"
         return self._send_archive_list_body(raw, gzip_body, etag_val)
 
     def _send_archive_list_body(self, raw, gzip_body, etag_val, extra_headers=()):

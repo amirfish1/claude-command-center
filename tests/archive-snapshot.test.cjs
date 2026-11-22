@@ -245,7 +245,8 @@ test('failed early requests retry normally; mismatched windows and initial reads
     await f.context.loadArchiveAll(opts);
     assert.equal(f.reads.length,1);
     assert.ok(!f.reads[0].url.includes('since='));
-    assert.equal(f.reads[0].init.headers,undefined);
+    if (opts.window) assert.equal(f.reads[0].init.headers['X-CCC-Abort-On-Disconnect'], '1');
+    else assert.equal(f.reads[0].init.headers, undefined);
   }
 });
 
@@ -716,6 +717,17 @@ test('cancelling a superseded preview aborts the actual early response body', as
       try {await body;return 'not aborted';}catch(e){return e.name;}
     }),'AbortError');
   } finally {slowPreview=false;await context.close();}
+});
+
+test('the bounded complete boot request opts into disconnect detection', async () => {
+  const context = await browser.createBrowserContext(), page = await context.newPage();
+  try {
+    const request = page.waitForRequest(r => r.url() === origin + fullUrl);
+    await page.goto(origin, {waitUntil:'domcontentloaded'});
+    assert.equal((await request).headers()['x-ccc-abort-on-disconnect'], '1');
+  } finally {
+    await context.close();
+  }
 });
 
 test('real IndexedDB retains one scoped snapshot and a reload obtains an actual server 304', async () => {
