@@ -941,6 +941,8 @@ document.addEventListener('scroll', () => {
   }
 
   function installConversationInteraction31() {
+    // app.js calls install functions by name; keep the MD action in here.
+    installOpenAssistantMarkdown();
 document.addEventListener('click', async (ev) => {
     const btn = ev.target.closest('[data-copy-assistant-message]');
     if (!btn) return;
@@ -971,7 +973,7 @@ document.addEventListener('click', async (ev) => {
   });
   }
 
-  function installConversationInteraction31b() {
+  function installOpenAssistantMarkdown() {
 document.addEventListener('click', async (ev) => {
     const btn = ev.target.closest('[data-open-assistant-md]');
     if (!btn) return;
@@ -4040,7 +4042,6 @@ document.addEventListener('keydown', (ev) => {
     installConversationInteraction29();
     installConversationInteraction30();
     installConversationInteraction31();
-    installConversationInteraction31b();
     installConversationInteraction32();
     installConversationInteraction33();
     installConversationInteraction34();
