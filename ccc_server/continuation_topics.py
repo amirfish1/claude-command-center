@@ -31,6 +31,7 @@ _TOPIC_CACHE: dict[str, object] = {'token': None, 'entries': {}}
 _REVISION_CACHE: dict[str, object] = {'token': None, 'value': 0}
 _PRECISE_TOKENS = OrderedDict()
 _ARCHIVE_TOPIC_SNAPSHOT = (None, None, None)
+_ARCHIVE_TOPIC_CONNECTION = (None, None)
 _NATIVE_TITLE_STATE = {'data': None, 'generation': 0}
 _TRACKED_TABLES = {
     'continuation_topics': ('sid', 'origin', 'root_sid', 'topic_title', 'user_named'),
@@ -337,6 +338,38 @@ def _archive_read_version(conn):
         # external titles separately and compares inside and outside a write.
         return token[:5]
     return conn.total_changes, conn.execute("PRAGMA data_version").fetchone()[0]
+
+
+def archive_connection():
+    """Reuse the topic database connection under the caller's archive lock."""
+    global _ARCHIVE_TOPIC_CONNECTION
+    database = Path(_sg._get_db_path()).resolve()
+
+    def identity():
+        stat = database.stat()
+        return database, stat.st_dev, stat.st_ino
+
+    current = identity()
+    previous, conn = _ARCHIVE_TOPIC_CONNECTION
+    if current == previous:
+        return _connection(conn)
+    _ARCHIVE_TOPIC_CONNECTION = (None, None)
+    if conn is not None:
+        conn.close()
+    # The ship index owns creation and journaling. A missing or contended
+    # database leaves the guarded All response on its ordinary fallback.
+    conn = sqlite3.connect(database.as_uri() + "?mode=rw", uri=True,
+                           check_same_thread=False, timeout=0.05)
+    try:
+        conn.execute("PRAGMA synchronous=NORMAL")
+        _connection(conn)
+        if identity() != current:
+            raise OSError("Topic database replaced while opening the archive connection")
+    except BaseException:
+        conn.close()
+        raise
+    _ARCHIVE_TOPIC_CONNECTION = current, conn
+    return conn
 
 
 def _archive_topic_records(conn, max_rows):

@@ -883,6 +883,50 @@ def test_archive_projection_reuses_committed_records_but_refreshes_titles(store,
     assert ('new-child', root) in edges
 
 
+def test_archive_topic_connection_reuses_records_across_request_threads_and_reopens(store, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from contextlib import closing
+    from pathlib import Path
+
+    database = Path(store.execute("PRAGMA database_list").fetchone()[2])
+    monkeypatch.setattr(topics._sg, '_get_db_path', lambda: database)
+    monkeypatch.setattr(topics, '_ARCHIVE_TOPIC_CONNECTION', (None, None))
+    monkeypatch.setattr(topics, '_ARCHIVE_TOPIC_SNAPSHOT', (None, None, None))
+    with store:
+        store.execute("INSERT INTO session_meta VALUES ('child', 'first')")
+
+    def capture():
+        details = {}
+        conn = topics.archive_connection()
+        inputs, _, _ = topics.archive_projection_inputs(conn, max_rows=20, diagnostics=details)
+        return conn, inputs[1], details["topics_snapshot_reused"]
+
+    try:
+        # Each executor owns a different request thread. The server's archive
+        # lock serializes their use of the shared connection.
+        with ThreadPoolExecutor(max_workers=1) as first, ThreadPoolExecutor(max_workers=1) as second:
+            conn, indexed, reused = first.submit(capture).result()
+            assert indexed == {'child': 'first'}
+            assert not reused
+            assert second.submit(capture).result() == (conn, indexed, True)
+            with store:
+                store.execute("UPDATE session_meta SET continuation_origin='renamed'")
+            assert second.submit(capture).result() == (conn, {'child': 'renamed'}, False)
+
+            replacement = database.with_name('replacement.sqlite3')
+            with closing(sqlite3.connect(replacement)) as new_database, new_database:
+                new_database.execute('CREATE TABLE session_meta (sid TEXT, continuation_origin TEXT)')
+                new_database.execute("INSERT INTO session_meta VALUES ('child', 'replacement')")
+            replacement.replace(database)
+            new_conn, indexed, reused = first.submit(capture).result()
+            assert new_conn is not conn
+            assert indexed == {'child': 'replacement'}
+            assert not reused
+    finally:
+        if topics._ARCHIVE_TOPIC_CONNECTION[1] is not None:
+            topics._ARCHIVE_TOPIC_CONNECTION[1].close()
+
+
 def test_archive_projection_retries_when_topic_sources_change_during_capture(store, monkeypatch):
     root = '11111111-1111-4111-8111-111111111111'
     topics.attach_topics([row(root), row('child', origin=root)], names={})

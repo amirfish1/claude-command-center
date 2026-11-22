@@ -19282,7 +19282,7 @@ def _archive_history_read_cut(key, cache_options, now, *, phases=None, check_cli
         with _archive_history_timing(phases, "sidecars"):
             sidecars = _capture_archive_history_sidecars(now)
         with _archive_history_timing(phases, "topics"):
-            connection = topic_reader if topic_reader is not None else continuation_topics._connection()
+            connection = topic_reader if topic_reader is not None else continuation_topics.archive_connection()
             topics = continuation_topics.archive_projection_inputs(
                 connection, max_rows=archive_history_layer.MAX_ROWS, diagnostics=phases)
         if topics is None:
@@ -19465,7 +19465,7 @@ def _archive_history_scope(key):
     return f"{key}:{_ARCHIVE_RESPONSE_CACHE_BUILD_ID}:{_ARCHIVE_SIDEBAR_PACKED_VERSION}"
 
 
-def _archive_history_publish_basis(key, cache_options, phases, *, captured_hot=None, topic_reader=None):
+def _archive_history_publish_basis(key, cache_options, phases, *, topic_reader, captured_hot=None):
     """Publish a guarded basis without running foreground ticket or topic effects."""
     from ccc_server import archive_history_layer as layer
 
