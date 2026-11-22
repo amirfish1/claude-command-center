@@ -97,7 +97,7 @@ test('the automatic prompt and its transcript write never count as an agent resp
     await fixture(page);
     await page.evaluate(async () => {
       await tick(); clock += 1000;
-      addEvent('user_text peer-message', 'Announced from: CCC silence check\n\n?');
+      addEvent('user_text peer-message legacy-silence-check', '?');
       liveStatus.transcriptMtime = clock / 1000;
       await tick(300000);
     });

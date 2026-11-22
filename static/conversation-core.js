@@ -12283,7 +12283,8 @@
       const node = stamped[i];
       const userText = node.querySelector('.user-msg');
       const text = userText && (userText.dataset.rawText || userText.textContent || '').trim();
-      const autoCheck = /^Announced from: CCC silence check\s+\?$/.test(text || '')
+      const autoCheck = node.matches('.legacy-silence-check')
+        || /^Announced from: CCC silence check\s+\?$/.test(text || '')
         || (text === '?' && node.querySelector('.peer-sender-name')?.textContent === 'CCC silence check');
       if (autoCheck && !node.matches('.pending')) transcriptNudgeAt = Math.max(transcriptNudgeAt, ep || 0);
       if (node.matches('.event.assistant, .event.thinking, .event.tool_use, .event.tool_result')

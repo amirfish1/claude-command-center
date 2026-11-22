@@ -48,6 +48,8 @@ test('worker instructions fold without losing text or collapsing ordinary and pe
           { type: 'user_text', line: 990002, text: normal },
           { type: 'user_text', line: 990003, text: prompt, peer: { from_session: 'other-session', from_name: 'Reviewer' } },
           { type: 'user_text', line: 990004, text: 'Drain the EXAMPLE-TOOLS WatchTower queue documentation needs updating.' },
+          { type: 'user_text', line: 990005, text: 'Announced from: CCC silence check\n\n?' },
+          { type: 'user_text', line: 990006, text: 'Announced from: CCC silence check\n\n? Is this expected?' },
         ];
         h.renderConversationEvents(events, paneId, { initialLoad: true });
         const row = view.querySelector('.worker-instructions-event');
@@ -58,10 +60,16 @@ test('worker instructions fold without losing text or collapsing ordinary and pe
           raw: row.querySelector('.user-msg').dataset.rawText === prompt, full: body.textContent === prompt,
           escaped: !body.querySelector('example'), height: row.getBoundingClientRect().height,
           ordinary: [...view.querySelectorAll('.user-msg')].some(el => el.dataset.rawText === normal && !el.querySelector('details')),
+          silenceCheck: [...view.querySelectorAll('.peer-message .user-msg')].some(el =>
+            el.dataset.rawText === '?' && el.querySelector('.peer-sender-name')?.textContent === 'CCC silence check'
+            && !el.textContent.includes('Announced from:')),
+          similarText: [...view.querySelectorAll('.user-msg')].some(el =>
+            el.dataset.rawText.endsWith('? Is this expected?') && el.textContent.includes('Announced from:')),
           summary: details.querySelector('summary').textContent };
       }, codex);
       assert.deepEqual(result, { cards: 1, closed: true, raw: true, full: true, escaped: true,
-        height: result.height, ordinary: true, summary: 'EXAMPLE-TOOLS worker instructions' });
+        height: result.height, ordinary: true, silenceCheck: true, similarText: true,
+        summary: 'EXAMPLE-TOOLS worker instructions' });
       assert.ok(result.height <= 120, JSON.stringify({width, codex, result}));
       const summary = '.worker-instructions-card > summary';
       await page.focus(summary);

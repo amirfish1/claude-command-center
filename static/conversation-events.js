@@ -167,7 +167,14 @@
       // the envelope identifies an external session or service.
       const authorKind = sourceEvent.attribution && sourceEvent.attribution.author && sourceEvent.attribution.author.kind;
       const ordinaryInput = authorKind === 'human' || authorKind === 'unknown';
-      const ev = ordinaryInput ? { ...sourceEvent, peer: null } : sourceEvent;
+      // Old transcript rows can contain the silence check's delivery header
+      // without separate sender metadata. Normalize this exact message for display.
+      const legacySilenceCheck = sourceEvent.type === 'user_text'
+        && authorKind !== 'human'
+        && /^Announced from: CCC silence check\r?\n\r?\n\?\s*$/.test(sourceEvent.text || '');
+      const ev = legacySilenceCheck
+        ? { ...sourceEvent, text: '?', peer: sourceEvent.peer || { name: 'CCC silence check' } }
+        : ordinaryInput ? { ...sourceEvent, peer: null } : sourceEvent;
       if (isRoutineCodexCoordination(ev)) continue;
       // Provisional (live_key) events never carry a real jsonl `line` — they
       // upsert in place (see _upsertProvisionalNode below) instead of taking
@@ -296,7 +303,7 @@
       }
 
       // Make the first user message sticky at the top
-      if (ev.type === 'user_text' && !state._firstUserMsgRendered) {
+      if (ev.type === 'user_text' && !legacySilenceCheck && !state._firstUserMsgRendered) {
         state._firstUserMsgRendered = true;
         // The first user message lives permanently in the sticky header as
         // "Original ask" — hide its in-conversation bubble so we don't show
@@ -1019,7 +1026,9 @@
           cleanedText = _stripKimiControlXml(cleanedText);
           if (!String(cleanedText || '').trim()) div.classList.add('kimi-xml-only');
         }
-        const bridgeSenderHtml = whatsappBridgeSenderHtml(ev) + peerSenderHtml(ev);
+        if (legacySilenceCheck) div.classList.add('legacy-silence-check');
+        const bridgeSenderHtml = whatsappBridgeSenderHtml(ev)
+          + peerSenderHtml(legacySilenceCheck && ordinaryInput ? { peer: ev.peer } : ev);
         if (ev.peer) div.classList.add('peer-message');
         if (ev.skill) div.classList.add('skill-loaded-event');
         const notification = parseTaskNotificationBlock(cleanedText);
