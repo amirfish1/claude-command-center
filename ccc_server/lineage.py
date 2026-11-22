@@ -33,6 +33,7 @@ import json
 import os
 import sqlite3
 import tempfile
+from collections.abc import Callable
 
 from ccc_server import test_isolation_active
 from ccc_server import report_routes as _routes
@@ -136,20 +137,26 @@ def continuation_ancestors_of(conn: sqlite3.Connection, sid: str) -> list[str]:
     return out
 
 
-def latest_successor(conn: sqlite3.Connection, sid: str) -> str:
+def latest_successor(
+    conn: sqlite3.Connection, sid: str, *, eligible: Callable[[str], bool] | None = None,
+) -> str:
     """Walk `continuation_origin` forward (whoever named `sid` as their
     origin, then whoever named THAT session, ...) to the newest member of the
-    chain. Returns `sid` itself if nothing ever continued from it."""
+    chain. With `eligible`, remember only destinations the caller can use,
+    while still walking through unavailable members to their successors."""
     seen = {sid}
     current = sid
+    latest = sid
     for _ in range(MAX_CHAIN_DEPTH):
         children = _sg.continuation_children_of(conn, current)
         nxt = next((c for c in children if c not in seen), "")
         if not nxt:
-            return current
+            break
         seen.add(nxt)
         current = nxt
-    return current
+        if eligible is None or eligible(current):
+            latest = current
+    return latest
 
 
 def continuation_chain_members(conn: sqlite3.Connection, sid: str) -> list[str]:

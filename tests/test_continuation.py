@@ -416,6 +416,43 @@ def test_forward_target_follows_multi_hop_chain(lineage_conn, monkeypatch):
     assert continuation.forward_target("b") == "c"
 
 
+def test_forward_target_skips_missing_transcript_without_erasing_lineage(
+    lineage_conn, monkeypatch, tmp_path,
+):
+    _insert_session_meta(lineage_conn, "old", start_ts=1.0)
+    _insert_session_meta(lineage_conn, "missing", start_ts=2.0, continuation_origin="old")
+    lineage_conn.execute(
+        "INSERT INTO transcripts (path, sid) VALUES (?, ?)",
+        (str(tmp_path / "removed.jsonl"), "missing"),
+    )
+    monkeypatch.setattr(server, "_sessions_state_snapshot", lambda: {})
+
+    assert continuation.forward_target("old") == "old"
+    assert continuation._lineage.latest_successor(lineage_conn, "old") == "missing"
+
+    _insert_session_meta(lineage_conn, "next", start_ts=3.0, continuation_origin="missing")
+    transcript = tmp_path / "next.jsonl"
+    transcript.touch()
+    lineage_conn.execute(
+        "INSERT INTO transcripts (path, sid) VALUES (?, ?)", (str(transcript), "next"),
+    )
+    assert continuation.forward_target("old") == "next"
+
+
+def test_forward_target_keeps_live_successor_with_missing_transcript(
+    lineage_conn, monkeypatch, tmp_path,
+):
+    _insert_session_meta(lineage_conn, "old", start_ts=1.0)
+    _insert_session_meta(lineage_conn, "live", start_ts=2.0, continuation_origin="old")
+    lineage_conn.execute(
+        "INSERT INTO transcripts (path, sid) VALUES (?, ?)",
+        (str(tmp_path / "not-on-disk.jsonl"), "live"),
+    )
+    monkeypatch.setattr(server, "_sessions_state_snapshot", lambda: {"live": {"state": "idle"}})
+
+    assert continuation.forward_target("old") == "live"
+
+
 def test_forward_target_empty_sid_is_noop():
     assert continuation.forward_target("") == ""
 

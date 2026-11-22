@@ -501,13 +501,39 @@ def decide_send_path(query, large_threshold=DEFAULT_LARGE_TOKENS,
     }
 
 
+def _has_delivery_transcript(conn, sid):
+    paths = conn.execute("SELECT path FROM transcripts WHERE sid = ?", (sid,)).fetchall()
+    # Only positive evidence of disappearance can disqualify a successor.
+    if not paths:
+        return True
+    for (path,) in paths:
+        try:
+            os.stat(path)
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except OSError:
+            return True
+        return True
+    # An index entry can lag a moved transcript or a still-live process.
+    state = (_core._sessions_state_snapshot() or {}).get(sid, {}).get("state")
+    return bool(
+        (state and state != "ended")
+        or _core._claude_session_jsonl_path(sid)
+        or _core._resolve_codex_rollout_path(sid)
+        or _core._codex_capture_thread_row(sid)
+    )
+
+
 def _latest_forward_target(sid):
     """Read committed forwards without waiting for a background index writer."""
+    manual = manual_forward_target(sid)
     try:
         conn = _sg._get_connection()
-        return _lineage.latest_successor(conn, manual_forward_target(sid)) or sid
+        return _lineage.latest_successor(
+            conn, manual, eligible=lambda successor: _has_delivery_transcript(conn, successor),
+        )
     except Exception:
-        return manual_forward_target(sid)
+        return manual
 
 
 def forward_target(sid):
