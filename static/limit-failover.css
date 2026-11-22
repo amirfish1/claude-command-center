@@ -17,7 +17,7 @@
 
 .ccc-failover-card {
   pointer-events: auto;
-  background: var(--panel-bg, #1e1f24);
+  background: var(--panel-bg, var(--surface, #1e1f24));
   border: 1px solid var(--border, #33353c);
   border-radius: 12px;
   padding: 12px 14px;
@@ -50,7 +50,7 @@
 
 .ccc-fo-titleblock { flex: 1; min-width: 0; }
 .ccc-fo-title { font-weight: 600; }
-.ccc-fo-subtitle { color: var(--muted, #9a9ba2); font-size: 12px; margin-top: 1px; }
+.ccc-fo-subtitle { color: var(--muted, var(--text-muted, #9a9ba2)); font-size: 12px; margin-top: 1px; }
 .ccc-fo-name {
   background: none; border: none; padding: 0; margin: 0;
   color: inherit; font: inherit; font-weight: 600;
@@ -60,14 +60,14 @@
 .ccc-fo-name:hover { text-decoration-color: currentColor; }
 
 .ccc-fo-x {
-  background: none; border: none; color: var(--muted, #9a9ba2);
+  background: none; border: none; color: var(--muted, var(--text-muted, #9a9ba2));
   font-size: 16px; line-height: 1; padding: 2px 4px; cursor: pointer;
   border-radius: 6px;
 }
 .ccc-fo-x:hover { color: var(--text, #e6e6e9); background: rgba(255,255,255,0.06); }
 
 .ccc-fo-body { margin: 8px 0 2px; color: var(--muted, #b9bac2); }
-.ccc-fo-freenote { margin-top: 6px; font-size: 12px; color: var(--muted, #9a9ba2); }
+.ccc-fo-freenote { margin-top: 6px; font-size: 12px; color: var(--muted, var(--text-muted, #9a9ba2)); }
 .ccc-fo-link {
   background: none; border: none; padding: 0; color: #78aaff;
   font: inherit; cursor: pointer; text-decoration: underline;
@@ -91,7 +91,7 @@
 
 .ccc-fo-always {
   display: flex; align-items: center; gap: 6px;
-  margin-top: 8px; font-size: 12px; color: var(--muted, #9a9ba2);
+  margin-top: 8px; font-size: 12px; color: var(--muted, var(--text-muted, #9a9ba2));
   cursor: pointer; user-select: none;
 }
 .ccc-fo-always input { margin: 0; accent-color: #58c88c; }
@@ -102,7 +102,7 @@
 
 /* Transcript marker row (subtype ccc_free_runtime). */
 .ccc-free-runtime .ccoord-icon { color: #58c88c; }
-.ccc-free-runtime .ccoord-text { color: var(--muted, #9a9ba2); }
+.ccc-free-runtime .ccoord-text { color: var(--muted, var(--text-muted, #9a9ba2)); }
 
 /* Simple-mode: cards sit above the bottom nav rail. */
 @media (max-width: 720px) {
