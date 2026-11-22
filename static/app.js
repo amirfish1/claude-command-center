@@ -55945,18 +55945,20 @@
     };
     unfoldFrame = requestAnimationFrame(step);
   }
+  let revealBands = () => {};
   for (const [kind, label, glyph] of [['search','Search sessions','⌕'], ['new','New session','+']]) {
     const button = document.createElement('button');
     button.type = 'button'; button.className = 'mobile-home-quick mobile-home-' + kind;
     button.setAttribute('aria-label', label); button.textContent = glyph;
     button.addEventListener('click', () => {
       if (kind === 'new') document.getElementById('sidebarNewBtn')?.click();
-      else { setProgress(0); document.getElementById('sidebarSearchBtn')?.click(); document.getElementById('convSearch')?.focus(); }
+      else { setProgress(0); revealBands(); document.getElementById('sidebarSearchBtn')?.click(); document.getElementById('convSearch')?.focus(); }
     });
     title.append(button);
   }
   sidebar.addEventListener('scroll', event => {
     if (!query.matches || document.body.classList.contains('mobile-show-main')) return;
+    if (document.body.classList.contains('mobile-home-scrollaway')) return;
     const scroller = event.target;
     if (!scroller.matches('#convList, #simpleHome, #simpleHistory, .conv-archived-list, [data-role="current-sessions-scroll"], .fq-recent-rows')) return;
     if (document.activeElement?.matches('input,textarea,select')) return;
@@ -55983,6 +55985,126 @@
   new MutationObserver(() => {
     if (document.body.classList.contains('mobile-show-main')) setProgress(0);
   }).observe(document.body, {attributes:true, attributeFilter:['class']});
+
+  // Main session list on phones: the status, workers and new-session bands
+  // are pinned over a spacer at the top of #convList and slide away with it.
+  // Scroll events only move those bands; the list's own box and layers never
+  // change while it scrolls, so iOS momentum is fully native. The fold above
+  // stays for the other phone lists.
+  const list = document.getElementById('convList');
+  const panel = document.getElementById('convListPanel');
+  const brand = sidebar.querySelector('.sidebar-header-brand');
+  if (!list || !panel || !brand) return;
+  const body = document.body;
+  let placed = [];
+  let roof = 0;
+  let spacer = 0;
+  let travel = 0;
+  let shift = -1;
+  const scrollawayBands = () => [sidebar.querySelector('.sidebar-header .mobile-home-status'),
+    sidebar.querySelector('.sidebar-header .worker-activity-line'),
+    sidebar.querySelector(':scope > .new-session-panel')].filter(el => el && el.getClientRects().length);
+  const wanted = () => query.matches && !body.classList.contains('mobile-show-main')
+    && !body.classList.contains('ccc-simple-mode') && panel.getClientRects().length > 0
+    && document.getElementById('todayTray')?.hidden !== false;
+  const leave = () => {
+    body.classList.remove('mobile-home-scrollaway');
+    brand.classList.remove('mobile-home-folded');
+    for (const {el} of placed) {
+      for (const key of ['transform', 'clip-path', '--mhs-top', '--mhs-left', '--mhs-width']) el.style.removeProperty(key);
+      el.inert = false;
+    }
+    placed = [];
+    shift = -1;
+    sidebar.style.removeProperty('--mhs-spacer');
+  };
+  const applyShift = () => {
+    if (!placed.length) return;
+    const focused = document.activeElement !== body && placed.some(({el}) => el.contains(document.activeElement));
+    const next = focused ? 0 : Math.max(0, Math.min(travel, Math.round(list.scrollTop)));
+    if (next === shift) return;
+    shift = next;
+    for (const {el, top, height} of placed) {
+      // Each band slides under the brand's lower edge as the list moves up.
+      const clip = Math.max(0, Math.min(height, roof - (top - next)));
+      el.style.transform = next ? `translate3d(0,${-next}px,0)` : '';
+      el.style.clipPath = clip ? `inset(${clip}px 0 0)` : '';
+      el.inert = clip >= height;
+    }
+    brand.classList.toggle('mobile-home-folded', travel > 0 && next >= travel - 1);
+  };
+  // Search lives in a band: make it focusable; focusin then shows the bands.
+  revealBands = () => { for (const {el} of placed) el.inert = false; };
+  let measuring = false;
+  // Layout work happens only on view, size and header changes, never per scroll.
+  const measure = () => {
+    if (measuring) return;
+    measuring = true;
+    try {
+      const top = list.scrollTop;
+      leave();
+      if (wanted()) {
+        if (progress) {
+          finishFolds();
+          progress = 0;
+          body.classList.remove('mobile-home-collapsed');
+          for (const el of bands()) el.inert = false;
+        }
+        const natural = scrollawayBands().map(el => ({el, rect:el.getBoundingClientRect()}));
+        const panelTop = panel.getBoundingClientRect().top;
+        roof = brand.getBoundingClientRect().bottom;
+        body.classList.add('mobile-home-scrollaway');
+        placed = natural.map(({el, rect}) => {
+          el.style.setProperty('--mhs-top', rect.top + 'px');
+          el.style.setProperty('--mhs-left', rect.left + 'px');
+          el.style.setProperty('--mhs-width', rect.width + 'px');
+          return {el, top:rect.top, height:rect.height};
+        });
+        spacer = Math.max(0, Math.round(panelTop - panel.getBoundingClientRect().top));
+        // Bands stop once the last one is fully under the brand.
+        travel = Math.max(0, Math.ceil(Math.max(...placed.map(({top, height}) => top + height), roof) - roof));
+        sidebar.style.setProperty('--mhs-spacer', spacer + 'px');
+      }
+      // The spacer keeps every row at the same scrollTop in both layouts.
+      list.scrollTop = top;
+      applyShift();
+    } finally { measuring = false; }
+  };
+  let measureFrame = 0;
+  const remeasure = () => { if (!measureFrame) measureFrame = requestAnimationFrame(() => { measureFrame = 0; measure(); }); };
+  list.addEventListener('scroll', applyShift, {passive:true});
+  sidebar.addEventListener('focusin', applyShift);
+  sidebar.addEventListener('focusout', () => setTimeout(applyShift));
+  query.addEventListener('change', remeasure);
+  window.addEventListener('resize', remeasure);
+  // Only view switches matter; other body classes change often and a
+  // remeasure mid-flick would end the momentum this mode protects.
+  const viewKey = () => [body.classList.contains('mobile-show-main'), body.classList.contains('ccc-simple-mode'), panel.getClientRects().length > 0].join();
+  let lastViewKey = viewKey();
+  new MutationObserver(() => {
+    if (measuring) return;
+    const key = viewKey();
+    if (key !== lastViewKey) { lastViewKey = key; remeasure(); }
+  }).observe(body, {attributes:true, attributeFilter:['class']});
+  const header = sidebar.querySelector('.sidebar-header');
+  if (header) new MutationObserver(remeasure).observe(header, {childList:true});
+  const tray = document.getElementById('todayTray');
+  if (tray) new MutationObserver(remeasure).observe(tray, {attributes:true, attributeFilter:['hidden']});
+  // Band heights change when the CI line expands or the workers line appears.
+  const sized = new WeakMap();
+  const resizes = new ResizeObserver(entries => {
+    if (measuring) return;
+    let changed = false;
+    for (const entry of entries) {
+      const height = Math.round(entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height);
+      if (sized.get(entry.target) !== height) { sized.set(entry.target, height); changed = true; }
+    }
+    if (changed) remeasure();
+  });
+  const watchBands = () => { for (const el of [sidebar.querySelector('.sidebar-header .mobile-home-status'), sidebar.querySelector('.sidebar-header .worker-activity-line'), sidebar.querySelector(':scope > .new-session-panel'), brand]) if (el) resizes.observe(el); };
+  watchBands();
+  if (header) new MutationObserver(watchBands).observe(header, {childList:true});
+  setTimeout(remeasure);
 })();
 
 // CI, usage and savings share one header line on phones and desktop.

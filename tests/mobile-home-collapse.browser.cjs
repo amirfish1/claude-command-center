@@ -1,5 +1,8 @@
 // Run with node tests/mobile-home-collapse.browser.cjs. Uses the shipped CSS
 // and scroll controller in a local fixture, without touching session state.
+// Covers the fold used by phone lists other than the main session list
+// (here #simpleHome); that list scrolls the header away natively, see
+// tests/mobile-home-scrollaway.browser.cjs.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -14,12 +17,12 @@ const css = fs.readFileSync(path.join(root, 'static/app.css'), 'utf8');
 const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="stylesheet" href="/app.css"><style>
 body {display:block;padding:0} .sidebar {width:100%;height:100dvh;max-width:none;overflow:hidden}
-#convList {flex:1;min-height:0;overflow:auto} .test-row {padding:20px;border-bottom:1px solid var(--border)}
+#simpleHome {flex:1;min-height:0;overflow:auto} .test-row {padding:20px;border-bottom:1px solid var(--border)}
 </style><div class="sidebar"><div class="sidebar-header">
 <div class="sidebar-header-brand"><div class="sh-title-row"><a class="sh-title-link"><span class="sh-title-main">Claude Command Center</span></a></div></div>
 <div class="mobile-home-status"><div id="localCiMobileList"><button class="local-ci-mobile-toggle" aria-expanded="false">CI: checks passing</button></div></div></div>
 <div class="new-session-panel"><button class="new-session-btn" id="sidebarNewBtn">+ New session</button><button id="sidebarSearchBtn">Search sessions</button><input id="convSearch" aria-label="Search sessions" hidden></div>
-<div id="convListPanel" class="conv-list-panel"><div id="convList"><div class="conv-archived-tools"><button>Filters</button></div>${Array.from({length:45},(_,i)=>`<div class="test-row">Session ${i+1}</div>`).join('')}</div></div></div>
+<div id="simpleHome"><div class="conv-archived-tools"><button>Filters</button></div>${Array.from({length:45},(_,i)=>`<div class="test-row">Session ${i+1}</div>`).join('')}</div></div>
 <script>document.querySelector('#sidebarNewBtn').onclick=()=>window.newClicks=(window.newClicks||0)+1;
 document.querySelector('#sidebarSearchBtn').onclick=()=>document.querySelector('#convSearch').hidden=false;</script>
 <script>${controller}</script>`;
@@ -37,7 +40,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     page.on('pageerror', error => errors.push(error.message));
     const url = `http://127.0.0.1:${server.address().port}`;
     const scroll = top => page.evaluate(top => {
-      const list = document.querySelector('#convList');
+      const list = document.querySelector('#simpleHome');
       list.scrollTop = top;
       list.dispatchEvent(new Event('scroll'));
     }, top);
@@ -48,7 +51,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
       await page.goto(url,{waitUntil:'load'});
       const geometry = () => page.evaluate(() => {
         const rect = el => el.getBoundingClientRect().toJSON();
-        return {panel:rect(document.querySelector('#convListPanel')),
+        return {panel:rect(document.querySelector('#simpleHome')),
           status:rect(document.querySelector('.mobile-home-status')),
           newPanel:rect(document.querySelector('.new-session-panel')),
           brand:rect(document.querySelector('.sidebar-header-brand')),
@@ -119,10 +122,10 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
       await scroll(180); // Typing must not hide the focused search field.
       assert.equal(await page.evaluate(()=>document.body.classList.contains('mobile-home-collapsed')),false);
     }
-    // The event is captured from nested session lists as well as #convList.
+    // The event is captured from nested session lists as well as the list itself.
     await page.goto(url);
     await page.evaluate(()=>{
-      const list=document.querySelector('#convList');
+      const list=document.querySelector('#simpleHome');
       const nested=document.createElement('div');
       nested.dataset.role='current-sessions-scroll';
       nested.style.cssText='height:300px;overflow:auto';

@@ -36248,6 +36248,40 @@ body.ccc-app-embed.conversation-popout .main > .toolbar {
   body.mobile-home-collapsed .mobile-home-search { font-size: 28px; }
   .mobile-home-quick:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 }
+/* Phone main list: the header bands sit pinned over a spacer at the top of
+   #convList and slide away with it (initMobileHomeCollapse). The list never
+   moves or resizes while scrolling, which keeps iOS momentum native. */
+@media (max-width: 1200px) {
+  body.mobile-home-scrollaway .sidebar .sidebar-header .mobile-home-status,
+  body.mobile-home-scrollaway .sidebar .sidebar-header .worker-activity-line,
+  body.mobile-home-scrollaway .sidebar > .new-session-panel {
+    position: fixed !important; z-index: 20; margin: 0 !important; box-sizing: border-box;
+    top: var(--mhs-top); left: var(--mhs-left); width: var(--mhs-width);
+    /* No will-change: it would make the CI details popup (position: fixed)
+       resolve against the band instead of the viewport. */
+    background: var(--surface);
+  }
+  body.mobile-home-scrollaway #convList::before {
+    content: ''; display: block; flex: none; height: var(--mhs-spacer, 0px); pointer-events: none;
+  }
+  body.mobile-home-scrollaway #convListPanel:has(> .conv-ptr:not([hidden])) #convList::before { height: 0; }
+  body.mobile-home-scrollaway #convListPanel > .conv-ptr:not([hidden]) { margin-top: var(--mhs-spacer, 0px); }
+  body.mobile-home-scrollaway .sidebar .sidebar-header-brand { width: 100%; }
+  body.mobile-home-scrollaway .sidebar .sh-title-link { margin-right: auto; }
+  body.mobile-home-scrollaway .mobile-home-quick {
+    display: inline-flex; align-items: center; justify-content: center;
+    flex: 0 0 44px; width: 44px; height: 44px; padding: 0; border: 0;
+    border-radius: 50%; background: transparent; color: var(--text); font-size: 26px;
+    visibility: hidden; opacity: 0; transition: opacity .15s, visibility 0s .15s;
+  }
+  body.mobile-home-scrollaway .mobile-home-search { font-size: 28px; }
+  body.mobile-home-scrollaway .mobile-home-folded .mobile-home-quick {
+    visibility: visible; opacity: 1; transition: opacity .15s;
+  }
+}
+@media (max-width: 1200px) and (prefers-reduced-motion: reduce) {
+  body.mobile-home-scrollaway .mobile-home-quick { transition: none; }
+}
 
 .simple-card-archive-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .simple-card-archive-btn:disabled { opacity: .45; cursor: wait; }
