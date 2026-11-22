@@ -249,6 +249,7 @@ def test_cold_read_pins_the_selected_hot_rows_after_a_row_ages_out(tmp_path, mon
     now = time.time()
     hot = {"session_id": "recent", "mtime": now}
     aged = {"session_id": "aged", "mtime": now - archive_store.HOT_SECONDS - 5}
+    extra = {"session_id": "extra"}
     persisted = {"cached_at": now - 10, "conversations": [hot, aged]}
     path = tmp_path / "archive.json"
     key = server._archive_response_cache_key()
@@ -265,17 +266,29 @@ def test_cold_read_pins_the_selected_hot_rows_after_a_row_ages_out(tmp_path, mon
     monkeypatch.setattr(server, "_archive_refresh_load_blocked", lambda now: True)
     monkeypatch.setattr(server, "_conversation_lifecycle_snapshot", lambda: (set(), set(), set(), {}))
     monkeypatch.setattr(server, "_overlay_conversation_lifecycle_flags", lambda rows, **kwargs: rows)
-    monkeypatch.setattr(server, "_archive_list_source_overlays", lambda *_: ([], []))
+    monkeypatch.setattr(server, "_archive_list_source_overlays", lambda *_: ([], [extra]))
     monkeypatch.setattr(server, "_capture_archive_history_sidecars", lambda _: dict.fromkeys(
         ("resumes", "parents", "names", "drivers", "ideas", "overlays"), {}))
     monkeypatch.setattr(layer, "_INVENTORY", (None, frozenset(), None))
     reader = object()
     monkeypatch.setattr(continuation_topics, "archive_projection_inputs",
                         lambda conn, **kwargs: (({}, {}, {}, {}), [], 0))
+    original_load = archive_store._load_override_entry
+    sqlite_reads = []
+
+    def track_load(*args, **kwargs):
+        sqlite_reads.append(kwargs["session_ids"])
+        return original_load(*args, **kwargs)
+
+    monkeypatch.setattr(archive_store, "_load_override_entry", track_load)
 
     with server._archive_history_read_cut(key, {}, now, topic_reader=reader) as cut:
         assert cut is not None
         inputs, _, hydrate, _ = cut
         assert inputs.sources["recent"][0] == "hot"
         assert inputs.sources["aged"][0] == "canonical"
-        assert hydrate(None) == [hot, aged]
+        assert hydrate(None) == [hot, aged, extra]
+        assert hydrate({"recent", "aged", "extra"}) == [hot, aged, extra]
+        assert hydrate({"recent", "extra"}) == [hot, extra]
+        assert hydrate({"extra"}) == [extra]
+        assert sqlite_reads == [None, {"aged"}]

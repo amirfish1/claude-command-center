@@ -19327,7 +19327,20 @@ def _archive_history_read_cut(key, cache_options, now, *, phases=None, check_cli
             wanted = None if session_ids is None and not removed else (
                 inputs.sources.keys() - extra_by_sid.keys() if session_ids is None
                 else session_ids - extra_by_sid.keys())
-            current = hydrate(hot.values(), wanted, check_client=check_client)
+            if session_ids is None:
+                current = hydrate(hot.values(), wanted, check_client=check_client)
+            else:
+                # read_inputs already matched hot identities to this pinned
+                # inventory. Only the remaining candidates need SQLite bodies.
+                cold = wanted - hot.keys()
+                stored = hydrate((), cold, check_client=check_client) if cold else []
+                if stored is None:
+                    return None
+                by_sid = {_archive_row_sid(row): row for row in stored}
+                if by_sid.keys() != cold or len(by_sid) != len(stored):
+                    return None
+                by_sid.update((sid, hot[sid]) for sid in wanted & hot.keys())
+                current = [by_sid[sid] for sid in inputs.order if sid in by_sid]
             if current is None:
                 return None
             current = _overlay_conversation_lifecycle_flags(
