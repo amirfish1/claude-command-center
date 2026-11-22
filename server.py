@@ -17338,7 +17338,7 @@ def _archive_refresh_read(key, **options):
         print(f"  [archive-cache] incremental read unavailable: {exc}")
 
 
-def _publish_archive_delta(key, base, merged, signature, *, point_update=False):
+def _publish_archive_delta(key, base, merged, signature, *, point_update=False, changed_session_ids=None):
     from ccc_server import archive_store
 
     entry = {"cached_at": time.time(), "conversations": merged, "signature": signature}
@@ -17346,7 +17346,7 @@ def _publish_archive_delta(key, base, merged, signature, *, point_update=False):
         _ARCHIVE_RESPONSE_CACHE_FILE, _archive_response_snapshot({key: entry}),
         complete=True, sidebar_key=_archive_response_cache_key(),
         sidebar_pages=(_ARCHIVE_SIDEBAR_PACKED_VERSION, _archive_list_pack_static),
-        base_entry=base, point_update=point_update,
+        base_entry=base, point_update=point_update, changed_session_ids=changed_session_ids,
     ):
         if point_update:
             return False
@@ -21347,8 +21347,12 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
                             )
                         phases["engine_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
                         _sp = time.perf_counter()
+                        changed_session_ids = {_archive_row_sid(row) for row in fresh} if published else None
                         if indexed and not published:
-                            _publish_archive_delta(key, indexed, merged, publication_sig)
+                            changed_session_ids = set() if reuse is not None else None
+                            published = _publish_archive_delta(
+                                key, indexed, merged, publication_sig, changed_session_ids=changed_session_ids,
+                            )
                         elif not indexed:
                             _archive_response_cache_put(key, merged, signature=sig)
                         phases["cache_put_ms"] = round(
@@ -21357,7 +21361,7 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
                         _sp = time.perf_counter()
                         if indexed:
                             if reuse is not None and published:
-                                reuse.prepare(indexed["cached_at"], published, fresh)
+                                reuse.prepare(indexed["cached_at"], published, changed_session_ids)
                             hot = _archive_refresh_read(key, hot=True, **hot_read_options)
                             phases["hot_read_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
                             if hot is None:
@@ -21544,10 +21548,10 @@ class _ArchiveHotReuse:
         self.changed = set()
         self.can_carry = False
 
-    def prepare(self, previous_stamp, expected_stamp, changed_rows=()):
+    def prepare(self, previous_stamp, expected_stamp, changed_session_ids=()):
         self.previous_stamp = previous_stamp
         self.expected_stamp = expected_stamp
-        self.changed = {_archive_row_sid(row) for row in changed_rows}
+        self.changed = set(changed_session_ids)
 
     def select(self, inventory, stamp):
         self.session_ids = {sid for _, sid in inventory}
@@ -21555,7 +21559,7 @@ class _ArchiveHotReuse:
             # Duplicate or missing IDs need the ordinary compound-key path.
             return {}
         self.stamp = stamp
-        # Only an exact match or a completed point update proves every
+        # Only an exact match or a generation-checked publication proves every
         # untouched canonical body is still the one behind the old result.
         self.can_carry = stamp == self.expected_stamp and self.previous.get("stamp") == self.previous_stamp
         if self.can_carry and isinstance(self.previous.get("rows"), dict):

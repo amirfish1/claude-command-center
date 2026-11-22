@@ -267,7 +267,7 @@ def _read_variant_signature_maps(con, key, stamp):
 
 
 def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_pages=None,
-         base_entry=None, point_update=False):
+         base_entry=None, point_update=False, changed_session_ids=None):
     """Publish variants atomically. Return the count of changed row bodies.
 
     Only complete builder snapshots may remove absent rows. Hot snapshots
@@ -275,10 +275,13 @@ def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_page
     With a base entry, publish only against that generation and return whether
     the publication succeeded. A point update accepts just the changed
     and added rows and can decline when the general merge is needed.
+    If supplied, changed_session_ids receives the session IDs of inserted,
+    replaced and deleted bodies after commit.
     """
     if point_update and (base_entry is None or not complete):
         raise ValueError("point updates require a complete base generation")
     changed = 0
+    changed_sessions = set()
     con = _connect(cache_file, write=True)
     try:
         if point_update:
@@ -394,8 +397,9 @@ def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_page
                         'SELECT rowid FROM rows WHERE variant=? AND identity=?', (key, rid),
                     ).fetchone()
                     previous_changed.add(old_rowid)
+                session_id = str(row.get('session_id') or row.get('id') or '')
                 write = con.execute('INSERT OR REPLACE INTO rows VALUES(?,?,?,?,?,?,?,?,?)', (
-                    key, rid, str(row.get('session_id') or row.get('id') or ''),
+                    key, rid, session_id,
                     str(row.get('parent_session_id') or row.get('hermes_parent_session_id') or ''),
                     index, row_activity, int(sticky(row, stamp=row_activity)), digest, body,
                 ))
@@ -403,9 +407,18 @@ def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_page
                     inserted.add(write.lastrowid)
                 if key == sidebar_key:
                     archive_preview.publish(con, key, rid, row)
+                if changed_session_ids is not None:
+                    changed_sessions.add(session_id)
                 changed += 1
             if complete:
                 removed = existing.keys() - seen
+                if changed_session_ids is not None:
+                    for rid in removed:
+                        removed_row = con.execute(
+                            'SELECT sid FROM rows WHERE variant=? AND identity=?', (key, rid),
+                        ).fetchone()
+                        if removed_row is not None:
+                            changed_sessions.add(removed_row[0])
                 if len(removed) + len(inserted) > archive_sidebar_pages.MAX_INCREMENTAL_CHANGES:
                     previous_hot = None
                 if previous_hot is not None:
@@ -450,6 +463,8 @@ def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_page
         raise
     finally:
         con.close()
+    if changed_session_ids is not None:
+        changed_session_ids.update(changed_sessions)
     return True if base_entry is not None else changed
 
 

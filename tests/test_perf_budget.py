@@ -6911,6 +6911,8 @@ def test_detached_archive_reuses_proven_row_bodies_after_one_canonical_change(tm
     previous = {}
     signature = "match"
     live = set()
+    refresh_engines = set()
+    codex_rows = []
     rows = [
         {"session_id": f"dormant-{i}", "engine": "hermes", "mtime": now - 86400}
         for i in range(300)
@@ -6942,8 +6944,10 @@ def test_detached_archive_reuses_proven_row_bodies_after_one_canonical_change(tm
     monkeypatch.setattr(server, "_ARCHIVE_SERVE_TTL", 0)
     monkeypatch.setattr(server.time, "time", lambda: now)
     monkeypatch.setattr(server, "_archive_corpus_signature", lambda: signature)
-    monkeypatch.setattr(server, "_archive_signature_delta", lambda *_: (["changed.jsonl"], [], set()))
+    monkeypatch.setattr(server, "_archive_signature_delta", lambda *_: (["changed.jsonl"], [], refresh_engines))
     monkeypatch.setattr(server, "find_all_conversations", lambda **kwargs: [rows[0]])
+    monkeypatch.setattr(server, "find_codex_conversations", lambda **kwargs: codex_rows)
+    monkeypatch.setattr(server, "find_codex_cloud_conversations", lambda **kwargs: [])
     monkeypatch.setattr(server, "_load_conv_meta_cache", lambda **kwargs: None)
     monkeypatch.setattr(server, "_save_conv_meta_cache", lambda: None)
     monkeypatch.setattr(server, "_load_archive_question_scores", lambda path: server._SOFT_BLOCK_SCORE_MEMO)
@@ -7017,3 +7021,33 @@ def test_detached_archive_reuses_proven_row_bodies_after_one_canonical_change(tm
     assert set(decoded_sids) == {"dormant-1", "dormant-2", " legacy "}
     assert steady["phases"]["hot_reused"] == 300
     assert list(steady["transfer_rows"]) == list(reused["transfer_rows"])
+
+    # A mixed refresh uses the comparison inside the canonical writer.
+    previous.clear()
+    previous.update(steady["transfer_rows"])
+    now += 1
+    signature = "one-file-and-codex"
+    rows[0]["last_assistant_text"] = "Second reply"
+    refresh_engines.add("codex")
+    codex_rows.append({"session_id": "codex-1", "source": "codex", "engine": "codex",
+                       "mtime": now - 86400})
+    decoded_sids.clear()
+    mixed = worker(proof=current)
+    assert mixed["phases"]["engines"] == ["codex"]
+    assert mixed["phases"]["hot_reused"] == 299
+    assert set(decoded_sids) == {"dormant-0", "dormant-1", "dormant-2", " legacy ", "codex-1"}
+    assert mixed["hot_reuse"]["carry_from"] == now - 1
+    assert mixed["hot_reuse"]["changed"] == ["codex-1", "dormant-0"]
+    assert mixed["rows"][0]["last_assistant_text"] == "Second reply"
+    assert list(mixed["transfer_rows"]) == list(worker()["transfer_rows"])
+
+    current = server._archive_refresh_reuse_basis(current, mixed)
+    previous.clear()
+    previous.update(mixed["transfer_rows"])
+    now += 1
+    signature = "codex-removal"
+    codex_rows.clear()
+    after_removal = worker(proof=current)
+    assert after_removal["hot_reuse"]["changed"] == ["codex-1"]
+    assert all(row.get("session_id") != "codex-1" for row in after_removal["rows"])
+    assert list(after_removal["transfer_rows"]) == list(worker()["transfer_rows"])
