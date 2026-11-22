@@ -4644,9 +4644,15 @@
       const key = _archiveRowStableKey(row);
       if (key) seen.add(key);
       const prev = key ? prevByKey.get(key) : null;
-      // Keep the network snapshot independent without growing a wide row
-      // property by property into V8's slower dictionary representation.
-      const merged = { ...row };
+      // The view is mutable, so keep it separate from the conditional
+      // snapshot. Copying keys avoids the spread cost on wide packed rows.
+      let merged;
+      if (row == null || Object.hasOwn(row, '__proto__')) {
+        merged = { ...row };
+      } else {
+        merged = {};
+        for (const field of Object.keys(row)) merged[field] = row[field];
+      }
       if (key) {
         const override = sharedState._recentRenameOverrides.get(key);
         if (override) {

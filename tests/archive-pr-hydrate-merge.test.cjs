@@ -9,6 +9,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
+const {functionSource} = require('./conversation-source.cjs');
 
 const app = require('./legacy-dashboard-source.cjs');
 
@@ -95,4 +96,31 @@ test('hydrate pass no longer wholesale-replaces archiveData', () => {
   assert.ok(!/archiveData\s*=\s*convs\b/.test(body),
     '_hydrateArchivePrData must graft enrichment, not replace archiveData');
   assert.match(body, /_graftArchivePrEnrichment\(/);
+});
+
+test('merging archive rows leaves the conditional snapshot intact', () => {
+  const overrides = new Map([
+    ['session', {display_name: 'New title', name_overridden: true, at: Date.now()}],
+  ]);
+  const mergeContext = vm.createContext({
+    sharedState: {_recentRenameOverrides: overrides, RENAME_OVERRIDE_MAX_AGE_MS: 30000},
+  });
+  vm.runInContext(functionSource('_archiveRowStableKey'), mergeContext);
+  vm.runInContext(functionSource('_mergeArchivePrSnapshot'), mergeContext);
+  const raw = Object.freeze({session_id: 'session', display_name: 'Old title', pr_state: null});
+  const unusual = JSON.parse('{"session_id":"legacy","__proto__":{"archived":true}}');
+  const pr = {id: 'pr', source: 'github_pr'};
+  const [view, legacyView, prView] = mergeContext._mergeArchivePrSnapshot(
+    [raw, unusual], [{session_id: 'session', pr_state: 'open'}, pr],
+  );
+  assert.equal(view.display_name, 'New title');
+  assert.equal(view.name_overridden, true);
+  assert.equal(view.pr_state, 'open');
+  view.archived = true;
+  assert.equal(raw.display_name, 'Old title');
+  assert.equal(raw.pr_state, null);
+  assert.equal(raw.archived, undefined);
+  assert.equal(JSON.stringify(legacyView), JSON.stringify(unusual));
+  assert.equal(legacyView.archived, undefined);
+  assert.equal(prView, pr);
 });
