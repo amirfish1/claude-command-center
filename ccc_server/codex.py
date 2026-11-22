@@ -2364,10 +2364,29 @@ def _codex_app_server_handle_server_request(request_id, method, params):
     return False
 
 
+def _codex_worker_tracks_thread(session_id):
+    """False only when the worker's thread map loaded and lacks this thread.
+
+    The archive build asks for activity on every Codex row. One RPC per row
+    against a busy worker pushed the refresh past its subprocess timeout, so
+    the sidebar snapshot froze and newly ended sessions vanished. The worker
+    answers untracked threads with empty fields, so skip those via the
+    shared, memoized whole-map fetch. A failed fetch keeps the per-row call.
+    """
+    if not session_id or not _core._control_plane_routes_engines():
+        return True
+    merged = _codex_thread_state_map_resolved()
+    with _codex_thread_state_remote_lock:
+        loaded = _codex_thread_state_remote.get("ok", False)
+    return not loaded or str(session_id) in merged
+
+
 def _codex_app_server_activity_fields(session_id):
-    routed = _core._control_plane_engine_call(
-        "codex", "activity", {"session_id": session_id}, mutate=False,
-    )
+    routed = None
+    if _codex_worker_tracks_thread(session_id):
+        routed = _core._control_plane_engine_call(
+            "codex", "activity", {"session_id": session_id}, mutate=False,
+        )
     if routed is not None and isinstance(routed.get("activity"), dict):
         return routed["activity"]
     fields = {
@@ -2976,10 +2995,12 @@ def _codex_thread_state_map_resolved():
         except Exception:
             routed = None
         remote = {}
+        loaded = False
         if isinstance(routed, dict) and routed.get("ok"):
             states = routed.get("states")
             if isinstance(states, dict):
                 remote = states
+                loaded = True
         # A status-only deadline must not publish an empty failure as a fresh
         # snapshot for concurrent action/writer checks using normal deadlines.
         status_only = getattr(
@@ -2989,6 +3010,7 @@ def _codex_thread_state_map_resolved():
             with _codex_thread_state_remote_lock:
                 _codex_thread_state_remote["ts"] = time.time()
                 _codex_thread_state_remote["map"] = remote
+                _codex_thread_state_remote["ok"] = loaded
     # Remote (owner) wins per key: routed call responses like thread/list
     # refresh get recorded into the CALLER's map too, so a dashboard-local
     # entry is usually a stale snapshot while the worker's copy tracks

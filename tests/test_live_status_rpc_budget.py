@@ -169,3 +169,26 @@ def test_timed_out_status_read_does_not_poison_action_snapshot():
         result = codex._codex_thread_state_map_resolved()
         assert result['test-session']['status'] == 'active'
         assert rpc.call_count == 2
+
+
+@pytest.mark.parametrize('states_reply,tracked_sid,expect_activity_rpc', [
+    ({'ok': True, 'states': {'live-thread': {'status': 'active'}}}, 'old-thread', False),
+    ({'ok': True, 'states': {'live-thread': {'status': 'active'}}}, 'live-thread', True),
+    ({'ok': False, 'available': True, 'error': 'timed out'}, 'old-thread', True),
+])
+def test_activity_skips_worker_rpc_for_untracked_threads(states_reply, tracked_sid, expect_activity_rpc):
+    calls = []
+
+    def rpc(engine, op, params, mutate=False):
+        calls.append(op)
+        if op == 'thread_states':
+            return states_reply
+        return {'ok': True, 'activity': {'sidecar_status': 'active'}}
+
+    with mock.patch.object(codex, '_codex_thread_state_remote', {'ts': 0.0, 'map': {}}), \
+         mock.patch.object(server, '_control_plane_routes_engines', return_value=True), \
+         mock.patch.object(server, '_control_plane_engine_call', side_effect=rpc):
+        for _ in range(3):
+            codex._codex_app_server_activity_fields(tracked_sid)
+    assert calls.count('thread_states') == 1, 'whole-map fetch is shared across rows'
+    assert calls.count('activity') == (3 if expect_activity_rpc else 0)
