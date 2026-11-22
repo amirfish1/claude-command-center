@@ -13,8 +13,8 @@ the child exits when its parent goes away.
 
 * gh-queue-watch: the dashboard's watch loop becomes a 1s proxy tick
   (``gh_tick``). The child runs the real 5s poll loop while ticks keep
-  arriving, and returns its change version plus the board memo only when
-  the memo changed.
+  arriving, and returns its change version with a complete board or a patch
+  against a known board revision when the memo changes.
 * uxq-health-refresh: ``ux_health`` returns the child's payload (rebuilt
   when older than the TTL, coalesced); the dashboard only parses it.
 * ship-graph-warm: ``ship_sync`` starts the full index sync in the child.
@@ -40,6 +40,7 @@ in, one JSON line out.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import socket
@@ -237,6 +238,20 @@ def status():
 # -------------------------------------------------------------------- child
 
 
+def _board_manifest(items):
+    """Guard exact JSON values and order without retaining another board."""
+    if len(items) > 32768:
+        return None
+    manifest = {}
+    for index, row in enumerate(items):
+        ref = row.get("ref") if isinstance(row, dict) else None
+        if not isinstance(ref, str) or not ref or ref in manifest:
+            return None
+        raw = json.dumps(row, default=str).encode()
+        manifest[ref] = (index, hashlib.sha256(raw).digest())
+    return manifest
+
+
 class _Child:
     def __init__(self, server_mod):
         self.server = server_mod
@@ -244,7 +259,10 @@ class _Child:
         self.gh_last_tick = 0.0
         self.gh_entered = False
         self.board_key = None
+        self.board_items = None
         self.board_rev = 0
+        self.board_epoch = os.urandom(16).hex()
+        self.board_manifest = (0, None)
         self.ux_lock = threading.Lock()
         self.ux = {"ts": 0.0, "body": None, "rev": 0}
         self.live_lock = threading.Lock()
@@ -260,22 +278,55 @@ class _Child:
             if not self.gh_entered:
                 self.gh_entered = True
                 q.gh_queue_watch_enter()
-        with q._ux_fixes_list_cache_lock:
-            entry = q._ux_fixes_list_cache.get(("", ""))
-            key = (entry.get("all_sig"), id(entry.get("items"))) if entry else None
-            items = entry.get("items") if entry else None
-            entry_ts = entry.get("ts") if entry else None
-        with self.lock:
-            if key is not None and key != self.board_key:
-                self.board_key = key
+            with q._ux_fixes_list_cache_lock:
+                entry = q._ux_fixes_list_cache.get(("", ""))
+                key = entry.get("all_sig") if entry else None
+                items = entry.get("items") if entry else None
+                entry_ts = entry.get("ts") if entry else None
+            if key != self.board_key or items is not self.board_items:
+                self.board_key, self.board_items = key, items
                 self.board_rev += 1
             board_rev = self.board_rev
+            base_rev, base = self.board_manifest
         reply = {"ok": True, "version": q.gh_queue_version(),
-                 "board_rev": board_rev, "board_ts": entry_ts}
+                 "board_rev": board_rev, "board_ts": entry_ts,
+                 "board_epoch": self.board_epoch}
         have = req.get("have_board_rev")
-        if items is not None and have != "skip" and have != board_rev:
-            reply["items"] = items
+        wants_patch = req.get("board_delta") is True
+        same_epoch = req.get("board_epoch") == self.board_epoch
+        if items is None or have == "skip" or (have == board_rev and (same_epoch or not wants_patch)):
+            return reply
+        use_base = (wants_patch and same_epoch and req.get("board_base") is True
+                    and have == base_rev and base is not None)
+        if use_base:
+            manifest = self._remember_board(board_rev, items)
+            if manifest is not None:
+                patch = []
+                replaced = 0
+                for ref, (index, digest) in manifest.items():
+                    previous = base.get(ref)
+                    if previous is not None and previous[1] == digest:
+                        patch.append(previous[0])
+                    else:
+                        patch.append(items[index])
+                        replaced += 1
+                if replaced * 2 <= len(items):
+                    reply.update(board_patch=patch, base_rev=base_rev)
+                    return reply
+        reply["items"] = items
         return reply
+
+    def _remember_board(self, revision, items):
+        with self.lock:
+            if revision != self.board_rev:
+                return None
+            if self.board_manifest[0] == revision:
+                return self.board_manifest[1]
+        manifest = _board_manifest(items)
+        with self.lock:
+            if revision == self.board_rev:
+                self.board_manifest = (revision, manifest)
+        return manifest
 
     def gh_reaper(self):
         while True:
@@ -285,6 +336,7 @@ class _Child:
                         and time.monotonic() - self.gh_last_tick > GH_TICK_GRACE_S)
                 if idle:
                     self.gh_entered = False
+                    self.board_key = self.board_items = None
             if idle:
                 self.server.gh_queue_watch_exit()
 
@@ -388,6 +440,10 @@ class _Child:
             if op == "live_activity" and reply.get("ok"):
                 reply["ready_at"] = time.time()
             conn.sendall(json.dumps(reply, default=str).encode() + b"\n")
+            if op == "gh_tick" and req.get("board_delta") is True and "items" in reply:
+                # Let the receiver consume the cold response while we build
+                # its fingerprint on the helper's interpreter.
+                self._remember_board(reply["board_rev"], reply["items"])
         except Exception:
             pass
         finally:

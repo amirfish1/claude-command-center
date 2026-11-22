@@ -1094,6 +1094,7 @@ def _ux_fixes_cache_ack(item, keys=("resolution", "history", "updated_at")):
                     dict(row, **changes) if row.get("ref") == ref else row
                     for row in entry["items"]
                 ]
+                entry.pop("board_delta_base", None)
 
 
 def _ux_fixes_list_refresh(status_filter, lane_filter):
@@ -1524,42 +1525,84 @@ _GH_PROXY_INTERVAL_S = 1.0
 # pulled only while something here reads it (a board is open).
 _GH_PROXY_BOARD_READ_WINDOW_S = 60.0
 _gh_proxy = {"version": None, "board_rev": -1, "read_at": 0.0}
+_gh_proxy_tick_lock = threading.Lock()
+
+
+def _apply_board_patch(patch, rows):
+    result = []
+    for item in patch:
+        if type(item) is int and 0 <= item < len(rows):
+            result.append(rows[item])
+        elif isinstance(item, dict):
+            result.append(item)
+        else:
+            return None
+    return result
 
 
 def _gh_queue_proxy_tick(want_items=None):
     """Mirror the helper's GitHub watch into this process. False when the
     helper is unavailable, so the caller polls in-process instead."""
+    if not _gh_proxy_tick_lock.acquire(blocking=False):
+        return True
+    try:
+        return _gh_queue_proxy_read(want_items)
+    finally:
+        _gh_proxy_tick_lock.release()
+
+
+def _gh_queue_proxy_read(want_items):
     from ccc_server import bg_helper
     if bg_helper.is_child() or not bg_helper.ready():
         return False
     if want_items is None:
         want_items = time.time() - _gh_proxy["read_at"] < _GH_PROXY_BOARD_READ_WINDOW_S
+    key = ("", "")
+    with _ux_fixes_list_cache_lock:
+        existing = _ux_fixes_list_cache.get(key) or {}
+        have = _gh_proxy["board_rev"] if want_items else "skip"
+        base = existing.get("items")
+        epoch = existing.get("board_epoch") if (
+            existing.get("all_sig") == ("bg-helper", have)
+        ) else None
+        can_patch = epoch is not None and existing.get("board_delta_base") is True
     reply = bg_helper.call(
         "gh_tick", timeout=10,
-        have_board_rev=_gh_proxy["board_rev"] if want_items else "skip",
+        have_board_rev=have, board_epoch=epoch, board_delta=True, board_base=can_patch,
     )
     if reply is None:
         return False
+    board_rev = reply.get("board_rev")
+    board_epoch = reply.get("board_epoch")
+    board_ts = reply.get("board_ts")
+    items = reply.get("items")
+    patch = reply.get("board_patch")
+    with _ux_fixes_list_cache_lock:
+        current = _ux_fixes_list_cache.get(key) or {}
+        # A patch applies only to the original helper snapshot, including
+        # when a local ack replaces the list while the helper is running.
+        if isinstance(patch, list):
+            if (can_patch and epoch == board_epoch and reply.get("base_rev") == have
+                    and current is existing and current.get("items") is base):
+                items = _apply_board_patch(patch, base)
+            if items is None:
+                _gh_proxy["board_rev"] = -1
+                return True
+        if isinstance(items, list):
+            _ux_fixes_list_cache[key] = {
+                "items": items, "all_sig": ("bg-helper", board_rev),
+                "board_epoch": board_epoch, "board_delta_base": True,
+                "ts": float(board_ts or time.time()),
+            }
+            _gh_proxy["board_rev"] = board_rev
+        elif (board_ts and current.get("all_sig") == ("bg-helper", board_rev)
+              and current.get("board_epoch") == board_epoch):
+            current["ts"] = max(float(current.get("ts") or 0), float(board_ts))
     version = reply.get("version")
     with _gh_watch_lock:
         if _gh_proxy["version"] is not None and version != _gh_proxy["version"]:
             _gh_watch["version"] += 1
         _gh_proxy["version"] = version
-    board_ts = reply.get("board_ts")
-    with _ux_fixes_list_cache_lock:
-        if isinstance(reply.get("items"), list):
-            _ux_fixes_list_cache[("", "")] = {
-                "items": reply["items"],
-                "all_sig": ("bg-helper", reply.get("board_rev")),
-                "ts": float(board_ts or time.time()),
-            }
-            _gh_proxy["board_rev"] = reply.get("board_rev")
-        elif board_ts:
-            existing = _ux_fixes_list_cache.get(("", ""))
-            if existing is not None and existing.get("all_sig") == (
-                "bg-helper", reply.get("board_rev"),
-            ):
-                existing["ts"] = max(float(existing.get("ts") or 0), float(board_ts))
     return True
 
 

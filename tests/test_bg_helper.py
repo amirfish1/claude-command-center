@@ -129,6 +129,71 @@ def test_gh_proxy_mirrors_board_and_version(helper):
         assert [i["ref"] for i in server._ux_fixes_list_cache[("", "")]["items"]] == ["CCC-3"]
 
 
+def test_gh_proxy_reuses_exact_rows_on_changed_board(helper):
+    fake, child = helper
+    first = {"ref": "TEST-1", "history": [{"value": 1}]}
+    second = {"ref": "TEST-2", "history": [{"value": 2}]}
+    removed = {"ref": "TEST-3"}
+    fake.set_board([first, second, removed])
+    assert server._gh_queue_proxy_tick(want_items=True)
+    prior = server._ux_fixes_list_cache[("", "")]["items"]
+
+    changed = {"ref": "TEST-1", "history": [{"value": 1.0}]}
+    fake.set_board([second, changed])
+    assert server._gh_queue_proxy_tick(want_items=True)
+    current = server._ux_fixes_list_cache[("", "")]["items"]
+    assert current == [second, changed]
+    assert current[0] is prior[1]
+    assert type(current[1]["history"][0]["value"]) is float
+    assert current[1] is not prior[0]
+
+    # A restarted helper may serve the same revision number for new data.
+    child.board_epoch = "restarted"
+    child.board_rev = 1
+    fake.set_board([{"ref": "TEST-4"}])
+    assert server._gh_queue_proxy_tick(want_items=True)
+    assert server._ux_fixes_list_cache[("", "")]["items"] == [{"ref": "TEST-4"}]
+
+
+def test_gh_proxy_keeps_ack_until_helper_publishes(helper):
+    fake, _ = helper
+    first = {"ref": "TEST-1", "resolution": {"summary": "done"}}
+    others = [{"ref": "TEST-2"}, {"ref": "TEST-3"}]
+    fake.set_board([first, *others])
+    assert server._gh_queue_proxy_tick(want_items=True)
+    acked = dict(first, resolution={"summary": "done", "unresolved_ack": {"0": True}})
+    server._ux_fixes_cache_ack(acked)
+    assert server._gh_queue_proxy_tick(want_items=True)
+    assert server._ux_fixes_list_cache[("", "")]["items"][0] == acked
+
+    fake.set_board([first, *reversed(others)])
+    assert server._gh_queue_proxy_tick(want_items=True)
+    assert server._ux_fixes_list_cache[("", "")]["items"] == [first, *reversed(others)]
+
+
+def test_gh_proxy_requests_full_after_its_base_changes_during_pull(helper, monkeypatch):
+    fake, _ = helper
+    rows = [{"ref": "TEST-1"}, {"ref": "TEST-2"}, {"ref": "TEST-3"}]
+    fake.set_board(rows)
+    assert server._gh_queue_proxy_tick(want_items=True)
+    modified = [*rows[:2], dict(rows[2], status="closed")]
+    fake.set_board(modified)
+    call = bg_helper.call
+
+    def ack_during_pull(*args, **kwargs):
+        reply = call(*args, **kwargs)
+        assert "board_patch" in reply
+        server._ux_fixes_cache_ack(dict(rows[0], updated_at="local"))
+        return reply
+
+    monkeypatch.setattr(bg_helper, "call", ack_during_pull)
+    assert server._gh_queue_proxy_tick(want_items=True)
+    assert server._ux_fixes_list_cache[("", "")]["items"][0]["updated_at"] == "local"
+    monkeypatch.setattr(bg_helper, "call", call)
+    assert server._gh_queue_proxy_tick(want_items=True)
+    assert server._ux_fixes_list_cache[("", "")]["items"] == modified
+
+
 def test_gh_watch_retires_in_child_when_ticks_stop(helper, monkeypatch):
     fake, child = helper
     server._gh_queue_proxy_tick()
