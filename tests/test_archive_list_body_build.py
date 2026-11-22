@@ -310,12 +310,13 @@ def test_unversioned_history_projection_shares_only_overlapping_exact_source(mon
     building = threading.Event()
     finish = threading.Event()
 
-    class ObservableFuture(server.Future):
-        def result(self):
-            waiting.set()
-            return super().result()
+    wait = server.wait
 
-    monkeypatch.setattr(server, 'Future', ObservableFuture)
+    def observe_wait(*args, **kwargs):
+        waiting.set()
+        return wait(*args, **kwargs)
+
+    monkeypatch.setattr(server, 'wait', observe_wait)
     rows = [{'session_id': 'first'}]
     payload = {'conversations': rows}
 
@@ -346,6 +347,36 @@ def test_unversioned_history_projection_shares_only_overlapping_exact_source(mon
         assert owner.result(timeout=5) is follower.result(timeout=5) is payload
     assert 'projection_flight' in phases
     assert project('scope', rows, own_projection, {}) != payload
+
+
+def test_all_projection_stops_when_all_opted_in_readers_leave():
+    import server
+
+    entered = threading.Event()
+    continue_owner = threading.Event()
+    rows = [{'session_id': 'row'}]
+
+    def build(check_client):
+        entered.set()
+        assert continue_owner.wait(5)
+        check_client()
+        pytest.fail('projection continued without a reader')
+
+    def disconnected():
+        raise server._ArchiveListClientDisconnected()
+
+    with ThreadPoolExecutor(2) as pool:
+        project = server._archive_list_history_projection
+        owner = pool.submit(project, 'scope', rows, build, {}, disconnected)
+        try:
+            assert entered.wait(5)
+            follower = pool.submit(project, 'scope', rows, build, {}, disconnected)
+            with pytest.raises(server._ArchiveListClientDisconnected):
+                follower.result(timeout=3)
+        finally:
+            continue_owner.set()
+        with pytest.raises(server._ArchiveListClientDisconnected):
+            owner.result(timeout=3)
 
 
 @pytest.mark.parametrize('since', ['', '&since=old'])

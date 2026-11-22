@@ -1,0 +1,1 @@
+- Stop building a shared All sidebar response once every browser waiting for it has navigated away.

@@ -69,7 +69,7 @@ import urllib.parse
 import urllib.error
 import urllib.request
 import weakref
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta, timezone, time as datetime_time
 from pathlib import Path
 
@@ -19340,22 +19340,35 @@ def _archive_list_history_projection(scope, rows, build, phases, check_client=No
         flight = _ARCHIVE_LIST_HISTORY_FLIGHTS.get(key)
         owner = flight is None
         if owner:
-            flight = _ARCHIVE_LIST_HISTORY_FLIGHTS[key] = (Future(), threading.Event())
-        future, shared = flight
-        if not owner:
-            shared.set()
+            flight = _ARCHIVE_LIST_HISTORY_FLIGHTS[key] = {"future": Future(), "followers": 0}
+        else:
+            flight["followers"] += 1
+        future = flight["future"]
     if not owner:
         started = time.perf_counter()
+        try:
+            if check_client is None:
+                wait((future,))
+            else:
+                while not wait((future,), timeout=0.05).done:
+                    check_client()
+                check_client()
+        finally:
+            with _ARCHIVE_LIST_HISTORY_FLIGHTS_LOCK:
+                flight["followers"] -= 1
         try:
             payload = future.result()
         except Exception:
             return build(check_client)
         phases["projection_flight"] = {"wait_ms": round((time.perf_counter() - started) * 1000, 1)}
         return payload
+
     def check_owner():
-        # An abandoned socket must not cancel projection for a live follower.
+        # Keep building while any follower still needs the projection.
         # A follower arriving concurrently with cancellation can build itself.
-        if not shared.is_set():
+        with _ARCHIVE_LIST_HISTORY_FLIGHTS_LOCK:
+            shared = flight["followers"] > 0
+        if not shared:
             check_client()
 
     try:
