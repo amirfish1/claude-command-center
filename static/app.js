@@ -56232,12 +56232,16 @@
     for (const timer of document.querySelectorAll('[data-ci-started-at]')) {
       const end = timer.dataset.ciCompletedAt ? Date.parse(timer.dataset.ciCompletedAt) : Date.now();
       const seconds = Math.max(0, Math.floor((end - Date.parse(timer.dataset.ciStartedAt)) / 1000));
-      if (!Number.isFinite(seconds)) { timer.textContent = ''; continue; }
+      // Write only real changes: finished runs never change, and each
+      // write invalidates layout once a second while the user scrolls.
+      if (!Number.isFinite(seconds)) { if (timer.textContent) timer.textContent = ''; continue; }
       const hours = Math.floor(seconds / 3600);
       const minutes = Math.floor(seconds / 60) % 60;
-      timer.textContent = (hours ? hours + ':' + String(minutes).padStart(2, '0') : String(minutes))
+      const text = (hours ? hours + ':' + String(minutes).padStart(2, '0') : String(minutes))
         + ':' + String(seconds % 60).padStart(2, '0');
-      timer.title = timer.dataset.ciCompletedAt ? 'Total duration' : 'Time elapsed';
+      if (timer.textContent !== text) timer.textContent = text;
+      const title = timer.dataset.ciCompletedAt ? 'Total duration' : 'Time elapsed';
+      if (timer.title !== title) timer.title = title;
     }
   }
   function dismissButton(jobs, label) {

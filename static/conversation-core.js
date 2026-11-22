@@ -12618,12 +12618,12 @@
         // or a small downward drift inside the old 80px tolerance.
         view._pinnedToBottom = true;
       }
-      updateConversationEndAffordance(view);
-      // Cache the topmost-visible message on every scroll so a later window
-      // resize (which fires the 'resize' event only after the browser has
-      // already reflowed the pane) can restore against a genuinely
-      // pre-resize position instead of whatever scrollTop happens to land on.
-      view._lastTopAnchor = _topVisibleAnchor(view);
+      // The jump/read-aloud buttons and the resize anchor cost a frame or
+      // more per call on phones (interleaved layout reads and writes), and
+      // scroll fires every frame, which made in-session scrolling stutter.
+      // Refresh them when the scroll pauses, and at most every 400ms while
+      // it keeps going.
+      _scheduleScrollChrome(view);
     }, { passive: true });
     _observeConvEventSizes(view, []);
     // Auto-advance: any content mutation (SSE event append, streaming
@@ -14662,6 +14662,26 @@
         if (n.querySelectorAll) n.querySelectorAll('.event').forEach((x) => ro.observe(x));
       }
     }
+  }
+
+  const SCROLL_CHROME_IDLE_MS = 120;
+  const SCROLL_CHROME_MAX_WAIT_MS = 400;
+  function _scheduleScrollChrome(view) {
+    const now = performance.now();
+    if (!view._scrollChromeFirstAt) view._scrollChromeFirstAt = now;
+    clearTimeout(view._scrollChromeTimer);
+    const wait = Math.max(0, Math.min(SCROLL_CHROME_IDLE_MS,
+      view._scrollChromeFirstAt + SCROLL_CHROME_MAX_WAIT_MS - now));
+    view._scrollChromeTimer = setTimeout(() => {
+      view._scrollChromeTimer = 0;
+      view._scrollChromeFirstAt = 0;
+      if (!view.isConnected) return;
+      updateConversationEndAffordance(view);
+      // Cache the topmost-visible message so a later window resize (which
+      // fires only after the browser has reflowed the pane) can restore
+      // against a genuinely pre-resize position.
+      view._lastTopAnchor = _topVisibleAnchor(view);
+    }, wait);
   }
 
   function _topVisibleAnchor($view) {

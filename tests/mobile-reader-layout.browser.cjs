@@ -191,7 +191,9 @@ const fixture = `
         await page.mouse.move(width - 2, 400);
         if (width === 390) await page.screenshot({path:'/tmp/ccc-mobile-home-usage-after.png'});
         await page.evaluate(() => { document.querySelector('.mobile-home-status').scrollLeft = 0; });
-        // Long home lists collapse their chrome and restore it at the top.
+        // Long home lists scroll their chrome away natively and restore it at
+        // the top. The list box itself never moves (iOS momentum).
+        const panelTop0 = await page.$eval('#convListPanel', el => el.getBoundingClientRect().top);
         await page.evaluate(() => {
           const list = document.getElementById('convList');
           const rows = document.createElement('div'); rows.id = 'scrollFixture';
@@ -199,33 +201,35 @@ const fixture = `
           list.append(rows); list.scrollTop = 180;
           list.dispatchEvent(new Event('scroll'));
         });
-        const foldedTop = await page.$eval('#convListPanel', el => el.getBoundingClientRect().top);
+        assert.equal(await page.evaluate(() => document.body.classList.contains('mobile-home-scrollaway')), true);
+        assert.ok(Math.abs((await page.$eval('#convListPanel', el => el.getBoundingClientRect().top)) - panelTop0) < 1, 'list box holds still');
         assert.ok(Math.abs((await page.$eval('.sidebar-header-brand',el=>el.getBoundingClientRect().top))-home.brand.top)<1, 'full fold keeps brand pinned');
         await page.evaluate(() => {
-          const list = document.getElementById('convList'); list.scrollTop = 48; list.dispatchEvent(new Event('scroll'));
+          const list = document.getElementById('convList'); list.scrollTop = 24; list.dispatchEvent(new Event('scroll'));
         });
-        const partialTop = await page.$eval('#convListPanel', el => el.getBoundingClientRect().top);
-        assert.ok(partialTop > foldedTop + 10, 'partial scroll reveals part of the full dashboard header');
-        assert.equal(await page.$eval('.mobile-home-status', el => getComputedStyle(el).display !== 'none'), true);
+        const partial = await page.evaluate(() => ({status:document.querySelector('.mobile-home-status').getBoundingClientRect().toJSON(),
+          brand:document.querySelector('.sidebar-header-brand').getBoundingClientRect().toJSON()}));
+        assert.ok(Math.abs(partial.status.top - (home.line.top - 24)) < 2 && partial.status.bottom > partial.brand.bottom,
+          'partial scroll reveals part of the full dashboard header');
         if (width === 390) await page.screenshot({path:'/tmp/ccc-mobile-home-partial-fold.png'});
         await page.evaluate(() => {
           const list = document.getElementById('convList'); list.scrollTop = 180; list.dispatchEvent(new Event('scroll'));
         });
-        await page.waitForFunction(() => document.body.classList.contains('mobile-home-collapsed'));
-        // The status line slides into the top; it leaves the layout at full scroll progress.
-        await page.waitForFunction(() => getComputedStyle(document.querySelector('.mobile-home-status')).display === 'none');
-        assert.equal(await page.$eval('.new-session-panel', el => getComputedStyle(el).display), 'none');
+        await page.waitForFunction(() => document.querySelector('.sidebar-header-brand').classList.contains('mobile-home-folded'));
+        assert.equal(await page.$eval('.new-session-panel', el => el.inert), true, 'hidden New session bar is inert');
+        assert.equal(await page.$eval('.mobile-home-status', el => el.inert), true, 'hidden status line is inert');
         assert.ok(Math.abs((await page.$eval('.sidebar-header-brand',el=>el.getBoundingClientRect().top))-home.brand.top)<1, 'partial-to-full fold keeps brand pinned');
         assert.ok(await page.$eval('.sidebar-header-brand',el=>el.querySelector('.sh-title-main').getBoundingClientRect().top>=el.getBoundingClientRect().top), 'brand title stays visible inside its row');
         assert.equal(await page.$eval('.mobile-home-new', el => el.getBoundingClientRect().width), 44);
         assert.ok(await page.$eval('.sidebar-header-brand', el => el.getBoundingClientRect().height > 0 && getComputedStyle(el).opacity !== '0'));
+        await page.waitForFunction(() => getComputedStyle(document.querySelector('.mobile-home-new')).opacity === '1');
         assert.ok(await page.$eval('.mobile-home-new', el => {const r=el.getBoundingClientRect();return el.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));}), 'compact New is visible and clickable');
         if (width === 390) await page.screenshot({path:'/tmp/ccc-mobile-home-collapsed.png'});
         await page.evaluate(() => {
           const list = document.getElementById('convList'); list.scrollTop = 0; list.dispatchEvent(new Event('scroll'));
           document.getElementById('scrollFixture').remove();
         });
-        await page.waitForFunction(() => !document.body.classList.contains('mobile-home-collapsed'));
+        await page.waitForFunction(() => !document.querySelector('.sidebar-header-brand').classList.contains('mobile-home-folded'));
         await page.waitForSelector('[data-mobile-app="example"]');
         if (width === 390) await page.screenshot({path:'/tmp/ccc-mobile-home-status-after.png'});
         await page.click('[data-mobile-nav-menu]');
