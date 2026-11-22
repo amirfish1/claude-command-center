@@ -285,6 +285,8 @@ def test_packed_history_recovers_rows_that_aged_out_of_hot_snapshot(tmp_path, mo
          "last_assistant_text": f"Reply {i}"}
         for i in range(300)
     ]
+    # An oversized row takes the individual read path within a sparse batch.
+    expired[120]["last_assistant_text"] = "α" * (32 << 10)
     cold = {"session_id": "history", "mtime": stamp - 2 * archive_store.HOT_SECONDS}
     hot = {"session_id": "live", "mtime": stamp}
     cold_position = len(expired) // 2
@@ -308,6 +310,26 @@ def test_packed_history_recovers_rows_that_aged_out_of_hot_snapshot(tmp_path, mo
         assert isinstance(packed[cold_position], archive_sidebar_pages.StoredRow)
         assert packed[:cold_position] + packed[cold_position + 1:-1] == expired
         assert packed[-1] is live
+
+        sparse_reads = 0
+        fetch_rows = archive_sidebar_pages.fetch_rows
+
+        def count_sparse_read(*args, **kwargs):
+            nonlocal sparse_reads
+            sparse_reads += 1
+            return fetch_rows(*args, **kwargs)
+
+        def disconnect():
+            if sparse_reads:
+                raise server._ArchiveListClientDisconnected()
+
+        monkeypatch.setattr(archive_sidebar_pages, "fetch_rows", count_sparse_read)
+        with pytest.raises(server._ArchiveListClientDisconnected):
+            archive_sidebar_pages.read(
+                conn, key, stamp, version, overrides.copy(), 1 << 20, page_cache,
+                check_client=disconnect,
+            )
+        assert sparse_reads == 1
 
         packed_bytes = sum(weight for weight, _ in page_cache.values())
         assert archive_sidebar_pages.read(

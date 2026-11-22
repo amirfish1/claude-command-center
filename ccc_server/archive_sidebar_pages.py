@@ -9,13 +9,15 @@ import sqlite3
 import zlib
 
 from ccc_server.archive_list_replay import pack_row_layouts
+from ccc_server.sqlite_batch import fetch_rows
 
 
 _BUCKETS = 128
 _PAGE_MAX_BYTES = 4 << 20
 _ORDER_BATCH_ITEMS = 32768
 _MAX_UNPACKED_ROWS = 1024
-_UNPACKED_QUERY_ROWS = 256
+_UNPACKED_QUERY_ROWS = 64
+_UNPACKED_BATCH_BODY_LIMIT = 32 << 10
 
 
 class StoredRow(dict):
@@ -164,6 +166,29 @@ def _ordered_identities(con, key):
     return [rid for rid, in con.execute(sql, (key,))]
 
 
+def _unpacked_bodies(con, key, missing, check_client):
+    for start in range(0, len(missing), _UNPACKED_QUERY_ROWS):
+        if check_client is not None:
+            check_client()
+        batch = missing[start:start + _UNPACKED_QUERY_ROWS]
+        marks = ",".join("?" for _ in batch)
+        # Batch the small bodies to avoid releasing the GIL at every SQLite
+        # row. Read large bodies individually to bound the aggregate buffer.
+        records = fetch_rows(
+            con, f"""SELECT identity, CASE
+                WHEN length(CAST(body AS BLOB)) <= ? THEN body END AS body
+                FROM rows WHERE variant=? AND identity IN ({marks})""",
+            (_UNPACKED_BATCH_BODY_LIMIT, key, *batch), ("identity", "body"))
+        for rid, body in records:
+            if body is None:
+                if check_client is not None:
+                    check_client()
+                body, = con.execute(
+                    "SELECT body FROM rows WHERE variant=? AND identity=?", (key, rid)
+                ).fetchone()
+            yield rid, body
+
+
 def read(con, key, cached_at, version, current, max_bytes, page_cache, *, check_client=None):
     """Load a current projection, borrowing read-only rows from recent pages."""
     if not con.execute("SELECT 1 FROM sqlite_master WHERE name='sidebar_page_generation'").fetchone():
@@ -203,19 +228,11 @@ def read(con, key, cached_at, version, current, max_bytes, page_cache, *, check_
     # of the archive or exceeding SQLite's older parameter limit.
     if len(missing) > _MAX_UNPACKED_ROWS:
         return None
-    for start in range(0, len(missing), _UNPACKED_QUERY_ROWS):
-        batch = missing[start:start + _UNPACKED_QUERY_ROWS]
-        marks = ",".join("?" for _ in batch)
-        for rid, body in con.execute(
-            f"SELECT identity,body FROM rows WHERE variant=? AND identity IN ({marks})",
-            (key, *batch),
-        ):
-            if check_client is not None:
-                check_client()
-            weight += 4 * len(body) + 224 + 4 * len(rid)
-            if weight > max_bytes:
-                return None
-            decoded[rid] = json.loads(body)
+    for rid, body in _unpacked_bodies(con, key, missing, check_client):
+        weight += 4 * len(body) + 224 + 4 * len(rid)
+        if weight > max_bytes:
+            return None
+        decoded[rid] = json.loads(body)
     layout = []
     rows = []
     for rid in ordered:
