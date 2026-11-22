@@ -2379,14 +2379,14 @@ _IMAGE_PATH_MARKER_RE = re.compile(r"/pasted-images/", re.IGNORECASE)
 _IMAGE_PATH_RE = re.compile(r"(?<!\S)\S*/pasted-images/\S+\.(?:png|jpe?g|gif|webp)", re.IGNORECASE)
 
 
-def _strip_image_markup(text):
-    """Drop <image ...> tags and pasted-image paths; collapse whitespace."""
+def _strip_image_markup(text, *, collapse_whitespace=True):
+    """Drop image tags and pasted-image paths, optionally collapsing whitespace."""
     t = str(text or "")
     if "<" in t:
         t = _IMAGE_TAG_RE.sub(" ", t)
     if "/" in t and _IMAGE_PATH_MARKER_RE.search(t):
         t = _IMAGE_PATH_RE.sub(" ", t)
-    return " ".join(t.split())
+    return " ".join(t.split()) if collapse_whitespace else t
 
 
 def _title_opener_is_thin(text):

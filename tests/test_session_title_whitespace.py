@@ -29,3 +29,15 @@ def test_image_cleanup_retains_every_unicode_whitespace_separator():
     text = whitespace + "first" + whitespace + "<image path='example.png'></image>"
     text += whitespace + "/tmp/pasted-images/example.png" + whitespace + "last" + whitespace
     assert session_graph._strip_image_markup(text) == "first last"
+
+
+def test_codex_title_cleans_markup_before_bounding_long_prompt(monkeypatch):
+    monkeypatch.setattr(server, "SESSION_NAME_MAX_CHARS", 24)
+    prompt = (
+        "<image path='example.png'></image>\u00a0"
+        "/tmp/pasted-images/example.png\u2003"
+        "keep\u2028this\tvisible text " + "extra " * 10_000
+    )
+    expected = server._truncate_session_name(session_graph._strip_image_markup(prompt))
+    assert expected == "keep this visible text…"
+    assert server._codex_display_name({}, first_message=prompt) == expected

@@ -335,12 +335,13 @@ def from_text(text):
 
 
 def strip_header(text):
-    lines = str(text or '').split('\n')
+    text = str(text or '')
+    lines = text.split('\n', 5)
     for index, line in enumerate(lines[:5]):
         if _parse_line(line) is not None:
             del lines[index]
-            break
-    return '\n'.join(lines)
+            return '\n'.join(lines)
+    return text
 
 
 def _label(value):

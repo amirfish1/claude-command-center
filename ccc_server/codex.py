@@ -9843,7 +9843,8 @@ def _codex_display_name(row, override=None, title="", first_message=""):
     def visible_prompt(value):
         import sender_envelope as attribution
         return _core._strip_image_markup(
-            attribution.strip_header(_core._strip_host_system_instruction(value))
+            attribution.strip_header(_core._strip_host_system_instruction(value)),
+            collapse_whitespace=False,
         )
 
     return (
