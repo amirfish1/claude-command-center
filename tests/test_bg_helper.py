@@ -2,6 +2,7 @@
 (CCC-142). The child side runs in-thread against a fake server module; the
 dashboard side is the real code in server.py / ship_graph."""
 
+import json
 import os
 import socket
 import tempfile
@@ -127,6 +128,19 @@ def test_gh_proxy_mirrors_board_and_version(helper):
     assert server.gh_queue_version() == v0 + 1
     with server._ux_fixes_list_cache_lock:
         assert [i["ref"] for i in server._ux_fixes_list_cache[("", "")]["items"]] == ["CCC-3"]
+
+
+@pytest.mark.parametrize("rows", [
+    [],
+    [{"ref": "TEST-1", "history": [{"text": "Crème\nlast line", "value": -0.0}]}],
+    [{"ref": "TEST-1"}, {"ref": "TEST-1", "updated": True}],
+])
+def test_board_snapshot_reuses_exact_json_bytes_for_manifest(rows):
+    reply = {"ok": True, "board_rev": 1, "items": rows}
+    wire, encoded_rows = bg_helper._encode_board_snapshot(reply)
+
+    assert wire == json.dumps(reply, default=str).encode() + b"\n"
+    assert bg_helper._board_manifest(rows, encoded_rows=encoded_rows) == bg_helper._board_manifest(rows)
 
 
 def test_gh_proxy_reuses_exact_rows_on_changed_board(helper):

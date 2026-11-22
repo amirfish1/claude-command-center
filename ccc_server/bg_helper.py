@@ -63,6 +63,7 @@ READY_TIMEOUT_S = 60.0
 MAX_CONSECUTIVE_ERRORS = 3
 # The child keeps the GitHub watch loop alive this long after the last tick.
 GH_TICK_GRACE_S = 15.0
+_BOARD_MANIFEST_MAX_ITEMS = 32768
 CHILD_ENV = "CCC_BG_HELPER_CHILD"
 
 _lock = threading.Lock()
@@ -238,16 +239,32 @@ def status():
 # -------------------------------------------------------------------- child
 
 
-def _board_manifest(items):
+def _encode_board_snapshot(reply):
+    """Encode the full gh_tick reply and keep the row bytes for its manifest."""
+    header = {key: value for key, value in reply.items() if key != "items"}
+    parts = [json.dumps(header, default=str).encode()[:-1], b', "items": [']
+    rows = []
+    for row in reply["items"]:
+        raw = json.dumps(row, default=str).encode()
+        rows.append(raw)
+        parts.extend((raw, b", "))
+    if rows:
+        parts.pop()
+    parts.append(b"]}\n")
+    return b"".join(parts), rows
+
+
+def _board_manifest(items, *, encoded_rows=None):
     """Guard exact JSON values and order without retaining another board."""
-    if len(items) > 32768:
+    if len(items) > _BOARD_MANIFEST_MAX_ITEMS:
         return None
     manifest = {}
     for index, row in enumerate(items):
         ref = row.get("ref") if isinstance(row, dict) else None
         if not isinstance(ref, str) or not ref or ref in manifest:
             return None
-        raw = json.dumps(row, default=str).encode()
+        raw = (json.dumps(row, default=str).encode()
+               if encoded_rows is None else encoded_rows[index])
         manifest[ref] = (index, hashlib.sha256(raw).digest())
     return manifest
 
@@ -316,13 +333,13 @@ class _Child:
         reply["items"] = items
         return reply
 
-    def _remember_board(self, revision, items):
+    def _remember_board(self, revision, items, *, encoded_rows=None):
         with self.lock:
             if revision != self.board_rev:
                 return None
             if self.board_manifest[0] == revision:
                 return self.board_manifest[1]
-        manifest = _board_manifest(items)
+        manifest = _board_manifest(items, encoded_rows=encoded_rows)
         with self.lock:
             if revision == self.board_rev:
                 self.board_manifest = (revision, manifest)
@@ -439,11 +456,16 @@ class _Child:
                 reply = {"ok": False, "error": str(exc)}
             if op == "live_activity" and reply.get("ok"):
                 reply["ready_at"] = time.time()
-            conn.sendall(json.dumps(reply, default=str).encode() + b"\n")
-            if op == "gh_tick" and req.get("board_delta") is True and "items" in reply:
-                # Let the receiver consume the cold response while we build
-                # its fingerprint on the helper's interpreter.
-                self._remember_board(reply["board_rev"], reply["items"])
+            items = reply.get("items") if op == "gh_tick" and req.get("board_delta") is True else None
+            encoded_rows = None
+            if isinstance(items, list) and len(items) <= _BOARD_MANIFEST_MAX_ITEMS:
+                body, encoded_rows = _encode_board_snapshot(reply)
+            else:
+                body = json.dumps(reply, default=str).encode() + b"\n"
+            conn.sendall(body)
+            del body
+            if items is not None:
+                self._remember_board(reply["board_rev"], items, encoded_rows=encoded_rows)
         except Exception:
             pass
         finally:
