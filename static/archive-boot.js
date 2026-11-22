@@ -31,9 +31,13 @@
   };
   // This tiny hint schedules reads only. Readiness still requires the actual
   // persisted body and a current server response, never the hint or disk alone.
-  let savedHint = false;
+  let savedHint = false, validatorHint = null;
   try {
-    const at = Number(localStorage.getItem(hintKey));
+    const stored = localStorage.getItem(hintKey);
+    if (windowName === 'all' && stored?.startsWith('{') && stored.length <= 2048) {
+      validatorHint = JSON.parse(stored);
+    }
+    const at = validatorHint?.at ?? Number(stored);
     const age = Date.now() - at;
     savedHint = at > 0 && age >= 0 && age < 86400000;
   } catch (_) {}
@@ -207,9 +211,15 @@
         const {rows, ...metadata} = value;
         const store = tx.objectStore('snapshot');
         const at = Date.now();
-        const markSaved = () => {
+        const markSaved = bytes => {
           tx.oncomplete = () => {
-            try { localStorage.setItem(hintKey, String(at)); } catch (_) {}
+            try {
+              const {etag, delta, order} = metadata;
+              const hint = windowName === 'all'
+                ? JSON.stringify({url:fullUrl, at, bytes, etag, delta, order})
+                : String(at);
+              localStorage.setItem(hintKey, hint);
+            } catch (_) {}
           };
         };
         const writeFull = () => {
@@ -225,7 +235,7 @@
           if (bytes > maxBytes) return;
           store.put({...metadata, ...storage, bytes, at}, 'last');
           store.put({...metadata, bytes, at}, 'header');
-          markSaved();
+          markSaved(bytes);
         };
         if (!delta?.from || !value.delta || delta.changes.length > maxPatchRows) {
           writeFull();
@@ -255,7 +265,7 @@
                 const baseAt = old.baseAt ?? old.at;
                 const baseDelta = old.baseDelta ?? old.delta;
                 store.put({...metadata, patchJson, bytes, baseBytes, baseAt, baseDelta, at}, 'header');
-                markSaved();
+                markSaved(bytes);
                 return;
               }
             } catch (_) {}
@@ -289,8 +299,9 @@
       recentController?.abort();
       if (!started) { skipped = true; clearTimeout(recentTimer); finishRecent(null); }
     }};
-  snapshot.fetch = header.then(async metadata => {
-    const value = metadata || await read;
+  const earlyValidator = validHeader(validatorHint) ? validatorHint : null;
+  snapshot.fetch = (async () => {
+    const value = earlyValidator || await header || await read;
     // Without a persisted base, start a fresh complete read during boot too.
     // The recent-row request remains independent; either validated response
     // can win without waiting for the large application to start its fetch.
@@ -306,6 +317,11 @@
       if (windowName === 'all') target += '&row_layouts=1&order_spans=1';
       const headers = value?.etag ? {'If-None-Match':value.etag} : {};
       if (windowName === 'all') headers['X-CCC-Abort-On-Disconnect'] = '1';
+      const matchesBase = base => base && base.etag === value.etag && base.delta === value.delta
+        && base.at === value.at && (!savedOrder || base.order === savedOrder);
+      // Start from the committed hint while IndexedDB opens. A concurrent
+      // save or cleared storage can invalidate it; stop the speculative read.
+      if (earlyValidator) read.then(base => { if (!matchesBase(base)) controller.abort(); });
       const response = await window.fetch(target, {signal:controller.signal, headers});
       response._cccArchiveTiming = {start,headers:performance.now()};
       if (response.ok && response.status !== 304) {
@@ -317,8 +333,7 @@
       const base = await read;
       // Conditional validation still requires the exact persisted body.
       // An unconditional full response needs no saved base.
-      if (value && (!base || base.etag !== value.etag || base.delta !== value.delta
-          || base.at !== value.at || (savedOrder && base.order !== savedOrder))) {
+      if (value && !matchesBase(base)) {
         body?.then(() => { delete response._cccArchivePackedBytes; }, () => {});
         startRecent(); return null;
       }
@@ -339,6 +354,6 @@
       return response;
     } catch (_) { startRecent(); return null; }
     finally { if (!body) clearTimeout(timeout); }
-  });
+  })();
   window.__cccArchiveSnapshot = snapshot;
 })();
