@@ -126,8 +126,10 @@ test('desktop and phone render only locally attributed work and retain ticket/se
       await page.setViewport({width,height:760});
       assert.deepEqual(await page.$$eval('[data-workers-pending-id]',nodes=>nodes.map(n=>n.dataset.workersPendingId)),
         ['starting-worker','local-worker','third-worker'], 'every live worker has a row, including the ticket claimant');
-      assert.match(await page.$eval('[data-workers-pending-id=local-worker]',el=>el.innerText), /EXAMPLE-1/);
-      assert.equal(await page.$eval('[data-workers-pending-id=local-worker] .workers-pending-session',el=>el.textContent), 'Local fix');
+      assert.doesNotMatch(await page.$eval('.workers-pending-list',el=>el.innerText), /EXAMPLE-1|Local fix/);
+      assert.equal(await page.$eval('[data-workers-pending-id=local-worker] .workers-pending-session',el=>el.textContent), 'EXAMPLE · local-worker');
+      assert.deepEqual(await page.$$eval('[data-workers-ticket="EXAMPLE-1"] .workers-ticket-title',nodes=>nodes.map(el=>el.textContent)), ['Local fix']);
+      assert.equal(await page.$eval('[data-workers-ticket="EXAMPLE-1"] .fq-recent-state',el=>el.textContent), 'Working');
       assert.equal(await page.$eval('[data-workers-pending-id=local-worker] .workers-pending-state',el=>el.textContent), 'Active');
       for (const size of await page.$$eval('[data-workers-pending-id]',nodes=>nodes.map(el=>({
         height:el.getBoundingClientRect().height,
@@ -144,6 +146,18 @@ test('desktop and phone render only locally attributed work and retain ticket/se
     }
     await page.click('[data-workers-pending-session="local-session"]');
     assert.equal(await page.evaluate(()=>picked.at(-1)), 'local-session');
+
+    await page.evaluate(() => {
+      _uxqHealthCache.wt_workers.find(w => w.worker_id === 'local-worker').claimed_tickets = [
+        {ref:'EXAMPLE-1',title:'Local fix'},
+        {ref:'EXAMPLE-4',title:'Newly claimed work'},
+      ];
+      _uxqRenderRecentWork();
+    });
+    const roster = await page.$eval('[data-workers-pending-id=local-worker]',el=>el.innerText);
+    assert.match(roster, /EXAMPLE-4/);
+    assert.match(roster, /Newly claimed work/);
+    assert.doesNotMatch(roster, /EXAMPLE-1|Local fix/);
 
   } finally {await browser.close();}
 });

@@ -34371,7 +34371,8 @@
           .flatMap(id => [...(tickets.get(id) || [])]))];
         const assigned = refs.map(ref => items.get(ref)).filter(Boolean)
           .sort((a, b) => (Date.parse(b.claimed_at || '') || 0) - (Date.parse(a.claimed_at || '') || 0));
-        if (!refs.length) for (const claim of w.claimed_tickets || []) {
+        for (const claim of w.claimed_tickets || []) {
+          if (refs.includes(claim.ref)) continue;
           refs.push(claim.ref);
           assigned.push(items.get(claim.ref) || {ref:claim.ref, title:claim.title, claimed_at:claim.claimed_at});
         }
@@ -34393,7 +34394,7 @@
       : {label:'Standing by', css:'', text:'The worker process is running with no recent activity.'};
     return {label:'Session not listed', css:'', text:'The worker session is registered; activity details are unavailable.'};
   }
-  function _workersPendingHtml(workers) {
+  function _workersPendingHtml(workers, listedRefs = new Set()) {
     if (!workers.length) return '';
     return '<section class="workers-pending-list" aria-label="Live workers on this machine">'
       + workerSectionHeaderHtml('unlisted', workers.length, 'Live workers')
@@ -34525,7 +34526,8 @@
       _workersTicketRecentSignature = signature;
       _scheduleSidebarRender({ lifecycle: true });
     }
-    const html = _workersPendingHtml(pending) + rows.map((row, i) => {
+    const listedRefs = new Set(rows.map(row => _uxqItemRef(row.item)));
+    const html = _workersPendingHtml(pending, listedRefs) + rows.map((row, i) => {
       const item = row.item;
       const ref = _uxqItemRef(item);
       const title = String(item.title || item.note || item.text || '').split('\n')[0]
