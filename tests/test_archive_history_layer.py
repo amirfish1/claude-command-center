@@ -1,4 +1,7 @@
 import contextlib
+import gzip
+import json
+import zlib
 
 import server
 from ccc_server import archive_history_layer as layer, archive_store
@@ -67,7 +70,10 @@ def test_persisted_basis_is_scoped_and_corruption_falls_back(tmp_path, monkeypat
     assert layer.write_basis(target, "current", basis)
     assert layer.load_basis(target, "current") == basis
     assert layer.load_basis(target, "different") is None
-    target.write_bytes(target.read_bytes()[:-1] + b"X")
+    saved = target.read_bytes()
+    target.write_bytes(saved[: layer._HEADER.size - 1])
+    assert layer.load_basis(target, "current") is None
+    target.write_bytes(saved[:-1] + b"X")
     assert layer.load_basis(target, "current") is None
 
 
@@ -82,7 +88,7 @@ def test_persisted_basis_replays_and_validates_when_the_current_projection_agree
     key = server._archive_response_cache_key()
     scope = server._archive_history_scope(key)
     basis = layer.make_basis(inputs, set(), {}, dict(metadata, conversations=[row]))
-    assert layer.write_basis(path.with_suffix(".sidebar-layer"), scope, basis)
+    assert layer.write_basis(layer.basis_path(path), scope, basis)
 
     monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", path)
     monkeypatch.setattr(server, "_ARCHIVE_HISTORY_STATE",
@@ -98,10 +104,35 @@ def test_persisted_basis_replays_and_validates_when_the_current_projection_agree
         return layer.View(inputs, frozenset(), {}, "candidate", metadata, {}), [], []
 
     monkeypatch.setattr(server, "_archive_history_project_cut", checked_projection)
-    assert server._archive_history_response(key, {}, basis.token, basis.order_token,
+    assert server._archive_history_response(key, {}, basis.token, basis.order_token, ("gzip",),
                                            phases={}, check_client=None) == (None, None, etag)
-    assert server._archive_history_response(key, {}, "", "",
-                                           phases={}, check_client=None) == (basis.frame, "zstd", etag)
+    assert server._archive_history_response(key, {}, "", "", ("zstd", "gzip"),
+                                           phases={}, check_client=None) == (basis.frames["zstd"], "zstd", etag)
+    body, encoding, validator = server._archive_history_response(
+        key, {}, "", "", ("gzip",), phases={}, check_client=None)
+    assert (encoding, validator) == ("gzip", etag)
+    assert json.loads(gzip.decompress(body))["patch"]["same_order"] is True
+
+
+def test_gzip_basis_and_patch_work_without_zstd(tmp_path, monkeypatch):
+    monkeypatch.setattr(layer.list_encoding, "_zstd", lambda raw: None)
+    source = layer.read_inputs(inventory("a"), {}, {}, (), overlay_maps=(), edges=())
+    basis = layer.make_basis(source, set(), {}, {"conversations": [{"session_id": "a"}]})
+    assert set(basis.frames) == {"gzip"}
+    target = layer.basis_path(tmp_path / "archive.json")
+    assert layer.write_basis(target, "test-scope", basis)
+    basis = layer.load_basis(target, "test-scope")
+    patch = layer.delta_payload(("a",), ("a", "b"), basis.token, "new",
+                                {"conversations": [{"session_id": "b"}]})
+    encoded = layer.layer_representation(basis, patch, "gzip")
+    decoder = zlib.decompressobj(wbits=31)
+    envelope = json.loads(decoder.decompress(encoded))
+    assert decoder.eof and not decoder.unused_data
+    assert envelope["history_layer"] == 1
+    assert envelope["base"]["delta_token"] == basis.token
+    assert envelope["patch"]["since"] == basis.token
+    assert envelope["patch"]["delta_token"] == "new"
+    assert json.loads(gzip.decompress(layer.delta_representation(patch, "gzip")))["ids"] == ["a", "b"]
 
 
 def test_known_deletion_rechecks_remaining_family_and_explicit_order():

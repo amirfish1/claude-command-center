@@ -19452,7 +19452,7 @@ def _archive_history_publish_basis(key, cache_options, phases, *, captured_hot=N
     )
     if basis is None:
         return None
-    target = _ARCHIVE_RESPONSE_CACHE_FILE.with_suffix(".sidebar-layer")
+    target = layer.basis_path(_ARCHIVE_RESPONSE_CACHE_FILE)
     return basis if layer.write_basis(target, _archive_history_scope(key), basis) else None
 
 
@@ -19497,7 +19497,7 @@ def _archive_history_publisher_main():
 
 
 def _archive_history_start_publication():
-    from ccc_server import background_work
+    from ccc_server import archive_history_layer as layer, background_work
 
     global _ARCHIVE_HISTORY_PUBLISH_LAST_START
     now = time.monotonic()
@@ -19511,7 +19511,7 @@ def _archive_history_start_publication():
 
     def publish():
         started = time.perf_counter()
-        target = _ARCHIVE_RESPONSE_CACHE_FILE.with_suffix(".sidebar-layer")
+        target = layer.basis_path(_ARCHIVE_RESPONSE_CACHE_FILE)
         previous = _archive_history_artifact(target)
         try:
             with background_work.slot():
@@ -19536,8 +19536,8 @@ def _archive_history_start_publication():
         _ARCHIVE_HISTORY_PUBLISH_LOCK.release()
 
 
-def _archive_history_response(key, cache_options, since, saved_order, *, phases, check_client):
-    """Build one exact All response using a local stored projection basis."""
+def _archive_history_response(key, cache_options, since, saved_order, encodings, *, phases, check_client):
+    """Build one exact All response using a stored projection basis."""
     import sqlite3
     from ccc_server import archive_history_layer as layer, continuation_topics
 
@@ -19552,7 +19552,7 @@ def _archive_history_response(key, cache_options, since, saved_order, *, phases,
         if check_client is not None:
             check_client()
         state = _ARCHIVE_HISTORY_STATE
-        target = _ARCHIVE_RESPONSE_CACHE_FILE.with_suffix(".sidebar-layer")
+        target = layer.basis_path(_ARCHIVE_RESPONSE_CACHE_FILE)
         scope = _archive_history_scope(key)
         artifact = _archive_history_artifact(target)
         if not state["loaded"] or state["artifact"] != artifact:
@@ -19562,6 +19562,9 @@ def _archive_history_response(key, cache_options, since, saved_order, *, phases,
         basis = state["basis"]
         if basis is None:
             phases["needs_basis"] = True
+            return None
+        encoding = next((item for item in encodings if item in basis.frames), None)
+        if encoding is None:
             return None
         views = state["views"]
         previous = views.get(since) if since else None
@@ -19591,20 +19594,21 @@ def _archive_history_response(key, cache_options, since, saved_order, *, phases,
                 break
         payload = dict(current.metadata, conversations=changed)
         with _archive_history_timing(phases, "encode"):
-            if (not changed and base.inputs.order == current.inputs.order
-                    and base.metadata == current.metadata):
+            unchanged = (not changed and base.inputs.order == current.inputs.order
+                         and base.metadata == current.metadata)
+            if unchanged:
                 current = layer.View(current.inputs, current.working, current.activity,
                                      base.token, current.metadata, current.effect_rows)
-                body, encoding = (None, None) if delta else (basis.frame, "zstd")
+            if unchanged and (delta or encoding == "zstd"):
+                body, encoding = (None, None) if delta else (basis.frames[encoding], encoding)
             else:
                 patch = layer.delta_payload(
                     base.inputs.order, current.inputs.order, base.token, current.token, payload,
                     saved_order=not delta or saved_order == _archive_list_order_token(base.inputs.order))
-                body = (layer.delta_representation(patch) if delta else
-                        layer.layer_representation(basis, patch))
+                body = (layer.delta_representation(patch, encoding) if delta else
+                        layer.layer_representation(basis, patch, encoding))
                 if body is None:
                     return None
-                encoding = "zstd"
         if check_client is not None:
             check_client()
         _trace_row_flicker(None, now=now, activity=current.activity)
@@ -38256,21 +38260,22 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                             else None)
             history_needs_basis = False
             if (not initial and window == "all" and stale_ok and not any(cache_options.values())
-                    and qs.get("history_layer", ["0"])[0] == "1"
-                    and not phone_access.is_remote_request(self.client_address[0], self.headers)):
+                    and qs.get("history_layer", ["0"])[0] == "1"):
+                from ccc_server.archive_history_layer import ENCODINGS
                 from ccc_server.static_encoding import accepted_encodings
 
-                if accepted_encodings(self.headers.get("Accept-Encoding"), supported=("zstd",)):
+                encodings = accepted_encodings(self.headers.get("Accept-Encoding"), supported=ENCODINGS)
+                if encodings:
                     history_phases = {}
 
                     def build_history(check_client):
                         return _archive_history_response(
-                            list_cache_key, cache_options, since, saved_order,
+                            list_cache_key, cache_options, since, saved_order, encodings,
                             phases=history_phases, check_client=check_client)
 
                     try:
                         layer_response = _archive_list_history_projection(
-                            (list_cache_key, since, saved_order), None,
+                            (list_cache_key, since, saved_order, encodings), None,
                             build_history, history_phases, check_client)
                     except _ArchiveListClientDisconnected:
                         return

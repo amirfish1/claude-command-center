@@ -4,22 +4,30 @@
 
 from collections import defaultdict, deque
 from dataclasses import dataclass
+import gzip
 import hashlib
 import json
 import os
 from pathlib import Path
+from struct import Struct
 import tempfile
 import uuid
+import zlib
 
 from ccc_server import archive_list_replay, archive_store, list_encoding
 
 
 # Bump when persisted projection or guard semantics change.
-VERSION = 7
+VERSION = 8
+ENCODINGS = ("zstd", "gzip")
+_HEADER = Struct(">III")
+_GZIP_TRAILER = Struct("<II")
+_LAYER_PREFIX = b'{"base":'
 MAX_ROWS = 32768
 MAX_PATCH_ROWS = 8192
 _MAX_BASE_BYTES = 16 << 20
 _MAX_INDEX_BYTES = 32 << 20
+_GZIP_LEVEL = 3
 _ENCODE_GUARD = json.JSONEncoder(separators=(",", ":")).encode
 
 
@@ -63,7 +71,8 @@ class Basis:
     activity: dict
     token: str
     order_token: str
-    frame: bytes
+    frames: dict
+    gzip_check: tuple
     metadata: dict
     effect_rows: dict
 
@@ -99,6 +108,17 @@ def same_projection(first, second):
             and first.overlays == second.overlays)
 
 
+def basis_path(cache_file):
+    return cache_file.with_suffix(f".sidebar-layer-v{VERSION}")
+
+
+def _digest(parts):
+    digest = hashlib.sha256()
+    for part in parts:
+        digest.update(part)
+    return digest.digest()
+
+
 def make_basis(inputs, working, activity, payload, *, effect_rows=None):
     rows = payload["conversations"]
     packed = archive_list_replay.pack_row_layouts(rows)
@@ -107,12 +127,24 @@ def make_basis(inputs, working, activity, payload, *, effect_rows=None):
     raw = archive_list_replay.encode_payload(
         dict(payload, row_layouts=packed[0], conversations=packed[1],
              delta_token=token, order_token=order), compact=True)
-    frame = list_encoding._zstd(raw)
-    if frame is None or len(frame) > _MAX_BASE_BYTES:
+    frames = {}
+    zstd_frame = list_encoding._zstd(raw)
+    if zstd_frame and len(zstd_frame) <= _MAX_BASE_BYTES:
+        frames["zstd"] = zstd_frame
+    # Leave the gzip member open so a small patch can complete it later.
+    gzip_encoder = zlib.compressobj(_GZIP_LEVEL, wbits=31)
+    gzip_prefix = (gzip_encoder.compress(_LAYER_PREFIX) + gzip_encoder.compress(raw)
+                   + gzip_encoder.flush(zlib.Z_FULL_FLUSH))
+    gzip_check = ()
+    if len(gzip_prefix) <= _MAX_BASE_BYTES:
+        frames["gzip"] = gzip_prefix
+        gzip_check = (zlib.crc32(raw, zlib.crc32(_LAYER_PREFIX)), len(_LAYER_PREFIX) + len(raw))
+    if not frames:
         return None
     metadata = {key: value for key, value in payload.items() if key != "conversations"}
     effect_rows = effect_rows if effect_rows and len(effect_rows) <= MAX_PATCH_ROWS else {}
-    return Basis(inputs, frozenset(working), activity, token, order, frame, metadata, effect_rows)
+    return Basis(inputs, frozenset(working), activity, token, order, frames, gzip_check,
+                 metadata, effect_rows)
 
 
 def write_basis(target, scope, basis):
@@ -121,18 +153,23 @@ def write_basis(target, scope, basis):
     inputs = basis.inputs
     state = (VERSION, scope, inputs.order, inputs.sources, inputs.overlays,
              inputs.edges, sorted(basis.working),
-             basis.activity, basis.token, basis.order_token, basis.metadata, basis.effect_rows)
+             basis.activity, basis.token, basis.order_token, basis.gzip_check,
+             basis.metadata, basis.effect_rows)
     metadata = _ENCODE_GUARD(state).encode("ascii")
-    if len(metadata) > _MAX_INDEX_BYTES or len(basis.frame) > _MAX_BASE_BYTES:
+    frames = tuple(basis.frames.get(encoding, b"") for encoding in ENCODINGS)
+    if (len(metadata) > _MAX_INDEX_BYTES or not any(frames)
+            or any(len(frame) > _MAX_BASE_BYTES for frame in frames)):
         return False
+    parts = (*frames, metadata)
+    header = _HEADER.pack(*(len(part) for part in parts))
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(dir=target.parent, prefix=target.name + ".", suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as stream:
-            stream.write(len(metadata).to_bytes(4, "big"))
-            stream.write(hashlib.sha256(basis.frame + metadata).digest())
-            stream.write(basis.frame)
-            stream.write(metadata)
+            stream.write(header)
+            stream.write(_digest((header, *parts)))
+            for part in parts:
+                stream.write(part)
         os.replace(name, target)
     finally:
         try:
@@ -147,27 +184,37 @@ def load_basis(target, scope):
     try:
         with open(target, "rb") as stream:
             size = os.fstat(stream.fileno()).st_size
-            index_bytes = int.from_bytes(stream.read(4), "big")
-            digest = stream.read(32)
-            frame_bytes = size - 36 - index_bytes
-            if not 0 < index_bytes <= _MAX_INDEX_BYTES or not 0 < frame_bytes <= _MAX_BASE_BYTES:
+            header = stream.read(_HEADER.size)
+            if len(header) != _HEADER.size:
                 return None
-            frame = stream.read(frame_bytes)
+            *frame_bytes, index_bytes = _HEADER.unpack(header)
+            digest = stream.read(32)
+            if (not 0 < index_bytes <= _MAX_INDEX_BYTES or not any(frame_bytes)
+                    or any(length > _MAX_BASE_BYTES for length in frame_bytes)
+                    or len(digest) != 32
+                    or size != _HEADER.size + 32 + sum(frame_bytes) + index_bytes):
+                return None
+            frames = {encoding: stream.read(length)
+                      for encoding, length in zip(ENCODINGS, frame_bytes) if length}
             metadata = stream.read(index_bytes)
-        if hashlib.sha256(frame + metadata).digest() != digest:
+        if _digest((header, *frames.values(), metadata)) != digest:
             return None
         (version, saved_scope, order, sources, overlays, edges,
-         working, activity, token, order_token, payload_metadata, effect_rows) = json.loads(metadata)
+         working, activity, token, order_token, gzip_check, payload_metadata, effect_rows) = json.loads(metadata)
         if (version != VERSION or saved_scope != scope or len(order) > MAX_ROWS
                 or len(order) != len(sources) or set(order) != sources.keys()
                 or order_token != archive_list_replay.order_token(order)
                 or not isinstance(payload_metadata, dict) or not isinstance(effect_rows, dict)
                 or len(effect_rows) > MAX_PATCH_ROWS or not effect_rows.keys() <= sources.keys()):
             return None
+        if (not isinstance(gzip_check, list)
+                or len(gzip_check) != (2 if "gzip" in frames else 0)
+                or any(type(item) is not int or not 0 <= item < 2**32 for item in gzip_check)):
+            return None
         inputs = Inputs(tuple(order), {sid: tuple(value) for sid, value in sources.items()},
                         tuple(overlays), tuple(map(tuple, edges)))
-        return Basis(inputs, frozenset(working), activity, token, order_token, frame,
-                     payload_metadata, effect_rows)
+        return Basis(inputs, frozenset(working), activity, token, order_token, frames,
+                     tuple(gzip_check), payload_metadata, effect_rows)
     except (OSError, ValueError, TypeError, AttributeError):
         return None
 
@@ -187,17 +234,29 @@ def delta_payload(previous_order, current_order, previous_token, current_token, 
     return patch
 
 
-def layer_representation(basis, patch):
-    """Use independent RFC 9659-compatible frames in one HTTP response."""
+def layer_representation(basis, patch, encoding):
+    """Compose one HTTP response from an encoded archive and the current patch."""
     layouts, rows = archive_list_replay.pack_row_layouts(patch["conversations"])
     patch = dict(patch, row_layouts=layouts, conversations=rows)
-    prefix = list_encoding._zstd(b'{"base":')
-    tail = list_encoding._zstd(b',"history_layer":1,"patch":' + _ENCODE_GUARD(patch).encode("ascii") + b'}')
-    return None if prefix is None or tail is None else b"".join((prefix, basis.frame, tail))
+    tail = b',"history_layer":1,"patch":' + _ENCODE_GUARD(patch).encode("ascii") + b'}'
+    if encoding == "gzip":
+        # The published prefix ends at a full flush. Start an independent
+        # deflate block and finish the same gzip member with a cumulative CRC.
+        encoder = zlib.compressobj(_GZIP_LEVEL, wbits=-15)
+        block = encoder.compress(tail) + encoder.flush()
+        checksum, length = basis.gzip_check
+        trailer = _GZIP_TRAILER.pack(zlib.crc32(tail, checksum), (length + len(tail)) % 2**32)
+        return b"".join((basis.frames["gzip"], block, trailer))
+    prefix = list_encoding._zstd(_LAYER_PREFIX)
+    suffix = list_encoding._zstd(tail)
+    return None if prefix is None or suffix is None else b"".join((prefix, basis.frames["zstd"], suffix))
 
 
-def delta_representation(patch):
-    return list_encoding._zstd(_ENCODE_GUARD(patch).encode("ascii"))
+def delta_representation(patch, encoding):
+    raw = _ENCODE_GUARD(patch).encode("ascii")
+    if encoding == "zstd":
+        return list_encoding._zstd(raw)
+    return gzip.compress(raw, compresslevel=_GZIP_LEVEL, mtime=0)
 
 
 def row_edges(rows):
