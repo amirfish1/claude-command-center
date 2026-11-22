@@ -32,7 +32,7 @@ test('proxy 502/503/504 and network failures recover without leaking an error', 
         if (failure === 'network') throw new TypeError('Failed to fetch');
         return new Response('proxy unavailable', {status: failure});
       }
-      assert.match(h.node().textContent, /restarting.*retrying/);
+      assert.equal(h.node().textContent, 'Server unavailable. Retrying for up to 60s.');
       return new Response('{"ok":true}');
     });
     const response = await h.fetch('/api/health');
@@ -46,9 +46,11 @@ test('late POST explicitly rejected before execution can retry its Request body'
   const bodies = [];
   const h = harness(async request => {
     bodies.push(await request.text());
-    return bodies.length === 1
-      ? new Response('{}', {status: 503, headers: {'X-CCC-Restarting': '1'}})
-      : new Response('{"saved":true}');
+    if (bodies.length === 1) {
+      return new Response('{}', {status: 503, headers: {'X-CCC-Restarting': '1'}});
+    }
+    assert.equal(h.node().textContent, 'Server restarting. Retrying for up to 60s.');
+    return new Response('{"saved":true}');
   });
   const response = await h.fetch(new Request('http://localhost/api/save', {method: 'POST', body: 'save-once'}));
   assert.equal(response.status, 200);
@@ -105,7 +107,7 @@ test('recovery is bounded and provides a next step when the service stays down',
   const h = harness(async () => { calls++; return new Response('', {status: 502}); }, {expire: true});
   assert.equal((await h.fetch('/api/health')).status, 502);
   assert.equal(calls, 2);
-  assert.match(h.node().textContent, /still unavailable/);
+  assert.equal(h.node().textContent, 'Request failed. Try again if needed.');
 });
 
 test('validation, authentication, unrelated URLs and ordinary errors pass through', async () => {
@@ -144,10 +146,10 @@ test('unrelated success cannot erase exhausted recovery; user can dismiss it', a
   let calls = 0;
   const h = harness(async () => new Response('{}', {status: calls++ < 2 ? 502 : 200}), {expire: true});
   await h.fetch('/api/health');
-  assert.match(h.node().textContent, /still unavailable/);
+  assert.match(h.node().textContent, /Request failed/);
   await h.fetch('/api/health');
   assert.equal(h.node().hidden, false);
-  assert.match(h.node().textContent, /still unavailable/);
+  assert.match(h.node().textContent, /Request failed/);
   h.node().child.click();
   assert.equal(h.node().hidden, true);
 });

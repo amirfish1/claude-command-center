@@ -7,9 +7,11 @@
   let notice;
   let message = '';
   let terminalMessage = '';
-  const retryMessage = 'Server restarting or unavailable; retrying…';
+  let retryMessage = '';
+  const retryLimit = `Retrying for up to ${recoveryMs / 1000}s.`;
 
   function render(text) {
+    if (notice && message === text) return;
     message = text;
     if (!document.body) {
       document.addEventListener('DOMContentLoaded', () => render(message), { once: true });
@@ -77,7 +79,6 @@
     const template = input instanceof Request ? new Request(input, init) : new Request(url, init);
     const deadline = Date.now() + recoveryMs;
     let recovering = false;
-    let failure = '';
     let attempt = 0;
     try {
       while (true) {
@@ -89,10 +90,7 @@
           error = err;
         }
         const transient = error || (response && [502, 503, 504].includes(response.status));
-        if (!transient) {
-          if (recovering && active === 1 && !terminalMessage) render('');
-          return response;
-        }
+        if (!transient) return response;
         const notStarted = response && response.status === 503
           && response.headers.get('X-CCC-Restarting') === '1';
         if (!read && !notStarted) {
@@ -100,19 +98,19 @@
           // that this POST was a save). Let the feature report its own error;
           // passive beacons and handled failures must not leave a global
           // unsaved-change warning behind. Never replay the ambiguous write.
-          failure = 'Connection interrupted. Check whether your change was saved before retrying.';
+          const failure = 'Connection interrupted. Check whether your change was saved before retrying.';
           if (error) throw new Error(failure, { cause: error });
           return response;
         }
         if (Date.now() >= deadline) {
-          failure = 'Server still unavailable. Please try again when it reconnects.';
-          terminalMessage = failure;
-          render(failure);
-          if (error) throw new Error(failure, { cause: error });
+          terminalMessage = 'Request failed. Try again if needed.';
+          render(terminalMessage);
+          if (error) throw new Error(terminalMessage, { cause: error });
           return response;
         }
         if (!recovering) { recovering = true; active += 1; }
-        render(terminalMessage || retryMessage);
+        retryMessage = `${notStarted ? 'Server restarting.' : 'Server unavailable.'} ${retryLimit}`;
+        if (!terminalMessage) render(retryMessage);
         // Release error bodies before waiting; don't retain a proxy connection.
         if (response && response.body) await response.body.cancel().catch(() => {});
         const delay = Math.min(2000, 300 * (2 ** Math.min(attempt++, 3)));
