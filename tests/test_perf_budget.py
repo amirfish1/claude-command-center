@@ -6780,3 +6780,47 @@ def test_archive_scoped_spawn_markers_stat_only_requested_sessions(monkeypatch, 
     scoped["selected"]["spawned_via"] = "changed"
     assert server._load_spawn_markers(["selected"]) == {"selected": full["selected"]}
     assert scans == []
+
+
+def test_one_shot_archive_refresh_does_not_schedule_full_marker_rescan(monkeypatch, tmp_path):
+    from unittest import mock
+
+    from ccc_server import cpu_priority
+
+    marker_dir = tmp_path / "markers"
+    marker_dir.mkdir()
+    marker = marker_dir / "one.json"
+    marker.write_text('{"spawned_via":"ui"}')
+    monkeypatch.setattr(server, "SPAWN_MARKERS_DIR", marker_dir)
+    monkeypatch.setattr(server, "_SPAWN_MARKER_MEMO", {"dir": None, "ts": 0, "out": {}})
+    monkeypatch.setattr(server, "_SPAWN_MARKER_FILE_CACHE", {})
+    monkeypatch.setattr(server, "_SPAWN_MARKER_INDEX_LOADED", set())
+    monkeypatch.setattr(server, "_SPAWN_MARKER_INDEX_DIR_MTIME", {})
+    monkeypatch.setattr(server, "_SPAWN_MARKER_REVALIDATING", threading.Event())
+    monkeypatch.setattr(server, "_WT_DISPLAY_SNAPSHOT_ONLY", False)
+    assert server._load_spawn_markers()["one"]["spawned_via"] == "ui"
+    assert server._spawn_marker_index_path().is_file()
+
+    # Give the worker a cold memo with a valid on-disk marker index.
+    server._SPAWN_MARKER_MEMO.update(dir=None, ts=0, out={})
+    server._SPAWN_MARKER_FILE_CACHE.clear()
+    server._SPAWN_MARKER_INDEX_LOADED.clear()
+    server._SPAWN_MARKER_INDEX_DIR_MTIME.clear()
+
+    def compute(*args, **kwargs):
+        assert server._load_spawn_markers(["one"])["one"]["spawned_via"] == "ui"
+        marker.write_text('{"spawned_via":"api"}')
+        server._SPAWN_MARKER_MEMO["ts"] -= server._SPAWN_MARKER_MEMO_TTL_S + 1
+        assert server._load_spawn_markers(["one"])["one"]["spawned_via"] == "api"
+        return [], True
+
+    monkeypatch.setattr(cpu_priority, "set_background_priority", lambda role: None)
+    monkeypatch.setattr(server, "_load_conv_meta_cache", lambda **kwargs: None)
+    monkeypatch.setattr(server, "_load_archive_question_scores", lambda path: server._SOFT_BLOCK_SCORE_MEMO)
+    monkeypatch.setattr(server, "_archive_compute_rows", compute)
+    monkeypatch.setattr(server, "_ARCHIVE_COMPUTE_LAST_PHASES", {})
+    output = tmp_path / "result.json"
+    with mock.patch.object(server.threading, "Thread") as thread:
+        assert server._archive_refresh_worker_main("e30=", output) == 0
+        thread.assert_not_called()
+    assert server._SPAWN_MARKER_BACKGROUND_REVALIDATION

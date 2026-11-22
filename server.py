@@ -6125,6 +6125,7 @@ _SPAWN_MARKER_SCAN_LOCK = threading.Lock()
 _SPAWN_MARKER_INDEX_LOADED = set()
 _SPAWN_MARKER_INDEX_DIR_MTIME = {}
 _SPAWN_MARKER_REVALIDATING = threading.Event()
+_SPAWN_MARKER_BACKGROUND_REVALIDATION = True
 
 
 def _spawn_marker_index_path():
@@ -6237,10 +6238,9 @@ def _load_spawn_markers_locked(now, marker_dir, session_ids=None):
         and _SPAWN_MARKER_INDEX_DIR_MTIME.get(marker_dir[0]) == marker_dir[1]
         and _SPAWN_MARKER_FILE_CACHE
     ):
-        # Cold process, directory unchanged since the index was written: serve
-        # the persisted map now (zero per-file syscalls) and let a background
-        # thread re-stat the files. A stat per marker is a GIL hand-off each,
-        # which is what made the first post-restart list take 15s+.
+        # The directory is unchanged since the index was written. Serve the
+        # persisted map without per-file stats. Long-running processes can
+        # revalidate it for later requests in the background.
         out = {
             os.path.basename(path)[: -len(".json")].strip(): dict(marker)
             for path, (_version, marker) in list(_SPAWN_MARKER_FILE_CACHE.items())
@@ -6248,7 +6248,7 @@ def _load_spawn_markers_locked(now, marker_dir, session_ids=None):
         }
         with _SPAWN_MARKER_MEMO_LOCK:
             _SPAWN_MARKER_MEMO.update(ts=now, dir=marker_dir, out=out, settled=False)
-        if not _SPAWN_MARKER_REVALIDATING.is_set():
+        if _SPAWN_MARKER_BACKGROUND_REVALIDATION and not _SPAWN_MARKER_REVALIDATING.is_set():
             _SPAWN_MARKER_REVALIDATING.set()
 
             def _revalidate():
@@ -21474,7 +21474,7 @@ def _archive_refresh_worker_main(encoded_options, output_path):
     """Build one archive snapshot in a short-lived, low-priority process."""
     import sqlite3
 
-    global _WT_DISPLAY_SNAPSHOT_ONLY
+    global _WT_DISPLAY_SNAPSHOT_ONLY, _SPAWN_MARKER_BACKGROUND_REVALIDATION
     _WT_DISPLAY_SNAPSHOT_ONLY = True
     basis = None
     holder_sample = None
@@ -21490,6 +21490,11 @@ def _archive_refresh_worker_main(encoded_options, output_path):
     except (OSError, ValueError, KeyError, TypeError) as exc:
         print(f"archive refresh worker could not read its input basis: {exc}", file=sys.stderr)
         return 1
+    previous_revalidation = _SPAWN_MARKER_BACKGROUND_REVALIDATION
+    # A one-shot reader has no later requests to warm. Revalidating the full
+    # marker directory can instead compete with its own scoped reads and
+    # result write when the refresh takes longer than the marker memo TTL.
+    _SPAWN_MARKER_BACKGROUND_REVALIDATION = False
     try:
         # This is the __main__ dispatch for --archive-refresh-worker, which
         # exits via SystemExit before ever reaching main()'s normal startup
@@ -21548,6 +21553,8 @@ def _archive_refresh_worker_main(encoded_options, output_path):
         }
     except Exception as exc:
         result = {"ok": False, "error": str(exc)}
+    finally:
+        _SPAWN_MARKER_BACKGROUND_REVALIDATION = previous_revalidation
     try:
         _write_archive_refresh_result(output_path, result, basis=basis)
     except (OSError, ValueError) as exc:

@@ -1,0 +1,1 @@
+- Avoid a redundant full scan of session launch markers during background archive refreshes.
