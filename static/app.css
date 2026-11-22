@@ -32322,6 +32322,13 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 #nsComposerAdvisor .ns-advisor-result { margin: 0 0 10px; }
 #nsComposerAdvisor .ns-advisor-result > strong { font-size: 13px; }
 #nsComposerAdvisor .ns-advisor-why[open] { flex: 1 0 100%; }
+#nsComposerAdvisor .ns-advisor-others > span { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
+#nsComposerAdvisor .ns-advisor-others ul { list-style: none; margin: 4px 0 10px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+#nsComposerAdvisor .ns-advisor-others li { display: flex; flex-direction: column; gap: 1px; }
+#nsComposerAdvisor .ns-advisor-others li > button { align-self: flex-start; font-size: 12px; padding: 1px 6px; text-align: left; }
+#nsComposerAdvisor .ns-advisor-others li > strong { font-size: 12px; font-weight: 500; }
+#nsComposerAdvisor .ns-advisor-others li.is-unavailable { opacity: .65; }
+#nsComposerAdvisor .ns-advisor-others small { color: var(--text-muted); font-size: 11px; }
 #nsComposerAdvisor .ns-auto-restore { font-size: 11px; padding: 3px 8px; }
 #nsComposerAdvisor .ns-advisor-suggest {
   flex: 1 0 100%; font-size: 12px; color: var(--text-muted);

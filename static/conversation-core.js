@@ -22254,6 +22254,22 @@
     } finally { sharedState.nsAdvisor.applying = false; }
   }
 
+  // The other ranked options and why each lost: eligible ones can be picked
+  // directly; skipped ones show the reason (no reading, exhausted, blocked).
+  function nsAdvisorOtherOptionsHtml(choices, best, label) {
+    const esc = sharedState.escapeHtml;
+    const others = choices.filter(c => c !== best);
+    if (!others.length) return '';
+    return '<div class="ns-advisor-others"><span>Other options</span><ul>' + others.map(c => {
+      const index = choices.indexOf(c);
+      const detail = c.unavailable ? 'Skipped: ' + c.unavailable : [c.funding, ...c.notes].filter(Boolean).join(' · ');
+      return '<li' + (c.unavailable ? ' class="is-unavailable"' : '') + '>'
+        + (c.unavailable ? '<strong>' + esc(label(c)) + '</strong>'
+          : '<button type="button" data-advisor-pick="' + index + '">' + esc(label(c)) + '</button>')
+        + '<small>' + esc(detail) + '</small></li>';
+    }).join('') + '</ul></div>';
+  }
+
   function renderNsAdvisor() {
     if (!sharedState.nsAdvisor || sharedState.nsAdvisor.applying || sharedState.currentConversation !== '__new__') return;
     const host = document.getElementById('nsComposerAdvisor');
@@ -22313,7 +22329,9 @@
         : best ? '<div class="ns-advisor-result"><strong>' + (0, sharedState.escapeHtml)(label(best)) + '</strong>'
           + '<span>' + (0, sharedState.escapeHtml)(best.reason || 'Your preferred eligible model for this task depth.') + '</span>'
           + '<small>' + (0, sharedState.escapeHtml)([best.funding, ...best.notes].filter(Boolean).join(' · ')) + '</small></div>'
-        : '<p role="status">No eligible model. Check availability and allowances, or choose a model.</p>')
+          + nsAdvisorOtherOptionsHtml(choices, best, label)
+        : '<p role="status">No eligible model. Check availability and allowances, or choose a model.</p>'
+          + nsAdvisorOtherOptionsHtml(choices, null, label))
       + '<div class="ns-advisor-actions"><button type="button" data-advisor-refresh>Refresh usage</button>'
       + '<button type="button" data-advisor-edit>Preferences</button></div></div></details></div>'
       + suggestHtml;
@@ -22325,6 +22343,13 @@
       renderNsAdvisor();
     }));
     host.querySelector('[data-advisor-use]')?.addEventListener('click', () => { sharedState.nsAdvisor.manual = false; sharedState.nsAdvisor.applied = null; renderNsAdvisor(); });
+    host.querySelectorAll('[data-advisor-pick]').forEach(button => button.addEventListener('click', () => {
+      const choice = choices[Number(button.dataset.advisorPick)];
+      if (!choice || choice.unavailable) return;
+      applyNsAdvisorChoice(choice);
+      sharedState.nsAdvisor.manual = true;
+      renderNsAdvisor();
+    }));
     host.querySelector('[data-advisor-switch]')?.addEventListener('click', () => {
       const suggestion = nsAdvisorChoices().find(c => !c.unavailable);
       if (suggestion) applyNsAdvisorChoice(suggestion);
