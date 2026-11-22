@@ -51,6 +51,44 @@ def test_projection_supports_sqlite_without_table_valued_pragma(thread_db, monke
     assert codex._codex_fetch_threads_in_home(limit=1, columns=("id",)) == [{"id": "thread"}]
 
 
+def test_exact_id_projection_chunks_inside_one_unsorted_snapshot(thread_db, monkeypatch):
+    with sqlite3.connect(thread_db) as con:
+        con.execute("CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT)")
+        con.executemany("INSERT INTO threads VALUES (?, ?)", [
+            ("wanted-a", "First"), ("wanted-b", "Second"), ("outside", "Outside"),
+        ])
+    real_connect = sqlite3.connect
+    calls = []
+    statements = []
+
+    class LowLimitConnection(sqlite3.Connection):
+        def getlimit(self, category):
+            assert category == sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER
+            return 2
+
+    if not hasattr(sqlite3, "SQLITE_LIMIT_VARIABLE_NUMBER"):
+        monkeypatch.setattr(sqlite3, "SQLITE_LIMIT_VARIABLE_NUMBER", 9, raising=False)
+
+    def connect(*args, **kwargs):
+        calls.append(args)
+        con = real_connect(*args, factory=LowLimitConnection, **kwargs)
+        con.set_trace_callback(statements.append)
+        return con
+
+    monkeypatch.setattr(codex.sqlite3, "connect", connect)
+    rows = codex._codex_fetch_threads_in_home(
+        columns=("id", "title"), exact_ids=("missing", "wanted-a", "wanted-b"),
+    )
+    assert {row["id"]: row["title"] for row in rows} == {
+        "wanted-a": "First", "wanted-b": "Second",
+    }
+    assert len(calls) == 1
+    assert statements.count("BEGIN") == 1
+    reads = [sql for sql in statements if "FROM threads WHERE id IN" in sql]
+    assert len(reads) == 2
+    assert all("ORDER BY" not in sql for sql in reads)
+
+
 def test_indexed_projection_work_is_bounded_and_preserves_ties(thread_db, monkeypatch):
     with sqlite3.connect(thread_db) as con:
         _schema(con)

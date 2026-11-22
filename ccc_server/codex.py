@@ -9200,23 +9200,25 @@ def _codex_db_signature(db):
 
 
 def _codex_fetch_threads(where="", params=(), limit=None, columns=None, *,
-                         omit_titles_for=None, batch=True):
+                         omit_titles_for=None, batch=True, exact_ids=None):
     from ccc_server.codex_accounts import homes
     bases = [_core._codex_home()] if os.environ.get("CCC_CODEX_ACCOUNT_KEY") else homes()
     rows = {}
     for home in bases:
         for row in _codex_fetch_threads_in_home(
             where, params, limit, columns, None if home == _core._codex_home() else home,
-            omit_titles_for=omit_titles_for, batch=batch,
+            omit_titles_for=omit_titles_for, batch=batch, exact_ids=exact_ids,
         ):
             rows.setdefault(row["id"], row)
+    if exact_ids is not None:
+        return list(rows.values())
     result = sorted(rows.values(), key=lambda r: r.get("updated_at_ms") or (r.get("updated_at") or 0) * 1000, reverse=True)
     return result[:int(limit)] if limit else result
 
 
 def _codex_fetch_threads_in_home(
     where="", params=(), limit=None, columns=None, home=None, *, omit_titles_for=None,
-    batch=True,
+    batch=True, exact_ids=None,
 ):
     """Read rows from Codex's local thread index without creating files.
 
@@ -9225,6 +9227,7 @@ def _codex_fetch_threads_in_home(
     mode so a dashboard scan cannot create a missing DB or mutate state.
     Narrow projections avoid reading prompt/source payloads on liveness paths.
     The bounded sidebar projection can leave out titles for already-loaded IDs.
+    Exact-ID projections read unordered rows from one snapshot per account.
     """
     columns = tuple(columns) if columns is not None else None
     omit_titles_for = omit_titles_for or ()
@@ -9232,7 +9235,7 @@ def _codex_fetch_threads_in_home(
     query_params = (*params, int(limit)) if limit else params
     for db in (_codex_state_db_candidates() if home is None else _codex_state_db_candidates(home)):
         sig = _codex_db_signature(db)
-        cache_key = (str(db), where, params, limit, columns, bool(omit_titles_for))
+        cache_key = (str(db), where, params, limit, columns, bool(omit_titles_for), exact_ids)
         if sig is not None:
             with _CODEX_THREADS_CACHE_LOCK:
                 hit = _CODEX_THREADS_CACHE.get(cache_key)
@@ -9305,6 +9308,21 @@ def _codex_fetch_threads_in_home(
             deleted = _core._codex_deleted_thread_ids()
 
             def read_rows(order_by, omit_titles=False):
+                if exact_ids is not None:
+                    # These rows fill a dictionary by ID. Avoid repeated opens,
+                    # schema probes and time sorts for batches from one account.
+                    getlimit = getattr(con, "getlimit", None)
+                    batch_size = min(4096, getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER)) if getlimit else 900
+                    fields = ", ".join(selected)
+                    con.execute("BEGIN")
+                    rows = []
+                    for start in range(0, len(exact_ids), batch_size):
+                        ids = exact_ids[start:start + batch_size]
+                        marks = ",".join("?" for _ in ids)
+                        rows.extend(dict(row) for row in con.execute(
+                            f"SELECT {fields} FROM threads WHERE id IN ({marks})", ids,
+                        ))
+                    return rows
                 fields = selected
                 bindings = query_params
                 if omit_titles:
@@ -9731,22 +9749,16 @@ def _codex_titles_snapshot():
 
 def _codex_archive_titles(session_ids):
     """Read current title inputs only for Codex rows in the detached hot view."""
-    columns = ("id", "updated_at", "updated_at_ms", "title", "first_user_message",
-               "agent_nickname", "agent_role", "agent_path")
+    if not session_ids:
+        return {}
+    columns = ("id", "title", "first_user_message", "agent_nickname", "agent_role", "agent_path")
     data = {}
-    # Keep each query within the variable limit of older SQLite builds. The
-    # worker is isolated from HTTP readers, so direct row stepping avoids
-    # encoding and decoding entire native prompts as an intermediate JSON.
-    ids = sorted(session_ids)
-    for start in range(0, len(ids), 900):
-        batch = ids[start:start + 900]
-        where = "id IN (" + ",".join("?" for _ in batch) + ")"
-        for row in _core._codex_fetch_threads(where, batch, columns=columns, batch=False):
-            data[row["id"]] = {
-                **row,
-                "title": (row.get("title") or "").strip(),
-                "first_user_message": row.get("first_user_message") or "",
-            }
+    for row in _core._codex_fetch_threads(columns=columns, exact_ids=tuple(sorted(session_ids))):
+        data[row["id"]] = {
+            **row,
+            "title": (row.get("title") or "").strip(),
+            "first_user_message": row.get("first_user_message") or "",
+        }
     return data
 
 

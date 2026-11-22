@@ -3419,17 +3419,15 @@ def test_detached_archive_queries_codex_titles_only_for_requested_ids(monkeypatc
 
     calls = []
 
-    def fetch(where, ids, *, columns, batch):
-        assert where.count("?") == len(ids)
-        assert not batch
+    def fetch(*, columns, exact_ids):
         assert "rollout_path" not in columns
-        calls.append(ids)
-        return [{"id": sid, "title": " Latest title "} for sid in ids]
+        calls.append(exact_ids)
+        return [{"id": sid, "title": " Latest title "} for sid in exact_ids]
 
     monkeypatch.setattr(server, "_codex_fetch_threads", fetch)
     ids = {f"thread-{index}" for index in range(950)}
     titles = _codex_archive_titles(ids)
-    assert [len(call) for call in calls] == [900, 50]
+    assert calls == [tuple(sorted(ids))]
     assert set(titles) == ids
     assert titles["thread-949"]["title"] == "Latest title"
 
