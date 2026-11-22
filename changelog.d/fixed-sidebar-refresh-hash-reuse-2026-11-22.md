@@ -1,0 +1,1 @@
+- Reuse row hashes from detached archive refreshes to reduce CPU work on the first full sidebar read.

@@ -18245,6 +18245,9 @@ def _archive_refresh_load_blocked(now):
     return True
 
 
+_ARCHIVE_HOT_TRANSFER_PREFIX = "hot."
+
+
 def _archive_serve_cache_store(key, rows, generation, ts=None, *, transfer_rows=None, partial=False,
                                hot_selected=False, hot_reuse=None):
     """Store rows only if no lifecycle mutation invalidated their build.
@@ -18272,6 +18275,11 @@ def _archive_serve_cache_store(key, rows, generation, ts=None, *, transfer_rows=
     # version, so the prebuilt /list body still replays (~356 rebuilds/day,
     # most of them no-ops, used to force a full 11MB body rebuild each).
     diff = _archive_serve_diff(prev, rows) if prev is not None else None
+    worker_tokens = {
+        id(row): token[len(_ARCHIVE_HOT_TRANSFER_PREFIX):]
+        for token, row in (transfer_rows or {}).items()
+        if token.startswith(_ARCHIVE_HOT_TRANSFER_PREFIX)
+    }
     with _archive_serve_lock:
         if generation != _archive_serve_generation:
             return False
@@ -18283,11 +18291,14 @@ def _archive_serve_cache_store(key, rows, generation, ts=None, *, transfer_rows=
             # on the rows it just built) but with the reused row dicts.
             rows[:] = diff["rows"]
             diff["rows"] = rows
-        history_tokens = {}
+        # Only attach proofs to the transmitted objects. The diff can keep an
+        # older object that compares equal but encodes differently.
+        history_tokens = ({id(row): worker_tokens[id(row)] for row in rows if id(row) in worker_tokens}
+                          if worker_tokens else {})
         if diff is not None and (memo := prev.get("history_hot_tokens")) is not None:
             if memo[0] == prev["ver"] and memo[1] is prev["rows"]:
                 # The diff retained these exact, unmodified row objects.
-                history_tokens = {id(row): memo[2][id(row)] for row in rows if id(row) in memo[2]}
+                history_tokens.update((id(row), memo[2][id(row)]) for row in rows if id(row) in memo[2])
         if diff is not None and diff["identical"]:
             if history_tokens:
                 prev["history_hot_tokens"] = (prev["ver"], rows, history_tokens)
@@ -21731,6 +21742,8 @@ _ARCHIVE_RESULT_ROWS_PER_LINE = 64
 
 def _write_archive_refresh_result(output_path, result, *, basis=None, reuse=None):
     """Send changed bodies and their order when the dashboard has a basis."""
+    from ccc_server.archive_history_layer import encode_hot_row
+
     rows = result.get("rows")
     header = {k: v for k, v in result.items() if k != "rows"}
     chunks = None
@@ -21742,8 +21755,12 @@ def _write_archive_refresh_result(output_path, result, *, basis=None, reuse=None
                 if isinstance(row, _ArchiveReusedRow):
                     order.append(row.token)
                     continue
-                encoded = json.dumps(row, separators=(",", ":"))
-                token = hashlib.blake2b(encoded.encode("ascii"), digest_size=16).hexdigest()
+                # One serialization supplies both the transfer token and the
+                # All history guard. Unprefixed tokens from an older worker
+                # still decode, but carry no proof for the history guard.
+                encoded = encode_hot_row(row)
+                digest = hashlib.blake2b(encoded.encode("ascii"), digest_size=16).hexdigest()
+                token = _ARCHIVE_HOT_TRANSFER_PREFIX + digest
                 order.append(token)
                 if reuse is not None and (proof := reuse.proof_for(row, token)) is not None:
                     sid = _archive_row_sid(row)

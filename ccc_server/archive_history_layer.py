@@ -36,11 +36,15 @@ def row_token(row):
     return hashlib.blake2b(encoded, digest_size=16).hexdigest()
 
 
-def hot_row_token(row):
+def encode_hot_row(row):
     # SQLite sorts persisted metadata keys, while refresh workers use the
     # parser's insertion order. The sidebar projects top-level fields in
     # layout order. Keep the order of nested objects that reach the wire.
-    return row_token(dict(sorted(row.items())))
+    return _ENCODE_GUARD(dict(sorted(row.items())))
+
+
+def hot_row_token(row):
+    return hashlib.blake2b(encode_hot_row(row).encode("ascii"), digest_size=16).hexdigest()
 
 
 def _guard_value(value):

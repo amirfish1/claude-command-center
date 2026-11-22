@@ -6,6 +6,7 @@ import json
 import pytest
 
 import server
+from ccc_server import archive_history_layer as layer
 
 
 def _result(n):
@@ -75,3 +76,34 @@ def test_delta_round_trips_changed_reordered_and_duplicate_rows(tmp_path):
     assert decoded["rows"][0] is previous["rows"][199]
     assert json.loads(path.read_text().splitlines()[0])["row_count"] == 1
     assert delta_size < full_size
+
+
+def test_history_guard_reuses_only_hashes_for_published_transfer_objects(tmp_path, monkeypatch):
+    previous = {"session_id": "old", "details": {"a": 1, "b": 2}}
+    reordered = {"session_id": "old", "details": {"b": 2, "a": 1}}
+    new = {"session_id": "new", "details": {"b": 2, "a": 1}}
+    path = tmp_path / "out.json"
+    server._write_archive_refresh_result(path, {"rows": [reordered, new]}, basis=set())
+    decoded, _ = server._read_archive_refresh_result(path)
+    assert list(decoded["rows"][1]) == ["details", "session_id"]
+    assert list(decoded["rows"][1]["details"]) == ["b", "a"]
+
+    expected = {"old": layer.hot_row_token(previous), "new": layer.hot_row_token(new)}
+    assert expected["old"] != layer.hot_row_token(reordered)
+    monkeypatch.setattr(server, "_archive_serve_cache", {})
+    monkeypatch.setattr(server, "_archive_serve_version", 0)
+    generation = server._archive_serve_generation
+    assert server._archive_serve_cache_store("base", [previous], generation, hot_selected=True)
+    assert server._archive_serve_cache_store(
+        "base", decoded["rows"], generation, hot_selected=True, transfer_rows=decoded["transfer_rows"])
+
+    computed = []
+    original = layer.hot_row_token
+
+    def count(row):
+        computed.append(row["session_id"])
+        return original(row)
+
+    monkeypatch.setattr(layer, "hot_row_token", count)
+    assert server._archive_history_hot_snapshot("base")[1] == expected
+    assert computed == ["old"]
