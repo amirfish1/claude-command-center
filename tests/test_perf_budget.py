@@ -6492,7 +6492,7 @@ def test_claude_status_polls_share_process_snapshot(monkeypatch):
 
 
 def test_indexed_hot_change_skips_cold_sidebar_page_scan(tmp_path, monkeypatch):
-    from ccc_server import archive_store
+    from ccc_server import archive_sidebar_pages, archive_store
 
     stamp = 2_000_000_000
     cache_file = tmp_path / "archive.json"
@@ -6501,6 +6501,8 @@ def test_indexed_hot_change_skips_cold_sidebar_page_scan(tmp_path, monkeypatch):
         for i in range(300)
     ]
     aging = {"session_id": "aging", "mtime": stamp - archive_store.HOT_SECONDS + 5}
+    aging_next = {"session_id": "aging-next", "mtime": stamp - archive_store.HOT_SECONDS + 15}
+    monkeypatch.setattr(archive_sidebar_pages, "_MAX_DEFERRED_COLD_ROWS", 1)
     recent = {"session_id": "hot", "mtime": stamp}
     options = dict(
         complete=True, sidebar_key=_ALL_KEY,
@@ -6520,7 +6522,7 @@ def test_indexed_hot_change_skips_cold_sidebar_page_scan(tmp_path, monkeypatch):
         merged = [replacements.get(row["session_id"], row) for row in entry["conversations"]]
         assert publish(at, merged, entry)
 
-    assert publish(stamp, [*cold, aging, recent]) == 302
+    assert publish(stamp, [*cold, aging, aging_next, recent]) == 303
     refresh(stamp + 1, dict(recent, first_message="priming change"))
 
     statements = []
@@ -6537,24 +6539,47 @@ def test_indexed_hot_change_skips_cold_sidebar_page_scan(tmp_path, monkeypatch):
     assert not any("INTO sidebar_pages" in sql for sql in statements)
 
     statements.clear()
+    refresh(stamp + 6, dict(recent, first_message="one hot row became cold"))
+    assert not any("SELECT identity,rowid,digest FROM rows" in sql for sql in statements)
+    packed_pages = [sql for sql in statements if "INTO sidebar_pages" in sql]
+    assert len(packed_pages) == 1
+    assert f",{archive_sidebar_pages._DEFERRED_COLD_BUCKET}," in packed_pages[0]
+
+    statements.clear()
     edited = dict(cold[0], first_message="cold edit")
-    refresh(stamp + 6, edited)
+    refresh(stamp + 7, edited)
     scans = [sql for sql in statements if "SELECT identity,rowid,digest FROM rows" in sql]
     assert len(scans) == 1
     assert "rowid%128 IN" in scans[0]
 
-    # Match a full publication when a cold body changes and a hot row ages.
     version, project = options["sidebar_pages"]
-    from ccc_server import archive_sidebar_pages
-    with connect(cache_file, write=True) as con:
-        hot = archive_store.load(cache_file, key=_ALL_KEY, hot=True, now=stamp + 6)
+
+    def read_at(con, at):
+        hot = archive_store.load(cache_file, key=_ALL_KEY, hot=True, now=at)
         current = {archive_store.identity(row): row for row in hot["entries"][_ALL_KEY]["conversations"]}
-        observed, _ = archive_sidebar_pages.read(con, _ALL_KEY, stamp + 6, version, dict(current), 1 << 24, {})
-        archive_sidebar_pages.publish(con, _ALL_KEY, stamp + 6, version, current, project)
-        expected, _ = archive_sidebar_pages.read(con, _ALL_KEY, stamp + 6, version, dict(current), 1 << 24, {})
-        assert observed == expected
+        rows, _ = archive_sidebar_pages.read(
+            con, _ALL_KEY, at, version, dict(current), 1 << 24, {},
+        )
+        return rows, current
+
+    with connect(cache_file, write=True) as con:
+        observed, current = read_at(con, stamp + 7)
         assert observed[0]["first_message"] == "cold edit"
-        assert isinstance(observed[-2], archive_sidebar_pages.StoredRow)
+        assert isinstance(observed[-3], archive_sidebar_pages.StoredRow)
+        con.execute("BEGIN")
+        archive_sidebar_pages.publish(con, _ALL_KEY, stamp + 7, version, current, project)
+        expected, _ = read_at(con, stamp + 7)
+        assert observed == expected
+        con.rollback()
+
+    refresh(stamp + 16, dict(recent, first_message="cold spill page reached capacity"))
+    with connect(cache_file) as con:
+        observed, _ = read_at(con, stamp + 16)
+        assert [row["session_id"] for row in observed[-3:]] == ["aging", "aging-next", "hot"]
+        assert con.execute(
+            "SELECT 1 FROM sidebar_pages WHERE bucket=?",
+            (archive_sidebar_pages._DEFERRED_COLD_BUCKET,),
+        ).fetchone() is None
 
 
 @pytest.mark.parametrize("legacy_index", [False, True])

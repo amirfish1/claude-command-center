@@ -19005,7 +19005,7 @@ def _archive_list_preview(text, limit=140):
     return preview
 
 # Change the prefix when the stored preview or packed field semantics change.
-_ARCHIVE_SIDEBAR_PACKED_VERSION = "2:" + hashlib.sha256(repr(_ARCHIVE_LIST_FIELDS).encode()).hexdigest()
+_ARCHIVE_SIDEBAR_PACKED_VERSION = "3:" + hashlib.sha256(repr(_ARCHIVE_LIST_FIELDS).encode()).hexdigest()
 
 
 _ARCHIVE_LIST_ROW_TEMPLATES = ByteBudgetCache(

@@ -19,6 +19,9 @@ _ORDER_BATCH_ITEMS = 32768
 _MAX_UNPACKED_ROWS = 1024
 _UNPACKED_QUERY_ROWS = 64
 _UNPACKED_BATCH_BODY_LIMIT = 32 << 10
+_DEFERRED_COLD_BUCKET = -1
+_MAX_DEFERRED_COLD_ROWS = 32
+_MAX_DEFERRED_COLD_BODY = 16 << 10
 
 
 class StoredRow(dict):
@@ -113,7 +116,7 @@ def _stored_bodies(con, rowids):
 
 
 def hot_basis(con, key, cached_at, version):
-    """Read the hot membership paired with the previously published pages."""
+    """Read the row IDs excluded from the previously published pages."""
     record = con.execute("""
         SELECT b.rowids FROM sidebar_page_hot_basis b
         JOIN sidebar_page_generation g USING (variant, cached_at, version)
@@ -129,14 +132,31 @@ def hot_basis(con, key, cached_at, version):
 
 def publish(con, key, cached_at, version, hot_ids, project, *,
             hot_rowids=None, previous_hot=None, previous_changed=(), inserted=()):
-    """Repack buckets affected by changed bodies or hot membership."""
+    """Repack buckets affected by changed bodies or hot membership.
+
+    The prior basis includes the rows held in the small cooled page.
+    """
     buckets = range(_BUCKETS)
     params = (key,)
     bucket_filter = ""
+    deferred = []
+    excluded = hot_rowids
     if previous_hot is not None:
+        # A few rows crossing the age cutoff can dirty many otherwise
+        # unchanged pages. Pack small cooled rows together with fixed count
+        # and byte bounds, then fold them into ordinary pages when full.
+        cooled = (previous_hot - hot_rowids).difference(previous_changed, inserted)
+        if 0 < len(cooled) <= _MAX_DEFERRED_COLD_ROWS:
+            marks = ",".join("?" for _ in cooled)
+            deferred = [(rid, rowid, digest) for rowid, rid, digest in con.execute(
+                f"""SELECT rowid,identity,digest FROM rows WHERE rowid IN ({marks})
+                    AND length(CAST(body AS BLOB)) <= ? ORDER BY rowid""",
+                (*sorted(cooled), _MAX_DEFERRED_COLD_BODY),
+            )]
+        excluded = hot_rowids | {rowid for _, rowid, _ in deferred}
         # Replaced hot rows often acquire a new rowid. Neither end of a hot
         # replacement was in a cold page, so it does not dirty a bucket.
-        dirty = (previous_hot ^ hot_rowids).difference(previous_changed, inserted)
+        dirty = (previous_hot ^ excluded).difference(previous_changed, inserted)
         dirty.update(set(previous_changed) - previous_hot)
         dirty.update(set(inserted) - hot_rowids)
         buckets = sorted({rowid % _BUCKETS for rowid in dirty})
@@ -146,12 +166,15 @@ def publish(con, key, cached_at, version, hot_ids, project, *,
             params = (key, *buckets)
 
     groups = defaultdict(list)
+    if deferred:
+        groups[_DEFERRED_COLD_BUCKET] = deferred
+    deferred_ids = {rid for rid, _, _ in deferred}
     if buckets:
         for rid, rowid, digest in con.execute(
             "SELECT identity,rowid,digest FROM rows WHERE variant=?"
             + bucket_filter + " ORDER BY rowid", params,
         ):
-            if rid not in hot_ids:
+            if rid not in hot_ids and rid not in deferred_ids:
                 groups[rowid % _BUCKETS].append((rid, rowid, digest))
 
     previous = dict(con.execute(
@@ -170,11 +193,15 @@ def publish(con, key, cached_at, version, hot_ids, project, *,
     for bucket in buckets:
         if bucket not in groups:
             con.execute("DELETE FROM sidebar_pages WHERE variant=? AND bucket=?", (key, bucket))
-    if hot_rowids is None:
+    if not deferred and _DEFERRED_COLD_BUCKET in previous:
+        con.execute("DELETE FROM sidebar_pages WHERE variant=? AND bucket=?",
+                    (key, _DEFERRED_COLD_BUCKET))
+    if excluded is None:
         con.execute("DELETE FROM sidebar_page_hot_basis WHERE variant=?", (key,))
     else:
         con.execute("INSERT OR REPLACE INTO sidebar_page_hot_basis VALUES (?,?,?,?)",
-                    (key, cached_at, version, json.dumps(sorted(hot_rowids), separators=(",", ":"))))
+                    (key, cached_at, version,
+                     json.dumps(sorted(excluded), separators=(",", ":"))))
     con.execute("INSERT OR REPLACE INTO sidebar_page_generation VALUES (?,?,?)",
                 (key, cached_at, version))
 
