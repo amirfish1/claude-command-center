@@ -2192,6 +2192,11 @@ onDashboardDocumentReady(() => {
     let fileViewerPreviousRailCollapsed = null;
     let fileViewerPreviousConvListCollapsed = null;
     let fileViewerPreviousConvListStored = null;
+    // Opening a preview narrows the session list to its minimum width (the
+    // sidebar's narrow layout) instead of hiding it; closing puts it back.
+    const FILE_VIEWER_SIDEBAR_NARROW_PX = 240;
+    let fileViewerPreviousSidebarWidth = null;
+    let fileViewerNarrowedSidebarWidth = null;
     // Resizing/collapsing the rail re-flows the conversation reader (its pane
     // gets wider/narrower → text re-wraps → content height changes), which
     // drifts the reading position under a fixed scrollTop. Capture each open
@@ -2238,12 +2243,24 @@ onDashboardDocumentReady(() => {
           : ($statusRail.getBoundingClientRect().width || _savedStatusRailWidth());
         try { fileViewerPreviousRailStoredWidth = localStorage.getItem('ccc-status-rail-width'); } catch (_) { fileViewerPreviousRailStoredWidth = null; }
       }
+      const $sidebar = document.querySelector('.sidebar');
+      const desktop = !window.matchMedia || window.matchMedia('(min-width: 1201px)').matches;
       if (!document.body.classList.contains('conv-list-collapsed')) {
-        _preserveReadersAcross(() => {
-          document.body.classList.add('conv-list-collapsed');
-        });
-        const $collapseBtn = document.getElementById('convListCollapseBtn');
-        if ($collapseBtn) $collapseBtn.setAttribute('aria-expanded', 'false');
+        if (desktop && $sidebar) {
+          if (!alreadyExpanded && $sidebar.getBoundingClientRect().width > FILE_VIEWER_SIDEBAR_NARROW_PX) {
+            fileViewerPreviousSidebarWidth = $sidebar.style.width || '';
+            fileViewerNarrowedSidebarWidth = FILE_VIEWER_SIDEBAR_NARROW_PX + 'px';
+            _preserveReadersAcross(() => {
+              $sidebar.style.width = fileViewerNarrowedSidebarWidth;
+            });
+          }
+        } else {
+          _preserveReadersAcross(() => {
+            document.body.classList.add('conv-list-collapsed');
+          });
+          const $collapseBtn = document.getElementById('convListCollapseBtn');
+          if ($collapseBtn) $collapseBtn.setAttribute('aria-expanded', 'false');
+        }
       }
       _setStatusRailCollapsed(false, false);
       if (!alreadyExpanded) {
@@ -2270,6 +2287,17 @@ onDashboardDocumentReady(() => {
       fileViewerPreviousRailCollapsed = null;
       fileViewerPreviousConvListCollapsed = null;
       fileViewerPreviousConvListStored = null;
+      const previousSidebarWidth = fileViewerPreviousSidebarWidth;
+      const narrowedSidebarWidth = fileViewerNarrowedSidebarWidth;
+      fileViewerPreviousSidebarWidth = null;
+      fileViewerNarrowedSidebarWidth = null;
+      const $sidebar = document.querySelector('.sidebar');
+      // Skip if the user resized the list while the preview was open.
+      if ($sidebar && narrowedSidebarWidth != null && $sidebar.style.width === narrowedSidebarWidth) {
+        _preserveReadersAcross(() => {
+          $sidebar.style.width = previousSidebarWidth || '';
+        });
+      }
       let currentConvListStored = null;
       try { currentConvListStored = localStorage.getItem('ccc-conv-list-collapsed'); } catch (_) {}
       if (previousConvListCollapsed === false && currentConvListStored === previousConvListStored) {

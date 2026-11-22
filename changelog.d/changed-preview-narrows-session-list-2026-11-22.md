@@ -1,0 +1,1 @@
+- Opening a file or web preview now narrows the session list to its narrow layout instead of hiding it, and closing the preview restores its previous width.

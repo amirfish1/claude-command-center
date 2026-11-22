@@ -180,3 +180,11 @@ test('Opening the RHS preview auto-collapses the LHS session list and restores i
   assert.match(viewsJs, /document\.body\.classList\.add\('conv-list-collapsed'\)/);
   assert.match(viewsJs, /document\.body\.classList\.remove\('conv-list-collapsed'\)/);
 });
+
+test('On desktop the RHS preview narrows the LHS list to its minimum width and restores it', () => {
+  const viewsJs = fs.readFileSync(require.resolve('../static/conversation-views.js'), 'utf8');
+  assert.match(viewsJs, /const FILE_VIEWER_SIDEBAR_NARROW_PX = 240;/);
+  assert.match(viewsJs, /\$sidebar\.style\.width = fileViewerNarrowedSidebarWidth;/);
+  assert.match(viewsJs, /\$sidebar\.style\.width === narrowedSidebarWidth/);
+  assert.match(viewsJs, /\$sidebar\.style\.width = previousSidebarWidth \|\| '';/);
+});
