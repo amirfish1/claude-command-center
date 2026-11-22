@@ -36451,3 +36451,12 @@ body.ccc-app-embed.conversation-popout .main > .toolbar {
 .conv-reader-audio.is-compact .speaker-rate-dial { width: 44px; height: 44px; }
 .conv-reader-audio.is-compact .speaker-dock { top: 0; left: 44px; }
 .conv-reader-audio.is-compact .speaker-voice-name { left: 44px; max-width: 120px; }
+
+/* The brand wordmark gradient starts near-white for dark mode; on the light
+   theme that made the leading "C" vanish ("laude Command Center"). */
+:root[data-theme="light"] .sidebar-header-brand .sh-title-main,
+:root[data-theme="light"] .sidebar .sidebar-header-brand .sh-title-main,
+:root[data-theme="light"] body.ccc-mobile-redesign.ccc-simple-mode .msh-wordmark {
+  background-image: linear-gradient(90deg, #1f2328 0%, #0969da 42%, #8250df 74%, #1a7f37 100%);
+  text-shadow: none;
+}
