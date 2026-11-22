@@ -9685,14 +9685,18 @@ def _session_landed(session_id):
     sid = str(session_id or "").strip()
     if not sid:
         return {"ok": False, "landed": False, "known": False}
-    # Codex writes the thread row into state_*.sqlite the moment the thread is
-    # created, well before the rollout has any content. Cached snapshot, so in
-    # the steady state this is a dict hit behind two stat() calls.
+    # The native thread row can land before the rollout has content. Read
+    # only this ID: a changing WAL can invalidate the bulk titles snapshot
+    # on every poll, including polls for sessions from another engine.
     try:
-        fresh = _core._codex_titles_snapshot().get(sid)
+        threads = _core._codex_fetch_threads(
+            "id = ?", (sid,), limit=1,
+            columns=("id", "title", "first_user_message", "agent_nickname", "agent_path"),
+        )
     except Exception:
-        fresh = None
-    if fresh:
+        threads = []
+    if threads:
+        fresh = threads[0]
         return {
             "ok": True,
             "landed": True,
@@ -9700,8 +9704,8 @@ def _session_landed(session_id):
             "engine": "codex",
             "display_name": _core._codex_display_name(
                 fresh,
-                title=fresh["title"],
-                first_message=fresh["first_user_message"],
+                title=(fresh.get("title") or "").strip(),
+                first_message=fresh.get("first_user_message") or "",
             ),
         }
     # Claude and everything else that logs a transcript under ~/.claude/projects.

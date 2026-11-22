@@ -16,6 +16,7 @@ time. These pin that, and pin the cheap spawn probe that replaced a full
 import importlib
 import os
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
 from unittest import mock
@@ -145,24 +146,22 @@ class SessionLandedProbeTests(unittest.TestCase):
     def test_a_known_codex_thread_reports_landed_with_its_name(self):
         server = self.server
         sid = "019f-thread"
-        snap = {
-            sid: {
-                "title": "spawn stats",
-                "first_user_message": "spawn stats",
-                "agent_nickname": None,
-                "agent_role": None,
-                "agent_path": None,
-            }
+        row = {
+            "id": sid,
+            "title": " spawn stats ",
+            "first_user_message": "first message",
         }
-        with mock.patch.object(server, "_codex_titles_snapshot", return_value=snap):
+        with mock.patch.object(server, "_codex_fetch_threads", return_value=[row]) as fetch:
             out = server._session_landed(sid)
+        self.assertEqual(fetch.call_args.args, ("id = ?", (sid,)))
+        self.assertEqual(fetch.call_args.kwargs["limit"], 1)
         self.assertTrue(out["landed"])
         self.assertEqual(out["engine"], "codex")
         self.assertEqual(out["display_name"], "spawn stats")
 
     def test_an_unknown_session_reports_not_landed_rather_than_erroring(self):
         server = self.server
-        with mock.patch.object(server, "_codex_titles_snapshot", return_value={}):
+        with mock.patch.object(server, "_codex_fetch_threads", return_value=[]):
             out = server._session_landed("nothing-here")
         self.assertTrue(out["ok"])
         self.assertFalse(out["landed"])
@@ -170,13 +169,59 @@ class SessionLandedProbeTests(unittest.TestCase):
     def test_an_empty_id_is_rejected(self):
         self.assertFalse(self.server._session_landed("")["ok"])
 
-    def test_the_probe_never_builds_the_archive_list(self):
-        """The whole point: this must not cost a full corpus serialization."""
+    def test_the_probe_never_builds_a_bulk_snapshot(self):
         server = self.server
-        with mock.patch.object(server, "_codex_titles_snapshot", return_value={}), \
+        with mock.patch.object(server, "_codex_fetch_threads", return_value=[]), \
+             mock.patch.object(server, "_codex_titles_snapshot") as titles, \
              mock.patch.object(server, "find_conversations") as build:
             server._session_landed("some-id")
+        titles.assert_not_called()
         build.assert_not_called()
+
+
+def test_landed_probe_sees_an_indexed_thread_arrive_and_change_in_wal(tmp_path, monkeypatch):
+    import server
+    from ccc_server import codex_accounts
+
+    home = tmp_path / "account"
+    home.mkdir()
+    missing_home = tmp_path / "default"
+    db = home / "state_5.sqlite"
+    monkeypatch.delenv("CCC_CODEX_ACCOUNT_KEY", raising=False)
+    monkeypatch.setattr(codex_accounts, "homes", lambda: [missing_home, home])
+    monkeypatch.setattr(server, "_codex_home", lambda: missing_home)
+    monkeypatch.setattr(server, "CODEX_STATE_DB", missing_home / "state_5.sqlite")
+    monkeypatch.setattr(server, "PROJECTS_ROOT", tmp_path / "projects")
+    deleted = set()
+    monkeypatch.setattr(server, "_codex_deleted_thread_ids", deleted.copy)
+
+    with sqlite3.connect(db) as con:
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("CREATE TABLE threads(id TEXT PRIMARY KEY, title TEXT)")
+        assert not server._session_landed("new-thread")["landed"]
+        con.execute("INSERT INTO threads VALUES ('new-thread', 'First title')")
+        con.commit()
+        assert server._session_landed("new-thread")["display_name"] == "First title"
+        con.execute("UPDATE threads SET title='Current title' WHERE id='new-thread'")
+        con.commit()
+        assert server._session_landed("new-thread")["display_name"] == "Current title"
+        deleted.add("new-thread")
+        assert not server._session_landed("new-thread")["landed"]
+
+
+def test_landed_probe_still_checks_claude_when_codex_has_no_match(tmp_path, monkeypatch):
+    import server
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "new-thread.jsonl").touch()
+    monkeypatch.setattr(server, "PROJECTS_ROOT", tmp_path)
+    monkeypatch.setattr(server, "_codex_fetch_threads", lambda *args, **kwargs: [])
+    monkeypatch.setattr(server, "_spawn_timeline_mark", lambda *args: False)
+
+    assert server._session_landed("new-thread") == {
+        "ok": True, "landed": True, "known": True, "engine": "claude",
+    }
 
 
 class JustSpawnedRowLabellingTests(unittest.TestCase):
