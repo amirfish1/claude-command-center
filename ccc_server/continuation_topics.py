@@ -325,8 +325,9 @@ def _native_title(sid):
 
 class _Batch:
     def __init__(self, conn, rows, names, *, reuse_cached=False, rows_by_sid=None,
-                 miss_detail=None):
+                 miss_detail=None, check_client=None):
         self.conn = conn
+        self.check_client = check_client
         self.rows = (rows_by_sid if rows_by_sid is not None else
                      {sid: row for row in rows if (sid := _sid(row))})
         self.names = names
@@ -365,6 +366,8 @@ class _Batch:
         # Start from the requested IDs so missing topic/index rows retain
         # the same defaults as established standalone sessions.
         for i in range(0, len(sids), chunk):
+            if self.check_client is not None:
+                self.check_client()
             part = sids[i:i + chunk]
             wanted = 'WITH wanted(sid) AS (VALUES ' + ','.join('(?)' for _ in part) + ') '
             topic_sql = '''SELECT w.sid AS sid, coalesce(t.origin, '') AS origin,
@@ -550,7 +553,10 @@ class _Batch:
 
 
 def _project_topics(batch, rows):
-    for row in rows:
+    check_client = batch.check_client
+    for index, row in enumerate(rows):
+        if check_client is not None and index % 256 == 0:
+            check_client()
         sid = _sid(row)
         if not sid:
             continue
@@ -578,7 +584,8 @@ def _project_topics(batch, rows):
             row.pop('continuation_topic_session_id', None)
 
 
-def _try_attach_from_cache(rows, conn, names, diagnostics=None, *, rows_by_sid=None):
+def _try_attach_from_cache(rows, conn, names, diagnostics=None, *, rows_by_sid=None,
+                           check_client=None):
     if diagnostics is not None:
         diagnostics.pop('miss_detail', None)
 
@@ -618,7 +625,9 @@ def _try_attach_from_cache(rows, conn, names, diagnostics=None, *, rows_by_sid=N
         external_titles = None
         staged = []
         untitled_roots = set()
-        for item in rows:
+        for index, item in enumerate(rows):
+            if check_client is not None and index % 256 == 0:
+                check_client()
             sid = _sid(item)
             if not sid:
                 continue
@@ -651,7 +660,9 @@ def _try_attach_from_cache(rows, conn, names, diagnostics=None, *, rows_by_sid=N
         root_rows = {sid: item for item in rows if (sid := _sid(item)) in untitled_roots}
         if resolved_names is None:
             resolved_names = _core._load_session_name_overrides() if names is None else names
-        for sid in untitled_roots:
+        for index, sid in enumerate(untitled_roots):
+            if check_client is not None and index % 256 == 0:
+                check_client()
             root_row = root_rows.get(sid, {})
             if _origin(root_row):
                 return miss('origin-changed')
@@ -666,6 +677,8 @@ def _try_attach_from_cache(rows, conn, names, diagnostics=None, *, rows_by_sid=N
                 return miss('title-discovered')
         if _db_state_token(conn) != token:
             return miss('database')
+    if check_client is not None:
+        check_client()
     for item, root, topic_title in staged:
         if root:
             item['continuation_topic_title'] = topic_title
@@ -747,7 +760,8 @@ def _store_busy_writer_inputs(conn, batch, read_version):
         _TOPIC_CACHE['indexed_origins'].update(batch.indexed_origins)
 
 
-def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnostics=None):
+def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnostics=None,
+                  check_client=None):
     """Project topics without waiting behind the ship index's bulk writer.
 
     Archive materialization is opportunistic: a busy writer leaves the computed
@@ -772,7 +786,7 @@ def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnos
                 rows_by_sid = {sid: row for row in rows if (sid := _sid(row))}
                 conn = _connection(thread_conn)
     if not wait_for_writer and _try_attach_from_cache(
-            rows, conn, names, diagnostics, rows_by_sid=rows_by_sid):
+            rows, conn, names, diagnostics, rows_by_sid=rows_by_sid, check_client=check_client):
         return
     conn = _connection(conn)
     names = _core._load_session_name_overrides() if names is None else names
@@ -780,11 +794,15 @@ def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnos
     miss_detail = (diagnostics.get('miss_detail') if diagnostics is not None
                    and diagnostics.get('reason') == 'new-session' else None)
     batch = _Batch(conn, rows, names, reuse_cached=not wait_for_writer, rows_by_sid=rows_by_sid,
-                   miss_detail=miss_detail)
+                   miss_detail=miss_detail, check_client=check_client)
     batch.capture_root_titles = wait_for_writer
     # Native title reads may perform I/O. Never do them while holding the
     # shared index's writer lock, including on a cold archive projection.
     _project_topics(batch, rows)
+    # Cancellation is safe during reads and request-local projection. Once
+    # persistence starts, finish the transaction and cache publication.
+    if check_client is not None:
+        check_client()
     if not batch.pending:
         if not wait_for_writer:
             _store_cache(conn, batch, rows, miss_detail=miss_detail)

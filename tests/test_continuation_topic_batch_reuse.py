@@ -113,6 +113,60 @@ def test_new_session_prefetches_only_unknown_database_records(store, monkeypatch
                          ('new',)).fetchone() == ('old-599',)
 
 
+def test_disconnected_projection_stops_after_first_topic_read(store, monkeypatch):
+    class Disconnected(Exception):
+        pass
+
+    store.execute('CREATE TABLE session_meta (sid TEXT PRIMARY KEY, continuation_origin TEXT)')
+    store.commit()
+    fetch = topics._sqlite_fetch_rows
+    reads = []
+
+    def observed(conn, sql, params, columns):
+        reads.append(len(params))
+        return fetch(conn, sql, params, columns)
+
+    def check_client():
+        if reads:
+            raise Disconnected
+
+    monkeypatch.setattr(topics, '_sqlite_fetch_rows', observed)
+    rows = [{'session_id': f'child-{i}', 'continued_from_session_id': 'root'}
+            for i in range(600)]
+    with pytest.raises(Disconnected):
+        topics.attach_topics(rows, conn=store, names={}, check_client=check_client)
+    assert reads == [500]
+    assert store.execute('SELECT count(*) FROM continuation_topics').fetchone() == (1,)
+    assert not store.in_transaction
+
+    topics.attach_topics(rows, conn=store, names={})
+    assert rows[-1]['continuation_topic_title'] == 'Original'
+    assert store.execute('SELECT count(*) FROM continuation_topics').fetchone() == (601,)
+
+
+def test_disconnected_cache_replay_leaves_projection_and_cache_available(store):
+    class Disconnected(Exception):
+        pass
+
+    rows = [{'session_id': f'child-{i}', 'continued_from_session_id': 'root'}
+            for i in range(300)]
+    topics.attach_topics([dict(row) for row in rows], conn=store, names={})
+    calls = 0
+
+    def check_client():
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise Disconnected
+
+    with patch.object(topics, '_Batch', side_effect=AssertionError('expected cache hit')):
+        with pytest.raises(Disconnected):
+            topics.attach_topics(rows, conn=store, names={}, check_client=check_client)
+        assert all('continuation_topic_title' not in row for row in rows)
+        topics.attach_topics(rows, conn=store, names={})
+    assert all(row['continuation_topic_title'] == 'Original' for row in rows)
+
+
 def test_cached_records_do_not_hide_peer_rename_on_new_session(store):
     peer = sqlite3.connect(store.execute('PRAGMA database_list').fetchone()[2])
     try:
