@@ -109,9 +109,11 @@ def sticky(row, *, stamp=None):
 def hot_rows(rows, now=None):
     cutoff = (time.time() if now is None else now) - HOT_SECONDS
     by_sid = {str(r.get('session_id') or r.get('id') or ''): r for r in rows}
-    # Reuse the serialized identities across selection, ancestor retention,
-    # and output. Duplicate identities share the same eligibility.
-    indexed = [(identity(row, index), row) for index, row in enumerate(rows)]
+    # Unique session IDs already distinguish the rows. Only archives with
+    # ambiguous or missing IDs need to serialize their compound identities.
+    unique_sids = len(by_sid) == len(rows) and '' not in by_sid
+    indexed = (by_sid.items() if unique_sids else
+               [(identity(row, index), row) for index, row in enumerate(rows)])
     keep = set()
     for rid, row in indexed:
         stamp = activity(row)
@@ -119,9 +121,10 @@ def hot_rows(rows, now=None):
             keep.add(rid)
     pending = [row for rid, row in indexed if rid in keep]
     for row in pending:
-        parent = by_sid.get(str(row.get('parent_session_id') or row.get('hermes_parent_session_id') or ''))
+        parent_sid = str(row.get('parent_session_id') or row.get('hermes_parent_session_id') or '')
+        parent = by_sid.get(parent_sid)
         if parent:
-            parent_id = identity(parent)
+            parent_id = parent_sid if unique_sids else identity(parent)
             if parent_id not in keep:
                 keep.add(parent_id)
                 pending.append(parent)
@@ -1044,9 +1047,16 @@ class _RowIndexEntry(dict):
     """Minimal row for merging a refresh without decoding historical bodies."""
 
     def __init__(self, rid, sid):
-        engine, source, _, path = json.loads(rid)
-        super().__init__(engine=engine, source=source, session_id=sid, jsonl_path=path)
+        super().__init__(session_id=sid)
         self.rid = rid
+
+    def get(self, key, default=None):
+        # With no deletions or engine refresh, the merge only needs the ID.
+        # Decode the compound identity on demand for the other merge paths.
+        if key in ('engine', 'source', 'jsonl_path') and key not in self:
+            engine, source, _, jsonl_path = json.loads(self.rid)
+            self.update(engine=engine, source=source, jsonl_path=jsonl_path)
+        return super().get(key, default)
 
 
 def load(cache_file, *, hot=False, key=None, now=None, row_index=False, reuse_engines=None):

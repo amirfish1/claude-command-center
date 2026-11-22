@@ -17628,10 +17628,9 @@ def _archive_merge_incremental_rows(cached_rows, fresh_rows, removed_paths):
     for raw in cached_rows or []:
         if not isinstance(raw, dict):
             continue
-        jp = raw.get("jsonl_path")
-        if jp and jp in removed:
+        if removed and (path := raw.get("jsonl_path")) and path in removed:
             continue
-        k = raw.get("session_id") or raw.get("id") or jp
+        k = raw.get("session_id") or raw.get("id") or raw.get("jsonl_path")
         if k and k in fresh_by_key:
             out.append(fresh_by_key.pop(k))
             continue
@@ -18214,7 +18213,8 @@ def _archive_refresh_load_blocked(now):
     return True
 
 
-def _archive_serve_cache_store(key, rows, generation, ts=None, *, transfer_rows=None, partial=False):
+def _archive_serve_cache_store(key, rows, generation, ts=None, *, transfer_rows=None, partial=False,
+                               hot_selected=False):
     """Store rows only if no lifecycle mutation invalidated their build.
 
     `ts` defaults to now (a genuine fresh build). The cold-restart path
@@ -18226,7 +18226,7 @@ def _archive_serve_cache_store(key, rows, generation, ts=None, *, transfer_rows=
     """
     global _archive_serve_version
     from ccc_server import archive_store
-    if archive_store.database_path(_ARCHIVE_RESPONSE_CACHE_FILE).exists():
+    if not hot_selected and archive_store.database_path(_ARCHIVE_RESPONSE_CACHE_FILE).exists():
         selected = archive_store.hot_rows(rows)
         if len(selected) != len(rows):
             rows = selected
@@ -21154,7 +21154,8 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
             # load guard and single-flight lock.
             pending = (result.get("phases") or {}).get("remaining")
             _archive_serve_cache_store(key, rows, serve_generation, ts=0 if pending else None,
-                                       transfer_rows=result.get("transfer_rows"), partial=bool(pending))
+                                       transfer_rows=result.get("transfer_rows"), partial=bool(pending),
+                                       hot_selected=True)
         _rt3 = time.perf_counter()
         _rphase["store_ms"] = round((_rt3 - _rt2) * 1000.0, 1)
         _rphase["rows"] = len(rows)
@@ -21554,6 +21555,13 @@ def _rehydrate_archive_cached_rows(rows, *, preselected=False):
     if not preselected and not archive_store.database_path(_ARCHIVE_RESPONSE_CACHE_FILE).exists():
         return _rehydrate_archive_hot_rows(rows)
     selected = (rows or []) if preselected else archive_store.hot_rows(rows or [])
+    if preselected:
+        # Rehydrate can reorder or drop rows. An indexed refresh can restore
+        # the original order without serializing identities when IDs are unique.
+        ids = [_archive_row_sid(row) for row in selected]
+        if "" not in ids and len(set(ids)) == len(ids):
+            fresh = {_archive_row_sid(row): row for row in _rehydrate_archive_hot_rows(selected)}
+            return [fresh[sid] for sid in ids if sid in fresh]
     selected_ids = {archive_store.identity(row) for row in selected}
     fresh = {archive_store.identity(row): row for row in _rehydrate_archive_hot_rows(selected)}
     # Historical sessions are for recall. Preserve their parsed metadata;

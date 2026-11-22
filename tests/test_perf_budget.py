@@ -3435,6 +3435,40 @@ def test_archive_incremental_refresh_reparses_only_changed_transcripts(
     assert len(builds) == 1
 
 
+def test_archive_indexed_update_leaves_unchanged_compound_identities_undecoded(
+    tmp_path, monkeypatch
+):
+    from ccc_server import archive_store
+
+    target = tmp_path / "archive.json"
+    rows = [
+        {"session_id": f"s{i}", "engine": "claude", "source": "interactive", "jsonl_path": f"/tmp/{i}.jsonl"}
+        for i in range(200)
+    ]
+    snapshot = {"schema_version": 1, "entries": {"key": {"cached_at": 1, "conversations": rows}}}
+    archive_store.save(target, snapshot, complete=True)
+    identity_reads = []
+    loads = archive_store.json.loads
+
+    def count_loads(value, *args, **kwargs):
+        if isinstance(value, str) and value.startswith('["claude","interactive",'):
+            identity_reads.append(value)
+        return loads(value, *args, **kwargs)
+
+    monkeypatch.setattr(archive_store.json, "loads", count_loads)
+    entry = archive_store.load(target, key="key", row_index=True)["entries"]["key"]
+    fresh = dict(rows[0], mtime=2)
+    merged = server._archive_merge_incremental_rows(entry["conversations"], [fresh], [])
+    snapshot["entries"]["key"] = {"cached_at": 2, "conversations": merged}
+    assert archive_store.save(target, snapshot, complete=True, base_entry=entry)
+    assert archive_store.load(target, key="key")["entries"]["key"]["conversations"] == [fresh, *rows[1:]]
+    assert len(merged) == 200 and merged[0] is fresh
+    assert identity_reads == []
+    assert merged[1].get("jsonl_path") == "/tmp/1.jsonl"
+    assert merged[1].get("engine") == "claude"
+    assert len(identity_reads) == 1
+
+
 def test_archive_signature_dedupes_symlinked_project_dirs(big_projects, tmp_path):
     """A symlink to an existing Claude project must not double-stat its corpus."""
     n, _ = big_projects
