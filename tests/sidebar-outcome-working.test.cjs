@@ -95,3 +95,26 @@ test('a resumed Antigravity ACP row shows current activity before its transcript
   const quiet = { ...live, working_since: now - 500, sidecar_ts: now - 380 };
   assert.match(renderOutcome(old, quiet), /No agent activity for 6 min/);
 });
+
+test('an idle Antigravity ACP connection does not erase native background activity', () => {
+  const sid = 'antigravity-background';
+  const now = Date.now() / 1000;
+  const row = { id: sid, source: 'antigravity', is_live: true, modified: now - 60,
+    state: 'idle', last_assistant_text: 'Previous finished turn.' };
+  const packet = { is_live: true, acp_status: 'idle', sidecar_status: 'active',
+    sidecar_in_flight: true, sidecar_ts: now, working_since: now - 5, sidecar_tool: 'read_file' };
+  const overlay = new Map([[sid, packet]]);
+  const start = source.indexOf('  function _applyLiveOverlayToRow(');
+  const apply = vm.runInNewContext(source.slice(start, source.indexOf('\n  }\n', start) + 4)
+    + '\n_applyLiveOverlayToRow;', {
+    _sessionLiveOverlay: overlay,
+    _LIVE_OVERLAY_KEYS: Object.keys(packet),
+  });
+  assert.equal(apply(row).state, 'working');
+  assert.match(renderOutcome(row, apply(row)), /data-label="Working">Reading file<\/span>/);
+  overlay.set(sid, { ...packet, sidecar_status: 'idle', sidecar_in_flight: false, working_since: null });
+  const final = { ...row, state: 'working', modified: now, last_assistant_text: 'Background work finished.' };
+  assert.equal(apply(final).state, 'idle');
+  assert.match(renderOutcome(final, apply(final)), /Background work finished/);
+  assert.doesNotMatch(renderOutcome(final, apply(final)), /data-label="Working"/);
+});

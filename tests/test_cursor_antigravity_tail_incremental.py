@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 import server
+from ccc_server import antigravity_stream, engines
 
 
 # --- Cursor fixtures --------------------------------------------------------
@@ -60,6 +61,47 @@ AG_SCRIPT = [
     _ag_user("second ag question"),
     _ag_planner("on it", tool="run_command"),
 ]
+
+
+def test_antigravity_background_turn_takes_precedence_over_older_acp_idle(tmp_path, monkeypatch):
+    path = tmp_path / "transcript_full.jsonl"
+    idle_at = 1780394410  # 10:00:10 UTC
+    now = idle_at + 60
+    monkeypatch.setattr(engines.time, "time", lambda: now)
+    monkeypatch.setattr(antigravity_stream, "acp_activity", lambda sid: {"busy": False, "ts": idle_at})
+
+    def activity():
+        tail = server._extract_antigravity_tail_meta(path)
+        return server._antigravity_activity_fields_from_tail(tail, True, session_id="session")
+
+    def append(event_type, second, *, source="MODEL", **fields):
+        with path.open("a") as transcript:
+            transcript.write(json.dumps({
+                "type": event_type, "created_at": f"2026-06-02T10:00:{second:02}Z",
+                "source": source, "status": "DONE", **fields,
+            }) + "\n")
+
+    append("PLANNER_RESPONSE", 5, tool_calls=[{"name": "run_command"}])
+    assert activity()["sidecar_status"] == "idle"
+    append("PLANNER_RESPONSE", 8, content="The requested review is done.")
+    append("SYSTEM_MESSAGE", 15, source="SYSTEM", content="Background task finished.")
+    assert activity()["sidecar_status"] == "idle"
+    append("PLANNER_RESPONSE", 16, tool_calls=[{"name": "read_file"}])
+    working = activity()
+    assert working["acp_status"] == "idle"
+    assert working["sidecar_in_flight"] and working["pending_tool"] == "read_file"
+    assert working["working_since"] == idle_at + 6
+    append("GENERIC", 22, content="Tool completed.")
+    between_tools = activity()
+    assert between_tools["sidecar_in_flight"] and not between_tools["pending_tool"]
+    assert between_tools["sidecar_ts"] == idle_at + 12
+    now += engines._ANTIGRAVITY_LIVE_WINDOW_S
+    assert activity()["sidecar_status"] == "idle"
+    append("PLANNER_RESPONSE", 25, content="The background work is complete.")
+    finished = activity()
+    assert finished["sidecar_status"] == "idle" and not finished["sidecar_in_flight"]
+    assert finished["sidecar_ts"] == idle_at + 15
+    assert server._extract_antigravity_tail_meta(path)["turn_complete"]
 
 
 CASES = {

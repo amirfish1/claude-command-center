@@ -890,10 +890,10 @@
     const live = _applyLiveOverlayToRow(c);
     const sending = sessionIsOptimisticallySending(sid);
     const raw = String(c.last_assistant_text || c.last_assistant_preview || '');
-    const antigravityAcp = (c.engine === 'antigravity' || c.source === 'antigravity')
-      && live.is_live && live.acp_status === 'running';
+    const antigravityTurn = (c.engine === 'antigravity' || c.source === 'antigravity')
+      && live.is_live && live.sidecar_in_flight && live.working_since;
     const stale = c.last_event_type === 'user' || preSendPreviewFor(sid) === raw
-      || (antigravityAcp && _ultraFreshTime(live.working_since) > _ultraFreshTime(c.modified || c.mtime))
+      || (antigravityTurn && _ultraFreshTime(live.working_since) > _ultraFreshTime(c.modified || c.mtime))
       || (live.last_event_type === 'user'
         && _ultraFreshTime(live.last_event_ts) > _ultraFreshTime(c.modified || c.mtime));
     const text = stale ? '' : raw.replace(/(?:<!--\s*)?<session-state>[\s\S]*$/, '')
@@ -926,7 +926,7 @@
     }
     if (working) {
       let activity = '';
-      if (antigravityAcp) {
+      if (antigravityTurn) {
         const age = Math.floor((Date.now() - _ultraFreshTime(live.sidecar_ts)) / 60000);
         if (live.sidecar_ts && age >= 5) activity = 'No agent activity for ' + age + ' min';
         else if (!text && live.sidecar_tool) activity = liveActivityToolLabel(live.sidecar_tool);
@@ -2395,8 +2395,8 @@
       for (const k of sharedState._LIVE_OVERLAY_KEYS) {
         if (ov[k] !== undefined) merged[k] = ov[k];
       }
-      if ((c.engine === 'antigravity' || c.source === 'antigravity') && ov.is_live && ov.acp_status) {
-        merged.state = ov.acp_status === 'running' ? 'working' : 'idle';
+      if ((c.engine === 'antigravity' || c.source === 'antigravity') && ov.is_live && ov.sidecar_status) {
+        merged.state = ov.sidecar_in_flight ? 'working' : 'idle';
       }
     }
     return merged;
@@ -2691,7 +2691,7 @@
       for (const [sid, fields] of Object.entries(sessions)) {
         const prev = sharedState._sessionLiveOverlay.get(sid);
         if (prev && fields && ((prev.state === 'working' && fields.state && fields.state !== 'working')
-          || (prev.acp_status === 'running' && fields.acp_status === 'idle'))) _turnEnded = true;
+          || (prev.working_since && prev.sidecar_in_flight && fields.sidecar_status === 'idle'))) _turnEnded = true;
         _rememberLiveOverlay(sid, fields);
       }
       // A turn just ended: its next step / final reply only arrives with the

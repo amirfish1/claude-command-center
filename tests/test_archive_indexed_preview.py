@@ -1,13 +1,15 @@
 import json
 import math
+import os
 import sqlite3
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
 import server
-from ccc_server import archive_preview, archive_sidebar_pages, archive_store, continuation_topics
+from ccc_server import archive_preview, archive_sidebar_pages, archive_store, continuation_topics, engines
 
 
 @pytest.mark.parametrize("edge_limit, byte_limit", [(8192, 512), (1, 512), (8192, 1)])
@@ -463,3 +465,73 @@ def test_detached_delta_publishes_every_batch_without_rewriting_legacy(tmp_path,
     assert archive_store.load(path, key=key)["entries"][key] == persisted
     server._ARCHIVE_STATMAP_BY_SIG["changed-capture"] = (new_files, {"ccc-codex-captures": "1" * 64})
     assert server._archive_signature_delta("new", "changed-capture") == ([], [], {"codex"})
+
+
+def test_detached_delta_refreshes_antigravity_when_an_existing_transcript_grows(tmp_path, monkeypatch):
+    root = tmp_path / "cli-brain"
+    sid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    transcript = root / sid / ".system_generated" / "logs" / "transcript_full.jsonl"
+    transcript.parent.mkdir(parents=True)
+    monkeypatch.setattr(server, "ANTIGRAVITY_BRAIN", tmp_path / "desktop-brain")
+    monkeypatch.setattr(server, "ANTIGRAVITY_CLI_BRAIN", root)
+    monkeypatch.setattr(engines, "_antigravity_cli_log_paths", lambda *_: [])
+    monkeypatch.setattr(engines, "_antigravity_spawn_pid_by_session_id", lambda: {})
+    monkeypatch.setattr(server, "_load_antigravity_summary_titles", lambda: {})
+    monkeypatch.setattr(server, "_ARCHIVE_SIG_TTL", 0)
+    monkeypatch.setattr(server, "_ARCHIVE_SERVE_TTL", 0)
+    monkeypatch.setattr(server, "_ARCHIVE_STATMAP_BY_SIG", {})
+    monkeypatch.setattr(server, "_save_conv_meta_cache", lambda: None)
+    monkeypatch.setattr(server, "_rehydrate_archive_hot_rows", lambda rows: rows)
+    monkeypatch.setattr(server, "_build_archive_conversations", lambda **_: pytest.fail("full archive rebuilt"))
+
+    # Exercise the real corpus scanner while holding unrelated engines' files
+    # constant, so parallel activity on the test machine cannot affect the delta.
+    scan = server._archive_corpus_signature_parts
+
+    def scan_antigravity():
+        _, _, extras = scan()
+        files = {key: extras[key] for key in (str(root), str(transcript)) if key in extras}
+        return repr(files), {}, files
+
+    monkeypatch.setattr(server, "_archive_corpus_signature_parts", scan_antigravity)
+    now = int(datetime.now(timezone.utc).timestamp())
+
+    def append_reply(text, ts):
+        with transcript.open("a") as stream:
+            stream.write(json.dumps({
+                "type": "PLANNER_RESPONSE", "source": "MODEL", "status": "DONE",
+                "created_at": datetime.fromtimestamp(ts, timezone.utc).isoformat(),
+                "content": text,
+            }) + "\n")
+        os.utime(transcript, (ts, ts))
+
+    append_reply("The first turn finished.", now - 60)
+    session_dir_mtime = (root / sid).stat().st_mtime_ns
+    root_mtime = root.stat().st_mtime_ns
+    old_sig = server._archive_corpus_signature()
+    assert str(transcript) in server._ARCHIVE_STATMAP_BY_SIG[old_sig][1]
+    unrelated = {"session_id": "unrelated", "mtime": 1, "last_assistant_text": "Keep this row."}
+    old = server.find_antigravity_conversations(repo_only=False, resolve_worktree_dirty=False)
+    assert [row["last_assistant_text"] for row in old] == ["The first turn finished."]
+    cache = tmp_path / "archive.json"
+    key = server._archive_response_cache_key()
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", cache)
+    snapshot = server._archive_response_snapshot({
+        key: {"cached_at": now - 60, "signature": old_sig, "conversations": [*old, unrelated]},
+    })
+    assert archive_store.save(cache, snapshot, complete=True)
+    monkeypatch.setattr(server, "_ARCHIVE_STATMAP_BY_SIG", {})  # New detached process.
+
+    append_reply("The background turn also finished.", now)
+    assert (root / sid).stat().st_mtime_ns == session_dir_mtime
+    assert root.stat().st_mtime_ns == root_mtime
+    rows, from_cache = server._archive_compute_rows(key, {}, detached=True)
+    assert from_cache and server._ARCHIVE_COMPUTE_LAST_PHASES["engines"] == ["antigravity"]
+    assert server._ARCHIVE_COMPUTE_LAST_PHASES["changed"] == 0
+    assert len(rows) == 1
+    assert rows[0]["modified"] == now
+    assert rows[0]["last_assistant_text"] == "The background turn also finished."
+    projected = server._archive_list_pack_static(rows[0], {})
+    assert projected["last_assistant_preview"] == rows[0]["last_assistant_text"]
+    persisted = archive_store.load(cache, key=key)["entries"][key]["conversations"]
+    assert persisted == [unrelated, rows[0]]

@@ -17530,11 +17530,8 @@ def _archive_signature_delta(old_sig, new_sig):
     (those are dir-granularity in the signature, so no file diff exists), or
     incremental refreshes are disabled.
 
-    Hermes is the one engine source with an isolated refresh path: its
-    state.db mtime flips per internal event, and treating that like the
-    dir-granular sources forced a full O(all-rows) rebuild on every poll
-    while a hermes session ran (measured 60-95s burns). Rebuilding hermes
-    rows alone is milliseconds.
+    Engines with an isolated refresh path can invalidate their own row set
+    without forcing a full O(all-rows) rebuild.
     """
     if not old_sig or not new_sig or old_sig == new_sig:
         return None
@@ -17566,6 +17563,14 @@ def _archive_signature_delta(old_sig, new_sig):
         if codex_keys:
             isolated |= codex_keys
             refresh_engines.add("codex")
+        antigravity_roots = (ANTIGRAVITY_BRAIN, ANTIGRAVITY_CLI_BRAIN)
+        antigravity_keys = {
+            key for key in changed_extras
+            if any(Path(key).is_relative_to(root) for root in antigravity_roots)
+        }
+        if antigravity_keys:
+            isolated |= antigravity_keys
+            refresh_engines.add("antigravity")
         if changed_extras - isolated:
             return None
     changed = [p for p, st in new_files.items() if old_files.get(p) != st]
@@ -17723,36 +17728,6 @@ def _codex_rollout_day_dirs():
     ]
 
 
-def _archive_antigravity_extra_paths():
-    """Antigravity brain dirs whose mtime marks a session lifecycle event.
-
-    Two gaps made headless agy sessions invisible to the archive signature.
-    First, only the desktop app's store (~/.gemini/antigravity/brain) was
-    covered; the CLI store (~/.gemini/antigravity-cli/brain), where every
-    headless `agy -p` session lives, produced no invalidation signal at all.
-    Second, the store ROOT's mtime only flips when a session dir is added or
-    removed — the transcript a row is built from materializes later, when
-    brain/<sid>/.system_generated/ is created (minutes into a run; observed
-    10+ min while the desktop language server was busy), which bumps only the
-    session dir's mtime. Folding in each session dir catches both events with
-    stat-only cost, same shape as the codex day-dirs above.
-    """
-    paths = []
-    for root in (ANTIGRAVITY_BRAIN, ANTIGRAVITY_CLI_BRAIN):
-        paths.append(root)
-        try:
-            with os.scandir(root) as it:
-                for entry in it:
-                    try:
-                        if entry.is_dir(follow_symlinks=False):
-                            paths.append(Path(entry.path))
-                    except OSError:
-                        continue
-        except OSError:
-            continue
-    return paths
-
-
 def _archive_corpus_signature_parts():
     """Cheap stat-only fingerprint of the conversation corpus on disk.
 
@@ -17828,10 +17803,11 @@ def _archive_corpus_signature_parts():
         *(home / "sessions" for home in _codex_archive_homes()),
         *_codex_rollout_day_dirs(),
         Path.home() / ".cursor" / "projects",
-        # Antigravity, both stores: the desktop app's brain AND the CLI brain
-        # (where headless `agy -p` sessions live), plus each session dir so a
-        # transcript materializing mid-run invalidates the cache too.
-        *_archive_antigravity_extra_paths(),
+        # A transcript can materialize after its session directory or change
+        # in place during a resumed turn. Both changes refresh only this engine.
+        ANTIGRAVITY_BRAIN,
+        ANTIGRAVITY_CLI_BRAIN,
+        *_antigravity_transcript_paths(),
         _ARCHIVE_HERMES_EXTRA_PATH,
         # Kimi sessions dir — NOT session_index.jsonl: that file's mtime
         # flips on per-turn updates, which forced a full O(all-rows) archive
@@ -20699,6 +20675,17 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
                                     resolve_worktree_dirty=cache_options.get("resolve_worktree_dirty", False),
                                 ),
                             )
+                        if "antigravity" in refresh_engines:
+                            merged = _archive_merge_engine_rows(
+                                merged,
+                                "antigravity",
+                                find_antigravity_conversations(
+                                    include_old=True,
+                                    repo_only=False,
+                                    resolve_pr_states=cache_options.get("resolve_pr_states", False),
+                                    resolve_worktree_dirty=cache_options.get("resolve_worktree_dirty", False),
+                                ),
+                            )
                         if "codex" in refresh_engines:
                             # Cloud rows carry engine="codex" too, so the
                             # codex merge would otherwise drop them: include
@@ -21840,6 +21827,10 @@ def _rehydrate_archive_hot_rows(rows):
                             row[k] = live_row[k]
                 except Exception:
                     pass
+                if row.get("engine") == "antigravity":
+                    path = row.get("jsonl_path")
+                    tail = _extract_antigravity_tail_meta(path) if path else {}
+                    row.update(_antigravity_activity_fields_from_tail(tail, True, session_id=sid))
             if row.get("engine") == "kimi" or row.get("source") == "kimi":
                 # Kimi turn-shape fields (last_event_type / pending_tool /
                 # stale_tool_call) can't wait for a corpus-signature rebuild —

@@ -829,7 +829,7 @@ _ANTIGRAVITY_APP_LS_TOKEN_RE = re.compile(
     r"--csrf_token\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
     re.IGNORECASE,
 )
-_ANTIGRAVITY_META_VERSION = 8
+_ANTIGRAVITY_META_VERSION = 9
 # An Antigravity transcript writes every assistant tool call / message, so if
 # the file moved within this window we treat the session as live. Antigravity
 # has no hook system that CCC could listen to (the way Claude Code does via
@@ -1880,10 +1880,14 @@ def _extract_antigravity_tail_meta(path_or_session_id):
                     meta["pending_file"] = None
                     meta["last_thinking_text"] = None
                     meta["last_event_type"] = "system"
+                    meta["native_activity_ts"] = ts_epoch
+                    meta["native_working_since"] = 0
                     pending_tool = False
                     continue
                 if ev_type == "USER_INPUT" and source == "USER_EXPLICIT":
                     meta["turn_complete"] = False
+                    meta["native_activity_ts"] = ts_epoch
+                    meta["native_working_since"] = ts_epoch
                     meta["last_thinking_text"] = None
                     text = _antigravity_user_text(ev.get("content") or "")
                     if text:
@@ -1898,6 +1902,11 @@ def _extract_antigravity_tail_meta(path_or_session_id):
                 if ev_type == "PLANNER_RESPONSE":
                     content = (ev.get("content") or "").strip()
                     meta["turn_complete"] = bool(content and _antigravity_final_response(ev))
+                    if source == "MODEL" and ts_epoch:
+                        meta["native_activity_ts"] = ts_epoch
+                        meta["native_working_since"] = (
+                            0 if meta["turn_complete"] else meta.get("native_working_since") or ts_epoch
+                        )
                     if meta["turn_complete"]:
                         tokens = sum(_antigravity_usage_to_int(ev.get(field)) for field in (
                             "input_tokens", "cache_read_tokens", "cache_creation_tokens",
@@ -1969,6 +1978,8 @@ def _extract_antigravity_tail_meta(path_or_session_id):
                         meta["native_launch_prompt"] = match["content"][:200].strip()
                 if ev_type in ("CONVERSATION_HISTORY", "SYSTEM_MESSAGE", "EPHEMERAL_MESSAGE", "CHECKPOINT"):
                     continue
+                if source == "MODEL" and ts_epoch and meta.get("native_working_since"):
+                    meta["native_activity_ts"] = ts_epoch
                 step = ev.get("step_index")
                 if (ev_type == "GENERIC" and source == "MODEL" and ev.get("status") == "DONE"
                         and isinstance(step, int)):
@@ -2041,18 +2052,42 @@ def _antigravity_activity_fields_from_tail(tail, live, *, session_id=None):
     if not live:
         return fields
     activity = _antigravity_stream.acp_activity(session_id) if session_id else None
-    if activity is not None:
-        busy = activity["busy"]
+    if activity and activity["busy"]:
         fields.update(
-            acp_status="running" if busy else "idle",
-            sidecar_status="active" if busy else "idle",
-            sidecar_in_flight=busy,
+            acp_status="running",
+            sidecar_status="active",
+            sidecar_in_flight=True,
             sidecar_ts=activity["ts"],
             sidecar_tool=activity.get("tool"),
             working_since=activity.get("working_since"),
             pending_tool=activity.get("tool"),
             pending_file=None,
         )
+        return fields
+    native_ts = tail.get("native_activity_ts") or 0
+    native_since = tail.get("native_working_since") or 0
+    idle_since = activity["ts"] if activity else 0
+    if activity is not None or native_ts:
+        # Background tasks can enter a model turn while the ACP prompt loop
+        # is idle. Only newer native work can supersede the last ACP result.
+        native_busy = bool(native_since and native_ts > idle_since and (
+            time.time() - native_ts < _ANTIGRAVITY_LIVE_WINDOW_S
+            or (activity is None and tail.get("pending_tool"))
+        ))
+        tool = tail.get("pending_tool") if native_busy else None
+        file = tail.get("pending_file") if tool else None
+        fields.update(
+            sidecar_status="active" if native_busy else "idle",
+            sidecar_in_flight=native_busy,
+            sidecar_ts=max(native_ts, idle_since),
+            sidecar_tool=tool,
+            sidecar_file=file,
+            working_since=native_since if native_busy else None,
+            pending_tool=tool,
+            pending_file=file,
+        )
+        if activity is not None:
+            fields["acp_status"] = "idle"
         return fields
     ts = tail.get("last_meaningful_ts") or int(time.time()) if tail else int(time.time())
     pending_tool = tail.get("pending_tool") if tail else None
