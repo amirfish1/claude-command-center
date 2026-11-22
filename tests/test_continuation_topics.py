@@ -851,6 +851,38 @@ def test_archive_projection_inputs_capture_topic_and_native_title_sources(store,
     ).fetchone() == ('External',)
 
 
+def test_archive_projection_reuses_committed_records_but_refreshes_titles(store, monkeypatch):
+    from contextlib import closing
+
+    root = '11111111-1111-4111-8111-111111111111'
+    topics.attach_topics([row(root), row('child', origin=root)], names={})
+    metadata = {'/sessions/solo.jsonl': {'ai_title': 'First external title'}}
+    monkeypatch.setattr(server, '_conv_meta_cache', metadata)
+    monkeypatch.setattr(server, '_codex_titles_cache', {'data': {}})
+    monkeypatch.setattr(topics, '_native_title', lambda sid: 'First native title')
+    first, first_edges, version = topics.archive_projection_inputs(store, max_rows=20)
+
+    metadata['/sessions/solo.jsonl']['ai_title'] = 'Second external title'
+    monkeypatch.setattr(topics, '_native_title', lambda sid: 'Second native title')
+    second, second_edges, repeat_version = topics.archive_projection_inputs(store, max_rows=20)
+    assert second[0] is first[0]
+    assert second_edges is first_edges
+    assert repeat_version == version
+    assert second[2:] == ({'solo': 'Second external title'}, {root: 'Second native title'})
+    assert topics.archive_projection_inputs(store, max_rows=1) is None
+
+    filename = store.execute("PRAGMA database_list").fetchone()[2]
+    with closing(sqlite3.connect(filename)) as peer, peer:
+        peer.execute("UPDATE continuation_topics SET topic_title='Saved title' WHERE sid=?", (root,))
+        peer.execute("INSERT INTO session_meta VALUES ('new-child', ?)", (root,))
+    updated, edges, new_version = topics.archive_projection_inputs(store, max_rows=20)
+    assert new_version != version
+    assert updated[0][root][2] == 'Saved title'
+    assert updated[1] == {'new-child': root}
+    assert updated[3] == {}
+    assert ('new-child', root) in edges
+
+
 def test_archive_projection_retries_when_topic_sources_change_during_capture(store, monkeypatch):
     root = '11111111-1111-4111-8111-111111111111'
     topics.attach_topics([row(root), row('child', origin=root)], names={})

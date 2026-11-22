@@ -19364,6 +19364,21 @@ def _archive_history_project_cut(cut, previous, *, phases=None, check_client=Non
                 if phases is not None:
                     phases["scope_rejected"] = len(changes.dirty or ())
                 return None
+            if phases is not None and len(wanted) >= 1000:
+                old_inputs = previous.inputs
+                source_changes = collections.Counter()
+                for sid, source in inputs.sources.items():
+                    old_source = old_inputs.sources.get(sid)
+                    if old_source != source:
+                        source_changes[f"{old_source[0] if old_source else 'new'}:{source[0]}"] += 1
+                phases["large_scope"] = {
+                    "dirty": len(changes.dirty), "missing_effects": len(missing_effects),
+                    "removed": len(changes.removed), "sources": dict(source_changes),
+                    "overlays": [
+                        sum(old.get(sid) != new.get(sid) for sid in old.keys() | new.keys())
+                        for old, new in zip(old_inputs.overlays, inputs.overlays)
+                    ],
+                }
             for _ in range(3):
                 if phases is not None:
                     phases.setdefault("hydrate_counts", []).append(len(wanted))
