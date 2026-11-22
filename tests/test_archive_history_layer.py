@@ -214,6 +214,56 @@ def test_known_deletion_rechecks_remaining_family_and_explicit_order():
     assert patch["delta_token"] == "new"
 
 
+def test_detached_rebase_keeps_boot_basis_and_publishes_exact_order(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    from ccc_server import cpu_priority
+
+    monkeypatch.setattr(cpu_priority, "set_background_priority", lambda _: None)
+    monkeypatch.setattr(layer.list_encoding, "_zstd", lambda raw: None)
+    archive = tmp_path / "archive.json"
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", archive)
+    monkeypatch.setattr(server, "_ARCHIVE_HISTORY_REBASE_MIN_CHANGES", 1)
+    key = server._archive_response_cache_key()
+    scope = server._archive_history_scope(key)
+    before = layer.read_inputs(inventory("a", "b", "removed"), {}, {}, (), overlay_maps=(), edges=())
+    after = layer.read_inputs(inventory("b", "a", "new"), {}, {}, (), overlay_maps=(), edges=())
+    metadata = {"ok": True, "window": "all", "count": 3}
+    old_rows = [{"session_id": sid, "name": "Old"} for sid in before.order]
+    old = layer.make_basis(before, (), {}, dict(metadata, conversations=old_rows))
+    boot_path = layer.basis_path(archive)
+    assert layer.write_basis(boot_path, scope, old)
+    changed = [{"session_id": "a", "name": "Changed"}, {"session_id": "new"}]
+    patch = layer.delta_payload(before.order, after.order, old.token, "current",
+                                dict(metadata, conversations=changed))
+    seed = replace(old, inputs=after, order_token=patch["order_token"], token="current",
+                   frames={"gzip": layer.layer_representation(old, patch, "gzip")},
+                   effect_rows={"a": changed[0]})
+    path = tmp_path / "seed"
+    assert layer.write_basis(path, scope + ":rebase", seed)
+    assert server._archive_history_publisher_main(path)
+    published = layer.load_basis(layer.rebased_path(archive), scope)
+    assert published.effect_rows == seed.effect_rows
+    assert published.inputs == after
+    decoder = zlib.decompressobj(wbits=31)
+    raw = decoder.decompress(published.frames["gzip"])
+    payload = json.loads(raw.removeprefix(layer._LAYER_PREFIX))
+    rows = [dict(zip(payload["row_layouts"][index], values)) for index, values in payload["conversations"]]
+    assert rows == [old_rows[1], *changed]
+    assert layer.load_basis(boot_path, scope) == old
+
+    state = {}
+    choose = server._archive_history_select_basis
+    assert choose(state, key, old, before, "", ("gzip",)) == old
+    assert choose(state, key, old, after, "", ("gzip",)) == published
+    assert choose(state, key, old, before, published.token, ("gzip",)) == published
+    assert choose(state, key, old, after, old.token, ("gzip",)) == old
+
+    assert layer.write_basis(path, scope + ":rebase", replace(seed, token="unrelated"))
+    assert not server._archive_history_publisher_main(path)
+    assert layer.load_basis(layer.rebased_path(archive), scope) == published
+
+
 def test_changed_cut_reuses_unchanged_effect_rows_and_adds_discovered_children(monkeypatch):
     old_inputs = layer.read_inputs(inventory("tracked", "changed", "untracked"), {}, {}, (),
                                    overlay_maps=({},), edges=())

@@ -27,6 +27,8 @@ MAX_ROWS = 32768
 MAX_PATCH_ROWS = 8192
 _MAX_BASE_BYTES = 16 << 20
 _MAX_INDEX_BYTES = 32 << 20
+_MAX_REBASE_BYTES = 96 << 20
+REBASED_TOKEN_PREFIX = "layer-rebased."
 _GZIP_LEVEL = 3
 _ENCODE_GUARD = json.JSONEncoder(separators=(",", ":")).encode
 
@@ -123,6 +125,10 @@ def basis_path(cache_file):
     return cache_file.with_suffix(f".sidebar-layer-v{VERSION}")
 
 
+def rebased_path(cache_file):
+    return cache_file.with_suffix(f".sidebar-layer-rebased-v{VERSION}")
+
+
 def _digest(parts):
     digest = hashlib.sha256()
     for part in parts:
@@ -130,10 +136,10 @@ def _digest(parts):
     return digest.digest()
 
 
-def make_basis(inputs, working, activity, payload, *, effect_rows=None):
+def make_basis(inputs, working, activity, payload, *, effect_rows=None, rebased=False):
     rows = payload["conversations"]
     packed = archive_list_replay.pack_row_layouts(rows)
-    token = "layer-base." + uuid.uuid4().hex
+    token = (REBASED_TOKEN_PREFIX if rebased else "layer-base.") + uuid.uuid4().hex
     order = archive_list_replay.order_token(inputs.order)
     raw = archive_list_replay.encode_payload(
         dict(payload, row_layouts=packed[0], conversations=packed[1],
@@ -247,9 +253,16 @@ def delta_payload(previous_order, current_order, previous_token, current_token, 
 
 def layer_representation(basis, patch, encoding):
     """Compose one HTTP response from an encoded archive and the current patch."""
+    return join_layer(basis, layer_tail(patch), encoding)
+
+
+def layer_tail(patch):
     layouts, rows = archive_list_replay.pack_row_layouts(patch["conversations"])
     patch = dict(patch, row_layouts=layouts, conversations=rows)
-    tail = b',"history_layer":1,"patch":' + _ENCODE_GUARD(patch).encode("ascii") + b'}'
+    return b',"history_layer":1,"patch":' + _ENCODE_GUARD(patch).encode("ascii") + b'}'
+
+
+def join_layer(basis, tail, encoding):
     if encoding == "gzip":
         # The published prefix ends at a full flush. Start an independent
         # deflate block and finish the same gzip member with a cumulative CRC.
@@ -261,6 +274,36 @@ def layer_representation(basis, patch, encoding):
     prefix = list_encoding._zstd(_LAYER_PREFIX)
     suffix = list_encoding._zstd(tail)
     return None if prefix is None or suffix is None else b"".join((prefix, basis.frames["zstd"], suffix))
+
+
+def rebase_basis(seed):
+    """Flatten an exact layered response into a new independently guarded basis."""
+    decoder = zlib.decompressobj(wbits=31)
+    try:
+        raw = decoder.decompress(seed.frames["gzip"], _MAX_REBASE_BYTES + 1)
+        if len(raw) > _MAX_REBASE_BYTES or not decoder.eof or decoder.unused_data:
+            return None
+        document = json.loads(raw)
+        if document["history_layer"] != 1 or document["patch"]["delta_token"] != seed.token:
+            return None
+        rows = {}
+        order = seed.inputs.order
+        wanted = seed.inputs.sources
+        for part in (document["base"], document["patch"]):
+            layouts = part["row_layouts"]
+            for index, values in part["conversations"]:
+                fields = layouts[index]
+                row = dict(zip(fields, values, strict=True))
+                sid = row.get("session_id") or row.get("id")
+                if sid in wanted:
+                    rows[sid] = row
+        if rows.keys() != wanted.keys():
+            return None
+        return make_basis(seed.inputs, seed.working, seed.activity,
+                          dict(seed.metadata, conversations=[rows[sid] for sid in order]),
+                          effect_rows=seed.effect_rows, rebased=True)
+    except (KeyError, TypeError, ValueError, IndexError, zlib.error):
+        return None
 
 
 def delta_representation(patch, encoding):

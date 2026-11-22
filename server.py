@@ -19489,6 +19489,7 @@ _ARCHIVE_HISTORY_STATE = {"basis": None, "views": collections.OrderedDict(),
                           "loaded": False, "artifact": None}
 _ARCHIVE_HISTORY_PUBLISH_LOCK = threading.Lock()
 _ARCHIVE_HISTORY_PUBLISH_LAST_START = None
+_ARCHIVE_HISTORY_REBASE_MIN_CHANGES = 1024
 
 
 def _archive_history_scope(key):
@@ -19528,15 +19529,21 @@ def _archive_history_artifact(target):
     return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns
 
 
-def _archive_history_publisher_main():
+def _archive_history_publisher_main(rebase_source=None):
     """Populate an optional history basis in a detached maintenance process."""
-    from ccc_server import archive_store, cpu_priority, ship_graph
+    from ccc_server import archive_history_layer as layer, archive_store, cpu_priority, ship_graph
     import sqlite3
 
     global _WT_DISPLAY_SNAPSHOT_ONLY
     _WT_DISPLAY_SNAPSHOT_ONLY = True
     cpu_priority.set_background_priority("archive")
     key = _archive_response_cache_key()
+    if rebase_source is not None:
+        scope = _archive_history_scope(key)
+        seed = layer.load_basis(rebase_source, scope + ":rebase")
+        basis = layer.rebase_basis(seed) if seed is not None else None
+        return basis is not None and layer.write_basis(
+            layer.rebased_path(_ARCHIVE_RESPONSE_CACHE_FILE), scope, basis)
     saved = archive_store.load(_ARCHIVE_RESPONSE_CACHE_FILE, key=key, hot=True)
     if not saved or (saved.get("schema_version"), saved.get("build_id")) != (
             _ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION, _ARCHIVE_RESPONSE_CACHE_BUILD_ID):
@@ -19560,7 +19567,7 @@ def _archive_history_publisher_main():
             key, {}, {}, captured_hot=snapshot, topic_reader=reader) is not None
 
 
-def _archive_history_start_publication():
+def _archive_history_start_publication(*, rebase=None):
     from ccc_server import archive_history_layer as layer, background_work
 
     global _ARCHIVE_HISTORY_PUBLISH_LAST_START
@@ -19575,18 +19582,36 @@ def _archive_history_start_publication():
 
     def publish():
         started = time.perf_counter()
-        target = layer.basis_path(_ARCHIVE_RESPONSE_CACHE_FILE)
+        target = (layer.basis_path(_ARCHIVE_RESPONSE_CACHE_FILE) if rebase is None else
+                  layer.rebased_path(_ARCHIVE_RESPONSE_CACHE_FILE))
         previous = _archive_history_artifact(target)
         try:
-            with background_work.slot():
+            with background_work.slot(), contextlib.ExitStack() as stack:
+                args = [*_server_launch_argv(), "--archive-sidebar-basis-worker"]
+                if rebase is not None:
+                    key, basis, current, tail = rebase
+                    folder = stack.enter_context(tempfile.TemporaryDirectory(
+                        dir=target.parent, prefix=".sidebar-rebase-"))
+                    seed_path = Path(folder) / "seed"
+                    seed = layer.Basis(
+                        current.inputs, current.working, current.activity, current.token,
+                        _archive_list_order_token(current.inputs.order),
+                        {"gzip": layer.join_layer(basis, tail, "gzip")}, (0, 0),
+                        current.metadata,
+                        {sid: _idea_tickets.archive_effect_row(row)
+                         for sid, row in current.effect_rows.items()},
+                    )
+                    if not layer.write_basis(seed_path, _archive_history_scope(key) + ":rebase", seed):
+                        return
+                    args.append(str(seed_path))
                 result = subprocess.run(
-                    [*_server_launch_argv(), "--archive-sidebar-basis-worker"],
+                    args,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                     timeout=_ARCHIVE_REFRESH_WATCHDOG_S, check=False,
                 )
             updated = _archive_history_artifact(target)
             record_diag("archive_rebuild", (time.perf_counter() - started) * 1000.0, {
-                "stage": "sidebar_basis",
+                "stage": "sidebar_basis" if rebase is None else "sidebar_rebase",
                 "published": result.returncode == 0 and updated is not None and updated != previous,
             })
         except (OSError, subprocess.TimeoutExpired):
@@ -19598,6 +19623,33 @@ def _archive_history_start_publication():
         threading.Thread(target=publish, name="ccc-sidebar-basis", daemon=True).start()
     except RuntimeError:
         _ARCHIVE_HISTORY_PUBLISH_LOCK.release()
+
+
+def _archive_history_select_basis(state, key, raw, inputs, since, encodings):
+    """Prefer the rebased archive only when its guards match the current cut better."""
+    from ccc_server import archive_history_layer as layer
+
+    if since == raw.token:
+        return raw
+    expected_rebased = bool(since and since.startswith(layer.REBASED_TOKEN_PREFIX))
+    sources = inputs.sources
+
+    def misses(basis):
+        return sum(basis.inputs.sources.get(sid) != value for sid, value in sources.items())
+
+    raw_misses = misses(raw)
+    if raw_misses < _ARCHIVE_HISTORY_REBASE_MIN_CHANGES and not expected_rebased:
+        return raw
+    target = layer.rebased_path(_ARCHIVE_RESPONSE_CACHE_FILE)
+    artifact = _archive_history_artifact(target)
+    previous, basis = state.get("rebased", (None, None))
+    if artifact != previous:
+        basis = layer.load_basis(target, _archive_history_scope(key)) if artifact is not None else None
+        state["rebased"] = artifact, basis
+    if (basis is not None and any(encoding in basis.frames for encoding in encodings)
+            and (since == basis.token or misses(basis) < raw_misses)):
+        return basis
+    return raw
 
 
 def _archive_history_response(key, cache_options, since, saved_order, encodings, *, phases, check_client):
@@ -19627,15 +19679,8 @@ def _archive_history_response(key, cache_options, since, saved_order, encodings,
         if basis is None:
             phases["needs_basis"] = True
             return None
-        encoding = next((item for item in encodings if item in basis.frames), None)
-        if encoding is None:
-            return None
         views = state["views"]
         previous = views.get(since) if since else None
-        if previous is None and since == basis.token:
-            previous = basis
-        delta = previous is not None
-        base = previous if delta else basis
         now = time.time()
         with _archive_history_timing(phases, "read_cut"):
             with _archive_history_read_cut(
@@ -19644,6 +19689,17 @@ def _archive_history_response(key, cache_options, since, saved_order, encodings,
             ) as cut:
                 if cut is None:
                     return None
+                if previous is None:
+                    with _archive_history_timing(phases, "select_basis"):
+                        basis = _archive_history_select_basis(state, key, basis, cut[0], since, encodings)
+                    if since == basis.token:
+                        previous = basis
+                encoding = next((item for item in encodings if item in basis.frames), None)
+                if encoding is None:
+                    return None
+                delta = previous is not None
+                base = previous if delta else basis
+                phases["rebased"] = base.token.startswith(layer.REBASED_TOKEN_PREFIX)
                 result = _archive_history_project_cut(
                     cut, base, phases=phases.setdefault("projection", {}), check_client=check_client)
                 if result is None:
@@ -19657,6 +19713,7 @@ def _archive_history_response(key, cache_options, since, saved_order, encodings,
                                      view.token, current.metadata, current.effect_rows)
                 break
         payload = dict(current.metadata, conversations=changed)
+        tail = None
         with _archive_history_timing(phases, "encode"):
             unchanged = (not changed and base.inputs.order == current.inputs.order
                          and base.metadata == current.metadata)
@@ -19669,12 +19726,19 @@ def _archive_history_response(key, cache_options, since, saved_order, encodings,
                 patch = layer.delta_payload(
                     base.inputs.order, current.inputs.order, base.token, current.token, payload,
                     saved_order=not delta or saved_order == _archive_list_order_token(base.inputs.order))
-                body = (layer.delta_representation(patch, encoding) if delta else
-                        layer.layer_representation(basis, patch, encoding))
+                if delta:
+                    body = layer.delta_representation(patch, encoding)
+                else:
+                    tail = layer.layer_tail(patch)
+                    body = layer.join_layer(basis, tail, encoding)
                 if body is None:
                     return None
         if check_client is not None:
             check_client()
+        changes = phases["projection"].get("large_scope", {}).get("sources", {})
+        if (tail is not None and "gzip" in basis.frames
+                and changes.get("hot:hot", 0) >= _ARCHIVE_HISTORY_REBASE_MIN_CHANGES):
+            _archive_history_start_publication(rebase=(key, basis, current, tail))
         _trace_row_flicker(None, now=now, activity=current.activity)
         _archive_list_ticket_effects(effects, state=ticket_state)
         views[current.token] = current
@@ -52673,13 +52737,13 @@ def _script_main():
     # Same for the identity of a Claude session the dashboard was started from.
     for _key in _INHERITED_CLAUDE_SESSION_ENV:
         os.environ.pop(_key, None)
-    if sys.argv[1:] == ["--archive-sidebar-basis-worker"]:
+    if len(sys.argv) in (2, 3) and sys.argv[1] == "--archive-sidebar-basis-worker":
         import sqlite3
 
         if os.environ.get("CCC_GC_FREEZE", "1") != "0":
             gc.set_threshold(_GC_GEN0_THRESHOLD, *gc.get_threshold()[1:])
         try:
-            published = _archive_history_publisher_main()
+            published = _archive_history_publisher_main(*sys.argv[2:])
         except (OSError, ValueError, sqlite3.Error) as exc:
             print(f"archive sidebar basis worker: {exc}", file=sys.stderr)
             published = False
