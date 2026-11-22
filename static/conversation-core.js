@@ -12048,13 +12048,17 @@
     return (Date.now() - freshest) >= sharedState.INCOMPLETE_QUIET_MS;
   }
 
+  // Outcome banners carry a signature. The silence bar shares their styling,
+  // but its own status update controls when it is removed.
+  const outcomeBannerSelector = ':scope > .conv-outcome-banner[data-outcome-sig]';
+
   function updateSessionOutcomeBanner(view) {
     if (!view) return;
     // An already-painted banner stays put when the recomputed outcome is
     // identical: this runs on every 5s liveStatus poll, and the 'incomplete'
     // path re-renders only after an async not-live confirm, so removing it
     // up front blinked the banner out and back in on every poll (CCC-1191).
-    const existing = view.querySelector(':scope > .conv-outcome-banner');
+    const existing = view.querySelector(outcomeBannerSelector);
     const clearExisting = () => { if (existing && existing.isConnected) existing.remove(); };
     // A live (or actively-working) session is still in flight — never
     // second-guess it.
@@ -12167,11 +12171,11 @@
     if (fresh === true) {
       // Confirmed live after all — say nothing, and drop a banner kept from
       // an earlier (not-live) pass.
-      const kept = view.querySelector(':scope > .conv-outcome-banner.conv-outcome-' + kind);
+      const kept = view.querySelector(outcomeBannerSelector + '.conv-outcome-' + kind);
       if (kept) kept.remove();
       return;
     }
-    if (view.querySelector(':scope > .conv-outcome-banner')) return;
+    if (view.querySelector(outcomeBannerSelector)) return;
     _renderOutcomeBanner(view, kind, title, detail);
   }
 
