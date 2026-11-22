@@ -36038,6 +36038,7 @@ a.local-ci-job:hover { color: var(--accent); }
 }
 #convList.workers-view .conv-workers-activity .fq-recent-rows {
   flex: 1 1 auto; min-height: 0; max-height: none; overflow-y: auto; overscroll-behavior: contain;
+  align-content: start;
 }
 #convList.workers-view .conv-workers-activity .fq-recent-state.is-open { color: var(--red, #da3633); font-weight: 600; }
 #convList.workers-view .conv-workers-activity .fq-recent-rows:has(.workers-ticket-session-body:not([hidden])) { max-height: none; }

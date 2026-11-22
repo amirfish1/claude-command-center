@@ -44,12 +44,12 @@ const AWAITING = Array.from({length:12}, (_, i) => ({project:'READY',ref:'READY-
 
 async function renderList(page, touch) {
   await page.setViewport({width:380, height:900, isMobile:touch, hasTouch:touch});
-  await page.setContent('<html data-theme="light"><head><meta name="viewport" content="width=device-width"></head><body><div class="sidebar"><div id="convList" class="workers-view">'
+  await page.setContent('<html data-theme="light"><head><meta name="viewport" content="width=device-width"></head><body><div class="sidebar"><div id="convList" class="log-list workers-view" style="overflow-y:auto;flex:1;min-height:0;max-height:none;">'
     + '<div class="conv-archived-section"><div class="conv-workers-activity"><div class="fq-recent-work" data-role="workers-recent-work">'
     + '<div class="workers-awaiting" data-role="workers-awaiting" hidden></div>'
     + '<div class="fq-recent-rows"></div></div></div></div></div></div></body></html>');
   await page.addStyleTag({content:fs.readFileSync('static/app.css', 'utf8')
-    + '\nbody{display:block!important;height:auto!important;margin:0}.sidebar{width:380px;height:auto}'});
+    + '\nbody{display:block!important;margin:0}.sidebar{width:380px;height:100dvh}'});
   await page.addScriptTag({content:fs.readFileSync('static/queue-attention.js', 'utf8')});
   await page.addScriptTag({content:`
     const ITEMS = ${JSON.stringify(ITEMS)};
@@ -112,6 +112,21 @@ for (const touch of [false, true]) {
       }
       assert.ok(result.awaiting <= BUDGET.awaitingStrip, `awaiting strip is ${result.awaiting}px; budget is ${BUDGET.awaitingStrip}px`);
       assert.equal(result.overflow, false, 'rows must truncate, not scroll sideways: ' + result.wide.join(' '));
+      const scroll = await page.evaluate(() => {
+        const list = document.querySelector('.fq-recent-rows');
+        const rows = [...list.children];
+        for (let copy = 0; copy < 12; copy++) {
+          list.append(...rows.map(row => row.cloneNode(true)));
+        }
+        list.scrollTop = list.scrollHeight;
+        return {
+          top: list.scrollTop,
+          lastBottom: list.lastElementChild.getBoundingClientRect().bottom,
+          listBottom: list.getBoundingClientRect().bottom,
+        };
+      });
+      assert.ok(scroll.top > 0, 'a long Workers list scrolls');
+      assert.ok(Math.abs(scroll.lastBottom - scroll.listBottom) <= 1, 'the final row is reachable');
     } finally { await browser.close(); }
   });
 }
