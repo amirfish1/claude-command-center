@@ -2381,8 +2381,10 @@ _IMAGE_PATH_RE = re.compile(r"(?<!\S)\S*/pasted-images/\S+\.(?:png|jpe?g|gif|web
 
 def _strip_image_markup(text):
     """Drop <image ...> tags and pasted-image paths; collapse whitespace."""
-    t = _IMAGE_TAG_RE.sub(" ", str(text or ""))
-    if _IMAGE_PATH_MARKER_RE.search(t):
+    t = str(text or "")
+    if "<" in t:
+        t = _IMAGE_TAG_RE.sub(" ", t)
+    if "/" in t and _IMAGE_PATH_MARKER_RE.search(t):
         t = _IMAGE_PATH_RE.sub(" ", t)
     return " ".join(t.split())
 

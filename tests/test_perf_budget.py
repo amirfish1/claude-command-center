@@ -3318,6 +3318,64 @@ def test_archive_snapshot_publication_reads_only_cached_metadata(tmp_path, monke
     assert len(json.loads(cache_file.read_text())["entries"]["base"]["conversations"]) == 300
 
 
+def test_detached_archive_reuses_scores_and_ticket_projection(tmp_path, monkeypatch):
+    from ccc_server import wt_snapshot
+
+    scores = tmp_path / "scores.json"
+    monkeypatch.setattr(server, "_SOFT_BLOCK_SCORE_MEMO", {})
+    texts = [f"Which approach would you like for item {index}?" for index in range(200)]
+    before = [server._score_soft_block(text) for text in texts]
+    server._save_archive_question_scores(scores)
+
+    # A new worker loads the memo. Changed prose is the only scoring miss.
+    monkeypatch.setattr(server, "_SOFT_BLOCK_SCORE_MEMO", {})
+    calls = _count_calls(monkeypatch, "_score_soft_block_uncached")
+    assert len(server._load_archive_question_scores(scores)) == len(texts)
+    assert [server._score_soft_block(text) for text in texts] == before
+    server._score_soft_block("A changed transcript.")
+    assert len(calls) == 1
+
+    snapshot = tmp_path / "tickets.json"
+    ticket = {
+        "ref": "TEST-1", "project": "TEST", "status": "closed",
+        "claimed_session_id": "worker", "title": "Previous title",
+        "resolution": {"summary": "Current outcome"},
+        "history": [
+            {"event": "claim", "by": {"session_id": "worker"}},
+            {"event": "closed", "text": "Large history the worker does not need"},
+        ],
+    }
+    wt_snapshot._persist([ticket], snapshot)
+    monkeypatch.setattr(server, "_WT_ITEMS_SNAPSHOT_FILE", snapshot)
+    monkeypatch.setattr(server, "_wt_detached_title_memo", {"key": None, "items": []})
+    fallback = _count_calls(monkeypatch, "_wt_list_items_snapshot_only")
+    projected, = server._wt_detached_title_items()
+    assert projected["title"] == "Current outcome"
+    assert server._wt_item_worked_by_session(projected, "worker")
+    assert not server._wt_item_worked_by_session(projected, "another-worker")
+    assert not fallback, "warm workers must not decode the full ticket snapshot"
+
+
+def test_detached_archive_queries_codex_titles_only_for_requested_ids(monkeypatch):
+    from ccc_server.codex import _codex_archive_titles
+
+    calls = []
+
+    def fetch(where, ids, *, columns, batch):
+        assert where.count("?") == len(ids)
+        assert not batch
+        assert "rollout_path" not in columns
+        calls.append(ids)
+        return [{"id": sid, "title": " Latest title "} for sid in ids]
+
+    monkeypatch.setattr(server, "_codex_fetch_threads", fetch)
+    ids = {f"thread-{index}" for index in range(950)}
+    titles = _codex_archive_titles(ids)
+    assert [len(call) for call in calls] == [900, 50]
+    assert set(titles) == ids
+    assert titles["thread-949"]["title"] == "Latest title"
+
+
 def test_archive_incremental_refresh_reparses_only_changed_transcripts(
     big_projects, monkeypatch, tmp_path
 ):

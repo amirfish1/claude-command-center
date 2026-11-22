@@ -103,7 +103,11 @@ def test_real_child_publishes_complete_display_snapshot(tmp_path):
     destination = tmp_path / "cache" / "snapshot.json"
     assert wt_snapshot.fetch(queue, snapshot_path=destination) == items
     assert json.loads(destination.read_text()) == {"items": items}
-    assert list(destination.parent.iterdir()) == [destination]
+    titles = wt_snapshot.worker_title_path(destination)
+    assert json.loads(titles.read_text()) == {
+        "key": wt_snapshot.worker_title_generation(destination.stat()), "items": [],
+    }
+    assert set(destination.parent.iterdir()) == {destination, titles}
 
 
 def test_alert_index_matches_the_published_snapshot_generation(tmp_path, monkeypatch):

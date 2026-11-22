@@ -9169,14 +9169,15 @@ def _codex_db_signature(db):
     return tuple(sig)
 
 
-def _codex_fetch_threads(where="", params=(), limit=None, columns=None, *, omit_titles_for=None):
+def _codex_fetch_threads(where="", params=(), limit=None, columns=None, *,
+                         omit_titles_for=None, batch=True):
     from ccc_server.codex_accounts import homes
     bases = [_core._codex_home()] if os.environ.get("CCC_CODEX_ACCOUNT_KEY") else homes()
     rows = {}
     for home in bases:
         for row in _codex_fetch_threads_in_home(
             where, params, limit, columns, None if home == _core._codex_home() else home,
-            omit_titles_for=omit_titles_for,
+            omit_titles_for=omit_titles_for, batch=batch,
         ):
             rows.setdefault(row["id"], row)
     result = sorted(rows.values(), key=lambda r: r.get("updated_at_ms") or (r.get("updated_at") or 0) * 1000, reverse=True)
@@ -9185,6 +9186,7 @@ def _codex_fetch_threads(where="", params=(), limit=None, columns=None, *, omit_
 
 def _codex_fetch_threads_in_home(
     where="", params=(), limit=None, columns=None, home=None, *, omit_titles_for=None,
+    batch=True,
 ):
     """Read rows from Codex's local thread index without creating files.
 
@@ -9287,7 +9289,7 @@ def _codex_fetch_threads_in_home(
                 query = f"SELECT {', '.join(fields)} {from_threads} ORDER BY {order_by}"
                 if limit:
                     query += " LIMIT ?"
-                if columns is not None:
+                if columns is not None and batch:
                     return [dict(zip(selected, row)) for row in _sqlite_fetch_rows(
                         con, query, bindings, selected)]
                 return [dict(r) for r in con.execute(query, bindings).fetchall()]
@@ -9694,6 +9696,27 @@ def _codex_titles_snapshot():
         _codex_titles_cache["key"] = key
         _codex_titles_cache["data"] = data
         _codex_titles_cache["ts"] = now
+    return data
+
+
+def _codex_archive_titles(session_ids):
+    """Read current title inputs only for Codex rows in the detached hot view."""
+    columns = ("id", "updated_at", "updated_at_ms", "title", "first_user_message",
+               "agent_nickname", "agent_role", "agent_path")
+    data = {}
+    # Keep each query within the variable limit of older SQLite builds. The
+    # worker is isolated from HTTP readers, so direct row stepping avoids
+    # encoding and decoding entire native prompts as an intermediate JSON.
+    ids = sorted(session_ids)
+    for start in range(0, len(ids), 900):
+        batch = ids[start:start + 900]
+        where = "id IN (" + ",".join("?" for _ in batch) + ")"
+        for row in _core._codex_fetch_threads(where, batch, columns=columns, batch=False):
+            data[row["id"]] = {
+                **row,
+                "title": (row.get("title") or "").strip(),
+                "first_user_message": row.get("first_user_message") or "",
+            }
     return data
 
 

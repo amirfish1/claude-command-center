@@ -19,6 +19,8 @@ from __future__ import annotations
 __version__ = "7.0.0"
 
 import sender_envelope as _attribution
+from ccc_server.wt_snapshot import clip_title as _wt_clip_title, ticket_context as _wt_ticket_context
+
 from ccc_server import session_driver as _driver
 from ccc_server import archive_list_replay as _list_replay
 from ccc_server import archive_preview as _archive_preview
@@ -3740,38 +3742,6 @@ def _wt_block_params(ref):
     return {"ok": True, "ref": ref, "proposal": proposal or None, "gate": gate}, 200
 
 
-def _wt_clip_title(text, limit=60):
-    text = " ".join(str(text or "").split()).strip()
-    if limit and len(text) > limit:
-        return text[:limit].rstrip() + "..."
-    return text
-
-
-def _wt_ticket_context(item, limit=60):
-    res = item.get("resolution") if isinstance(item, dict) else {}
-    summary = ""
-    if isinstance(res, str):
-        summary = res
-    elif isinstance(res, dict):
-        summary = str(res.get("summary") or "")
-    # Annotation titles mirror the browser document title, which is usually a
-    # generic product name. Their note is the reporter's actual request and
-    # therefore makes a useful worker label. Ordinary WatchTower tickets keep
-    # their explicit title as the preferred context.
-    annotation_id = str(item.get("annotation_id") or item.get("id") or "")
-    is_annotation = annotation_id.startswith("ann-")
-    values = (
-        (summary, item.get("note"), item.get("title"), item.get("text"))
-        if is_annotation
-        else (summary, item.get("title"), item.get("note"), item.get("text"))
-    )
-    for value in values:
-        text = _wt_clip_title(value, limit=limit)
-        if text:
-            return text
-    return ""
-
-
 def _wt_compact_ref(queue, ref):
     """Mirror WT's own workers._compact_ref so CCC and WT agree on the
     ticket-reference shape (e.g. "THROUGHPUT-25" -> "THROUGHPUT#25")."""
@@ -3991,6 +3961,34 @@ def _wt_list_items_for_requests():
     return _wt_list_items_snapshot_only()
 
 
+_wt_detached_title_memo = {"key": None, "items": []}
+
+
+def _wt_detached_title_items():
+    """Use the small display projection of the current published generation."""
+    from ccc_server import wt_snapshot
+
+    source = _WT_ITEMS_SNAPSHOT_FILE
+    try:
+        key = wt_snapshot.worker_title_generation(source.stat())
+    except OSError:
+        return _wt_list_items_snapshot_only()
+    if _wt_detached_title_memo["key"] == key:
+        return _wt_detached_title_memo["items"]
+    try:
+        with wt_snapshot.worker_title_path(source).open(encoding="utf-8") as handle:
+            snapshot = json.load(handle)
+        if snapshot["key"] == key and isinstance(snapshot["items"], list):
+            _wt_detached_title_memo.update(key=key, items=snapshot["items"])
+            return snapshot["items"]
+    except (KeyError, OSError, TypeError, ValueError):
+        pass
+    # Older snapshots and failed sidecar publications use the same tickets.
+    items = wt_snapshot.project_worker_title_items(_wt_list_items_snapshot_only())
+    _wt_detached_title_memo.update(key=key, items=items)
+    return items
+
+
 def _apply_watchtower_worker_display_names(rows):
     """Layer WT ticket names onto live WT worker session rows.
 
@@ -4023,8 +4021,12 @@ def _apply_watchtower_worker_display_names(rows):
             sid_to_worker[sid] = w
         if wid and sid:
             worker_ids[wid] = sid
-    items = (_wt_list_items_snapshot_only() if _WT_DISPLAY_SNAPSHOT_ONLY
+    items = (_wt_detached_title_items() if _WT_DISPLAY_SNAPSHOT_ONLY
              else _wt_list_items_display_cached())
+    candidate_sids = {
+        str(row.get("session_id") or row.get("id") or "").strip()
+        for row in rows if isinstance(row, dict) and not row.get("name_overridden")
+    }
     titles_by_sid = {}
     for it in items:
         if not isinstance(it, dict):
@@ -4039,7 +4041,7 @@ def _apply_watchtower_worker_display_names(rows):
         sid = str(it.get("claimed_session_id") or "").strip()
         if not sid:
             sid = worker_ids.get(str(it.get("claimed_by") or "").strip(), "")
-        if not sid:
+        if not sid or sid not in candidate_sids:
             continue
         if not _wt_item_worked_by_session(it, sid):
             continue
@@ -6441,11 +6443,13 @@ def _infer_session_spawned_via(row_or_entry, sid=None, markers=None, spawn_regis
     # This is a directory convention, not evidence of a particular parent.
     cwd = str(row_or_entry.get("session_cwd") or row_or_entry.get("folder_path")
               or row_or_entry.get("cwd") or "")
-    helper_name = Path(cwd).name if cwd else str(row_or_entry.get("slug") or "")
-    for prefix, origin in (("te-side", "tokeneconomizer"), ("wt-model", "watchtower-model")):
-        pattern = (r"^" if cwd else r"(?:^|-)") + prefix + r"-[A-Za-z0-9_-]+$"
-        if re.search(pattern, helper_name):
-            return origin
+    helper_source = cwd or str(row_or_entry.get("slug") or "")
+    if "te-side-" in helper_source or "wt-model-" in helper_source:
+        helper_name = Path(cwd).name if cwd else helper_source
+        for prefix, origin in (("te-side", "tokeneconomizer"), ("wt-model", "watchtower-model")):
+            pattern = (r"^" if cwd else r"(?:^|-)") + prefix + r"-[A-Za-z0-9_-]+$"
+            if re.search(pattern, helper_name):
+                return origin
     caller = str(row_or_entry.get("spawn_caller") or "").strip().lower()
     if caller in ("terminal", "iterm", "iterm2", "kitty", "alacritty", "wezterm"):
         return "terminal"
@@ -16189,7 +16193,12 @@ def find_all_conversations(
 
     project_dirs = []
     if projects_root_exists:
-        project_dirs = _archive_canonical_project_dirs(projects_root)
+        if files_by_project is None:
+            project_dirs = _archive_canonical_project_dirs(projects_root)
+        else:
+            # Signature deltas already name canonical project paths, including
+            # targets of symlinks. Avoid enumerating unrelated project folders.
+            project_dirs = sorted(files_by_project)
 
     # Pre-count total transcripts for the progress callback. Just iterdir
     # + name check — no stat, no parse — so it's cheap relative to the cold
@@ -20915,7 +20924,11 @@ def _archive_refresh_worker_main(encoded_options, output_path):
         }
         key = _archive_response_cache_key(**cache_options)
         _wt0 = time.perf_counter()
+        scores_file = _ARCHIVE_RESPONSE_CACHE_FILE.with_name("archive-question-scores.json")
+        scores = _load_archive_question_scores(scores_file)
         rows, from_cache = _archive_compute_rows(key, cache_options, detached=True)
+        if _SOFT_BLOCK_SCORE_MEMO != scores:
+            _save_archive_question_scores(scores_file)
         from ccc_server import archive_store
         rows = archive_store.hot_rows(rows)
         phases = dict(_ARCHIVE_COMPUTE_LAST_PHASES)
@@ -21676,7 +21689,15 @@ def _rehydrate_archive_hot_rows(rows):
                 if row.get("engine") == "codex":
                     if _codex_titles is None:
                         try:
-                            _codex_titles = _codex_titles_snapshot()
+                            if _WT_DISPLAY_SNAPSHOT_ONLY:
+                                from ccc_server.codex import _codex_archive_titles
+                                _codex_titles = _codex_archive_titles({
+                                    r.get("session_id") or r.get("id") for r in rows
+                                    if isinstance(r, dict) and r.get("engine") == "codex"
+                                    and not name_overrides.get(r.get("session_id") or r.get("id"))
+                                } - {None, ""} - deleted_codex)
+                            else:
+                                _codex_titles = _codex_titles_snapshot()
                         except Exception:
                             _codex_titles = {}
                     fresh = _codex_titles.get(sid)
@@ -21807,8 +21828,9 @@ def _rehydrate_archive_hot_rows(rows):
             row["is_live"] = is_live
             if row.get("engine") == "claude":
                 row.update(_registry_row_overlay(session_registry.get(sid)))
-            for k, v in _ARCHIVE_SIDECAR_DEFAULTS.items():
-                row[k] = copy.deepcopy(v)
+            row.update(_ARCHIVE_SIDECAR_DEFAULTS)
+            row["question_options"] = []
+            row["question_option_details"] = []
             if is_live:
                 live_row = {"session_id": sid, "is_live": True}
                 try:
@@ -48897,6 +48919,51 @@ def _strip_for_question_scan(text):
 # digest of the text so the memo holds 16-byte keys, not the transcripts.
 _SOFT_BLOCK_SCORE_MEMO = {}
 _SOFT_BLOCK_SCORE_MEMO_MAX = 16384
+
+
+# Bump when prose scoring or its input normalization changes. Cache only the
+# content-derived score; liveness, approvals and pending-tool gates stay fresh.
+_ARCHIVE_QUESTION_SCORE_VERSION = 1
+
+
+def _load_archive_question_scores(filename):
+    try:
+        with filename.open(encoding="utf-8") as handle:
+            data = json.load(handle)
+        if data["version"] != _ARCHIVE_QUESTION_SCORE_VERSION:
+            return {}
+        scores = data["scores"]
+        if len(scores) > _SOFT_BLOCK_SCORE_MEMO_MAX:
+            return {}
+        loaded = {}
+        for key, (score, reasons, text) in scores.items():
+            if not isinstance(score, int) or not isinstance(reasons, list) or not isinstance(text, str):
+                return {}
+            loaded[bytes.fromhex(key)] = (score, reasons, text)
+    except (AttributeError, KeyError, OSError, TypeError, ValueError):
+        return {}
+    _SOFT_BLOCK_SCORE_MEMO.update(loaded)
+    return loaded
+
+
+def _save_archive_question_scores(filename):
+    staged = None
+    try:
+        filename.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="w", dir=filename.parent, encoding="utf-8",
+                                         delete=False) as handle:
+            staged = handle.name
+            handle.write(json.dumps({
+                "version": _ARCHIVE_QUESTION_SCORE_VERSION,
+                "scores": {digest.hex(): value for digest, value in _SOFT_BLOCK_SCORE_MEMO.items()},
+            }, separators=(",", ":")))
+        os.replace(staged, filename)
+    except OSError:
+        pass
+    finally:
+        if staged is not None:
+            with contextlib.suppress(OSError):
+                os.unlink(staged)
 
 
 def _score_soft_block(text):

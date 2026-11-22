@@ -10,6 +10,71 @@ import sys
 import tempfile
 
 
+def clip_title(text, limit=60):
+    text = " ".join(str(text or "").split()).strip()
+    if limit and len(text) > limit:
+        return text[:limit].rstrip() + "..."
+    return text
+
+
+def ticket_context(item, limit=60):
+    res = item.get("resolution") if isinstance(item, dict) else {}
+    summary = ""
+    if isinstance(res, str):
+        summary = res
+    elif isinstance(res, dict):
+        summary = str(res.get("summary") or "")
+    # Annotation titles mirror the browser document title, which is usually a
+    # generic product name. Their note is the reporter's actual request and
+    # therefore makes a useful worker label. Ordinary WatchTower tickets keep
+    # their explicit title as the preferred context.
+    annotation_id = str(item.get("annotation_id") or item.get("id") or "")
+    is_annotation = annotation_id.startswith("ann-")
+    values = (
+        (summary, item.get("note"), item.get("title"), item.get("text"))
+        if is_annotation
+        else (summary, item.get("title"), item.get("note"), item.get("text"))
+    )
+    for value in values:
+        text = clip_title(value, limit=limit)
+        if text:
+            return text
+    return ""
+
+
+def worker_title_path(snapshot_path):
+    return snapshot_path.with_name(snapshot_path.stem + ".worker-titles.json")
+
+
+def worker_title_generation(stat):
+    return [1, stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size]
+
+
+def project_worker_title_items(rows):
+    # Retain original ticket order and the claim evidence used by the
+    # dashboard. Omit non-claim history and text superseded by a resolution.
+    items = []
+    for item in rows:
+        if not isinstance(item, dict) or item.get("status") not in (
+            "in_progress", "in_review", "closed",
+        ):
+            continue
+        title_item = {field: item[field] for field in (
+            "project", "ref", "status", "claimed_by", "claimed_session_id",
+            "claimed_at", "closed_at", "updated_at", "created_at",
+        ) if field in item}
+        title_item["title"] = ticket_context(item, limit=0)
+        history = item.get("history")
+        if isinstance(history, list) and history:
+            title_item["history"] = [
+                {"event": "claim", "by": {"session_id": event["by"].get("session_id")}}
+                if isinstance(event.get("by"), dict) else {"event": "claim"}
+                for event in history if isinstance(event, dict) and event.get("event") == "claim"
+            ] or [{}]
+        items.append(title_item)
+    return items
+
+
 class _Snapshot(list):
     """Read-only display rows and their last child-output fingerprints."""
 
@@ -72,6 +137,8 @@ def fetch(queue_module, timeout=90, *, snapshot_path=None, previous=None):
                     except OSError:
                         pass
                     else:
+                        with contextlib.suppress(OSError):
+                            os.replace(worker_title_path(staged), worker_title_path(destination))
                         # Alert polls need only status fields. Associate them
                         # with the published inode to avoid re-decoding history.
                         from ccc_server.wt_alerts import remember_ticket_snapshot
@@ -90,6 +157,15 @@ def fetch(queue_module, timeout=90, *, snapshot_path=None, previous=None):
 
 
 def _persist(items, destination):
+    destination = Path(destination)
+    stamp = _persist_data({"items": items}, destination)
+    if stamp is not None:
+        _persist_data({"key": worker_title_generation(stamp),
+                       "items": project_worker_title_items(items)},
+                      worker_title_path(destination))
+
+
+def _persist_data(data, destination):
     """Publish the display copy in the child, away from the HTTP GIL.
 
     A unique temporary file prevents overlapping readers from sharing a
@@ -103,8 +179,10 @@ def _persist(items, destination):
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
                                          dir=destination.parent, delete=False) as output:
             temporary = output.name
-            output.write(json.dumps({"items": items}))
+            output.write(json.dumps(data, separators=(",", ":")))
+        stamp = os.stat(temporary)
         os.replace(temporary, destination)
+        return stamp
     except (OSError, TypeError, ValueError):
         pass
     finally:
