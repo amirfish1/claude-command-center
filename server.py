@@ -62,6 +62,7 @@ import sysconfig
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import ssl
 import copy
 import uuid
@@ -3990,17 +3991,7 @@ def _wt_detached_title_items():
     return items
 
 
-def _apply_watchtower_worker_display_names(rows):
-    """Layer WT ticket names onto live WT worker session rows.
-
-    Claude workers usually carry this through transcript custom-title events.
-    Non-Claude engines, especially Codex exec, do not expose that same title
-    primitive, and old pre-fix Claude workers may still overwrite themselves
-    with a generic spawn name. This display-only overlay keeps CCC's row title
-    tied to the WT ticket while preserving user-renamed sessions.
-    """
-    if not rows:
-        return rows
+def _watchtower_worker_display_inputs():
     # The persistent ledger is the only source that still knows about a WT
     # worker after it has been reaped. Stamp rows here, alongside the existing
     # WT display overlay, so Current Sessions can exclude them on its *first*
@@ -4024,6 +4015,27 @@ def _apply_watchtower_worker_display_names(rows):
             worker_ids[wid] = sid
     items = (_wt_detached_title_items() if _WT_DISPLAY_SNAPSHOT_ONLY
              else _wt_list_items_display_cached())
+    try:
+        origins = _wt_read_session_origins()
+    except Exception:
+        origins = {}
+    return worker_session_ids, sid_to_worker, worker_ids, items, origins
+
+
+def _apply_watchtower_worker_display_names(rows, inputs=None):
+    """Layer WT ticket names onto live WT worker session rows.
+
+    Claude workers usually carry this through transcript custom-title events.
+    Non-Claude engines, especially Codex exec, do not expose that same title
+    primitive, and old pre-fix Claude workers may still overwrite themselves
+    with a generic spawn name. This display-only overlay keeps CCC's row title
+    tied to the WT ticket while preserving user-renamed sessions.
+    """
+    if not rows:
+        return rows
+    worker_session_ids, sid_to_worker, worker_ids, items, origins = (
+        _watchtower_worker_display_inputs() if inputs is None else inputs
+    )
     candidate_sids = {
         str(row.get("session_id") or row.get("id") or "").strip()
         for row in rows if isinstance(row, dict) and not row.get("name_overridden")
@@ -4067,13 +4079,8 @@ def _apply_watchtower_worker_display_names(rows):
             _wt_display_name(it.get("project"), it.get("ref"), clipped_context),
             rest_context,
         )
-    if not titles_by_sid and not sid_to_worker and not worker_session_ids \
-            and not _wt_read_session_origins():
+    if not titles_by_sid and not sid_to_worker and not worker_session_ids and not origins:
         return rows
-    try:
-        origins = _wt_read_session_origins()
-    except Exception:
-        origins = {}
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -17345,7 +17352,7 @@ def _publish_archive_delta(key, base, merged, signature, *, point_update=False):
             return False
         raise RuntimeError("archive response changed while its delta was being built")
     note_archive_build(entry["cached_at"])
-    return True
+    return entry["cached_at"]
 
 
 def _archive_response_cache_get(key):
@@ -18239,7 +18246,7 @@ def _archive_refresh_load_blocked(now):
 
 
 def _archive_serve_cache_store(key, rows, generation, ts=None, *, transfer_rows=None, partial=False,
-                               hot_selected=False):
+                               hot_selected=False, hot_reuse=None):
     """Store rows only if no lifecycle mutation invalidated their build.
 
     `ts` defaults to now (a genuine fresh build). The cold-restart path
@@ -18287,6 +18294,7 @@ def _archive_serve_cache_store(key, rows, generation, ts=None, *, transfer_rows=
             prev["ts"] = stamp
             prev["rows"] = diff["rows"]
             prev["transfer_rows"] = transfer_rows
+            prev["hot_reuse"] = hot_reuse
             prev["partial_refresh"] = partial
             return True
         _archive_serve_version += 1
@@ -18294,7 +18302,7 @@ def _archive_serve_cache_store(key, rows, generation, ts=None, *, transfer_rows=
         # row_rev: session id -> version its row last changed (absent = at or
         # before track_since). Feeds the ?since= delta /list.
         entry = {"ts": stamp, "rows": rows, "ver": ver, "track_since": ver, "row_rev": {},
-                 "transfer_rows": transfer_rows, "partial_refresh": partial}
+                 "transfer_rows": transfer_rows, "partial_refresh": partial, "hot_reuse": hot_reuse}
         if diff is not None:
             entry["rows"] = diff["rows"]
             if prev.get("track_since") and prev.get("row_rev") is not None and not diff["untracked"]:
@@ -21172,7 +21180,8 @@ def _stamp_archive_goals(rows):
 _ARCHIVE_COMPUTE_LAST_PHASES = {}
 
 
-def _archive_compute_rows(key, cache_options, serve_generation=None, progress_step=None, *, detached=False):
+def _archive_compute_rows(key, cache_options, serve_generation=None, progress_step=None, *,
+                          detached=False, reuse=None):
     """Produce archive rows under the per-key build lock (single-flight).
 
     Signature-gated: unchanged transcript corpus → rehydrate the persisted rows
@@ -21187,6 +21196,7 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
     # CCC-142: per-phase timings, shipped back by the refresh worker.
     phases = _ARCHIVE_COMPUTE_LAST_PHASES
     phases.clear()
+    hot_read_options = {"reuse_hot": reuse.select} if reuse is not None else {}
     _ph = time.perf_counter()
     sig = _archive_corpus_signature()
     phases["signature_ms"] = round((time.perf_counter() - _ph) * 1000.0, 1)
@@ -21200,11 +21210,14 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
         if entry and entry.get("signature") == sig:
             phases["tier"] = "match"
             if indexed:
-                entry = _archive_refresh_read(key, hot=True)
+                if reuse is not None:
+                    reuse.prepare(indexed["cached_at"], indexed["cached_at"])
+                entry = _archive_refresh_read(key, hot=True, **hot_read_options)
                 phases["hot_read_ms"] = round((time.perf_counter() - _ph) * 1000.0, 1)
                 if entry is None:
                     raise RuntimeError("archive hot rows became unavailable")
-                rows = _rehydrate_archive_cached_rows(entry["conversations"], preselected=True)
+                rows = (reuse.hydrate(entry["conversations"]) if reuse and reuse.inputs is not None
+                        else _rehydrate_archive_cached_rows(entry["conversations"], preselected=True))
             else:
                 rows = _rehydrate_archive_cached_rows(entry.get("conversations") or [])
             phases["rehydrate_ms"] = round((time.perf_counter() - _ph) * 1000.0, 1)
@@ -21332,11 +21345,14 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
                         )
                         _sp = time.perf_counter()
                         if indexed:
-                            hot = _archive_refresh_read(key, hot=True)
+                            if reuse is not None and published:
+                                reuse.prepare(indexed["cached_at"], published, fresh)
+                            hot = _archive_refresh_read(key, hot=True, **hot_read_options)
                             phases["hot_read_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
                             if hot is None:
                                 raise RuntimeError("published archive hot rows became unavailable")
-                            rows = _rehydrate_archive_cached_rows(hot["conversations"], preselected=True)
+                            rows = (reuse.hydrate(hot["conversations"]) if reuse and reuse.inputs is not None
+                                    else _rehydrate_archive_cached_rows(hot["conversations"], preselected=True))
                         else:
                             rows = _rehydrate_archive_cached_rows(merged)
                         phases["rehydrate_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
@@ -21492,6 +21508,119 @@ def _start_gc_freeze_thread():
     threading.Thread(target=loop, name="ccc-gc-freeze", daemon=True).start()
 
 
+class _ArchiveReusedRow(dict):
+    """Selector fields for a row whose full body belongs to the IPC basis."""
+
+    def __init__(self, sid, proof):
+        _, activity, engine, parent, self.token = proof
+        super().__init__(session_id=sid, mtime=activity, engine=engine, parent_session_id=parent)
+
+
+class _ArchiveHotReuse:
+    """Carry exact detached rows when their canonical and overlay inputs agree."""
+
+    def __init__(self, previous, basis):
+        self.previous = previous if isinstance(previous, dict) else {}
+        self.records = {}
+        self.basis = basis
+        self.inputs = None
+        self.excluded = set()
+        self.session_ids = set()
+        self.eligible = {}
+        self.previous_stamp = None
+        self.expected_stamp = None
+        self.stamp = None
+        self.changed = set()
+        self.can_carry = False
+
+    def prepare(self, previous_stamp, expected_stamp, changed_rows=()):
+        self.previous_stamp = previous_stamp
+        self.expected_stamp = expected_stamp
+        self.changed = {_archive_row_sid(row) for row in changed_rows}
+
+    def select(self, inventory, stamp):
+        self.session_ids = {sid for _, sid in inventory}
+        if "" in self.session_ids or len(self.session_ids) != len(inventory):
+            # Duplicate or missing IDs need the ordinary compound-key path.
+            return {}
+        self.stamp = stamp
+        # Only an exact match or a completed point update proves every
+        # untouched canonical body is still the one behind the old result.
+        self.can_carry = stamp == self.expected_stamp and self.previous.get("stamp") == self.previous_stamp
+        if self.can_carry and isinstance(self.previous.get("rows"), dict):
+            self.records = self.previous["rows"]
+        requested_ids = {sid.strip() for sid in self.session_ids if sid.strip()}
+        inputs = self.inputs = _archive_hot_overlay_inputs(requested_ids)
+        inputs.parents = _session_graph.parent_snapshot()
+        try:
+            inputs.lane_overrides = _load_session_lane_overrides()
+        except Exception:
+            inputs.lane_overrides = {}
+        inputs.worker_inputs = _watchtower_worker_display_inputs()
+        ledger, workers, worker_ids, tickets, origins = inputs.worker_inputs
+        excluded = self.excluded = set().union(
+            inputs.name_overrides, inputs.archived_set, inputs.trashed_set,
+            inputs.verified_set, inputs.pinned_rank, inputs.spawn_registry_by_sid,
+            inputs.idea_tickets_by_sid, inputs.drivers, inputs.spawn_markers,
+            inputs.session_overrides, inputs.live_candidates, inputs.session_registry,
+            inputs.parents, inputs.lane_overrides, _ARCHIVE_WORKFLOW_SESSION_DIRS,
+            ledger, workers, origins,
+        )
+        excluded.update(
+            str(ticket.get("claimed_session_id") or "").strip()
+            or worker_ids.get(str(ticket.get("claimed_by") or "").strip(), "")
+            for ticket in tickets if isinstance(ticket, dict)
+        )
+        rows = {}
+        cutoff = inputs.now - _LIVE_MTIME_WINDOW
+        for rowid, sid in inventory:
+            record = self.records.get(sid)
+            if (sid in excluded or sid in self.changed or not isinstance(record, list) or len(record) != 5
+                    or type(record[0]) not in (float, int)
+                    or not math.isfinite(record[0]) or record[0] > cutoff
+                    or not isinstance(record[-1], str) or record[-1] not in self.basis
+                    or _is_recently_unarchived(sid, inputs.now)):
+                continue
+            rows[rowid] = _ArchiveReusedRow(sid, record)
+        return rows
+
+    def hydrate(self, rows):
+        by_sid = {}
+        dirty = []
+        cutoff = self.inputs.now - _LIVE_MTIME_WINDOW
+        for row in rows:
+            sid = _archive_row_sid(row)
+            if isinstance(row, _ArchiveReusedRow):
+                by_sid[sid] = row
+                continue
+            dirty.append(row)
+            stamp = row.get("mtime") or row.get("modified") or 0
+            raw_sid = row.get("session_id") or row.get("id")
+            if (isinstance(raw_sid, str) and raw_sid == raw_sid.strip()
+                    and sid in self.session_ids and sid not in self.excluded
+                    and row.get("engine") not in ("codex", "kimi") and row.get("source") != "kimi"
+                    and not _is_claude_task_agent_row(row) and type(stamp) in (int, float)
+                    and math.isfinite(stamp) and stamp <= cutoff
+                    and not _is_recently_unarchived(sid, self.inputs.now)):
+                self.eligible[sid] = stamp
+        by_sid.update((_archive_row_sid(row), row)
+                      for row in _rehydrate_archive_hot_rows(dirty, inputs=self.inputs))
+        return [by_sid[sid] for row in rows if (sid := _archive_row_sid(row)) in by_sid]
+
+    def proof_for(self, row, token):
+        sid = _archive_row_sid(row)
+        if sid in self.eligible:
+            from ccc_server import archive_store
+
+            activity = archive_store.activity(row)
+            # Summary timestamps use the selector's ordinary seconds path.
+            if activity <= 100000000000:
+                return [self.eligible[sid], activity,
+                        row.get("engine") or row.get("source") or "",
+                        row.get("parent_session_id") or row.get("hermes_parent_session_id") or "",
+                        token]
+
+
 def _archive_refresh_worker_main(encoded_options, output_path):
     """Build one archive snapshot in a short-lived, low-priority process."""
     import sqlite3
@@ -21500,6 +21629,8 @@ def _archive_refresh_worker_main(encoded_options, output_path):
     _WT_DISPLAY_SNAPSHOT_ONLY = True
     basis = None
     holder_sample = None
+    reuse = None
+    reuse_options = {}
     try:
         basis_path = Path(str(output_path) + ".basis")
         if basis_path.is_file():
@@ -21507,6 +21638,8 @@ def _archive_refresh_worker_main(encoded_options, output_path):
             if isinstance(inputs, dict):
                 basis = set(inputs["rows"])
                 holder_sample = inputs.get("codex_holders")
+                if "hot_reuse" in inputs and _ARCHIVE_SERVE_TTL <= 0:
+                    reuse = _ArchiveHotReuse(inputs["hot_reuse"], basis)
             else:
                 basis = set(inputs)
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -21548,7 +21681,8 @@ def _archive_refresh_worker_main(encoded_options, output_path):
         scores = _load_archive_question_scores(scores_file)
         from ccc_server.codex import _seed_codex_archive_holders
         holders_seeded = _seed_codex_archive_holders(holder_sample)
-        rows, from_cache = _archive_compute_rows(key, cache_options, detached=True)
+        reuse_options = {"reuse": reuse} if reuse is not None and key == _archive_response_cache_key() else {}
+        rows, from_cache = _archive_compute_rows(key, cache_options, detached=True, **reuse_options)
         if _SOFT_BLOCK_SCORE_MEMO != scores:
             _save_archive_question_scores(scores_file)
         from ccc_server import archive_store
@@ -21564,6 +21698,8 @@ def _archive_refresh_worker_main(encoded_options, output_path):
                     phases["sidebar_backfill_ms"] = round((time.perf_counter() - started) * 1000.0, 1)
             except (OSError, ValueError, sqlite3.Error) as exc:
                 print(f"  [archive-cache] sidebar backfill deferred: {exc}", file=sys.stderr)
+        if reuse is not None and reuse.inputs is not None:
+            phases["hot_reused"] = sum(isinstance(row, _ArchiveReusedRow) for row in rows)
         phases["compute_ms"] = round((time.perf_counter() - _wt0) * 1000.0, 1)
         phases["compute_thread_cpu_ms"] = round((time.thread_time() - _cpu0) * 1000.0, 1)
         result = {
@@ -21578,7 +21714,7 @@ def _archive_refresh_worker_main(encoded_options, output_path):
     finally:
         _SPAWN_MARKER_BACKGROUND_REVALIDATION = previous_revalidation
     try:
-        _write_archive_refresh_result(output_path, result, basis=basis)
+        _write_archive_refresh_result(output_path, result, basis=basis, **reuse_options)
     except (OSError, ValueError) as exc:
         print(f"archive refresh worker could not write its result: {exc}", file=sys.stderr)
         return 1
@@ -21593,7 +21729,7 @@ def _archive_refresh_worker_main(encoded_options, output_path):
 _ARCHIVE_RESULT_ROWS_PER_LINE = 64
 
 
-def _write_archive_refresh_result(output_path, result, *, basis=None):
+def _write_archive_refresh_result(output_path, result, *, basis=None, reuse=None):
     """Send changed bodies and their order when the dashboard has a basis."""
     rows = result.get("rows")
     header = {k: v for k, v in result.items() if k != "rows"}
@@ -21601,10 +21737,18 @@ def _write_archive_refresh_result(output_path, result, *, basis=None):
     if isinstance(rows, list):
         if basis is not None:
             order, chunks, chunk = [], [], []
+            row_proofs = {}
             for row in rows:
+                if isinstance(row, _ArchiveReusedRow):
+                    order.append(row.token)
+                    continue
                 encoded = json.dumps(row, separators=(",", ":"))
                 token = hashlib.blake2b(encoded.encode("ascii"), digest_size=16).hexdigest()
                 order.append(token)
+                if reuse is not None and (proof := reuse.proof_for(row, token)) is not None:
+                    sid = _archive_row_sid(row)
+                    if sid in reuse.changed or reuse.records.get(sid) != proof:
+                        row_proofs[sid] = proof
                 if token in basis:
                     continue
                 basis.add(token)
@@ -21614,6 +21758,13 @@ def _write_archive_refresh_result(output_path, result, *, basis=None):
                     chunk = []
             if chunk:
                 chunks.append(chunk)
+            if reuse is not None and reuse.stamp is not None:
+                header["hot_reuse"] = {
+                    "stamp": reuse.stamp,
+                    "carry_from": reuse.previous_stamp if reuse.can_carry else None,
+                    "changed": sorted(reuse.changed),
+                    "rows": row_proofs,
+                }
             header["row_order"] = order
             header["row_count"] = sum(map(len, chunks))
         else:
@@ -21695,6 +21846,24 @@ def _sweep_stale_archive_refresh_results(root=None, now=None):
     return removed
 
 
+def _archive_refresh_reuse_basis(previous, result):
+    """Keep proof only for bodies carried by the accepted transfer."""
+    update = result.get("hot_reuse")
+    if update is None:
+        return None
+    previous = previous or {}
+    rows = update["rows"]
+    if update["carry_from"] is not None and update["carry_from"] == previous.get("stamp"):
+        changed = set(update["changed"])
+        transmitted = result["transfer_rows"]
+        rows = {
+            **{sid: proof for sid, proof in previous["rows"].items()
+               if sid not in changed and proof[-1] in transmitted},
+            **rows,
+        }
+    return {"stamp": update["stamp"], "rows": rows}
+
+
 def _archive_compute_rows_detached(key, cache_options, serve_generation):
     """Run GIL-heavy archive parsing outside the dashboard server process.
 
@@ -21745,10 +21914,12 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
             with _archive_serve_lock:
                 previous = _archive_serve_cache.get(key) or {}
                 basis = previous.get("transfer_rows") or {}
+                hot_reuse = previous.get("hot_reuse")
             basis_fd = os.open(basis_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             from ccc_server.codex import _codex_archive_holder_sample
             with os.fdopen(basis_fd, "w", encoding="ascii") as handle:
-                json.dump({"rows": list(basis), "codex_holders": _codex_archive_holder_sample()},
+                json.dump({"rows": list(basis), "codex_holders": _codex_archive_holder_sample(),
+                           "hot_reuse": hot_reuse},
                           handle, separators=(",", ":"))
             completed = subprocess.run(
                 command,
@@ -21781,6 +21952,7 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
             raise RuntimeError("archive refresh worker returned invalid rows")
         from ccc_server import archive_store
         rows = archive_store.hot_rows(rows)
+        next_proofs = _archive_refresh_reuse_basis(hot_reuse, result)
         _rt2 = time.perf_counter()
         _rphase["decode_ms"] = round((_rt2 - _rt1) * 1000.0, 1)
         if _ARCHIVE_SERVE_TTL > 0:
@@ -21790,7 +21962,7 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
             pending = (result.get("phases") or {}).get("remaining")
             _archive_serve_cache_store(key, rows, serve_generation, ts=0 if pending else None,
                                        transfer_rows=result.get("transfer_rows"), partial=bool(pending),
-                                       hot_selected=True)
+                                       hot_selected=True, hot_reuse=next_proofs)
         _rt3 = time.perf_counter()
         _rphase["store_ms"] = round((_rt3 - _rt2) * 1000.0, 1)
         _rphase["rows"] = len(rows)
@@ -22211,10 +22383,7 @@ def _rehydrate_archive_cached_rows(rows, *, preselected=False):
     return merged
 
 
-def _rehydrate_archive_hot_rows(rows):
-    """Apply fast-changing state to cached archive rows before responding."""
-    if not isinstance(rows, (list, tuple)):
-        rows = list(rows or ())
+def _archive_hot_overlay_inputs(session_ids):
     try:
         name_overrides = _load_session_name_overrides()
     except Exception:
@@ -22232,11 +22401,6 @@ def _rehydrate_archive_hot_rows(rows):
     except Exception:
         pinned_list = []
     pinned_rank = _pinned_rank_map(pinned_list)
-    session_ids = {
-        str(row.get("session_id") or row.get("id") or "").strip()
-        for row in rows if isinstance(row, dict)
-    }
-    session_ids.discard("")
     try:
         spawn_registry_by_sid = _spawn_registry_entries_by_session(session_ids=session_ids)
     except Exception:
@@ -22282,6 +22446,28 @@ def _rehydrate_archive_hot_rows(rows):
     except Exception:
         session_registry = {}
     _now_rehydrate = time.time()
+    return SimpleNamespace(
+        name_overrides=name_overrides, archived_set=archived_set, trashed_set=trashed_set,
+        verified_set=verified_set, pinned_list=pinned_list, pinned_rank=pinned_rank,
+        spawn_registry_by_sid=spawn_registry_by_sid, idea_tickets_by_sid=idea_tickets_by_sid,
+        drivers=drivers, spawn_markers=spawn_markers, session_overrides=session_overrides,
+        deleted_codex=deleted_codex, live_candidates=live_candidates, session_registry=session_registry,
+        now=_now_rehydrate, parents=None, lane_overrides=None, worker_inputs=None,
+    )
+
+
+def _rehydrate_archive_hot_rows(rows, *, inputs=None):
+    """Apply fast-changing state to cached archive rows before responding."""
+    if not isinstance(rows, (list, tuple)):
+        rows = list(rows or ())
+    if inputs is None:
+        session_ids = {
+            str(row.get("session_id") or row.get("id") or "").strip()
+            for row in rows if isinstance(row, dict)
+        }
+        session_ids.discard("")
+        inputs = _archive_hot_overlay_inputs(session_ids)
+    _now_rehydrate = inputs.now
 
     # Codex names a thread seconds AFTER the spawn returns, and that name lands
     # in state_*.sqlite, which the corpus signature deliberately ignores (see
@@ -22304,14 +22490,14 @@ def _rehydrate_archive_hot_rows(rows):
             row.get("last_assistant_text")
         )
         sid = row.get("session_id") or row.get("id")
-        if row.get("engine") == "codex" and str(sid or "") in deleted_codex:
+        if row.get("engine") == "codex" and str(sid or "") in inputs.deleted_codex:
             continue
         if sid:
             if row.get("engine") == "codex":
                 if _task_titles is None:
                     _task_titles = _auto_titled_session_ids()
                 row["task_title"] = _task_titles.get(sid) or ""
-            override = name_overrides.get(sid)
+            override = inputs.name_overrides.get(sid)
             if override:
                 row["display_name"] = override
                 row["name_overridden"] = True
@@ -22333,8 +22519,8 @@ def _rehydrate_archive_hot_rows(rows):
                                 _codex_titles = _codex_archive_titles({
                                     r.get("session_id") or r.get("id") for r in rows
                                     if isinstance(r, dict) and r.get("engine") == "codex"
-                                    and not name_overrides.get(r.get("session_id") or r.get("id"))
-                                } - {None, ""} - deleted_codex)
+                                    and not inputs.name_overrides.get(r.get("session_id") or r.get("id"))
+                                } - {None, ""} - inputs.deleted_codex)
                             else:
                                 _codex_titles = _codex_titles_snapshot()
                         except Exception:
@@ -22376,7 +22562,7 @@ def _rehydrate_archive_hot_rows(rows):
             # spawn_recent instead, so a genuinely created-but-unused session
             # still shows it.
             if sid and not row.get("first_message"):
-                spawn = spawn_registry_by_sid.get(sid) or {}
+                spawn = inputs.spawn_registry_by_sid.get(sid) or {}
                 prompt = _strip_host_system_instruction(spawn.get("prompt") or "").strip()
                 if prompt:
                     if not row.get("display_name"):
@@ -22384,10 +22570,10 @@ def _rehydrate_archive_hot_rows(rows):
                     if _spawn_is_recent(spawn, _now_rehydrate):
                         row["spawn_recent"] = True
 
-            row["archived"] = sid in archived_set
-            row["trashed"] = sid in trashed_set
+            row["archived"] = sid in inputs.archived_set
+            row["trashed"] = sid in inputs.trashed_set
             row["recently_unarchived"] = _is_recently_unarchived(sid, _now_rehydrate)
-            row["verified"] = sid in verified_set
+            row["verified"] = sid in inputs.verified_set
             # Live-first, matching the model beside it (CCC-466): a row states
             # what the session last RAN at. An observed transcript value always
             # wins, whichever engine parsed it, because a picked-but-not-yet-
@@ -22396,23 +22582,24 @@ def _rehydrate_archive_hot_rows(rows):
             # fallback for a session with no assistant turn yet.
             if not row.get("reasoning_effort"):
                 row["reasoning_effort"] = _conv_row_reasoning_effort(
-                    sid, session_overrides, spawn_registry_by_sid.get(sid),
+                    sid, inputs.session_overrides, inputs.spawn_registry_by_sid.get(sid),
                 )
-            row["pinned"] = sid in pinned_rank
-            row["pin_rank"] = pinned_rank.get(sid)
+            row["pinned"] = sid in inputs.pinned_rank
+            row["pin_rank"] = inputs.pinned_rank.get(sid)
             spawn_parent_id = str(
-                (spawn_registry_by_sid.get(sid) or {}).get("parent_session_id") or ""
+                (inputs.spawn_registry_by_sid.get(sid) or {}).get("parent_session_id") or ""
             ).strip()
             if not spawn_parent_id:
                 spawn_parent_id = _parent_session_id_from_return_address_text(
                     row.get("first_message")
                 )
-            if not spawn_parent_id and sid in spawn_registry_by_sid and row.get("jsonl_path"):
+            if not spawn_parent_id and sid in inputs.spawn_registry_by_sid and row.get("jsonl_path"):
                 spawn_parent_id = _parent_session_id_from_transcript_return_address(
                     row.get("jsonl_path")
                 )
             if not spawn_parent_id:
-                spawn_parent_id = str(_session_graph.parent_of(sid) or "").strip()
+                spawn_parent_id = str((_session_graph.parent_of(sid) if inputs.parents is None
+                                       else inputs.parents.get(str(sid).strip())) or "").strip()
             if spawn_parent_id:
                 row["parent_session_id"] = spawn_parent_id
             else:
@@ -22431,7 +22618,7 @@ def _rehydrate_archive_hot_rows(rows):
             )
             if (
                 not continued_from
-                and (sid in spawn_registry_by_sid or (row.get("engine") == "codex" and spawn_parent_id))
+                and (sid in inputs.spawn_registry_by_sid or (row.get("engine") == "codex" and spawn_parent_id))
                 and row.get("jsonl_path")
             ):
                 continued_from = _continued_from_session_id_from_transcript(
@@ -22440,10 +22627,10 @@ def _rehydrate_archive_hot_rows(rows):
             row["continued_from_session_id"] = continued_from
             row["spawned_via"] = _infer_session_spawned_via(
                 row, sid=sid,
-                markers=spawn_markers, spawn_registry_by_sid=spawn_registry_by_sid,
+                markers=inputs.spawn_markers, spawn_registry_by_sid=inputs.spawn_registry_by_sid,
             )
-            row.update(_driver.fields(row, sid, observed=drivers.get(sid, {})))
-            idea_ticket = idea_tickets_by_sid.get(sid)
+            row.update(_driver.fields(row, sid, observed=inputs.drivers.get(sid, {})))
+            idea_ticket = inputs.idea_tickets_by_sid.get(sid)
             if idea_ticket:
                 row["idea_ticket"] = idea_ticket
             else:
@@ -22460,13 +22647,13 @@ def _rehydrate_archive_hot_rows(rows):
                     )
                 except Exception:
                     is_live = False
-            elif sid in live_candidates or (_now_rehydrate - row_ts) < _LIVE_MTIME_WINDOW:
+            elif sid in inputs.live_candidates or (_now_rehydrate - row_ts) < _LIVE_MTIME_WINDOW:
                 is_live = _archive_session_is_live(sid)
             else:
                 is_live = False
             row["is_live"] = is_live
             if row.get("engine") == "claude":
-                row.update(_registry_row_overlay(session_registry.get(sid)))
+                row.update(_registry_row_overlay(inputs.session_registry.get(sid)))
             row.update(_ARCHIVE_SIDECAR_DEFAULTS)
             row["question_options"] = []
             row["question_option_details"] = []
@@ -22506,11 +22693,11 @@ def _rehydrate_archive_hot_rows(rows):
                     pass
         hydrated.append(row)
 
-    _apply_pinned_conversation_fields(hydrated, pinned_list)
+    _apply_pinned_conversation_fields(hydrated, inputs.pinned_list)
     hydrated.sort(key=lambda r: r.get("mtime") or r.get("modified") or 0, reverse=True)
-    _sort_pinned_conversations_first(hydrated, pinned_list)
-    _apply_session_lane_overrides(hydrated)
-    _apply_spawn_markers(hydrated, markers=spawn_markers)
+    _sort_pinned_conversations_first(hydrated, inputs.pinned_list)
+    _apply_session_lane_overrides(hydrated, overrides=inputs.lane_overrides)
+    _apply_spawn_markers(hydrated, markers=inputs.spawn_markers)
     _stamp_archive_state(hydrated)
     # Layer the current codex goal on every rehydrate (one batched, cached read)
     # so the stale_ok serve the dashboard polls reflects goal set/clear without
@@ -22519,7 +22706,10 @@ def _rehydrate_archive_hot_rows(rows):
     # Same reasoning for WT ticket badges: without this, a session that closes
     # a new ticket only gets its display_name refreshed on the next full
     # transcript-signature rebuild, not on every cache-hit serve.
-    _apply_watchtower_worker_display_names(hydrated)
+    if inputs.worker_inputs is None:
+        _apply_watchtower_worker_display_names(hydrated)
+    else:
+        _apply_watchtower_worker_display_names(hydrated, inputs=inputs.worker_inputs)
     return hydrated
 
 

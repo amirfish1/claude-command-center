@@ -1286,18 +1286,25 @@ def _hot_params(key, now=None):
     return key, cutoff, key
 
 
-def _load_hot_bodies(con, key, now):
+def _load_hot_bodies(con, key, now, *, reuse=None, stamp=None):
     # Sort the small database keys before loading row bodies. SQLite otherwise
     # copies all hot JSON into a temporary sorter that can spill to disk.
     # The caller's read transaction keeps the ordered rowids and bodies paired.
-    ordered = [rowid for rowid, in con.execute(
-        _HOT_ROWS_CTE + "SELECT rowid FROM selected ORDER BY position",
-        _hot_params(key, now),
-    )]
+    params = _hot_params(key, now)
+    if reuse is None:
+        ordered = [rowid for rowid, in con.execute(
+            _HOT_ROWS_CTE + "SELECT rowid FROM selected ORDER BY position", params,
+        )]
+        rows = {}
+    else:
+        inventory = con.execute(
+            _HOT_ROWS_CTE + "SELECT rowid,sid FROM selected ORDER BY position", params,
+        ).fetchall()
+        ordered = [rowid for rowid, _ in inventory]
+        rows = reuse(inventory, stamp)
     # Rowid order keeps SQLite's table seeks in storage order even after
     # a point update writes the replacement at a new physical key.
-    physical = sorted(ordered)
-    rows = {}
+    physical = sorted(rowid for rowid in ordered if rowid not in rows)
     for offset in range(0, len(physical), 192):
         rowids = physical[offset:offset + 192]
         marks = ",".join("?" for _ in rowids)
@@ -1326,7 +1333,7 @@ class _RowIndexEntry(dict):
 
 
 def load(cache_file, *, hot=False, key=None, now=None, row_index=False, metadata_only=False,
-         reuse_engines=None, include_signature_maps=True):
+         reuse_engines=None, include_signature_maps=True, reuse_hot=None):
     """Read all metadata but only requested row bodies, with ancestor context."""
     if not database_path(cache_file).exists():
         return None
@@ -1370,7 +1377,7 @@ def load(cache_file, *, hot=False, key=None, now=None, row_index=False, metadata
                     index[rid] = (digest, position)
                 entry['_row_index'] = index
             elif hot:
-                rows = _load_hot_bodies(con, variant, now)
+                rows = _load_hot_bodies(con, variant, now, reuse=reuse_hot, stamp=stamp)
             elif reuse_engines:
                 predicates = " OR ".join("identity LIKE ?" for _ in reuse_engines)
                 prefixes = ["[" + json.dumps(engine) + ",%" for engine in reuse_engines]

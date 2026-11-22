@@ -6898,3 +6898,122 @@ def test_one_shot_archive_refresh_does_not_schedule_full_marker_rescan(monkeypat
         assert server._archive_refresh_worker_main("e30=", output) == 0
         thread.assert_not_called()
     assert server._SPAWN_MARKER_BACKGROUND_REVALIDATION
+
+
+def test_detached_archive_reuses_proven_row_bodies_after_one_canonical_change(tmp_path, monkeypatch):
+    from ccc_server import archive_store, cpu_priority
+
+    now = 2_000_000_000
+    key = server._archive_response_cache_key()
+    cache = tmp_path / "archive.json"
+    output = tmp_path / "result.json"
+    basis_path = output.with_suffix(".json.basis")
+    previous = {}
+    signature = "match"
+    live = set()
+    rows = [
+        {"session_id": f"dormant-{i}", "engine": "hermes", "mtime": now - 86400}
+        for i in range(300)
+    ]
+    rows.extend([
+        {"session_id": " legacy ", "engine": "hermes", "mtime": now - 86400},
+        {"session_id": "parent", "engine": "claude", "mtime": 1},
+        {"session_id": "child", "engine": "claude", "mtime": now - 86400,
+         "parent_session_id": "parent"},
+    ])
+
+    def publish():
+        archive_store.save(cache, {
+            "schema_version": server._ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
+            "build_id": server._ARCHIVE_RESPONSE_CACHE_BUILD_ID,
+            "entries": {key: {"cached_at": now, "signature": signature, "conversations": rows}},
+        }, complete=True, sidebar_key=key,
+           sidebar_pages=(server._ARCHIVE_SIDEBAR_PACKED_VERSION, server._archive_list_pack_static))
+
+    def worker(*, proof=None):
+        inputs = {"rows": list(previous)}
+        if proof is not None:
+            inputs["hot_reuse"] = proof
+        basis_path.write_text(json.dumps(inputs))
+        assert server._archive_refresh_worker_main("e30=", output) == 0
+        return server._read_archive_refresh_result(output, basis=previous)[0]
+
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", cache)
+    monkeypatch.setattr(server, "_ARCHIVE_SERVE_TTL", 0)
+    monkeypatch.setattr(server.time, "time", lambda: now)
+    monkeypatch.setattr(server, "_archive_corpus_signature", lambda: signature)
+    monkeypatch.setattr(server, "_archive_signature_delta", lambda *_: (["changed.jsonl"], [], set()))
+    monkeypatch.setattr(server, "find_all_conversations", lambda **kwargs: [rows[0]])
+    monkeypatch.setattr(server, "_load_conv_meta_cache", lambda **kwargs: None)
+    monkeypatch.setattr(server, "_save_conv_meta_cache", lambda: None)
+    monkeypatch.setattr(server, "_load_archive_question_scores", lambda path: server._SOFT_BLOCK_SCORE_MEMO)
+    monkeypatch.setattr(server, "_discover_live_session_ids", lambda: live)
+    monkeypatch.setattr(server, "_archive_session_is_live", lambda sid: sid in live)
+    monkeypatch.setattr(server, "_load_session_registry", lambda: {})
+    monkeypatch.setattr(server, "_load_spawn_markers", lambda ids: {
+        "legacy": {"spawned_via": "api"},
+    } if "legacy" in ids else {})
+    monkeypatch.setattr(server, "_spawn_registry_entries_by_session", lambda **kwargs: {})
+    monkeypatch.setattr(server, "_watchtower_worker_display_inputs", lambda: (set(), {}, {}, [], {}))
+    monkeypatch.setattr(server, "_WT_DISPLAY_SNAPSHOT_ONLY", False)
+    monkeypatch.setattr(cpu_priority, "set_background_priority", lambda role: None)
+    names = {}
+    monkeypatch.setattr(server, "_load_session_name_overrides", lambda: names)
+    publish()
+    seed = worker(proof={})
+    assert seed["hot_reuse"]["stamp"] == now
+    assert len(seed["hot_reuse"]["rows"]) == len(rows) - 1
+    assert " legacy " not in seed["hot_reuse"]["rows"]
+    previous.update(seed["transfer_rows"])
+
+    # One changed canonical body and a new name outside the corpus signature.
+    rows[0]["last_assistant_text"] = "New reply"
+    names["dormant-1"] = "Renamed"
+    live.add("dormant-2")
+    now += 1
+    signature = "one-file"
+    decoded_sids = []
+    decode = archive_store._decode_full_batch
+
+    def recorded(bodies):
+        decoded = decode(bodies)
+        decoded_sids.extend(row.get("session_id") for row in decoded)
+        return decoded
+
+    monkeypatch.setattr(archive_store, "_decode_full_batch", recorded)
+    reused = worker(proof=seed["hot_reuse"])
+    assert set(decoded_sids) == {"dormant-0", "dormant-1", "dormant-2", " legacy "}
+    assert len(decoded_sids) == 4
+    assert reused["phases"]["point_rows"] == 1
+    assert reused["phases"]["hot_reused"] == 299
+    assert reused["hot_reuse"]["carry_from"] == now - 1
+    assert reused["hot_reuse"]["changed"] == ["dormant-0"]
+    assert set(reused["hot_reuse"]["rows"]) == {"dormant-0"}
+    assert list(reused["transfer_rows"]) == list(worker()["transfer_rows"])
+    assert reused["rows"][0]["last_assistant_text"] == "New reply"
+    assert reused["rows"][1]["display_name"] == "Renamed"
+    assert reused["rows"][2]["is_live"] is True
+    assert reused["rows"][-3]["spawned_via"] == "api"
+    assert [row["session_id"] for row in reused["rows"][-2:]] == ["parent", "child"]
+
+
+    # A basis from before a different publication must not borrow raw bodies.
+    decoded_sids.clear()
+    fallback = worker(proof=seed["hot_reuse"])
+    assert len(decoded_sids) == len(rows)
+    assert fallback["phases"]["hot_reused"] == 0
+    assert list(fallback["transfer_rows"]) == list(reused["transfer_rows"])
+
+    current = server._archive_refresh_reuse_basis(seed["hot_reuse"], reused)
+    assert current["stamp"] == now
+    assert len(current["rows"]) == 300
+    assert "dormant-1" not in current["rows"]
+    assert "dormant-2" not in current["rows"]
+    assert current["rows"]["dormant-0"] == reused["hot_reuse"]["rows"]["dormant-0"]
+    previous.clear()
+    previous.update(reused["transfer_rows"])
+    decoded_sids.clear()
+    steady = worker(proof=current)
+    assert set(decoded_sids) == {"dormant-1", "dormant-2", " legacy "}
+    assert steady["phases"]["hot_reused"] == 300
+    assert list(steady["transfer_rows"]) == list(reused["transfer_rows"])
