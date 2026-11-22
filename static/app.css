@@ -33978,7 +33978,8 @@ body.has-img-lightbox-open .ffv-overlay { visibility: hidden; }
     box-shadow: none !important;
     min-height: 0 !important;
   }
-  #convList .conv-item > :not(.wa-row) { display: none !important; }
+  /* The swipe tray is a direct child too; hiding it left an empty gap. */
+  #convList .conv-item > :not(.wa-row, .conv-swipe-tray) { display: none !important; }
   #convList .conv-item > .wa-row {
     display: flex;
     align-items: center;
@@ -36138,6 +36139,8 @@ body.ccc-app-embed.conversation-popout .main > .toolbar {
   :is(.conv-item, .simple-task-card[data-session-id]) { touch-action: pan-y; }
   :is(.conv-item, .simple-task-card).is-swipe-committed {
     position: relative; overflow: visible; z-index: 2;
+    /* content-visibility:auto paint-contains the row and clips the tray. */
+    content-visibility: visible !important; contain: none !important;
     transform: translateX(var(--conv-row-swipe-offset, 0px));
     transition: none; box-shadow: none;
   }

@@ -12,9 +12,10 @@ const css = fs.readFileSync('static/app.css', 'utf8') + fs.readFileSync('static/
 test('swipe left reveals More + Archive, full swipe archives, right swipe stars, More opens the sheet', async () => {
   const names = ['All','Features','Bugs','Workers','History','Simple'];
   const rows = names.map(name => `<div id="${name}" class="${name === 'Simple' ? 'simple-card simple-task-card' : 'conv-item'}" data-session-id="fixture-${name}" style="height:80px;margin:8px;background:#222"><div data-role="title" aria-label="${name} session">${name} session</div><button class="conv-archive-btn" data-role="archive" data-archived="${name !== 'History'}">${name === 'History' ? 'Restore' : 'Archive'}</button><button class="conv-trash-btn" data-role="trash" aria-label="Move to Trash">🗑</button>${name === 'All' ? '<button class="conv-today-star" data-role="today-star" aria-pressed="false" aria-label="Star for today">☆</button><button data-role="move-lane" aria-label="Move to Workers tab">💼</button>' : ''}</div>`).join('');
+  const waRow = `<div id="convList"><div id="Wa" class="conv-item" data-session-id="fixture-Wa"><div class="wa-row" style="height:80px"><div data-role="title" aria-label="Wa session">Wa session</div></div><button class="conv-archive-btn" data-role="archive" data-archived="true">Archive</button></div></div>`;
   const server = http.createServer((req,res) => {
     res.setHeader('Content-Type','text/html; charset=utf-8');
-    res.end(`<meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}body{display:block;overflow-x:hidden;padding:0;background:#111;color:#eee}.conv-archive-btn,.conv-trash-btn,.conv-today-star,[data-role=move-lane]{float:right}</style>${rows}<script>
+    res.end(`<meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}body{display:block;overflow-x:hidden;padding:0;background:#111;color:#eee}.conv-archive-btn,.conv-trash-btn,.conv-today-star,[data-role=move-lane]{float:right}</style>${rows}${waRow}<script>
       window.actions=[]; window.opens=0; window.dragDepth=0;
       function isTouchPrimary(){return true}
       function isSimpleMode(){return false}
@@ -112,6 +113,16 @@ test('swipe left reveals More + Archive, full swipe archives, right swipe stars,
     assert.equal(await page.$eval('#Bugs',el=>el.style.getPropertyValue('--conv-row-swipe-offset')),'');
     assert.equal(await depth(),0);
     assert.equal(await page.evaluate(()=>opens),0,'synthetic clicks after swipes suppressed');
+
+    // Phone list rows hide every child but .wa-row; the tray must stay visible.
+    await swipe('Wa',300,190);
+    assert.equal(await page.$eval('#Wa',el=>el.classList.contains('is-swipe-open')),true);
+    const tray=await page.$eval('#Wa .conv-swipe-tray',el=>({display:getComputedStyle(el).display,width:el.getBoundingClientRect().width}));
+    assert.notEqual(tray.display,'none','swipe tray visible inside #convList phone rows');
+    assert.ok(tray.width>=148,'tray has room for More + Archive');
+    await page.$eval('#Wa',el=>{el.style.contentVisibility='auto';});
+    await new Promise(r=>setTimeout(r,250));
+    assert.equal(await page.$eval('#Wa .conv-swipe-tray',el=>{const b=el.getBoundingClientRect();const e=document.elementFromPoint(b.x+b.width*0.75,b.y+b.height/2);return !!e?.closest('.conv-swipe-action')||JSON.stringify([b.x,b.y,b.width,b.height,e&&e.tagName+'.'+e.className+'#'+e.id,el.parentElement.className,getComputedStyle(el.parentElement).contentVisibility,window.innerWidth]);}),true,'tray not clipped by content-visibility');
   } finally { await browser.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve)); }
 });
 
