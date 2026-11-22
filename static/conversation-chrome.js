@@ -4221,7 +4221,12 @@
       return r.json();
     }).then(data => {
       if (!data.ok) throw new Error('Account unavailable');
-      if (sharedState._antigravityAccountSession === sid) badge.textContent = 'Account: ' + data.session_account;
+      if (sharedState._antigravityAccountSession !== sid) return;
+      const labels = new Map([
+        ['primary', 'agy - primary (cloud)'],
+        ['secondary', 'agy - secondary (oauth)'],
+      ]);
+      badge.textContent = labels.get(data.account_id) || 'Account: ' + data.session_account;
     }).catch(() => {
       if (sharedState._antigravityAccountSession === sid) {
         badge.textContent = 'Account unavailable';
