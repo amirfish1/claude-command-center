@@ -6275,3 +6275,69 @@ def test_claude_status_polls_share_process_snapshot(monkeypatch):
         assert len(scans) == 4, 'snapshot never refreshed'
     finally:
         server._reset_ttl_memo_caches()
+
+
+def test_indexed_hot_change_skips_cold_sidebar_page_scan(tmp_path, monkeypatch):
+    from ccc_server import archive_store
+
+    stamp = 2_000_000_000
+    cache_file = tmp_path / "archive.json"
+    cold = [
+        {"session_id": f"cold-{i}", "mtime": stamp - 30 * 86400}
+        for i in range(300)
+    ]
+    aging = {"session_id": "aging", "mtime": stamp - archive_store.HOT_SECONDS + 5}
+    recent = {"session_id": "hot", "mtime": stamp}
+    options = dict(
+        complete=True, sidebar_key=_ALL_KEY,
+        sidebar_pages=(server._ARCHIVE_SIDEBAR_PACKED_VERSION, server._archive_list_pack_static),
+    )
+
+    def publish(at, rows, base=None):
+        return archive_store.save(cache_file, {
+            "schema_version": 1, "build_id": "1",
+            "entries": {_ALL_KEY: {"cached_at": at, "conversations": rows}},
+        }, base_entry=base, **options)
+
+    def refresh(at, *updates):
+        data = archive_store.load(cache_file, key=_ALL_KEY, row_index=True)
+        entry = data["entries"][_ALL_KEY]
+        replacements = {row["session_id"]: row for row in updates}
+        merged = [replacements.get(row["session_id"], row) for row in entry["conversations"]]
+        assert publish(at, merged, entry)
+
+    assert publish(stamp, [*cold, aging, recent]) == 302
+    refresh(stamp + 1, dict(recent, first_message="priming change"))
+
+    statements = []
+    connect = archive_store._connect
+
+    def traced(*args, **kwargs):
+        con = connect(*args, **kwargs)
+        con.set_trace_callback(statements.append)
+        return con
+
+    monkeypatch.setattr(archive_store, "_connect", traced)
+    refresh(stamp + 2, dict(recent, first_message="another hot change"))
+    assert not any("SELECT identity,rowid,digest FROM rows" in sql for sql in statements)
+    assert not any("INTO sidebar_pages" in sql for sql in statements)
+
+    statements.clear()
+    edited = dict(cold[0], first_message="cold edit")
+    refresh(stamp + 6, edited)
+    scans = [sql for sql in statements if "SELECT identity,rowid,digest FROM rows" in sql]
+    assert len(scans) == 1
+    assert "rowid%128 IN" in scans[0]
+
+    # Match a full publication when a cold body changes and a hot row ages.
+    version, project = options["sidebar_pages"]
+    from ccc_server import archive_sidebar_pages
+    with connect(cache_file, write=True) as con:
+        hot = archive_store.load(cache_file, key=_ALL_KEY, hot=True, now=stamp + 6)
+        current = {archive_store.identity(row): row for row in hot["entries"][_ALL_KEY]["conversations"]}
+        observed, _ = archive_sidebar_pages.read(con, _ALL_KEY, stamp + 6, version, dict(current), 1 << 24, {})
+        archive_sidebar_pages.publish(con, _ALL_KEY, stamp + 6, version, current, project)
+        expected, _ = archive_sidebar_pages.read(con, _ALL_KEY, stamp + 6, version, dict(current), 1 << 24, {})
+        assert observed == expected
+        assert observed[0]["first_message"] == "cold edit"
+        assert isinstance(observed[-2], archive_sidebar_pages.StoredRow)

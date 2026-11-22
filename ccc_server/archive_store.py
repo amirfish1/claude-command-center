@@ -235,6 +235,10 @@ def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_page
                 SELECT 1 FROM sidebar_preview_generation WHERE variant=? AND cached_at=? AND version=?
             """, (key, previous[0], archive_preview.VERSION)).fetchone()
             preview_ids = archive_preview.indexed(con, key) if key == sidebar_key and not preview_current else None
+            previous_hot = None
+            previous_changed, inserted = set(), set()
+            if base_entry is not None and complete and key == sidebar_key and sidebar_pages is not None:
+                previous_hot = archive_sidebar_pages.hot_basis(con, key, previous[0], sidebar_pages[0])
             base_rows = {identity(row, index): row
                          for index, row in enumerate((base_entry or {}).get('conversations', ()))}
             seen = set()
@@ -277,17 +281,35 @@ def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_page
                         archive_preview.publish(con, key, rid)
                     continue
                 row_activity = activity(row)
-                con.execute('INSERT OR REPLACE INTO rows VALUES(?,?,?,?,?,?,?,?,?)', (
+                if len(inserted) >= archive_sidebar_pages.MAX_INCREMENTAL_CHANGES:
+                    previous_hot = None
+                if previous_hot is not None and rid in existing:
+                    old_rowid, = con.execute(
+                        'SELECT rowid FROM rows WHERE variant=? AND identity=?', (key, rid),
+                    ).fetchone()
+                    previous_changed.add(old_rowid)
+                write = con.execute('INSERT OR REPLACE INTO rows VALUES(?,?,?,?,?,?,?,?,?)', (
                     key, rid, str(row.get('session_id') or row.get('id') or ''),
                     str(row.get('parent_session_id') or row.get('hermes_parent_session_id') or ''),
                     index, row_activity, int(sticky(row, stamp=row_activity)), digest, body,
                 ))
+                if previous_hot is not None:
+                    inserted.add(write.lastrowid)
                 if key == sidebar_key:
                     archive_preview.publish(con, key, rid, row)
                 changed += 1
             if complete:
+                removed = existing.keys() - seen
+                if len(removed) + len(inserted) > archive_sidebar_pages.MAX_INCREMENTAL_CHANGES:
+                    previous_hot = None
+                if previous_hot is not None:
+                    for rid in removed:
+                        old_rowid, = con.execute(
+                            'SELECT rowid FROM rows WHERE variant=? AND identity=?', (key, rid),
+                        ).fetchone()
+                        previous_changed.add(old_rowid)
                 con.executemany('DELETE FROM rows WHERE variant=? AND identity=?',
-                                ((key, rid) for rid in existing.keys() - seen))
+                                ((key, rid) for rid in removed))
                 inventory_keys = existing.keys() if projections_current else inventory.keys()
                 attention_keys = existing.keys() if projections_current else attention.keys()
                 con.executemany('DELETE FROM session_inventory WHERE variant=? AND identity=?',
@@ -308,10 +330,15 @@ def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_page
                     version, project = sidebar_pages
                     if base_entry is None:
                         hot = {identity(row) for row in hot_rows(entry.get('conversations') or [], now=stamp)}
+                        archive_sidebar_pages.publish(con, key, stamp, version, hot, project)
                     else:
-                        hot = {rid for rid, in con.execute(
-                            _HOT_ROW_QUERY.format(columns="r.identity"), _hot_params(key, stamp))}
-                    archive_sidebar_pages.publish(con, key, stamp, version, hot, project)
+                        hot_rows_by_id = dict(con.execute(
+                            _HOT_ROW_QUERY.format(columns="r.identity,r.rowid"), _hot_params(key, stamp)))
+                        archive_sidebar_pages.publish(
+                            con, key, stamp, version, hot_rows_by_id, project,
+                            hot_rowids=set(hot_rows_by_id.values()), previous_hot=previous_hot,
+                            previous_changed=previous_changed, inserted=inserted,
+                        )
         con.commit()
     except BaseException:
         con.rollback()

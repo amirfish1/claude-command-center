@@ -13,6 +13,7 @@ from ccc_server.sqlite_batch import fetch_rows
 
 
 _BUCKETS = 128
+MAX_INCREMENTAL_CHANGES = _BUCKETS
 _PAGE_MAX_BYTES = 4 << 20
 _ORDER_BATCH_ITEMS = 32768
 _MAX_UNPACKED_ROWS = 1024
@@ -48,6 +49,10 @@ def setup(con):
             fingerprint BLOB NOT NULL, payload BLOB NOT NULL,
             PRIMARY KEY(variant, bucket)
         ) WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS sidebar_page_hot_basis (
+            variant TEXT PRIMARY KEY, cached_at REAL NOT NULL,
+            version TEXT NOT NULL, rowids TEXT NOT NULL
+        );
         CREATE TRIGGER IF NOT EXISTS sidebar_page_insert
         AFTER INSERT ON rows BEGIN
             DELETE FROM sidebar_page_generation WHERE variant=NEW.variant;
@@ -107,14 +112,47 @@ def _stored_bodies(con, rowids):
             f"SELECT identity,body FROM rows WHERE rowid IN ({marks}) ORDER BY rowid", batch)
 
 
-def publish(con, key, cached_at, version, hot_ids, project):
-    """Repack only buckets whose canonical cold members changed."""
+def hot_basis(con, key, cached_at, version):
+    """Read the hot membership paired with the previously published pages."""
+    record = con.execute("""
+        SELECT b.rowids FROM sidebar_page_hot_basis b
+        JOIN sidebar_page_generation g USING (variant, cached_at, version)
+        WHERE b.variant=? AND b.cached_at=? AND b.version=?
+    """, (key, cached_at, version)).fetchone()
+    if not record:
+        return None
+    try:
+        return set(json.loads(record[0]))
+    except (TypeError, ValueError):
+        return None
+
+
+def publish(con, key, cached_at, version, hot_ids, project, *,
+            hot_rowids=None, previous_hot=None, previous_changed=(), inserted=()):
+    """Repack buckets affected by changed bodies or hot membership."""
+    buckets = range(_BUCKETS)
+    params = (key,)
+    bucket_filter = ""
+    if previous_hot is not None:
+        # Replaced hot rows often acquire a new rowid. Neither end of a hot
+        # replacement was in a cold page, so it does not dirty a bucket.
+        dirty = (previous_hot ^ hot_rowids).difference(previous_changed, inserted)
+        dirty.update(set(previous_changed) - previous_hot)
+        dirty.update(set(inserted) - hot_rowids)
+        buckets = sorted({rowid % _BUCKETS for rowid in dirty})
+        if buckets:
+            marks = ",".join("?" for _ in buckets)
+            bucket_filter = f" AND rowid%{_BUCKETS} IN ({marks})"
+            params = (key, *buckets)
+
     groups = defaultdict(list)
-    for rid, rowid, digest in con.execute("""
-        SELECT identity,rowid,digest FROM rows WHERE variant=? ORDER BY rowid
-    """, (key,)):
-        if rid not in hot_ids:
-            groups[rowid % _BUCKETS].append((rid, rowid, digest))
+    if buckets:
+        for rid, rowid, digest in con.execute(
+            "SELECT identity,rowid,digest FROM rows WHERE variant=?"
+            + bucket_filter + " ORDER BY rowid", params,
+        ):
+            if rid not in hot_ids:
+                groups[rowid % _BUCKETS].append((rid, rowid, digest))
 
     previous = dict(con.execute(
         "SELECT bucket,fingerprint FROM sidebar_pages WHERE variant=? AND version=?",
@@ -129,9 +167,14 @@ def publish(con, key, cached_at, version, hot_ids, project):
             return
         con.execute("INSERT OR REPLACE INTO sidebar_pages VALUES (?,?,?,?,?)",
                     (key, bucket, version, fingerprint, payload))
-    for bucket in range(_BUCKETS):
+    for bucket in buckets:
         if bucket not in groups:
             con.execute("DELETE FROM sidebar_pages WHERE variant=? AND bucket=?", (key, bucket))
+    if hot_rowids is None:
+        con.execute("DELETE FROM sidebar_page_hot_basis WHERE variant=?", (key,))
+    else:
+        con.execute("INSERT OR REPLACE INTO sidebar_page_hot_basis VALUES (?,?,?,?)",
+                    (key, cached_at, version, json.dumps(sorted(hot_rowids), separators=(",", ":"))))
     con.execute("INSERT OR REPLACE INTO sidebar_page_generation VALUES (?,?,?)",
                 (key, cached_at, version))
 
