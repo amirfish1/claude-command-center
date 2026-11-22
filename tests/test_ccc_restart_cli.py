@@ -222,6 +222,53 @@ class RestartReservationTests(unittest.TestCase):
     def state(self):
         return self.m._restart_state_update(lambda s: dict(s))
 
+    def observation_lease(self):
+        lease = Path(self.m.RESTART_STATE_FILE + ".observation")
+        lease.write_text(json.dumps({
+            "server": "base", "after_started_at": 9000,
+            "expires_at": 19000, "minimum_uptime_s": 5400,
+        }))
+        return lease
+
+    def test_observation_hold_preserves_reserved_boot_and_runner_target(self):
+        self.observation_lease()
+        self.m._get_json.return_value = {"started_at": 9000}
+        with mock.patch("time.time", return_value=10800) as clock:
+            self.m._restart_state_update(lambda state: state.update(
+                runner_pid=os.getpid(), last_dashboard_back=9000,
+                pending={"target": "dashboard", "due": 10800}))
+            self.assertEqual(self.m._reserve_restart("base", runner=True)["target"],
+                             "dashboard")
+            self.m._get_json.return_value = {"started_at": 10810}
+            clock.return_value = 10812
+            self.m._note_dashboard_back(9000, 10810)
+            queued = self.m._reserve_restart("base", "dashboard")["pending"]
+            self.assertEqual(queued["due"], 16210)
+            self.assertEqual(self.m._reserve_restart("base", "worker")["pending"]["target"],
+                             "all")
+            clock.return_value = 12613
+            self.assertEqual(self.m._reserve_restart("base", runner=True),
+                             {"hold_until": 16210})
+            clock.return_value = 16210
+            self.assertEqual(self.m._reserve_restart("base", runner=True)["target"], "all")
+
+    def test_observation_hold_can_be_overridden_or_removed(self):
+        lease = self.observation_lease()
+        self.m._get_json.return_value = {"started_at": 13000}
+        self.m.RESTART_DEBOUNCE_S = 0
+        with mock.patch("time.time", return_value=15000) as clock:
+            self.assertEqual(self.m._reserve_restart("base", "worker")["target"], "worker")
+            self.assertIn("pending", self.m._reserve_restart("base", "all"))
+            self.assertEqual(self.m._reserve_restart("base", "dashboard", force=True)["target"],
+                             "dashboard")
+            self.assertEqual(self.state()["pending"]["target"], "worker")
+            clock.return_value = 15002
+            self.assertEqual(self.m._reserve_restart("base", runner=True)["target"], "worker")
+            self.assertIn("pending", self.m._reserve_restart("base", "dashboard"))
+            lease.unlink()
+            clock.return_value = 15004
+            self.assertEqual(self.m._reserve_restart("base", runner=True)["target"], "dashboard")
+
     def _run_replies(self, replies):
         self.m.RESTART_DEBOUNCE_S = 0
         self.m._RESTART_RETRY_S = 0

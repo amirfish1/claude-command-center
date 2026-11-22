@@ -1897,6 +1897,27 @@ def _defer_restart(base, target, due, why, dashboard_started_at):
     return _print_pending_restart(pending)
 
 
+def _restart_observation_until(base, target, started):
+    """A local lease preserves routine dashboard uptime after a reserved boot."""
+    if target not in ("dashboard", "all"):
+        return 0
+    try:
+        with open(RESTART_STATE_FILE + ".observation") as handle:
+            lease = json.load(handle)
+        if lease["server"] != base:
+            return 0
+        previous = float(lease["after_started_at"])
+        expires = float(lease["expires_at"])
+        minimum_uptime = float(lease["minimum_uptime_s"])
+        if not (0 < previous < expires <= previous + 10800 and 0 < minimum_uptime <= 7200):
+            return 0
+    except (OSError, ValueError, KeyError, TypeError):
+        return 0
+    if not started:
+        return expires  # Recheck the boot before sending a routine restart.
+    return min(expires, started + minimum_uptime) if started > previous else 0
+
+
 def _reserve_restart(base, target=None, force=False, runner=False):
     """Choose a slot and reserve it atomically, before making the HTTP request.
 
@@ -1941,10 +1962,19 @@ def _reserve_restart(base, target=None, force=False, runner=False):
                 pending["due"] = due
                 return {"pending": dict(pending)}
             selected = pending.get("target") or "all"
-        elif not force and (stamp - last < RESTART_DEBOUNCE_S or pending):
-            return {"pending": _queue_restart(
-                state, base, target, max(last + RESTART_DEBOUNCE_S, stamp + 1),
-                f"last restart was {int(stamp - last)}s ago", started)}
+            hold_until = _restart_observation_until(base, selected, started)
+            if hold_until > stamp:
+                return {"hold_until": hold_until}
+        elif not force:
+            merged = _merge_restart_targets((pending or {}).get("target"), target)
+            hold_until = _restart_observation_until(base, merged, started)
+            if stamp - last < RESTART_DEBOUNCE_S or pending or hold_until > stamp:
+                queued = _queue_restart(
+                    state, base, target, max(last + RESTART_DEBOUNCE_S, stamp + 1),
+                    f"last restart was {int(stamp - last)}s ago", started)
+                if hold_until > queued["due"]:
+                    queued = dict(queued, due=hold_until, why="dashboard observation window")
+                return {"pending": queued}
         reservation = {"at": stamp, "pid": os.getpid(),
                        "previous": last, "previous_target": state.get("last_target"),
                        "dashboard_started_at": started}
@@ -2173,6 +2203,11 @@ def _run_pending_restart(base, due):
         slot = _reserve_restart(base, runner=True)
         if slot.get("stop"):
             return 0
+        if slot.get("hold_until"):
+            # Leave the original due time intact so rollback can be observed
+            # promptly without rewriting a reservation or dropping targets.
+            time.sleep(max(0, min(60, slot["hold_until"] - time.time())))
+            continue
         if slot.get("pending"):
             continue
         target = slot["target"]

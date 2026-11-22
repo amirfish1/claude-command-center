@@ -245,6 +245,17 @@ gui/$(id -u)/com.github.claude-command-center.server` (or `.worker`; `systemctl 
 restart ccc[-worker]` on Linux) is for a human recovering a wedged server that
 no longer answers HTTP.
 
+For a bounded measurement window after an already queued adoption, operators
+can atomically write a JSON file beside the restart state named
+`restart-debounce.json.observation`. Set `server` to the exact CCC base URL,
+`after_started_at` to the current dashboard's `/api/version` timestamp,
+`minimum_uptime_s` to the desired uptime (up to two hours), and `expires_at`
+to an epoch timestamp within three hours of `after_started_at`. On later
+dashboard generations, routine CLI requests that include the dashboard wait
+until the minimum uptime or expiry, whichever comes first. A standalone
+worker restart and explicit `--now` keep their usual behavior. Removing the
+file lifts the hold without losing queued work.
+
 Order does not matter for the raw commands: on launch `run.sh` compares the worker's loaded code
 fingerprint (`server.py` + `ccc_server/*.py`) to the repo, kickstarts a stale
 worker, and waits for the new worker pid before starting the dashboard. So
