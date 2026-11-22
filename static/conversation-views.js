@@ -2303,8 +2303,10 @@ onDashboardDocumentReady(() => {
         } catch (_) {}
       }
     };
-    _setStatusRailWidth(_savedStatusRailWidth(), false);
-    _setStatusRailCollapsed(document.body.classList.contains('status-rail-collapsed'), false);
+    const railStartsCollapsed = document.body.classList.contains('status-rail-collapsed');
+    // Opening the rail already applies the saved width and restores the readers.
+    if (railStartsCollapsed) _setStatusRailWidth(_savedStatusRailWidth(), false);
+    _setStatusRailCollapsed(railStartsCollapsed, false);
     // Quick-close X inside the rail (top-right). Persisted so a
     // reload keeps the rail closed unless the user re-opens it via
     // the topbar restore button.

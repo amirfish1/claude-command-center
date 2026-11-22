@@ -1,0 +1,1 @@
+- Avoid measuring the status rail twice when opening the session archive with the rail expanded.
