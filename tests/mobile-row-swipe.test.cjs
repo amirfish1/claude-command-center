@@ -9,11 +9,12 @@ const start = source.indexOf('  function _swipeActionButtonForRow(row) {');
 const handler = source.slice(start, source.indexOf('  // WhatsApp-style drag-to-dismiss', start));
 const css = fs.readFileSync('static/app.css', 'utf8') + fs.readFileSync('static/simple.css', 'utf8');
 
-test('session swipes archive across lists, cancel safely and never open or trash a row', async () => {
-  const rows = ['All','Features','Bugs','Workers','History','Simple'].map(name => `<div id="${name}" class="${name === 'Simple' ? 'simple-card simple-task-card' : 'conv-item'}" data-session-id="fixture-${name}" style="height:80px;margin:8px;background:#222"><span>${name} session</span><button class="conv-archive-btn" data-archived="${name !== 'History'}">${name === 'History' ? 'Restore' : 'Archive'}</button><button class="conv-trash-btn">Trash</button></div>`).join('');
+test('swipe left reveals More + Archive, full swipe archives, right swipe stars, More opens the sheet', async () => {
+  const names = ['All','Features','Bugs','Workers','History','Simple'];
+  const rows = names.map(name => `<div id="${name}" class="${name === 'Simple' ? 'simple-card simple-task-card' : 'conv-item'}" data-session-id="fixture-${name}" style="height:80px;margin:8px;background:#222"><div data-role="title" aria-label="${name} session">${name} session</div><button class="conv-archive-btn" data-role="archive" data-archived="${name !== 'History'}">${name === 'History' ? 'Restore' : 'Archive'}</button><button class="conv-trash-btn" data-role="trash" aria-label="Move to Trash">🗑</button>${name === 'All' ? '<button class="conv-today-star" data-role="today-star" aria-pressed="false" aria-label="Star for today">☆</button><button data-role="move-lane" aria-label="Move to Workers tab">💼</button>' : ''}</div>`).join('');
   const server = http.createServer((req,res) => {
     res.setHeader('Content-Type','text/html; charset=utf-8');
-    res.end(`<meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}body{display:block;overflow:auto;padding:0;background:#111;color:#eee}.conv-archive-btn,.conv-trash-btn{float:right}</style>${rows}<script>
+    res.end(`<meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}body{display:block;overflow-x:hidden;padding:0;background:#111;color:#eee}.conv-archive-btn,.conv-trash-btn,.conv-today-star,[data-role=move-lane]{float:right}</style>${rows}<script>
       window.actions=[]; window.opens=0; window.dragDepth=0;
       function isTouchPrimary(){return true}
       function isSimpleMode(){return false}
@@ -22,12 +23,13 @@ test('session swipes archive across lists, cancel safely and never open or trash
       function cancelMobileConversationRowTap(){}
       function noteMobileConversationRowSwipe(){}
       document.querySelectorAll('[data-session-id]').forEach(row=>row.addEventListener('click',e=>{
-        if(e.target.closest('button')) actions.push(row.id+':'+e.target.textContent);
-        else opens++;
+        const b=e.target.closest('button[data-role]');
+        if(b) actions.push(row.id+':'+(b.getAttribute('aria-label')||b.textContent));
+        else if(!e.target.closest('.conv-swipe-tray')) opens++;
       }));
       ${handler}
       window.touch=(id,type,x,y=30)=>{
-        const target=document.getElementById(id);
+        const target=document.querySelector('#'+id+' [data-role=title]');
         const touch=new Touch({identifier:1,target,clientX:x,clientY:y});
         target.dispatchEvent(new TouchEvent(type,{bubbles:true,cancelable:true,touches:type==='touchend'||type==='touchcancel'?[]:[touch],changedTouches:[touch]}));
       };
@@ -40,41 +42,76 @@ test('session swipes archive across lists, cancel safely and never open or trash
     await page.setViewport({width:390,height:850,isMobile:true,hasTouch:true});
     await page.goto('http://127.0.0.1:'+server.address().port);
     const touch=async(id,type,x,y)=>page.evaluate((...args)=>window.touch(...args),id,type,x,y);
-    for(const id of ['All','Features','Bugs','Workers','History','Simple']) {
-      const left=id==='Features'||id==='Workers'||id==='Simple';
-      await touch(id,'touchstart',left?280:60);
-      await touch(id,'touchmove',left?140:200);
-      assert.equal(await page.evaluate(()=>dragDepth),1,'poll redraws held during gesture');
+    const swipe=async(id,from,to)=>{ await touch(id,'touchstart',from); await new Promise(r=>setTimeout(r,90)); await touch(id,'touchmove',to); await new Promise(r=>setTimeout(r,90)); await touch(id,'touchmove',to); await touch(id,'touchend',to); };
+    const depth=()=>page.evaluate(()=>dragDepth);
+    const actions=()=>page.evaluate(()=>actions.slice());
+
+    // Partial left swipe snaps open with More + Archive and holds redraws.
+    await swipe('Bugs',300,190);
+    assert.equal(await page.$eval('#Bugs',el=>el.classList.contains('is-swipe-open')),true);
+    assert.deepEqual(await page.$$eval('#Bugs .conv-swipe-action',els=>els.map(e=>e.textContent.replace(/[^A-Za-z]/g,''))),['More','Archive']);
+    assert.equal(await page.$eval('#Bugs',el=>el.style.getPropertyValue('--conv-row-swipe-offset')),'-148px');
+    assert.equal(await depth(),1,'poll redraws held while the tray is open');
+    await new Promise(r=>setTimeout(r,250));
+    await page.screenshot({path:'/tmp/ccc-mobile-swipe-open.png'});
+    await page.$eval('#Bugs [data-swipe-action=archive]',el=>el.click());
+    assert.deepEqual(await actions(),['Bugs:Archive']);
+    assert.equal(await depth(),0);
+
+    // Full left swipe archives (or restores) without a second tap.
+    for (const id of ['Features','History','Simple']) {
+      await touch(id,'touchstart',360); await touch(id,'touchmove',300); await touch(id,'touchmove',60);
       assert.equal(await page.$eval('#'+id,el=>el.classList.contains('is-swipe-armed')),true);
-      assert.match(await page.$eval('#'+id,el=>el.dataset.swipeActionLabel),/Release to (archive|restore)/);
-      if(id==='Bugs') await page.screenshot({path:'/tmp/ccc-mobile-swipe-armed.png'});
-      await touch(id,'touchend',left?140:200);
-      await page.$eval('#'+id+' span',el=>el.click());
-      assert.equal(await page.evaluate(()=>dragDepth),0);
+      if (id==='Features') await page.screenshot({path:'/tmp/ccc-mobile-swipe-armed.png'});
+      await touch(id,'touchend',60);
+      await new Promise(r=>setTimeout(r,260));
     }
-    assert.deepEqual(await page.evaluate(()=>actions),['All:Archive','Features:Archive','Bugs:Archive','Workers:Archive','History:Restore','Simple:Archive']);
-    assert.equal(await page.evaluate(()=>opens),0,'synthetic click after swipe suppressed');
-    // A deliberate slow short swipe springs back; vertical drags remain scrolls.
-    await touch('All','touchstart',60);
-    await new Promise(resolve=>setTimeout(resolve,120));
-    await touch('All','touchmove',90);
-    await touch('All','touchend',90);
-    await touch('All','touchstart',60);
-    await touch('All','touchmove',65,180);
-    await touch('All','touchend',65,180);
-    await touch('All','touchstart',60);
-    await touch('All','touchmove',220);
-    await touch('All','touchcancel',220);
-    await touch('All','touchstart',5);
-    await touch('All','touchmove',220);
-    await touch('All','touchend',220);
-    assert.equal(await page.evaluate(()=>actions.length),6,'cancellation and browser edge never archive');
-    assert.equal(await page.evaluate(()=>dragDepth),0);
-    assert.equal(await page.$eval('#All',el=>el.style.getPropertyValue('--conv-row-swipe-offset')),'');
-    // A new row inserted after boot inherits delegation without rewiring.
-    await page.evaluate(()=>{const row=document.getElementById('All').cloneNode(true);row.id='Added';document.body.append(row);row.querySelector('button').onclick=()=>actions.push('Added:Archive');});
-    await touch('Added','touchstart',60); await touch('Added','touchmove',220); await touch('Added','touchend',220);
-    assert.equal(await page.evaluate(()=>actions.at(-1)),'Added:Archive');
+    assert.deepEqual((await actions()).slice(1),['Features:Archive','History:Restore','Simple:Archive']);
+    assert.equal(await depth(),0);
+
+    // Right swipe: only rows with a today star have a left tray.
+    await swipe('Workers',60,200);
+    assert.equal(await page.$('#Workers .conv-swipe-tray'),null);
+    await swipe('All',60,150);
+    assert.deepEqual(await page.$$eval('#All .conv-swipe-action',els=>els.map(e=>e.dataset.swipeAction)),['star']);
+    // Tapping another row closes the open tray without opening that row.
+    await touch('Workers','touchstart',200); await touch('Workers','touchend',200);
+    await page.$eval('#Workers [data-role=title]',el=>el.click());
+    await new Promise(r=>setTimeout(r,250));
+    assert.equal(await page.$('#All .conv-swipe-tray'),null);
+    assert.equal(await page.evaluate(()=>opens),0);
+    assert.equal(await depth(),0);
+    await touch('All','touchstart',30); await touch('All','touchmove',90); await touch('All','touchmove',330); await touch('All','touchend',330);
+    await new Promise(r=>setTimeout(r,260));
+    assert.equal((await actions()).at(-1),'All:Star for today');
+
+    // More opens a sheet of the row's own actions; Trash sits in the red group.
+    await swipe('All',300,190);
+    await page.$eval('#All [data-swipe-action=more]',el=>el.click());
+    await page.waitForSelector('.row-action-sheet.is-open');
+    assert.equal(await page.$eval('.row-action-sheet-title',el=>el.textContent),'All session');
+    assert.deepEqual(await page.$$eval('.row-action-sheet-group:not(.is-danger) .row-action-sheet-item',els=>els.map(e=>e.textContent.trim())),['☆Star for today','💼Move to Workers tab']);
+    assert.deepEqual(await page.$$eval('.row-action-sheet-group.is-danger .row-action-sheet-item',els=>els.map(e=>e.dataset.sheetRole)),['trash']);
+    assert.equal(await depth(),1,'row held in place under the sheet');
+    await new Promise(r=>setTimeout(r,260));
+    await page.screenshot({path:'/tmp/ccc-mobile-row-sheet.png'});
+    await page.$eval('.row-action-sheet-group.is-danger .row-action-sheet-item',el=>el.click());
+    assert.equal((await actions()).at(-1),'All:Move to Trash');
+    await new Promise(r=>setTimeout(r,260));
+    assert.equal(await page.$('.row-action-sheet'),null);
+    assert.equal(await depth(),0);
+
+    // Short slow swipes spring back; vertical drags, cancel and the edge never act.
+    const before=(await actions()).length;
+    await swipe('Bugs',300,280);
+    await touch('Bugs','touchstart',300); await touch('Bugs','touchmove',295,180); await touch('Bugs','touchend',295,180);
+    await touch('Bugs','touchstart',300); await touch('Bugs','touchmove',60); await touch('Bugs','touchcancel',60);
+    await touch('Bugs','touchstart',5); await touch('Bugs','touchmove',-200); await touch('Bugs','touchend',-200);
+    await new Promise(r=>setTimeout(r,260));
+    assert.equal((await actions()).length,before,'cancellation and browser edge never act');
+    assert.equal(await page.$eval('#Bugs',el=>el.style.getPropertyValue('--conv-row-swipe-offset')),'');
+    assert.equal(await depth(),0);
+    assert.equal(await page.evaluate(()=>opens),0,'synthetic clicks after swipes suppressed');
   } finally { await browser.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve)); }
 });
 

@@ -12289,13 +12289,140 @@
     setInterval(wireAllConvSwipe, 3000);
   }
 
-  // Session swipes share the row's reversible archive action in every list.
-  // Restoring an archived row uses that same button; swipes never trash.
+  // Phone session rows use a two-tray swipe like native chat lists:
+  // swipe left reveals More + Archive (a long swipe archives at once), swipe
+  // right reveals the row's today star. More opens a bottom sheet listing the
+  // row's own action buttons. Every action proxies to the row's existing
+  // button, so lifecycle rules stay in one place; swipes never trash.
   function _swipeActionButtonForRow(row) {
     return row.querySelector('.conv-archive-btn:not(.is-close)');
   }
   function _swipeLabelForRow(row) {
     return _swipeActionButtonForRow(row)?.dataset.archived === 'false' ? 'Restore' : 'Archive';
+  }
+  function _swipeOwnButton(row, selector) {
+    return [...row.querySelectorAll(selector)].find(btn => btn.closest('.conv-item, .simple-task-card') === row && !btn.disabled) || null;
+  }
+  // Actions for one swipe direction: dir<0 is the right-edge tray.
+  function _swipeTrayActions(row, dir) {
+    if (dir < 0) {
+      const archive = _swipeActionButtonForRow(row);
+      if (!archive || archive.disabled) return [];
+      const label = _swipeLabelForRow(row);
+      return [
+        {key: 'more', label: 'More', icon: '•••'},
+        {key: 'archive', label, icon: label === 'Restore' ? '↩' : '↓', primary: true},
+      ];
+    }
+    const star = _swipeOwnButton(row, '[data-role="today-star"]');
+    if (!star) return [];
+    const on = star.getAttribute('aria-pressed') === 'true';
+    return [{key: 'star', label: on ? 'Unstar' : 'Star', icon: on ? '☆' : '★', primary: true}];
+  }
+  // Disclosure toggles and the desktop kebab are layout, not actions.
+  const _ROW_SHEET_SKIP_ROLES = new Set(['archive', 'drag', 'title', 'kebab', 'nya-collapse', 'subagent-cluster-toggle',
+    'session-summary-toggle', 'brief-toggle', 'conv-pct-compact']);
+  // Short sheet labels where the row's tooltip is a full sentence.
+  const _ROW_SHEET_LABELS = {handoff: 'Turn on takeover', 'handoff-takeback': 'Take it back', 'report-decision': 'Report wrong status'};
+  function _rowSheetActions(row) {
+    const seen = new Set(), items = [];
+    for (const btn of row.querySelectorAll('button[data-role]')) {
+      if (btn.disabled || btn.closest('.conv-item, .simple-task-card') !== row || btn.closest('.conv-swipe-tray')) continue;
+      const role = btn.dataset.role;
+      if (_ROW_SHEET_SKIP_ROLES.has(role)) continue;
+      const label = _ROW_SHEET_LABELS[role] || (btn.getAttribute('aria-label') || btn.title || btn.textContent || '').trim();
+      if (!label || seen.has(label)) continue;
+      seen.add(label);
+      const glyph = btn.textContent.trim();
+      items.push({role, label, icon: glyph && [...glyph].length <= 2 ? glyph : '', danger: role === 'trash', btn});
+    }
+    if (row.classList.contains('conv-item') && row.dataset.id && typeof startInlineRename === 'function') {
+      items.unshift({role: 'rename', label: 'Rename', icon: '✎', run: () => startInlineRename(row)});
+    }
+    return items;
+  }
+  function _rowTitleText(row) {
+    const el = row.querySelector('[data-role="title"], .simple-card-title, .simple-task-title');
+    return (el?.getAttribute('aria-label') || el?.textContent || row.textContent || '').trim().split('\n')[0].slice(0, 120);
+  }
+  // Re-find the live button when a redraw replaced the row under the sheet.
+  function _rowLiveButton(row, item) {
+    if (item.btn && item.btn.isConnected) return item.btn;
+    const sid = row.dataset.sessionId;
+    const fresh = sid && document.querySelector('[data-session-id="' + CSS.escape(sid) + '"]');
+    return fresh ? _swipeOwnButton(fresh, '[data-role="' + CSS.escape(item.role) + '"]') : null;
+  }
+  let _rowSheetEl = null;
+  function closeRowActionSheet() {
+    const el = _rowSheetEl;
+    if (!el) return;
+    _rowSheetEl = null;
+    el.classList.remove('is-open');
+    document.removeEventListener('keydown', el._onKey, true);
+    endSidebarDrag();
+    setTimeout(() => el.remove(), 200);
+  }
+  function openRowActionSheet(row) {
+    closeRowActionSheet();
+    const items = _rowSheetActions(row);
+    const sheet = document.createElement('div');
+    sheet.className = 'row-action-sheet';
+    sheet.setAttribute('role', 'dialog');
+    sheet.setAttribute('aria-modal', 'true');
+    const panel = document.createElement('div');
+    panel.className = 'row-action-sheet-panel';
+    const head = document.createElement('div');
+    head.className = 'row-action-sheet-head';
+    const title = document.createElement('div');
+    title.className = 'row-action-sheet-title';
+    title.textContent = _rowTitleText(row) || 'Session';
+    sheet.setAttribute('aria-label', title.textContent);
+    const close = document.createElement('button');
+    close.type = 'button'; close.className = 'row-action-sheet-close';
+    close.setAttribute('aria-label', 'Close'); close.textContent = '✕';
+    close.addEventListener('click', closeRowActionSheet);
+    head.append(title, close);
+    panel.append(head);
+    const group = danger => {
+      const list = items.filter(item => !!item.danger === danger);
+      if (!list.length) return;
+      const box = document.createElement('div');
+      box.className = 'row-action-sheet-group' + (danger ? ' is-danger' : '');
+      for (const item of list) {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'row-action-sheet-item'; b.dataset.sheetRole = item.role;
+        const icon = document.createElement('span');
+        icon.className = 'row-action-sheet-icon'; icon.setAttribute('aria-hidden', 'true'); icon.textContent = item.icon;
+        const label = document.createElement('span');
+        label.textContent = item.label;
+        b.append(icon, label);
+        b.addEventListener('click', e => {
+          e.stopPropagation();
+          if (item.run) { closeRowActionSheet(); item.run(); return; }
+          const live = _rowLiveButton(row, item);
+          if (live) live.click();
+          closeRowActionSheet();
+        });
+        box.append(b);
+      }
+      panel.append(box);
+    };
+    group(false); group(true);
+    if (!items.length) {
+      const empty = document.createElement('div');
+      empty.className = 'row-action-sheet-empty'; empty.textContent = 'No other actions for this session';
+      panel.append(empty);
+    }
+    sheet.append(panel);
+    sheet.addEventListener('click', e => { if (e.target === sheet) closeRowActionSheet(); });
+    sheet._onKey = e => { if (e.key === 'Escape') { e.preventDefault(); closeRowActionSheet(); } };
+    document.addEventListener('keydown', sheet._onKey, true);
+    // Keep the row (and its buttons) in the DOM while the sheet is up.
+    beginSidebarDrag();
+    document.body.append(sheet);
+    _rowSheetEl = sheet;
+    requestAnimationFrame(() => sheet.classList.add('is-open'));
+    close.focus({preventScroll: true});
   }
   function wireConvListRowSwipe($list) {
     // Delegate from the stable shell, including Simple Home and History.
@@ -12303,40 +12430,130 @@
     if (!$list || $list.dataset.convSwipeWired === '1' || !isTouchPrimary()) return;
     $list.dataset.convSwipeWired = '1';
     const rowSelector = '.conv-item, .simple-task-card[data-session-id]';
-    let currentRow = null, sx = 0, sy = 0, dir = 0, tracking = false;
-    let threshold = 80, lastX = 0, lastAt = 0, velocity = 0;
+    const BTN_W = 74;
+    let currentRow = null, sx = 0, sy = 0, dir = 0, tracking = false, base = 0;
+    let trayW = 0, fullAt = 0, lastX = 0, lastAt = 0, velocity = 0, offset = 0;
+    let openRow = null, held = false;
+    const hold = () => { if (!held) { held = true; beginSidebarDrag(); } };
+    const release = () => {
+      if (!held) return;
+      held = false; endSidebarDrag();
+      if (isSimpleMode()) requestAnimationFrame(() => { _simpleHistoryApply(); _simpleHomeRefresh(); });
+    };
+    const setOffset = (row, px) => {
+      offset = px;
+      row.style.setProperty('--conv-row-swipe-offset', px + 'px');
+      row.style.setProperty('--conv-row-swipe-reveal', Math.abs(px) + 'px');
+    };
+    const ensureTray = (row, d) => {
+      let tray = row.querySelector(':scope > .conv-swipe-tray');
+      if (tray && Number(tray.dataset.dir) === d) return tray;
+      tray?.remove();
+      const actions = _swipeTrayActions(row, d);
+      if (!actions.length) return null;
+      tray = document.createElement('div');
+      tray.className = 'conv-swipe-tray ' + (d < 0 ? 'is-end' : 'is-start');
+      tray.dataset.dir = String(d);
+      tray.style.setProperty('--conv-swipe-tray-w', actions.length * BTN_W + 'px');
+      for (const a of actions) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'conv-swipe-action is-' + a.key + (a.primary ? ' is-primary' : '');
+        b.dataset.swipeAction = a.key;
+        b.innerHTML = '<span class="conv-swipe-action-icon" aria-hidden="true"></span><span class="conv-swipe-action-label"></span>';
+        b.firstChild.textContent = a.icon; b.lastChild.textContent = a.label;
+        tray.append(b);
+      }
+      row.append(tray);
+      return tray;
+    };
     const clearRowSwipe = row => {
-      row.classList.remove('is-swipe-committed', 'is-swipe-left', 'is-swipe-armed');
+      row.classList.remove('is-swipe-committed', 'is-swipe-left', 'is-swipe-armed', 'is-swipe-open');
       row.style.removeProperty('--conv-row-swipe-offset');
+      row.style.removeProperty('--conv-row-swipe-reveal');
       row.classList.add('is-swipe-settling');
       clearTimeout(row._swipeSettleTimer);
-      row._swipeSettleTimer = setTimeout(() => { row.classList.remove('is-swipe-settling'); delete row.dataset.swipeActionLabel; }, 200);
+      row._swipeSettleTimer = setTimeout(() => {
+        row.classList.remove('is-swipe-settling');
+        if (!row.classList.contains('is-swipe-committed')) row.querySelector(':scope > .conv-swipe-tray')?.remove();
+        delete row.dataset.swipeActionLabel;
+      }, 200);
+    };
+    const closeOpen = () => {
+      if (!openRow) return;
+      const row = openRow;
+      openRow = null;
+      clearRowSwipe(row);
+      if (!currentRow) release();
     };
     const cancel = () => {
-      if (currentRow) clearRowSwipe(currentRow);
-      if (tracking) {
-        endSidebarDrag();
-        if (isSimpleMode()) requestAnimationFrame(() => { _simpleHistoryApply(); _simpleHomeRefresh(); });
-      }
+      const row = currentRow;
       currentRow = null; tracking = false; dir = 0;
+      if (row && row !== openRow) clearRowSwipe(row);
+      if (!openRow) release();
+    };
+    const runAction = (row, key) => {
+      const target = key === 'archive' ? _swipeActionButtonForRow(row)
+        : key === 'star' ? _swipeOwnButton(row, '[data-role="today-star"]') : null;
+      if (key === 'more') { closeOpen(); openRowActionSheet(row); return; }
+      closeOpen();
+      if (target && !target.disabled && target.isConnected) target.click();
+    };
+    // Full swipe: slide the row out, then fire the action.
+    const commitFull = row => {
+      const d = row.classList.contains('is-swipe-left') ? -1 : 1;
+      const key = d < 0 ? 'archive' : 'star';
+      row.classList.add('is-swipe-settling', 'is-swipe-armed');
+      setOffset(row, d * row.getBoundingClientRect().width);
+      setTimeout(() => {
+        row.classList.remove('is-swipe-settling');
+        if (openRow === row) openRow = null;
+        clearRowSwipe(row);
+        release();
+        const target = key === 'archive' ? _swipeActionButtonForRow(row) : _swipeOwnButton(row, '[data-role="today-star"]');
+        if (target && !target.disabled && target.isConnected) target.click();
+      }, 180);
     };
     $list.addEventListener('click', e => {
+      const action = e.target.closest('.conv-swipe-tray [data-swipe-action]');
+      if (action) {
+        e.preventDefault(); e.stopImmediatePropagation();
+        const row = action.closest(rowSelector);
+        if (row) runAction(row, action.dataset.swipeAction);
+        return;
+      }
       const row = e.target.closest(rowSelector);
+      // Only the stray tap that would open the row is suppressed; the row's
+      // own action buttons (fired by a full swipe or the sheet) pass.
       if (row && Date.now() < Number(row.dataset.swipeSuppressUntil || 0)
-          && !e.target.closest('.conv-archive-btn')) {
+          && !e.target.closest('.conv-archive-btn, button[data-role]')) {
         e.preventDefault(); e.stopImmediatePropagation();
       }
     }, true);
+    // Scrolling the list closes an open tray, like a native list.
+    document.addEventListener('scroll', () => { if (openRow && !tracking) closeOpen(); }, {capture: true, passive: true});
     $list.addEventListener('touchstart', e => {
-      cancel();
-      if (e.touches.length !== 1 || e.target.closest('button, input, textarea, select, a, [contenteditable]')) return;
+      if (e.target.closest('.conv-swipe-tray, .row-action-sheet')) return;
       const row = e.target.closest(rowSelector);
-      const btn = row && _swipeActionButtonForRow(row);
-      if (!btn || btn.disabled) return;
+      if (openRow && openRow !== row) {
+        // Any touch elsewhere only closes the open tray.
+        cancelMobileConversationRowTap();
+        if (row) row.dataset.swipeSuppressUntil = String(Date.now() + 500);
+        closeOpen();
+        cancel();
+        return;
+      }
+      cancel();
+      if (e.touches.length !== 1) return;
+      const reopen = row && row === openRow;
+      if (!reopen && e.target.closest('button, input, textarea, select, a, [contenteditable]')) return;
+      if (!row) return;
       sx = lastX = e.touches[0].clientX; sy = e.touches[0].clientY;
-      if (sx < 20) return; // Leave the browser's edge-back gesture alone.
+      if (!reopen && sx < 20) return; // Leave the browser's edge-back gesture alone.
+      if (!reopen && !_swipeTrayActions(row, -1).length && !_swipeTrayActions(row, 1).length) return;
       currentRow = row;
-      threshold = Math.min(112, Math.max(72, row.getBoundingClientRect().width * 0.28));
+      base = reopen ? offset : 0;
+      if (reopen) { cancelMobileConversationRowTap(); row.dataset.swipeSuppressUntil = String(Date.now() + 700); }
       lastAt = performance.now(); velocity = 0;
     }, {passive:true});
     $list.addEventListener('touchmove', e => {
@@ -12345,43 +12562,87 @@
       const x = e.touches[0].clientX, dx = x - sx, dy = e.touches[0].clientY - sy;
       if (!tracking) {
         if (Math.max(Math.abs(dx), Math.abs(dy)) < 12) return;
-        if (Math.abs(dx) <= Math.abs(dy) * 1.5) { cancel(); return; }
-        dir = dx > 0 ? 1 : -1; tracking = true;
-        beginSidebarDrag();
+        if (Math.abs(dx) <= Math.abs(dy) * 1.5) {
+          if (currentRow === openRow) closeOpen();
+          cancel(); return;
+        }
+        tracking = true;
+        hold();
         cancelMobileConversationRowTap();
         noteMobileConversationRowSwipe(currentRow);
         currentRow.dataset.swipeSuppressUntil = String(Date.now() + 1000);
         clearTimeout(currentRow._swipeSettleTimer);
         currentRow.classList.remove('is-swipe-settling');
-        currentRow.classList.add('is-swipe-committed');
-        currentRow.classList.toggle('is-swipe-left', dir < 0);
       }
       const now = performance.now();
       velocity = (x - lastX) / Math.max(1, now - lastAt);
       lastX = x; lastAt = now;
-      const distance = Math.max(0, dx * dir);
-      const offset = Math.min(distance, threshold) + Math.max(0, distance - threshold) * 0.35;
-      currentRow.style.setProperty('--conv-row-swipe-offset', dir * offset + 'px');
-      currentRow.classList.toggle('is-swipe-armed', distance >= threshold);
-      currentRow.dataset.swipeActionLabel = (distance >= threshold ? 'Release to ' : '') + _swipeLabelForRow(currentRow).toLowerCase();
+      const raw = base + dx;
+      const d = raw === 0 ? (dir || (dx < 0 ? -1 : 1)) : (raw < 0 ? -1 : 1);
+      if (d !== dir) {
+        const tray = ensureTray(currentRow, d);
+        if (!tray) {
+          // Nothing on this side: hold the row at rest.
+          dir = d; trayW = 0;
+          currentRow.classList.remove('is-swipe-committed');
+          setOffset(currentRow, 0);
+          if (e.cancelable) e.preventDefault();
+          return;
+        }
+        dir = d;
+        trayW = tray.childElementCount * BTN_W;
+        fullAt = Math.max(trayW + 64, currentRow.getBoundingClientRect().width * 0.6);
+        currentRow.classList.add('is-swipe-committed');
+        currentRow.classList.toggle('is-swipe-left', d < 0);
+      }
+      if (!trayW) { if (e.cancelable) e.preventDefault(); return; }
+      const distance = Math.abs(raw);
+      const width = currentRow.getBoundingClientRect().width;
+      const shown = distance <= fullAt ? distance : fullAt + (distance - fullAt) * 0.6;
+      setOffset(currentRow, dir * Math.min(shown, width));
+      const armed = distance >= fullAt;
+      if (armed !== currentRow.classList.contains('is-swipe-armed')) {
+        currentRow.classList.toggle('is-swipe-armed', armed);
+        if (armed) { try { navigator.vibrate?.(10); } catch (_) {} }
+      }
+      currentRow.dataset.swipeActionLabel = (armed ? 'Release to ' : '') + (dir < 0 ? _swipeLabelForRow(currentRow) : 'Star').toLowerCase();
       if (e.cancelable) e.preventDefault();
     }, {passive:false});
     $list.addEventListener('touchend', e => {
-      if (!currentRow || !tracking) { cancel(); return; }
-      const row = currentRow, touch = e.changedTouches?.[0];
-      const dx = touch ? touch.clientX - sx : 0, dy = touch ? touch.clientY - sy : 0;
-      const distance = dx * dir;
-      const flick = distance >= 44 && velocity * dir > 0.55 && performance.now() - lastAt < 80;
-      const commit = row.isConnected && Math.abs(dx) > Math.abs(dy) * 1.5 && (distance >= threshold || flick);
-      row.dataset.swipeSuppressUntil = String(Date.now() + 700);
-      const btn = _swipeActionButtonForRow(row);
-      cancel();
-      if (commit && btn && !btn.disabled && btn.isConnected) {
-        if (e.cancelable) e.preventDefault();
-        btn.click();
+      const row = currentRow;
+      if (!row || !tracking) {
+        // A plain tap on the open row closes its tray.
+        if (row && row === openRow) closeOpen();
+        cancel(); return;
       }
+      row.dataset.swipeSuppressUntil = String(Date.now() + 700);
+      currentRow = null; tracking = false;
+      if (!trayW || !row.isConnected) { if (openRow === row) openRow = null; clearRowSwipe(row); dir = 0; release(); return; }
+      const distance = Math.abs(offset);
+      const flickOut = velocity * dir > 0.9 && distance >= trayW * 0.6;
+      const flickIn = velocity * dir < -0.4;
+      if (e.cancelable) e.preventDefault();
+      if (row.classList.contains('is-swipe-armed')) {
+        commitFull(row);
+      } else if (!flickIn && (distance >= trayW * 0.5 || flickOut)) {
+        // Snap open at the tray width; it stays open until the next touch.
+        row.classList.add('is-swipe-settling', 'is-swipe-open');
+        setOffset(row, dir * trayW);
+        clearTimeout(row._swipeSettleTimer);
+        row._swipeSettleTimer = setTimeout(() => row.classList.remove('is-swipe-settling'), 200);
+        if (openRow && openRow !== row) clearRowSwipe(openRow);
+        openRow = row;
+      } else {
+        if (openRow === row) openRow = null;
+        clearRowSwipe(row);
+        release();
+      }
+      dir = 0;
     }, {passive:false});
-    $list.addEventListener('touchcancel', cancel, {passive:true});
+    $list.addEventListener('touchcancel', () => {
+      if (currentRow && currentRow === openRow) { setOffset(openRow, base); currentRow = null; tracking = false; dir = 0; return; }
+      cancel();
+    }, {passive:true});
   }
   wireConvListRowSwipe(document.body);
 
@@ -19251,6 +19512,7 @@
     '[data-role="handoff-takeback"]',
     '[data-role="popout-row-session"]',
     '[data-role="report-decision"]',
+    '.conv-swipe-tray',
     '.conv-title-input',
     '.conv-session-origin-chip[data-parent-sid]',
     '.conv-chain-badge[data-parent-sid]',
