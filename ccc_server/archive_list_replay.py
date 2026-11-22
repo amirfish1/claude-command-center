@@ -20,13 +20,16 @@ from ccc_server.bounded_cache import ByteBudgetCache
 _RUN_CACHE = ByteBudgetCache(32 * 1024 * 1024, 512)
 # Packed All responses have different row slots and must not evict the
 # smaller sidebar windows' DEFLATE runs.
-_PACKED_RUN_CACHE = ByteBudgetCache(32 * 1024 * 1024, 700)
+_PACKED_RUN_CACHE = ByteBudgetCache(32 * 1024 * 1024, 2300)
 _HISTORY_MANIFESTS = ByteBudgetCache(4 * 1024 * 1024, 32)
 # Multiple manifests can share an order. Keep IDs under a separate budget
 # so retaining them never evicts the run guards needed for ordinary deltas.
 _HISTORY_ORDERS = ByteBudgetCache(8 * 1024 * 1024, 16)
 _RUN_MAX_ROWS = 256
 _RUN_BOUNDARY_MASK = 63
+# History deltas send each changed run. Closer boundaries limit how many
+# unchanged rows a scattered update sends alongside the changed ones.
+_HISTORY_RUN_BOUNDARY_MASK = 15
 # Bound how many packed value arrays a conditional history request retains.
 # Larger responses still use the original run guard and pack only to send.
 _HISTORY_PACK_MAX_ROWS = 32768
@@ -46,16 +49,17 @@ class _GuardPickler(pickle.Pickler):
         raise TypeError('custom values are not encoding cache guards')
 
 
+class _DigestWriter:
+    def __init__(self):
+        self.digest = hashlib.sha256()
+
+    def write(self, data):
+        self.digest.update(data)
+
+
 def payload_fingerprint(payload):
     """Hash ordered JSON-compatible values without keeping the serialized copy."""
-    class DigestWriter:
-        def __init__(self):
-            self.digest = hashlib.sha256()
-
-        def write(self, data):
-            self.digest.update(data)
-
-    writer = DigestWriter()
+    writer = _DigestWriter()
     try:
         _GuardPickler(writer, protocol=pickle.HIGHEST_PROTOCOL).dump(payload)
     except (TypeError, ValueError, pickle.PicklingError, RecursionError):
@@ -102,7 +106,7 @@ def prepare_history(payload, *, check_client=None):
         ids.append(sid)
         seen.add(sid)
         if (end - start == _RUN_MAX_ROWS or end == len(rows)
-                or zlib.crc32(sid.encode("utf-8", "surrogatepass")) & _RUN_BOUNDARY_MASK == 0):
+                or zlib.crc32(sid.encode("utf-8", "surrogatepass")) & _HISTORY_RUN_BOUNDARY_MASK == 0):
             if packed is None:
                 content = rows[start:end]
             else:

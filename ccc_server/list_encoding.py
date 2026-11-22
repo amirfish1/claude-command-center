@@ -150,7 +150,7 @@ def history_representation(payload, accept, validator, *, diagnostics=None, fing
                            row_layouts=False, packed_rows=None, packed_runs=None, prefer_zstd=False,
                            check_client=None):
     """Reuse encoded bytes after a fresh full-history projection."""
-    supported = ("zstd", "br", "gzip") if row_layouts and prefer_zstd else ("br", "gzip")
+    supported = ("zstd", "br", "gzip") if prefer_zstd else ("br", "gzip")
     accepted = static_encoding.accepted_encodings(accept, supported=supported)
     if not accepted:
         fingerprint = None

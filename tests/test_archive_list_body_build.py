@@ -140,9 +140,15 @@ def test_history_encoding_reuses_bytes_after_fresh_projection(monkeypatch, tmp_p
     monkeypatch.setattr(server, '_archive_list_source_rows_cached',
                         lambda *a, **kw: ([dict(item) for item in rows], True, 0))
     diagnostics = []
-    monkeypatch.setattr(server, 'record_diag',
-                        lambda kind, ms, detail: diagnostics.append(detail)
-                        if kind == 'list_server' else None)
+    initial_diagnostics_ready = threading.Event()
+
+    def record(kind, ms, detail):
+        if kind == 'list_server':
+            diagnostics.append(detail)
+            if len(diagnostics) == 10:
+                initial_diagnostics_ready.set()
+
+    monkeypatch.setattr(server, 'record_diag', record)
     httpd = server.http.server.ThreadingHTTPServer(('127.0.0.1', 0), server.CommandCenterHandler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
@@ -188,6 +194,7 @@ def test_history_encoding_reuses_bytes_after_fresh_projection(monkeypatch, tmp_p
         active_token = json.loads(gzip.decompress(changed[3]))['delta_token']
         assert read(since=active_token) == (304, None, '"d-' + active_token + '"', b'')
 
+        assert initial_diagnostics_ready.wait(5)
         assert [entry['body_cache'].get('encoding_hit') for entry in diagnostics] == [
             False, True, True, False, True, True, True, False, False, None,
         ]
@@ -198,13 +205,23 @@ def test_history_encoding_reuses_bytes_after_fresh_projection(monkeypatch, tmp_p
         rows[:] = [{'session_id': 'archive-row-' + str(i)} for i in range(100)]
         response = read(encoding='identity', order='')
         base = json.loads(response[3])
-        rows.insert(27, {'session_id': 'joined'})
+        rows.insert(27, {'session_id': 'joined', 'first_message': 'New note ' * 200})
         response = read(encoding='identity', since=base['delta_token'], order=base['order_token'])
         assert response[0] == 200
         patch = json.loads(response[3])
         assert patch['ids'] == [] and patch['base_order'] == base['order_token']
         assert patch['order_spans'] == [[0, 27], 'joined', [27, 73]]
         assert [item['session_id'] for item in patch['conversations']] == ['joined']
+        monkeypatch.setattr(list_encoding, '_zstd', lambda raw: raw)
+        response = read(encoding='gzip, zstd', since=base['delta_token'],
+                        order=base['order_token'], row_layouts=True)
+        assert response[:2] == (200, 'zstd')
+        assert json.loads(response[3]) == patch
+        monkeypatch.setattr(server.phone_access, 'is_remote_request', lambda *args: True)
+        remote = read(encoding='gzip, zstd', since=base['delta_token'],
+                      order=base['order_token'], row_layouts=True)
+        assert remote[:2] == (200, 'gzip')
+        assert json.loads(gzip.decompress(remote[3])) == patch
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -214,7 +231,7 @@ def test_history_delta_preserves_projected_values_and_order(monkeypatch):
     from ccc_server import archive_list_replay as replay
 
     monkeypatch.setattr(replay, '_RUN_MAX_ROWS', 2)
-    monkeypatch.setattr(replay, '_RUN_BOUNDARY_MASK', 0xffffffff)
+    monkeypatch.setattr(replay, '_HISTORY_RUN_BOUNDARY_MASK', 0xffffffff)
     monkeypatch.setattr(replay, '_HISTORY_MANIFESTS', replay.ByteBudgetCache(1 << 20, 4))
     first = [{'session_id': sid, 'title': sid} for sid in 'abcdef']
     base, _ = replay.history_delta(replay.prepare_history({'conversations': first}),
@@ -655,7 +672,7 @@ def test_packed_history_reuses_runs_but_checks_wire_layout_slots(monkeypatch):
     assert digests[0] == list(reversed(digests[2]))
     assert digests[0][1] != digests[3][1]
 
-def test_history_zstd_requires_local_packed_response_and_client_acceptance(monkeypatch):
+def test_history_zstd_requires_preference_and_client_acceptance(monkeypatch):
     from ccc_server import list_encoding
 
     monkeypatch.setattr(list_encoding, '_HISTORY_CACHE', list_encoding.ByteBudgetCache(1 << 20, 4))
@@ -671,7 +688,7 @@ def test_history_zstd_requires_local_packed_response_and_client_acceptance(monke
 
     assert read() == (b'encoded zstd', 'zstd')
     assert read(local=False) == (b'encoded br', 'br')
-    assert read(packed=False) == (b'encoded br', 'br')
+    assert read(packed=False) == (b'encoded zstd', 'zstd')
     assert read('gzip, br, zstd;q=0') == (b'encoded br', 'br')
     assert read('gzip, br, zstd;q=0.5') == (b'encoded br', 'br')
     monkeypatch.setattr(list_encoding, '_zstd_encoder', lambda: None)

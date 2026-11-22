@@ -48590,7 +48590,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                         packed_runs=history[1][1] if history[1] is not None else None,
                         # Direct local connections can trade extra wire bytes for
                         # lower compression latency.
-                        prefer_zstd=(row_layouts and not is_delta and not
+                        prefer_zstd=(row_layouts and not
                                      phone_access.is_remote_request(self.client_address[0], self.headers)),
                         check_client=check_client)
             except _ArchiveListClientDisconnected:
