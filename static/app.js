@@ -34404,11 +34404,13 @@
         const age = Number.isFinite(started) ? ' · started ' + _uxqRelTime(w.started_at) : '';
         const activity = w.idle_seconds != null && Number.isFinite(Number(w.idle_seconds))
           ? ' · last activity ' + Math.max(0, Math.floor(Number(w.idle_seconds))) + 's ago' : '';
-        const item = w.ticket_items?.[0];
+        const refs = w.ticket_refs.filter(ref => !listedRefs.has(ref));
+        const item = w.ticket_items.find(item => !listedRefs.has(_uxqItemRef(item)));
         const task = String(item && (item.title || item.note || item.text) || '').split('\n')[0]
           .replace(/(?:file:\/\/)?\/[^\s]*\/(?:pasted-images|attachments)\/[^\s]+/g, '').trim();
-        const title = task || (w.queue || 'Worker') + ' · ' + (w.ticket_refs?.length ? w.ticket_refs.join(' · ') : 'no listed ticket');
-        const meta = (w.worker_id || 'Worker') + (w.ticket_refs?.length ? ' · ' + w.ticket_refs.join(' · ') : ' · ' + state.text);
+        const workerId = w.worker_id || 'Worker';
+        const title = task || (w.queue ? w.queue + ' · ' : '') + (refs.length ? refs.join(' · ') : workerId);
+        const meta = refs.length ? workerId + ' · ' + refs.join(' · ') : state.text;
         const open = w.session_id ? '<button type="button" class="workers-ticket-title workers-pending-session" data-workers-pending-session="'
           + escapeAttr(w.session_id) + '" aria-label="' + escapeAttr('Open session: ' + title) + '">'
           + escapeHtml(title) + '</button>' : '<span class="workers-ticket-title">' + escapeHtml(title) + '</span>';
