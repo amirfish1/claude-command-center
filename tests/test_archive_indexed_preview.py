@@ -113,8 +113,7 @@ def test_legacy_database_allows_index_fallback(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("include_boundary_hot", [False, True])
-def test_indexed_preview_hot_cutoff_preserves_ties_pins_and_deletions(tmp_path,
-                                                                 include_boundary_hot):
+def test_indexed_preview_preserves_precision_ties_pins_and_deletions(tmp_path, include_boundary_hot):
     path = tmp_path / "archive.json"
     key = "base"
     colder = {"session_id": "colder", "mtime": math.nextafter(5, 0)}
@@ -133,7 +132,7 @@ def test_indexed_preview_hot_cutoff_preserves_ties_pins_and_deletions(tmp_path,
         selected = [row["session_id"] for row in preview.select({}, {})]
     assert selected == ["tied", "pinned", *(f"hot-{i}" for i in range(499))]
     assert len(preview.items) == len(hot) + 2
-    assert preview.items[0][1] == (0 if include_boundary_hot else colder["mtime"])
+    assert preview.items[0][1] == colder["mtime"]
 
 
 def test_signature_match_backfills_existing_sidebar_generation(tmp_path, monkeypatch):

@@ -4,7 +4,6 @@
 
 from collections import defaultdict
 import heapq
-from itertools import islice
 import json
 import math
 
@@ -158,32 +157,19 @@ class Preview:
         self.items = []
         self.sources = {}
         self.cold_positions = {}
-        # A cold row older than this many surviving hot rows cannot make the
-        # recent cut. Only sample a bounded prefix and keep exact timestamps
-        # for ties. Pins and family expansion still use every indexed row.
-        hot_stamps = heapq.nlargest(_RECENT_ROWS, (
-            activity(row) for row in islice(overrides.values(), 2 * _RECENT_ROWS)
-            if row.get("engine") != "codex" or _sid(row) not in deleted_codex
-        ))
-        cutoff = (hot_stamps[-1] or None) if len(hot_stamps) == _RECENT_ROWS else None
         # Use the same persisted order as the canonical override merge.
-        # Position ties can occur after an incremental hot-only write.
-        groups = con.execute("""
-            SELECT json_group_array(json_array(identity,sid,
-                CASE WHEN activity < ? THEN NULL ELSE printf('%!.26g',activity) END,pinned,working,codex))
-            FROM (SELECT * FROM sidebar_preview_rows WHERE variant=? ORDER BY position,row_order)
-            GROUP BY position/256 ORDER BY position/256
-        """, (cutoff, key))
-        for packed, in groups:
-            for identity, sid, stamp, pinned, working, codex in json.loads(packed):
-                live = overrides.pop(identity, None)
-                if live is not None:
-                    self.append([live], deleted_codex=deleted_codex)
-                elif not codex or sid not in deleted_codex:
-                    offset = len(self.items)
-                    self.items.append((sid, float(stamp) if stamp is not None else 0,
-                                       pinned, working, identity))
-                    self.cold_positions[identity] = offset
+        # SQLite returns REAL timestamps with their original precision.
+        for identity, sid, stamp, pinned, working, codex in con.execute("""
+            SELECT identity,sid,activity,pinned,working,codex
+            FROM sidebar_preview_rows WHERE variant=? ORDER BY position,row_order
+        """, (key,)):
+            live = overrides.pop(identity, None)
+            if live is not None:
+                self.append([live], deleted_codex=deleted_codex)
+            elif not codex or sid not in deleted_codex:
+                offset = len(self.items)
+                self.items.append((sid, stamp, pinned, working, identity))
+                self.cold_positions[identity] = offset
         self.append(overrides.values(), deleted_codex=deleted_codex)
 
     def append(self, rows, *, deleted_codex=()):
