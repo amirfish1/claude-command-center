@@ -19417,7 +19417,8 @@ def _archive_history_effect_ids(inputs, previous, sidecars):
     return (ticketed | tickets["pending"].keys() | children) & inputs.sources.keys()
 
 
-def _archive_history_project_cut(cut, previous, *, phases=None, check_client=None, persist_topics=True):
+def _archive_history_project_cut(cut, previous, *, phases=None, check_client=None,
+                                 persist_topics=True, max_rows=None):
     """Project a complete basis or its conservative changed-row closure."""
     from ccc_server import archive_history_layer as layer
 
@@ -19429,7 +19430,8 @@ def _archive_history_project_cut(cut, previous, *, phases=None, check_client=Non
     with _archive_history_timing(phases, "changed"):
         reusable = (previous is not None and not missing_effects
                     and layer.same_projection(previous.inputs, inputs))
-        changes = (layer.Changes(previous.inputs, inputs, allow_shrink=True)
+        changes = (layer.Changes(previous.inputs, inputs, allow_shrink=True,
+                                 max_rows=layer.MAX_PATCH_ROWS if max_rows is None else max_rows)
                    if previous is not None and not reusable else None)
         changed = set() if reusable else None
     with _archive_history_timing(phases, "rows"):
@@ -19473,6 +19475,8 @@ def _archive_history_project_cut(cut, previous, *, phases=None, check_client=Non
                     changed = changes.scope()
                     break
                 if expanded is None:
+                    if phases is not None:
+                        phases["expanded_scope_rejected"] = True
                     return None
                 wanted = expanded
             else:
@@ -19534,7 +19538,7 @@ _ARCHIVE_HISTORY_STATE = {"basis": None, "views": collections.OrderedDict(),
 _ARCHIVE_HISTORY_PUBLISH_LOCK = threading.Lock()
 _ARCHIVE_HISTORY_PUBLISH_LAST_START = None
 _ARCHIVE_HISTORY_REBASE_MIN_CHANGES = 1024
-_ARCHIVE_HISTORY_COLD_REBASE_MAX_MISSES = 128
+_ARCHIVE_HISTORY_COLD_REBASE_MAX_ROWS = 512
 
 
 def _archive_history_scope(key):
@@ -19837,22 +19841,10 @@ def _archive_history_response(key, cache_options, since, saved_order, encodings,
             ) as cut:
                 if cut is None:
                     return None
-                use_preferred = False
-                if preferred is not None:
-                    with _archive_history_timing(phases, "select_cold_rebased"):
-                        use_preferred = (previous is not None or since == preferred.token
-                                         or _archive_history_source_misses(preferred, cut[0])
-                                         <= _ARCHIVE_HISTORY_COLD_REBASE_MAX_MISSES)
-                if not use_preferred:
-                    if preferred is not None:
-                        basis = _archive_history_raw_basis(state, key, phases)
-                        if basis is None:
-                            phases["needs_basis"] = True
-                            return None
-                    if previous is None:
-                        with _archive_history_timing(phases, "select_basis"):
-                            basis = _archive_history_select_basis(
-                                state, key, basis, cut[0], since, encodings)
+                if preferred is None and previous is None:
+                    with _archive_history_timing(phases, "select_basis"):
+                        basis = _archive_history_select_basis(
+                            state, key, basis, cut[0], since, encodings)
                 if previous is None and since == basis.token:
                     previous = basis
                 encoding = next((item for item in encodings if item in basis.frames), None)
@@ -19860,13 +19852,22 @@ def _archive_history_response(key, cache_options, since, saved_order, encodings,
                     return None
                 delta = previous is not None
                 base = previous if delta else basis
+                # Try the already decoded artifact with a small hydration
+                # budget that includes overlay and family changes.
+                cold_probe = preferred is not None and not since
                 result = _archive_history_project_cut(
-                    cut, base, phases=phases.setdefault("projection", {}), check_client=check_client)
-                if result is None and use_preferred and not since:
-                    # Matching source tokens alone cannot prove that topic
-                    # and family changes fit the bounded projection.
+                    cut, base, phases=phases.setdefault("projection", {}), check_client=check_client,
+                    max_rows=_ARCHIVE_HISTORY_COLD_REBASE_MAX_ROWS if cold_probe else None)
+                if result is None and cold_probe:
+                    probe = phases["cold_rebased_probe"] = phases["projection"]
                     basis = _archive_history_raw_basis(state, key, phases)
                     if basis is not None:
+                        # An oversized probe can still use the standard
+                        # selection and its larger projection budget.
+                        if "scope_rejected" in probe or probe.get("expanded_scope_rejected"):
+                            with _archive_history_timing(phases, "select_basis"):
+                                basis = _archive_history_select_basis(
+                                    state, key, basis, cut[0], since, encodings)
                         encoding = next((item for item in encodings if item in basis.frames), None)
                         if encoding is not None:
                             base = basis

@@ -265,7 +265,7 @@ def test_cold_rebased_basis_defers_raw_load_and_honors_saved_validators(tmp_path
     reject_rebased = False
 
     def project(cut, previous, **kwargs):
-        projected.append(previous.token)
+        projected.append((previous.token, kwargs.get("max_rows")))
         if reject_rebased and previous.token == rebased.token:
             return None
         return layer.View(inputs, frozenset(), {}, "candidate", metadata, {}), [], []
@@ -289,7 +289,22 @@ def test_cold_rebased_basis_defers_raw_load_and_honors_saved_validators(tmp_path
     projected.clear()
     reject_rebased = True
     assert request()[2] == '"d-' + raw.token + '"'
-    assert projected == [rebased.token, raw.token]
+    assert projected == [(rebased.token, server._ARCHIVE_HISTORY_COLD_REBASE_MAX_ROWS), (raw.token, None)]
+
+    def project_with_scope_limit(cut, previous, *, max_rows=None, phases, **kwargs):
+        projected.append((previous.token, max_rows))
+        if max_rows is not None:
+            phases["scope_rejected"] = max_rows + 1
+            return None
+        return layer.View(inputs, frozenset(), {}, "candidate", metadata, {}), [], []
+
+    state.update(loaded=False, basis=None, views=OrderedDict())
+    projected.clear()
+    monkeypatch.setattr(server, "_archive_history_project_cut", project_with_scope_limit)
+    monkeypatch.setattr(server, "_archive_history_select_basis", lambda *args: rebased)
+    assert request()[2] == '"d-' + rebased.token + '"'
+    assert projected == [(rebased.token, server._ARCHIVE_HISTORY_COLD_REBASE_MAX_ROWS),
+                         (rebased.token, None)]
 
 
 def test_gzip_basis_and_patch_work_without_zstd(tmp_path, monkeypatch):
@@ -437,6 +452,9 @@ def test_changed_cut_reuses_unchanged_effect_rows_and_adds_discovered_children(m
     monkeypatch.setattr(server, "_queue_health_stats", lambda *args, **kw: {})
     cut = (inputs, {"now": 100, "tickets": {"sessions": {"tracked": {"ref": "TEST-1"}},
                                            "pending": {}}}, read, True)
+    assert server._archive_history_project_cut(cut, previous, max_rows=1) is None
+    assert reads == [{"changed"}]
+    reads.clear()
     _, changed, effects = server._archive_history_project_cut(cut, previous)
 
     assert reads == [{"changed"}, {"tracked", "changed"}]
