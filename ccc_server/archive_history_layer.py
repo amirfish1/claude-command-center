@@ -65,7 +65,11 @@ def encode_hot_row(row):
 
 
 def hot_row_token(row):
-    return hashlib.blake2b(encode_hot_row(row).encode("ascii"), digest_size=16).hexdigest()
+    return hot_body_token(encode_hot_row(row))
+
+
+def hot_body_token(body):
+    return hashlib.blake2b(body.encode("ascii"), digest_size=16).hexdigest()
 
 
 def _guard_value(value):

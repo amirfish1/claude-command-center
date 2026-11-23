@@ -534,7 +534,7 @@ def test_server_keeps_only_hot_rows_but_all_history_is_available(tmp_path, monke
     monkeypatch.setattr(server, '_ARCHIVE_STATMAP_BY_SIG', {})
     monkeypatch.setattr(server, '_archive_serve_cache', {})
     monkeypatch.setattr(server, '_archive_refresh_load_blocked', lambda now: True)
-    monkeypatch.setattr(server, '_overlay_conversation_lifecycle_flags', lambda rows: rows)
+    monkeypatch.setattr(server, '_overlay_conversation_lifecycle_flags', lambda rows, **kwargs: rows)
     monkeypatch.setattr(server, '_pinned_rank_map', lambda: {})
     monkeypatch.setattr(server._idea_tickets, 'idea_ticket_rows_map', lambda: {})
     monkeypatch.setattr(server._session_graph, 'parent_snapshot', lambda: {})

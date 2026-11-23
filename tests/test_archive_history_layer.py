@@ -135,6 +135,48 @@ def test_history_hot_guard_reuses_tokens_for_unchanged_published_rows(monkeypatc
     assert hashed == ["changed"]
 
 
+def test_history_hot_guard_uses_durable_tokens_only_before_lifecycle_changes(tmp_path, monkeypatch):
+    key = server._archive_response_cache_key()
+    path = tmp_path / 'archive.json'
+    base = {'archived': False, 'trashed': False, 'all_lane_override': '',
+            'subagent_recent': [{'type': 'task', 'id': 'child'}]}
+    archive_store.save(path, {
+        'schema_version': server._ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
+        'build_id': server._ARCHIVE_RESPONSE_CACHE_BUILD_ID,
+        'entries': {key: {'cached_at': 10, 'conversations': [
+            dict(base, session_id='stable', display_name='Quoted "title" — résumé'),
+            dict(base, session_id='archived'),
+            dict(base, session_id='moved'),
+            dict(base, session_id='deleted', engine='codex'),
+        ]}},
+    }, complete=True)
+    monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE_FILE', path)
+    monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE_LOADED', False)
+    monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE', {})
+    monkeypatch.setattr(server, '_archive_serve_cache', {})
+    monkeypatch.setattr(server, '_archive_serve_version', 0)
+    monkeypatch.setattr(server, '_archive_refresh_load_blocked', lambda now: True)
+    monkeypatch.setattr(server, '_load_conversation_lifecycle_sets', lambda: ({'archived'}, set()))
+    monkeypatch.setattr(server, '_codex_deleted_thread_ids', lambda: {'deleted'})
+    monkeypatch.setattr(server, '_load_session_lane_overrides', lambda: {'moved': 'other'})
+    hashed = []
+    original = layer.hot_row_token
+
+    def counted(row):
+        hashed.append(row['session_id'])
+        return original(row)
+
+    monkeypatch.setattr(layer, 'hot_row_token', counted)
+    server._archive_serve_hot_rows_versioned(key, {}, defer_cold=True, copy_rows=False)
+    rows, tokens = server._archive_history_hot_snapshot(key)
+
+    assert list(rows) == ['stable', 'archived', 'moved']
+    assert rows['archived']['archived'] is True
+    assert rows['moved']['all_lane_override'] == 'other'
+    assert tokens == {sid: original(row) for sid, row in rows.items()}
+    assert hashed == ['archived', 'moved']
+
+
 def test_layer_never_adopts_duplicate_overlay_identity():
     source = inventory("a")
     assert layer.read_inputs(source, {}, {}, [{"session_id": "a"}],

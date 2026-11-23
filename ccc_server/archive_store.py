@@ -1336,7 +1336,15 @@ def _hot_params(key, now=None):
     return key, cutoff, key
 
 
-def _load_hot_bodies(con, key, now, *, reuse=None, stamp=None):
+class HotRows(list):
+    """Decoded durable rows and their process-local body tokens."""
+
+    def __init__(self, rows, tokens):
+        super().__init__(rows)
+        self.tokens = tokens
+
+
+def _load_hot_bodies(con, key, now, *, reuse=None, stamp=None, retain_tokens=False):
     # Sort the small database keys before loading row bodies. SQLite otherwise
     # copies all hot JSON into a temporary sorter that can spill to disk.
     # The caller's read transaction keeps the ordered rowids and bodies paired.
@@ -1354,6 +1362,10 @@ def _load_hot_bodies(con, key, now, *, reuse=None, stamp=None):
         rows = reuse(inventory, stamp)
     # Rowid order keeps SQLite's table seeks in storage order even after
     # a point update writes the replacement at a new physical key.
+    if retain_tokens:
+        from ccc_server.archive_history_layer import hot_body_token
+
+    tokens = {}
     physical = sorted(rowid for rowid in ordered if rowid not in rows)
     for offset in range(0, len(physical), 192):
         rowids = physical[offset:offset + 192]
@@ -1362,8 +1374,16 @@ def _load_hot_bodies(con, key, now, *, reuse=None, stamp=None):
             f"SELECT rowid,body FROM rows WHERE rowid IN ({marks}) ORDER BY rowid", rowids,
         ).fetchall()
         ids, bodies = zip(*records)
-        rows.update(zip(ids, _decode_full_batch(bodies)))
-    return [rows[rowid] for rowid in ordered]
+        decoded = _decode_full_batch(bodies)
+        rows.update(zip(ids, decoded))
+        if retain_tokens:
+            # Canonical writes use compact ASCII JSON with sorted keys. A
+            # differently formatted older body can only force extra work:
+            # equal bytes still describe the same row and field order.
+            tokens.update((id(row), hot_body_token(body)) for row, body in zip(decoded, bodies)
+                          if type(row) is dict and isinstance(body, str) and body.isascii())
+    result = [rows[rowid] for rowid in ordered]
+    return HotRows(result, tokens) if tokens else result
 
 
 class _RowIndexEntry(dict):
@@ -1383,7 +1403,7 @@ class _RowIndexEntry(dict):
 
 
 def load(cache_file, *, hot=False, key=None, now=None, row_index=False, metadata_only=False,
-         reuse_engines=None, include_signature_maps=True, reuse_hot=None):
+         reuse_engines=None, include_signature_maps=True, reuse_hot=None, retain_hot_tokens=False):
     """Read all metadata but only requested row bodies, with ancestor context."""
     if not database_path(cache_file).exists():
         return None
@@ -1427,7 +1447,8 @@ def load(cache_file, *, hot=False, key=None, now=None, row_index=False, metadata
                     index[rid] = (digest, position)
                 entry['_row_index'] = index
             elif hot:
-                rows = _load_hot_bodies(con, variant, now, reuse=reuse_hot, stamp=stamp)
+                rows = _load_hot_bodies(con, variant, now, reuse=reuse_hot, stamp=stamp,
+                                        retain_tokens=retain_hot_tokens)
             elif reuse_engines:
                 predicates = " OR ".join("identity LIKE ?" for _ in reuse_engines)
                 prefixes = ["[" + json.dumps(engine) + ",%" for engine in reuse_engines]

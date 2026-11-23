@@ -17162,7 +17162,7 @@ def _read_archive_response_cache_file():
     import sqlite3
     legacy_import_done = None
     try:
-        data = archive_store.load(_ARCHIVE_RESPONSE_CACHE_FILE, hot=True)
+        data = archive_store.load(_ARCHIVE_RESPONSE_CACHE_FILE, hot=True, retain_hot_tokens=True)
     except (OSError, ValueError, sqlite3.Error):
         data = None
     if data is None:
@@ -17386,14 +17386,28 @@ def _publish_archive_delta(key, base, merged, signature, *, point_update=False, 
 
 
 def _archive_response_cache_get(key):
+    from ccc_server.archive_store import HotRows
+
     _load_archive_response_cache()
     with _ARCHIVE_RESPONSE_CACHE_LOCK:
         entry = _ARCHIVE_RESPONSE_CACHE.get(key)
         if not entry:
             return None
+        source = entry.get("conversations") or []
+        if isinstance(source, HotRows):
+            rows, tokens = [], {}
+            for row in source:
+                if isinstance(row, dict):
+                    copied = dict(row)
+                    rows.append(copied)
+                    if token := source.tokens.get(id(row)):
+                        tokens[id(copied)] = token
+            rows = HotRows(rows, tokens)
+        else:
+            rows = [dict(row) for row in source if isinstance(row, dict)]
         return {
             "cached_at": float(entry.get("cached_at") or 0),
-            "conversations": [dict(r) for r in (entry.get("conversations") or []) if isinstance(r, dict)],
+            "conversations": rows,
             "signature": entry.get("signature") or None,
         }
 
@@ -18279,7 +18293,7 @@ _ARCHIVE_HOT_TRANSFER_PREFIX = "hot."
 
 
 def _archive_serve_cache_store(key, rows, generation, ts=None, *, transfer_rows=None, partial=False,
-                               hot_selected=False, hot_reuse=None):
+                               hot_selected=False, hot_reuse=None, persisted_tokens=None):
     """Store rows only if no lifecycle mutation invalidated their build.
 
     `ts` defaults to now (a genuine fresh build). The cold-restart path
@@ -18305,7 +18319,7 @@ def _archive_serve_cache_store(key, rows, generation, ts=None, *, transfer_rows=
     # version, so the prebuilt /list body still replays (~356 rebuilds/day,
     # most of them no-ops, used to force a full 11MB body rebuild each).
     diff = _archive_serve_diff(prev, rows) if prev is not None else None
-    worker_tokens = {
+    row_tokens = persisted_tokens if persisted_tokens is not None else {
         id(row): token[len(_ARCHIVE_HOT_TRANSFER_PREFIX):]
         for token, row in (transfer_rows or {}).items()
         if token.startswith(_ARCHIVE_HOT_TRANSFER_PREFIX)
@@ -18321,10 +18335,10 @@ def _archive_serve_cache_store(key, rows, generation, ts=None, *, transfer_rows=
             # on the rows it just built) but with the reused row dicts.
             rows[:] = diff["rows"]
             diff["rows"] = rows
-        # Only attach proofs to the transmitted objects. The diff can keep an
+        # Only attach proofs to the exact source objects. The diff can keep an
         # older object that compares equal but encodes differently.
-        history_tokens = ({id(row): worker_tokens[id(row)] for row in rows if id(row) in worker_tokens}
-                          if worker_tokens else {})
+        history_tokens = ({id(row): row_tokens[id(row)] for row in rows if id(row) in row_tokens}
+                          if row_tokens else {})
         if diff is not None and (memo := prev.get("history_hot_tokens")) is not None:
             if memo[0] == prev["ver"] and memo[1] is prev["rows"]:
                 # The diff retained these exact, unmodified row objects.
@@ -22489,13 +22503,23 @@ def _archive_serve_hot_rows_versioned(
             entry = _archive_response_cache_get(base_key)
             borrowed_base_snapshot = bool(entry and entry.get("conversations"))
     if entry and entry.get("conversations"):
-        rows = _overlay_conversation_lifecycle_flags([
-            dict(row) for row in (entry.get("conversations") or [])
-            if isinstance(row, dict)
-        ])
+        from ccc_server.archive_store import HotRows
+
+        source = entry["conversations"]
+        if isinstance(source, HotRows):
+            # Keep exact body proofs only on the copies that lifecycle did not
+            # replace. The original list keeps all proof identities live here.
+            rows = _overlay_conversation_lifecycle_flags(list(source), copy_on_change=True)
+            persisted_tokens = source.tokens
+        else:
+            rows = _overlay_conversation_lifecycle_flags([
+                dict(row) for row in source if isinstance(row, dict)
+            ])
+            persisted_tokens = None
         partial = not borrowed_base_snapshot and str(entry.get("signature") or "").startswith("partial:")
         stored = _archive_serve_cache_store(
             key, rows, serve_generation, ts=0 if partial else entry.get("cached_at"), partial=partial,
+            persisted_tokens=persisted_tokens,
         )
         entry_stale = partial or (now - float(entry.get("cached_at") or 0)) >= _ARCHIVE_SERVE_TTL
         with _archive_serve_lock:
