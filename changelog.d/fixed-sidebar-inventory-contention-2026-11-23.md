@@ -1,1 +1,1 @@
-Batch the remaining sidebar archive inventory when a large ordered read stalls under load.
+Reduce delays opening the full conversation archive when other dashboard work starts during its inventory scan.

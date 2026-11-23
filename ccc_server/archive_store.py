@@ -31,7 +31,7 @@ HOT_SECONDS = 7 * 86400
 _SIGNATURE_MAP_COMPRESS_MIN_BYTES = 64 << 10
 _SIGNATURE_MAP_MAX_BYTES = 64 << 20
 _POINT_WAL_CHECKPOINT_BYTES = 32 << 20
-_HISTORY_INVENTORY_PROBE_ROWS = 2048
+_HISTORY_INVENTORY_PROBE_ROWS = 1024
 _HISTORY_INVENTORY_MIN_STALL = 0.008
 _HISTORY_BODY_BATCH_MAX_ROWS = 512
 _HISTORY_BODY_BATCH_MAX_ROW_BYTES = 32 << 10
@@ -1153,30 +1153,35 @@ def _sidebar_history_inventory(con, key, max_rows):
 
 def _sidebar_history_covering_inventory(con, query, key, limit):
     params = (key, limit)
-    if limit <= _HISTORY_INVENTORY_PROBE_ROWS or not con.in_transaction:
+    chunk_size = _HISTORY_INVENTORY_PROBE_ROWS
+    if limit <= chunk_size or not con.in_transaction:
         return tuple(con.execute(query, params))
 
     wall_started, cpu_started = time.perf_counter(), time.thread_time()
     cursor = con.execute(query, params)
+    records = []
     try:
-        first = tuple(cursor.fetchmany(_HISTORY_INVENTORY_PROBE_ROWS))
-        wall = time.perf_counter() - wall_started
-        cpu = time.thread_time() - cpu_started
-        if len(first) < _HISTORY_INVENTORY_PROBE_ROWS:
-            return first
-        # A loaded interpreter can reacquire the GIL on every SQLite row.
-        # If the prefix spent most of its time waiting, batch the rest within
-        # the same ordered read transaction. The typed cursor remains usable.
-        if wall - cpu >= max(_HISTORY_INVENTORY_MIN_STALL, 2 * cpu):
-            try:
-                rest = _sidebar_history_inventory_batch(
-                    con, query + ' OFFSET ?', (key, limit - len(first), len(first)),
-                )
-            except sqlite3.DataError:
-                rest = None
-            if rest is not None:
-                return first + rest
-        return first + tuple(cursor)
+        while True:
+            chunk = cursor.fetchmany(chunk_size)
+            records.extend(chunk)
+            if len(chunk) < chunk_size:
+                return tuple(records)
+            wall = time.perf_counter() - wall_started
+            cpu = time.thread_time() - cpu_started
+            # A loaded interpreter can reacquire the GIL on every SQLite row.
+            # Recheck between chunks so work that starts midscan can also
+            # switch to the aggregate in the same read transaction.
+            if wall - cpu >= max(_HISTORY_INVENTORY_MIN_STALL, 2 * cpu):
+                offset = len(records)
+                try:
+                    rest = _sidebar_history_inventory_batch(
+                        con, query + ' OFFSET ?', (key, limit - offset, offset),
+                    )
+                except sqlite3.DataError:
+                    rest = None
+                records.extend(cursor if rest is None else rest)
+                return tuple(records)
+            wall_started, cpu_started = time.perf_counter(), time.thread_time()
     finally:
         cursor.close()
 

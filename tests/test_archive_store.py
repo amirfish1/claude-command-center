@@ -877,9 +877,10 @@ def test_sidebar_history_inventory_preserves_values_and_rowid_ties(parent, cover
 
 
 @pytest.mark.parametrize('parent', ['parent', 'parent\0id', b'\xff', None])
-def test_stalled_sidebar_inventory_batches_the_same_ordered_cut(monkeypatch, parent):
+@pytest.mark.parametrize('late_stall', [False, True])
+def test_stalled_sidebar_inventory_batches_the_same_ordered_cut(monkeypatch, parent, late_stall):
     monkeypatch.setattr(store, '_HISTORY_INVENTORY_PROBE_ROWS', 1)
-    clock = iter((0.0, 0.02))
+    clock = iter((0.0, 0.001, 0.001, 0.021) if late_stall else (0.0, 0.02))
     monkeypatch.setattr(store, 'time', SimpleNamespace(
         perf_counter=lambda: next(clock), thread_time=lambda: 0.0,
     ))
@@ -898,8 +899,12 @@ def test_stalled_sidebar_inventory_batches_the_same_ordered_cut(monkeypatch, par
                     'ON rows(variant, position, sid, identity, parent, digest)')
         rows = [('z-child', 'child-identity', 'parent', 'child-digest'),
                 ('parent', 'parent-identity', parent, 'parent-digest')]
+        offset = 1
+        if late_stall:
+            rows.insert(1, ('sibling', 'sibling-identity', 'parent', 'sibling-digest'))
+            offset = 2
         con.executemany('INSERT INTO rows VALUES (?, ?, ?, ?, ?, ?)',
                         [('base', 0, *row) for row in rows])
 
-        assert store._sidebar_history_inventory(con, 'base', 2) == tuple(rows)
-        assert batches == [(rows[1],) if parent == 'parent' else None]
+        assert store._sidebar_history_inventory(con, 'base', len(rows)) == tuple(rows)
+        assert batches == [tuple(rows[offset:]) if parent == 'parent' else None]
