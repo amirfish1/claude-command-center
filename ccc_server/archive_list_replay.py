@@ -150,7 +150,7 @@ def _packed_history_fragments(rows, runs, check_client):
     return chunks
 
 
-def _order_spans(previous_ids, ids):
+def _order_spans(previous_ids, ids, *, max_spans=256):
     """Describe current order with slices of the saved order and new IDs."""
     positions = {sid: index for index, sid in enumerate(previous_ids)}
     spans = []
@@ -163,7 +163,7 @@ def _order_spans(previous_ids, ids):
             last[1] += 1
         else:
             spans.append([index, 1])
-        if len(spans) > 256:
+        if len(spans) > max_spans:
             return None
     return spans if len(spans) * 4 < len(ids) else None
 

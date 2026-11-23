@@ -28,6 +28,8 @@
     return {...metadata, conversations:rows};
   }
 
+  const wideOrderSpanQuery = '&wide_order_spans=1';
+
   function _mergeArchiveListDelta(prev, d, savedOrder) {
     if (!Array.isArray(prev) || !Array.isArray(d.ids) || !Array.isArray(d.conversations)) return null;
     const sameOrder = d.same_order === true;
@@ -46,8 +48,9 @@
     if (sameOrder) return [...byId.values()];
     if (Object.hasOwn(d, 'order_spans')) {
       // Offsets only describe the exact pre-delta array validated by the server.
+      // The wide_order_spans capability advertises this decoder limit.
       if (d.ids.length || !savedOrder || d.base_order !== savedOrder
-          || !Array.isArray(d.order_spans) || d.order_spans.length > 256
+          || !Array.isArray(d.order_spans) || d.order_spans.length > 4096
           || !Number.isSafeInteger(d.count) || d.count < 0
           || d.count > prev.length + d.conversations.length) return null;
       const rows = [], seen = new Set();
@@ -120,7 +123,7 @@
   }
 
   window.CCCArchiveWire = Object.freeze({
-    _decodeArchiveRowLayouts, _mergeArchiveListDelta, _decodeArchiveHistoryLayer,
+    _decodeArchiveRowLayouts, _mergeArchiveListDelta, _decodeArchiveHistoryLayer, wideOrderSpanQuery,
   });
 
   if (window.self !== window.top) return;
@@ -452,7 +455,10 @@
       let target = value?.delta ? fullUrl + '&since=' + encodeURIComponent(value.delta) : fullUrl;
       const savedOrder = value?.delta && /^[0-9a-f]{64}$/.test(value.order) ? value.order : '';
       if (savedOrder) target += '&saved_order=' + savedOrder;
-      if (windowName === 'all') target += '&row_layouts=1&order_spans=1&history_layer=1';
+      if (windowName === 'all') {
+        target += '&row_layouts=1&order_spans=1&history_layer=1';
+        if (savedOrder) target += wideOrderSpanQuery;
+      }
       const headers = value?.etag ? {'If-None-Match':value.etag} : {};
       headers['X-CCC-Abort-On-Disconnect'] = '1';
       const matchesBase = base => base && base.etag === value.etag && base.delta === value.delta

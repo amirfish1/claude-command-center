@@ -19922,7 +19922,8 @@ def _archive_history_raw_basis(state, key, phases):
     return state["basis"]
 
 
-def _archive_history_response(key, cache_options, since, saved_order, encodings, *, phases, check_client):
+def _archive_history_response(key, cache_options, since, saved_order, encodings, *, phases, check_client,
+                              wide_order_spans=False):
     """Build one exact All response using a stored projection basis."""
     import sqlite3
     from ccc_server import archive_history_layer as layer, continuation_topics
@@ -20027,7 +20028,8 @@ def _archive_history_response(key, cache_options, since, saved_order, encodings,
             else:
                 patch = layer.delta_payload(
                     base.inputs.order, current.inputs.order, base.token, current.token, payload,
-                    saved_order=not delta or saved_order == layer.order_token(base.inputs.order))
+                    saved_order=not delta or saved_order == layer.order_token(base.inputs.order),
+                    wide_order_spans=delta and wide_order_spans)
                 if delta:
                     body = layer.delta_representation(patch, encoding)
                 else:
@@ -38925,15 +38927,17 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 encodings = accepted_encodings(self.headers.get("Accept-Encoding"), supported=ENCODINGS)
                 if encodings:
                     history_phases = {}
+                    wide_order_spans = bool(since and saved_order and qs.get("wide_order_spans") == ["1"])
 
                     def build_history(check_client):
                         return _archive_history_response(
                             list_cache_key, cache_options, since, saved_order, encodings,
-                            phases=history_phases, check_client=check_client)
+                            phases=history_phases, check_client=check_client,
+                            wide_order_spans=wide_order_spans)
 
                     try:
                         layer_response = _archive_list_history_projection(
-                            (list_cache_key, since, saved_order, encodings), None,
+                            (list_cache_key, since, saved_order, encodings, wide_order_spans), None,
                             build_history, history_phases, check_client)
                     except _ArchiveListClientDisconnected:
                         return

@@ -12,6 +12,25 @@ def inventory(*session_ids):
             for sid in session_ids]
 
 
+def test_wide_order_spans_require_opt_in_and_a_matching_saved_order():
+    previous = tuple(map(str, range(25000)))
+    # Move 1,800 rows as a group while preserving long unchanged runs.
+    current = previous[::7][:1800]
+    moved = set(current)
+    current += tuple(sid for sid in previous if sid not in moved)
+    arguments = (previous, current, "before", "after", {"conversations": []})
+    assert layer.delta_payload(*arguments)["ids"] == current
+    assert layer.delta_payload(*arguments, wide_order_spans=True, saved_order=False)["ids"] == current
+    patch = layer.delta_payload(*arguments, wide_order_spans=True)
+    assert patch["ids"] == []
+    spans = patch["order_spans"]
+    assert 256 < len(spans) <= 4096
+    assert tuple(sid for start, count in spans for sid in previous[start:start + count]) == current
+    reverse = previous[::-1]
+    assert layer.delta_payload(previous, reverse, "before", "after", {},
+                               wide_order_spans=True)["ids"] == reverse
+
+
 def test_effect_scope_keeps_ticket_members_pending_and_lineage():
     from types import SimpleNamespace
 

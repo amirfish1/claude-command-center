@@ -4956,7 +4956,10 @@
             if (!opts.initial && !opts.includePrs && params.get('window') === 'all') _perfFetchUrl += '&history_layer=1';
             if (deltaToken) _perfFetchUrl += '&since=' + encodeURIComponent(deltaToken);
             requestedOrder = baseOrder;
-            if (requestedOrder) _perfFetchUrl += '&saved_order=' + requestedOrder;
+            if (requestedOrder) {
+              _perfFetchUrl += '&saved_order=' + requestedOrder;
+              if (deltaToken && requestUrl !== url) _perfFetchUrl += window.CCCArchiveWire?.wideOrderSpanQuery || '';
+            }
             r = await backgroundApiFetch(_perfFetchUrl, init);
           }
           if (controller.signal.aborted) throw controller.signal.reason;

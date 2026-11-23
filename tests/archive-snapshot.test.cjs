@@ -24,7 +24,10 @@ function setup({snapshot, response, early} = {}) {
     performance, URLSearchParams, AbortController, setTimeout:()=>0, clearTimeout(){},
     _archiveWindow:()=> '7d', _clientLog(){}, _scheduleArchiveSidebarCache(){},
     backgroundApiFetch:async(url, init) => { reads.push({url, init}); return response; }};
-  vm.createContext(context); vm.runInContext(archive, context);
+  vm.createContext(context);
+  context.window.top = context;
+  vm.runInContext(boot, context);
+  vm.runInContext(archive, context);
   return {context, state, reads, saves, savedDeltas, savedLayouts};
 }
 function reply(body, status=200) {
@@ -237,6 +240,7 @@ test('an All order delta reconstructs slices and survives the next saved-order p
       const params = new URL(url,'http://localhost').searchParams;
       assert.equal(params.get('order_spans'),'1');
       assert.equal(params.get('history_layer'),'1');
+      assert.equal(params.get('wide_order_spans'),'1');
       assert.equal(params.get('since'),'new');
       assert.equal(params.get('saved_order'),nextOrder);
       return reply(null,304);
@@ -244,6 +248,20 @@ test('an All order delta reconstructs slices and survives the next saved-order p
     assert.deepEqual(Array.from(await f.context.loadArchiveAll({window:'all'})),
       [rows[1],changed,updated]);
   }
+});
+
+test('the All decoder applies a wide saved reorder and rejects an oversized patch', () => {
+  const {context} = setup();
+  const merge = context.window.CCCArchiveWire._mergeArchiveListDelta;
+  const order = 'a'.repeat(64);
+  const previous = Array.from({length:4300}, (_, index) => ({session_id:String(index)}));
+  const spans = Array.from({length:512}, (_, index) => [2 * index, 1]);
+  spans.push(...Array.from({length:512}, (_, index) => [2 * index + 1, 1]), [1024, 3276]);
+  const delta = {ids:[], conversations:[], count:previous.length, base_order:order, order_spans:spans};
+  const expected = spans.flatMap(([start, count]) => previous.slice(start, start + count));
+  assert.deepEqual(Array.from(merge(previous, delta, order)), expected);
+  const oversized = previous.map((_, index) => [index, 1]);
+  assert.equal(merge(previous, {...delta, order_spans:oversized}, order), null);
 });
 
 test('304 reuses the exact validated rows; an expired server token replaces the full base', async () => {
