@@ -763,7 +763,7 @@ def test_cold_read_pins_the_selected_hot_rows_after_a_row_ages_out(tmp_path, mon
     monkeypatch.setattr(server, "_archive_refresh_load_blocked", lambda now: True)
     monkeypatch.setattr(server, "_conversation_lifecycle_snapshot", lambda: (set(), set(), set(), {}))
     monkeypatch.setattr(server, "_overlay_conversation_lifecycle_flags", lambda rows, **kwargs: rows)
-    monkeypatch.setattr(server, "_archive_list_source_overlays", lambda *_: ([], [extra]))
+    monkeypatch.setattr(server, "_archive_list_source_overlays", lambda *_, **kwargs: ([], [extra]))
     monkeypatch.setattr(server, "_capture_archive_history_sidecars", lambda _: dict.fromkeys(
         ("resumes", "parents", "names", "drivers", "ideas", "overlays"), {}))
     monkeypatch.setattr(layer, "_INVENTORY", (None, frozenset(), None))

@@ -98,7 +98,7 @@ def live_cli_session_ids():
     return sids
 
 
-def archive_terminal_overlay(rows, *, existing_ids=None):
+def archive_terminal_overlay(rows, *, existing_ids=None, process_reader=None):
     """Fill snapshot gaps from terminal-owned logs, without an archive scan."""
     from ccc_server.engines import _antigravity_native_launch, _antigravity_response_state
 
@@ -107,7 +107,8 @@ def archive_terminal_overlay(rows, *, existing_ids=None):
     archived, trashed = _core._load_conversation_lifecycle_sets()
     excluded = existing | archived | trashed
     candidates = {}
-    for proc in _core.find_live_antigravity_processes():
+    read_processes = _core.find_live_antigravity_processes if process_reader is None else process_reader
+    for proc in read_processes():
         owned = {}
         for log in _cli_process_logs(proc['pid']):
             meta = _core._antigravity_cli_log_meta(log)

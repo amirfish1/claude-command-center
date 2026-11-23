@@ -51,6 +51,14 @@ def test_stale_archive_gets_current_terminal_chat(terminal):
     assert row['is_live']
 
 
+def test_terminal_overlay_consumes_prefetched_processes(terminal, monkeypatch):
+    processes = server.find_live_antigravity_processes()
+    monkeypatch.setattr(server, 'find_live_antigravity_processes',
+                        lambda: pytest.fail('duplicate process scan'))
+    rows = antigravity.archive_terminal_overlay([], process_reader=lambda: processes)
+    assert [row['session_id'] for row in rows] == [SID]
+
+
 def test_snapshot_and_lifecycle_exclusions_skip_transcript_reads(terminal, monkeypatch):
     monkeypatch.setattr(server, '_extract_antigravity_tail_meta', lambda p: pytest.fail('excluded row'))
     assert antigravity.archive_terminal_overlay([{'session_id': SID}]) == []

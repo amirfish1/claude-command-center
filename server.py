@@ -19272,6 +19272,7 @@ def _capture_archive_history_sidecars(now):
 
 
 _ARCHIVE_HISTORY_HOT_SNAPSHOT_BYTES = 16 << 20
+_ARCHIVE_HISTORY_PROCESS_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ccc-archive-processes")
 
 
 def _archive_history_hot_snapshot(key, captured=None):
@@ -19348,6 +19349,13 @@ def _archive_history_read_cut(key, cache_options, now, *, phases=None, check_cli
     with _ARCHIVE_RESPONSE_CACHE_LOCK:
         min_stamp = float((_ARCHIVE_RESPONSE_CACHE.get(key) or {}).get("cached_at") or 0)
     with contextlib.ExitStack() as stack:
+        # Only the foreground history reader needs to hide the process-table
+        # round trip. Its caller holds the history lock across this cut.
+        antigravity_processes = None
+        if topic_reader is None:
+            probe = _ARCHIVE_HISTORY_PROCESS_POOL.submit(find_live_antigravity_processes)
+            stack.callback(probe.cancel)
+            antigravity_processes = probe.result
         with _archive_history_timing(phases, "inventory"):
             cut = stack.enter_context(archive_store.sidebar_history_cut(
                 _ARCHIVE_RESPONSE_CACHE_FILE, key, schema_version=_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
@@ -19373,11 +19381,6 @@ def _archive_history_read_cut(key, cache_options, now, *, phases=None, check_cli
             hot = {sid: row for sid, row in hot.items() if sid not in removed}
         if check_client is not None:
             check_client()
-        existing = {sid for sid, _, _, _ in inventory if sid not in removed} | hot.keys()
-        with _archive_history_timing(phases, "engine_rows"):
-            _, extra = _archive_list_source_overlays([], existing, lambda _phase: None)
-        extra_by_sid = {_archive_row_sid(row): row for row in extra}
-        existing = existing | extra_by_sid.keys()
         with _archive_history_timing(phases, "sidecars"):
             sidecars = _capture_archive_history_sidecars(now)
         with _archive_history_timing(phases, "topics"):
@@ -19393,6 +19396,14 @@ def _archive_history_read_cut(key, cache_options, now, *, phases=None, check_cli
         topic_inputs, topic_edges, topic_version = topics
         records, origins, fallback_titles, native_titles = topic_inputs
         sidecars["topics"] = (connection, topic_inputs, topic_version)
+        if check_client is not None:
+            check_client()
+        existing = {sid for sid, _, _, _ in inventory if sid not in removed} | hot.keys()
+        with _archive_history_timing(phases, "engine_rows"):
+            _, extra = _archive_list_source_overlays(
+                [], existing, lambda _phase: None, antigravity_processes=antigravity_processes)
+        extra_by_sid = {_archive_row_sid(row): row for row in extra}
+        existing = existing | extra_by_sid.keys()
         resume_entries = sidecars["resumes"]
         resumable_ids = existing & (resume_entries.keys() | {"session_" + sid for sid in resume_entries})
         resumes = {
@@ -20472,7 +20483,7 @@ def _archive_list_source_rows_for_sessions(session_ids):
     return [row for row in rows if isinstance(row, dict) and row.get("session_id") in session_ids]
 
 
-def _archive_list_source_overlays(rows, existing_ids, phase):
+def _archive_list_source_overlays(rows, existing_ids, phase, *, antigravity_processes=None):
     """Apply the same current engine gap fillers to full and indexed reads."""
     codex_overlay = _archive_overlay_codex_sessions(rows, existing_ids=existing_ids)
     if codex_overlay:
@@ -20502,7 +20513,8 @@ def _archive_list_source_overlays(rows, existing_ids, phase):
         existing_ids.update(_archive_overlay_existing_ids(devin_overlay))
     phase("devin_ms")
     from ccc_server.antigravity import archive_terminal_overlay
-    antigravity_overlay = archive_terminal_overlay(rows, existing_ids=existing_ids)
+    antigravity_overlay = archive_terminal_overlay(
+        rows, existing_ids=existing_ids, process_reader=antigravity_processes)
     if antigravity_overlay:
         rows = list(rows or []) + antigravity_overlay
         existing_ids.update(_archive_overlay_existing_ids(antigravity_overlay))
