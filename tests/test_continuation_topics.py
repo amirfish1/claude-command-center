@@ -825,6 +825,27 @@ def test_topic_cache_keeps_persisted_title_when_fallback_changes(store, monkeypa
     assert child['continuation_topic_title'] == 'BEFORE'
 
 
+def test_archive_projection_inputs_batch_native_titles(store, monkeypatch):
+    roots = [f'{digit}1111111-1111-4111-8111-111111111111' for digit in '123']
+    for i, root in enumerate(roots):
+        topics.attach_topics([row(root), row(f'child-{i}', origin=root)], names={})
+    monkeypatch.setattr(topics, '_archive_fallback_titles', lambda: {})
+    calls = []
+
+    def fetch(*, columns, exact_ids):
+        calls.append((columns, exact_ids))
+        return [
+            {'id': roots[0], 'title': ' Native title ', 'agent_nickname': 'Ignored'},
+            {'id': roots[1], 'title': '', 'agent_nickname': 'Nickname'},
+        ]
+
+    monkeypatch.setattr(server, '_codex_fetch_threads', fetch)
+    inputs, _, _ = topics.archive_projection_inputs(store, max_rows=20)
+
+    assert calls == [(('id', 'title', 'agent_nickname'), tuple(roots))]
+    assert inputs[3] == dict(zip(roots, (' Native title ', 'Nickname', None)))
+
+
 def test_archive_projection_inputs_capture_topic_and_native_title_sources(store, monkeypatch):
     root = '11111111-1111-4111-8111-111111111111'
     topics.attach_topics([row(root), row('child', origin=root)], names={})

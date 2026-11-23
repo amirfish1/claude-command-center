@@ -330,6 +330,18 @@ def _native_title(sid):
     return native.get('title') or native.get('agent_nickname')
 
 
+def _archive_native_titles(roots):
+    if len(roots) <= 1:
+        return {sid: _native_title(sid) for sid in roots}
+    # Resolve the bounded set in one read per account. Use the same account
+    # precedence and deleted-thread filtering as the individual thread lookup.
+    rows = _core._codex_fetch_threads(
+        columns=('id', 'title', 'agent_nickname'), exact_ids=tuple(sorted(roots)),
+    )
+    titles = {row['id']: row.get('title') or row.get('agent_nickname') for row in rows}
+    return {sid: titles.get(sid) for sid in roots}
+
+
 class UnavailableArchiveProjection(Exception):
     """A title source or topic mutation needs the ordinary full reader."""
 
@@ -499,7 +511,7 @@ def archive_projection_inputs(conn, *, max_rows, max_native_roots=32, diagnostic
             if len(native_roots) > max_native_roots:
                 return unavailable("native_root_limit")
             with timing("native_titles"):
-                native = {sid: _native_title(sid) for sid in native_roots}
+                native = _archive_native_titles(native_roots)
             with timing("revision"):
                 current = _archive_read_version(conn)
             if current == version:
