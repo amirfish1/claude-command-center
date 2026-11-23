@@ -94,10 +94,10 @@ class CodexTitleRehydrateTests(unittest.TestCase):
 
     def test_title_changes_participate_in_sidebar_delta_updates(self):
         server = self.server
-        server._archive_delta_ctx_remember("before-title", "test", "all", {}, {},
-                                           {"saved-task": {"task_title": "Old"}})
-        server._archive_delta_ctx_remember("after-title", "test", "all", {}, {},
-                                           {"saved-task": {"task_title": "New"}})
+        server._archive_delta_ctx_remember("before-title", "test", "all", "{}", "{}",
+                                           '{"saved-task":{"task_title":"Old"}}', 0)
+        server._archive_delta_ctx_remember("after-title", "test", "all", "{}", "{}",
+                                           '{"saved-task":{"task_title":"New"}}', 0)
         changed = server._archive_delta_ctx_changed_sids("before-title", "after-title")
         self.assertIn("saved-task", changed)
 

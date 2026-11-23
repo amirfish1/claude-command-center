@@ -18487,16 +18487,17 @@ def _archive_list_delta_state(key, rows, window, from_cache):
     # Join the shared pieces of the original JSON arrays around the idea
     # snapshot, preserving the exact bytes consumed by each digest.
     encode = _ARCHIVE_DELTA_JSON.encode
-    start = encode([key, window, graph_revision, resumes])[:-1].encode()
-    end = ("," + encode([row_overlays, topic_revision])[1:]).encode()
+    resumes_json, ideas_json, overlays_json = map(encode, (resumes, ideas, row_overlays))
+    start = (encode([key, window, graph_revision])[:-1] + "," + resumes_json).encode()
+    end = ("," + overlays_json + "," + encode(topic_revision) + "]").encode()
     response_hash = hashlib.sha1(start)
     projection_hash = response_hash.copy()
-    response_hash.update(("," + encode(ideas)).encode())
+    response_hash.update(("," + ideas_json).encode())
     response_hash.update(end)
     projection_hash.update(end)
     ctx = response_hash.hexdigest()[:12]
     projection_ctx = projection_hash.hexdigest()[:12]
-    _archive_delta_ctx_remember(ctx, key, window, resumes, ideas, row_overlays, topic_revision)
+    _archive_delta_ctx_remember(ctx, key, window, resumes_json, ideas_json, overlays_json, topic_revision)
     ovl = hashlib.sha1(encode(extra).encode()).hexdigest()[:8] if extra else "0"
     return {
         "token": f"{_ARCHIVE_DELTA_NONCE}.{ver}.{ctx}.{ovl}",
@@ -18517,14 +18518,19 @@ _ARCHIVE_DELTA_CTX_HIST_MAX = 8
 _archive_delta_ctx_lock = threading.Lock()
 
 
-def _archive_delta_ctx_fingerprints(mapping):
-    if not isinstance(mapping, dict):
-        return None
-    encode = _ARCHIVE_DELTA_JSON.encode
-    return {str(sid): encode(value) for sid, value in mapping.items()}
+def _archive_delta_ctx_number(text):
+    # Compare JSON number spellings. Python equality treats 1, 1.0, and True
+    # as equal, although they have different encodings in a sidebar row.
+    return (text,)
 
 
-def _archive_delta_ctx_remember(ctx, key, window, resumes, ideas, titles=None, topic_revision=0):
+_ARCHIVE_DELTA_CTX_DECODER = json.JSONDecoder(
+    parse_int=_archive_delta_ctx_number, parse_float=_archive_delta_ctx_number,
+    parse_constant=_archive_delta_ctx_number,
+)
+
+
+def _archive_delta_ctx_remember(ctx, key, window, resumes_json, ideas_json, titles_json, topic_revision):
     with _archive_delta_ctx_lock:
         if ctx in _ARCHIVE_DELTA_CTX_HIST:
             _ARCHIVE_DELTA_CTX_HIST.move_to_end(ctx)
@@ -18532,9 +18538,11 @@ def _archive_delta_ctx_remember(ctx, key, window, resumes, ideas, titles=None, t
     entry = {
         "scope": (key, window, topic_revision),
         "parents": _session_graph.parent_snapshot(),
-        "resumes": _archive_delta_ctx_fingerprints(resumes),
-        "ideas": _archive_delta_ctx_fingerprints(ideas),
-        "titles": _archive_delta_ctx_fingerprints(titles),
+        # Reuse the immutable digest inputs. Only a client holding a
+        # different context needs to compare the per-session values.
+        "resumes": resumes_json,
+        "ideas": ideas_json,
+        "titles": titles_json,
     }
     with _archive_delta_ctx_lock:
         _ARCHIVE_DELTA_CTX_HIST[ctx] = entry
@@ -18543,18 +18551,31 @@ def _archive_delta_ctx_remember(ctx, key, window, resumes, ideas, titles=None, t
             _ARCHIVE_DELTA_CTX_HIST.popitem(last=False)
 
 
-def _archive_delta_ctx_changed_sids(old_ctx, new_ctx):
-    """Session ids whose projection inputs differ between two remembered ctx
-    states (both forms of kimi's "session_" prefix), or None if either state
-    is unknown or they belong to different list scopes."""
+def _archive_delta_ctx_pair(old_ctx, new_ctx):
     with _archive_delta_ctx_lock:
         old = _ARCHIVE_DELTA_CTX_HIST.get(old_ctx)
         new = _ARCHIVE_DELTA_CTX_HIST.get(new_ctx)
     if old is None or new is None or old["scope"] != new["scope"]:
         return None
+    return old, new
+
+
+def _archive_delta_ctx_changed_sids(old_ctx, new_ctx):
+    """Session ids whose context inputs changed, or None for incompatible scopes."""
+    pair = _archive_delta_ctx_pair(old_ctx, new_ctx)
+    if pair is None:
+        return None
+    old, new = pair
     changed = set()
     for field in ("parents", "resumes", "ideas", "titles"):
-        a, b = old.get(field), new.get(field)
+        a, b = old[field], new[field]
+        if a == b:
+            continue
+        if field != "parents":
+            a = _ARCHIVE_DELTA_CTX_DECODER.decode(a)
+            b = _ARCHIVE_DELTA_CTX_DECODER.decode(b)
+            a = a if isinstance(a, dict) else None
+            b = b if isinstance(b, dict) else None
         if a is None or b is None:
             if a is not b:
                 return None
@@ -18580,7 +18601,7 @@ def _archive_list_delta_reject(state, since):
         return "malformed"
     if nonce != state["nonce"]:
         return "nonce"
-    if ctx != state["ctx"] and _archive_delta_ctx_changed_sids(ctx, state["ctx"]) is None:
+    if ctx != state["ctx"] and _archive_delta_ctx_pair(ctx, state["ctx"]) is None:
         return "ctx"
     if not (state["track_since"] <= since_ver <= state["ver"]):
         return "range"

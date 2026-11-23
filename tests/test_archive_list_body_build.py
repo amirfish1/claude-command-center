@@ -950,3 +950,15 @@ def test_ctx_change_resends_only_rows_whose_projection_inputs_moved(monkeypatch)
     other = server._archive_list_delta_state(key, base, '1d', True)
     assert server._archive_list_delta_reject(state, other['token'].replace(
         other['token'].split('.')[1], ver, 1)) == 'ctx'
+
+
+def test_delta_context_compares_serialized_numeric_types(monkeypatch):
+    server = importlib.import_module('server')
+    monkeypatch.setattr(server, '_ARCHIVE_DELTA_CTX_HIST', server.collections.OrderedDict())
+    server._archive_delta_ctx_remember(
+        'before', 'scope', '7d', '{"a":{"value":1},"b":[true],"c":[0.0],"d":[1]}', '{}', '{}', 1)
+    server._archive_delta_ctx_remember(
+        'after', 'scope', '7d', '{"a":{"value":1.0},"b":[1],"c":[-0.0],"d":["1"]}', '{}', '{}', 1)
+    assert server._archive_delta_ctx_changed_sids('before', 'after') == {
+        'a', 'b', 'c', 'd', 'session_a', 'session_b', 'session_c', 'session_d',
+    }

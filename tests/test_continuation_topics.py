@@ -377,8 +377,8 @@ def test_fresh_sidebar_projection_resolves_topic_after_live_names(store, monkeyp
 def test_topic_revision_rejects_delta_even_when_renamed_root_is_unloaded(monkeypatch):
     monkeypatch.setattr(server, '_ARCHIVE_DELTA_CTX_HIST', OrderedDict())
     monkeypatch.setattr(server._session_graph, 'parent_snapshot', lambda: {})
-    server._archive_delta_ctx_remember('before', 'scope', 'all', {}, {}, {}, 1)
-    server._archive_delta_ctx_remember('after', 'scope', 'all', {}, {}, {}, 2)
+    server._archive_delta_ctx_remember('before', 'scope', 'all', '{}', '{}', '{}', 1)
+    server._archive_delta_ctx_remember('after', 'scope', 'all', '{}', '{}', '{}', 2)
     assert server._archive_delta_ctx_changed_sids('before', 'after') is None
 
 
