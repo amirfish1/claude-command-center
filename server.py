@@ -21545,8 +21545,13 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
     if phases is not None:
         phases["projection_cache"] = _archive_list_projection_diag(window, key, entry is not None)
     if entry is None:
+        # A packed seven-day result already retains its encoded rows for replay.
+        # Reuse existing scalar templates, but don't populate a second cache
+        # for the entire window during a cold build or context change.
+        retain_templates = window != "7d" or not row_layouts
         payload = _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
                                        _inputs=inputs, _row_overlays=row_overlays,
+                                       _retain_templates=retain_templates,
                                        check_client=check_client)
         if check_client is not None:
             check_client()

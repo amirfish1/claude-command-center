@@ -94,6 +94,22 @@ def test_packed_projection_replays_overlay_order_and_ticket_layout_changes(input
     assert 'idea_ticket' not in replayed['conversations'][-1]
 
 
+def test_packed_seven_day_replay_keeps_existing_templates_without_admitting_new_rows(inputs, monkeypatch):
+    cache = server.ByteBudgetCache(1 << 20, 8)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_ROW_TEMPLATES', cache)
+    rows = fixture_rows()
+    server._archive_list_project_row(rows[0], resumes={}, parents={})
+    template = cache.get(('codex', 'archive'))
+
+    packed = read(rows, row_layouts=True)
+    assert cache.get(('codex', 'archive')) is template
+    assert ('codex', 'live') not in cache
+
+    legacy = read(rows)
+    assert legacy['conversations'] == packed['conversations']
+    assert ('codex', 'live') in cache
+
+
 def test_reuses_archive_but_keeps_timestamps_ticket_ticks_and_containers_fresh(inputs):
     rows = fixture_rows()
     first = read(rows)
