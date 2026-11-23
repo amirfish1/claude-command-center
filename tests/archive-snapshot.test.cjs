@@ -95,7 +95,9 @@ test('All history requests reconstruct ordered rows from shared layouts before c
     assert.equal(f.state._archiveAllData.get(allUrl),loaded);
     assert.equal(f.state._archiveAllDelta.get(allUrl).token,'history');
     assert.equal(validated,1);
-    assert.deepEqual(f.reads.map(read => read.url),early ? [] : [allUrl + '&row_layouts=1&order_spans=1&history_layer=1']);
+    assert.deepEqual(f.reads.map(read => read.url), early ? [] : [
+      allUrl + '&row_layouts=1&order_spans=1&history_layer=1&wide_order_spans=1',
+    ]);
     if (!early) assert.equal(f.reads[0].init.headers['X-CCC-Abort-On-Disconnect'], '1');
     assert.deepEqual(Array.from(f.savedLayouts[0]),[body.row_layouts,body.conversations]);
   }
@@ -154,7 +156,7 @@ test('a malformed history layer retries the ordinary request exactly once', asyn
   };
   assert.equal(JSON.stringify(await f.context.loadArchiveAll({window:'all'})),JSON.stringify(rows));
   const ordinary = url + '&row_layouts=1&order_spans=1';
-  assert.deepEqual(f.reads,[ordinary + '&history_layer=1',ordinary]);
+  assert.deepEqual(f.reads,[ordinary + '&history_layer=1&wide_order_spans=1',ordinary]);
 });
 
 test('a saved-order delta merges against its validated base and persists the full order', async () => {
@@ -260,6 +262,12 @@ test('the All decoder applies a wide saved reorder and rejects an oversized patc
   const delta = {ids:[], conversations:[], count:previous.length, base_order:order, order_spans:spans};
   const expected = spans.flatMap(([start, count]) => previous.slice(start, start + count));
   assert.deepEqual(Array.from(merge(previous, delta, order)), expected);
+  const layered = context.window.CCCArchiveWire._decodeArchiveHistoryLayer({
+    history_layer:1,
+    base:{window:'all', conversations:previous, count:previous.length, order_token:order, delta_token:'base'},
+    patch:{...delta, delta:true, window:'all', order_token:'b'.repeat(64), since:'base', delta_token:'next'},
+  });
+  assert.deepEqual(Array.from(layered.conversations), expected);
   const oversized = previous.map((_, index) => [index, 1]);
   assert.equal(merge(previous, {...delta, order_spans:oversized}, order), null);
 });
@@ -729,6 +737,11 @@ test('a stale All validator cannot adopt a 304 for a different IndexedDB base', 
       };
     });
     await page.goto(origin, {waitUntil:'load'});
+    await page.waitForFunction(() => window.archiveBootRequests.some(({url}) => url.includes('history_layer=1')));
+    assert.equal(await page.evaluate(() => {
+      const request = window.archiveBootRequests.find(({url}) => url.includes('history_layer=1'));
+      return new URL(request.url, location.origin).searchParams.get('wide_order_spans');
+    }), '1');
     await page.evaluate(rows => {
       const snapshot = window.__cccArchiveSnapshot;
       window.__cccArchiveSettled = true;

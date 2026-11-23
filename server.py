@@ -20029,7 +20029,7 @@ def _archive_history_response(key, cache_options, since, saved_order, encodings,
                 patch = layer.delta_payload(
                     base.inputs.order, current.inputs.order, base.token, current.token, payload,
                     saved_order=not delta or saved_order == layer.order_token(base.inputs.order),
-                    wide_order_spans=delta and wide_order_spans)
+                    wide_order_spans=wide_order_spans)
                 if delta:
                     body = layer.delta_representation(patch, encoding)
                 else:
@@ -38927,7 +38927,9 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 encodings = accepted_encodings(self.headers.get("Accept-Encoding"), supported=ENCODINGS)
                 if encodings:
                     history_phases = {}
-                    wide_order_spans = bool(since and saved_order and qs.get("wide_order_spans") == ["1"])
+                    # Full layers carry their own base order. Conditional
+                    # deltas still need to match the client's saved order.
+                    wide_order_spans = qs.get("wide_order_spans") == ["1"]
 
                     def build_history(check_client):
                         return _archive_history_response(

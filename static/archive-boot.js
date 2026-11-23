@@ -456,8 +456,7 @@
       const savedOrder = value?.delta && /^[0-9a-f]{64}$/.test(value.order) ? value.order : '';
       if (savedOrder) target += '&saved_order=' + savedOrder;
       if (windowName === 'all') {
-        target += '&row_layouts=1&order_spans=1&history_layer=1';
-        if (savedOrder) target += wideOrderSpanQuery;
+        target += '&row_layouts=1&order_spans=1&history_layer=1' + wideOrderSpanQuery;
       }
       const headers = value?.etag ? {'If-None-Match':value.etag} : {};
       headers['X-CCC-Abort-On-Disconnect'] = '1';

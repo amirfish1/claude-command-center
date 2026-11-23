@@ -4953,12 +4953,13 @@
               && url === sharedState._archiveBootstrapUrl) return null;
           if (!r) {
             _perfFetchUrl = requestUrl;
-            if (!opts.initial && !opts.includePrs && params.get('window') === 'all') _perfFetchUrl += '&history_layer=1';
+            if (requestUrl !== url) {
+              _perfFetchUrl += '&history_layer=1' + (window.CCCArchiveWire?.wideOrderSpanQuery || '');
+            }
             if (deltaToken) _perfFetchUrl += '&since=' + encodeURIComponent(deltaToken);
             requestedOrder = baseOrder;
             if (requestedOrder) {
               _perfFetchUrl += '&saved_order=' + requestedOrder;
-              if (deltaToken && requestUrl !== url) _perfFetchUrl += window.CCCArchiveWire?.wideOrderSpanQuery || '';
             }
             r = await backgroundApiFetch(_perfFetchUrl, init);
           }

@@ -31,6 +31,49 @@ def test_wide_order_spans_require_opt_in_and_a_matching_saved_order():
                                wide_order_spans=True)["ids"] == reverse
 
 
+def test_full_layer_can_use_wide_spans_against_its_embedded_order(monkeypatch):
+    from collections import OrderedDict
+    from dataclasses import replace
+
+    previous = tuple(map(str, range(4300)))
+    current = previous[:1024:2] + previous[1:1024:2] + previous[1024:]
+    base_inputs = layer.read_inputs(inventory(*previous), {}, {}, (), overlay_maps=(), edges=())
+    current_inputs = replace(base_inputs, order=current)
+    metadata = {"count": len(previous), "window": "all"}
+    rows = [{"session_id": sid} for sid in previous]
+    monkeypatch.setattr(layer.list_encoding, "_zstd", lambda raw: None)
+    basis = layer.make_basis(base_inputs, (), {}, dict(metadata, conversations=rows))
+    monkeypatch.setattr(server, "_ARCHIVE_HISTORY_STATE", {"views": OrderedDict(), "loaded": True})
+    monkeypatch.setattr(server, "_archive_history_raw_basis", lambda *args: basis)
+    monkeypatch.setattr(server, "_archive_history_select_basis", lambda *args: basis)
+    monkeypatch.setattr(server, "_archive_history_read_cut",
+                        lambda *args, **kwargs: contextlib.nullcontext((current_inputs, {"tickets": None})))
+    view = layer.View(current_inputs, frozenset(), {}, "current", metadata, {})
+    monkeypatch.setattr(server, "_archive_history_project_cut", lambda *args, **kwargs: (view, [], []))
+    monkeypatch.setattr(server, "_archive_history_should_rebase", lambda *args: False)
+    monkeypatch.setattr(server, "_trace_row_flicker", lambda *args, **kwargs: None)
+    monkeypatch.setattr(server, "_archive_list_ticket_effects", lambda *args, **kwargs: None)
+
+    for since, wide, saved_order in (("", False, ""), ("", True, ""), ("old", True, "stale"),
+                                     (basis.token, True, "stale")):
+        body, encoding, _ = server._archive_history_response(
+            "scope", {}, since, saved_order, ("gzip",), phases={}, check_client=None, wide_order_spans=wide)
+        assert encoding == "gzip"
+        document = json.loads(gzip.decompress(body))
+        if since == basis.token:
+            assert document["ids"] == list(current)
+            continue
+        patch = document["patch"]
+        assert document["base"]["order_token"] == basis.order_token
+        if wide:
+            assert patch["base_order"] == basis.order_token
+            assert patch["ids"] == []
+            assert tuple(sid for start, count in patch["order_spans"]
+                         for sid in previous[start:start + count]) == current
+        else:
+            assert patch["ids"] == list(current)
+
+
 def test_effect_scope_keeps_ticket_members_pending_and_lineage():
     from types import SimpleNamespace
 
