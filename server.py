@@ -19092,11 +19092,11 @@ def _archive_list_window_cutoff(window, now=None):
 
 _archive_list_row_ts = _archive_preview.activity
 
-def _archive_list_window_allows_row(row, cutoff, idea_tickets_by_sid=None):
+def _archive_list_window_allows_row(row, cutoff, idea_tickets_by_sid=None, *, activity=_archive_list_row_ts):
     if not cutoff:
         return True
     engine = ((row or {}).get("engine") or (row or {}).get("source") or "").lower()
-    if bool((row or {}).get("pinned")) or engine == "hermes" or _archive_list_row_ts(row) >= cutoff:
+    if bool((row or {}).get("pinned")) or engine == "hermes" or activity(row) >= cutoff:
         return True
     ticket = (idea_tickets_by_sid or {}).get(_archive_row_sid(row))
     return bool(ticket) and _archive_list_row_ts({"idea_ticket": ticket}) >= cutoff
@@ -20132,8 +20132,12 @@ def _archive_list_family_rows(rows, selected, idea_tickets_by_sid, parents, *, c
     """Keep loaded family context together without making unrelated rows recent."""
     by_sid = {_archive_row_sid(row): row for row in rows}
     children = {}
+    parent_links = {}
     for row in rows:
-        for pid in _archive_list_parent_ids(row, parents):
+        links = _archive_list_parent_ids(row, parents)
+        if links:
+            parent_links[id(row)] = links
+        for pid in links:
             children.setdefault(pid, []).append(row)
     result = list(selected)
     included = {_archive_row_sid(row) for row in result}
@@ -20142,7 +20146,7 @@ def _archive_list_family_rows(rows, selected, idea_tickets_by_sid, parents, *, c
         row = result[index]
         index += 1
         sid = _archive_row_sid(row)
-        related = [by_sid.get(pid) for pid in _archive_list_parent_ids(row, parents)]
+        related = [by_sid.get(pid) for pid in parent_links.get(id(row), ())]
         related.extend(children.get(sid, ()))
         for member in related:
             if member is None:
@@ -20159,11 +20163,12 @@ def _archive_list_family_rows(rows, selected, idea_tickets_by_sid, parents, *, c
     return result
 
 
-def _archive_list_window_rows(rows, cutoff, idea_tickets_by_sid, parents, *, ancestor_ids=None):
+def _archive_list_window_rows(rows, cutoff, idea_tickets_by_sid, parents, *, ancestor_ids=None,
+                              activity=_archive_list_row_ts):
     """Window activity together with its loaded ancestors and child lanes."""
     source_rows = [row for row in (rows or []) if isinstance(row, dict)]
     window_rows = [row for row in source_rows
-                   if _archive_list_window_allows_row(row, cutoff, idea_tickets_by_sid)]
+                   if _archive_list_window_allows_row(row, cutoff, idea_tickets_by_sid, activity=activity)]
     if cutoff is not None:
         # Both directions matter: a visible topic retains its old lanes and
         # earlier continuation legs, just as a recent lane retains its topic.
@@ -21294,17 +21299,18 @@ def _archive_list_initial_selection(rows, window, now, parents, ideas, version):
         if entry and entry[2] <= now < entry[3]:
             return [rows[i] for i in entry[0]], entry[1], True
     cutoff = _archive_list_window_cutoff(window, now=now)
-    selected = _archive_list_window_rows(rows, cutoff, ideas, parents)
-    # The sort already computes each selected row's activity. Reuse it to
-    # find the selection cache expiry for bounded windows.
+    # Share activity across the window filter, recency sort and cache expiry.
     row_times = {}
 
     def remember_activity(row):
-        stamp = _archive_list_row_ts(row)
-        row_times[id(row)] = stamp
+        row_id = id(row)
+        stamp = row_times.get(row_id)
+        if stamp is None:
+            stamp = row_times[row_id] = _archive_list_row_ts(row)
         return stamp
 
     activity = remember_activity if key is not None and cutoff is not None else _archive_list_row_ts
+    selected = _archive_list_window_rows(rows, cutoff, ideas, parents, activity=activity)
     recent = sorted(selected, key=activity, reverse=True)[:500]
     wanted = {id(row) for row in recent}
     wanted.update(id(row) for row in selected if row.get("pinned"))

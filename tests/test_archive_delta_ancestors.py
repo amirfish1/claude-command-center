@@ -29,9 +29,9 @@ def test_delta_resends_only_context_ancestors_and_changed_rows(monkeypatch, wind
     calls = []
     allows = server._archive_list_window_allows_row
 
-    def counted(row, cutoff, ideas):
+    def counted(row, cutoff, ideas, **kwargs):
         calls.append(row['session_id'])
-        return allows(row, cutoff, ideas)
+        return allows(row, cutoff, ideas, **kwargs)
 
     monkeypatch.setattr(server, '_archive_list_window_allows_row', counted)
     result = server._archive_list_delta_payload(state, token, rows, window=window, now=now)
