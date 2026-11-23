@@ -18346,6 +18346,8 @@ def _archive_serve_cache_store(key, rows, generation, ts=None, *, transfer_rows=
         if diff is not None and diff["identical"]:
             if history_tokens:
                 prev["history_hot_tokens"] = (prev["ver"], rows, history_tokens)
+            if prev.get("rows") is not diff["rows"]:
+                prev.pop("history_hot_snapshot", None)
             prev["ts"] = stamp
             prev["rows"] = diff["rows"]
             prev["transfer_rows"] = transfer_rows
@@ -18745,6 +18747,7 @@ def _restamp_archive_serve_cache_after_mutation(archived_set=None, trashed_set=N
                 entry["ts"] = 0.0
                 entry["ver"] = _archive_serve_version
                 entry.pop("transfer_rows", None)
+                entry.pop("history_hot_snapshot", None)
             _archive_serve_refreshing.clear()
             return
 
@@ -19241,8 +19244,11 @@ def _capture_archive_history_sidecars(now):
     }
 
 
+_ARCHIVE_HISTORY_HOT_SNAPSHOT_BYTES = 16 << 20
+
+
 def _archive_history_hot_snapshot(key, captured=None):
-    """Pin the published hot rows, or verify a publisher's explicit source cut."""
+    """Pin a read-only cut of the published hot rows and their body tokens."""
     from ccc_server.archive_history_layer import hot_row_token
 
     with _archive_serve_lock:
@@ -19252,6 +19258,9 @@ def _archive_history_hot_snapshot(key, captured=None):
         rows, version = entry.get("rows"), entry.get("ver")
         if captured is not None and (rows is not captured[0] or version != captured[1]):
             return None
+        saved = entry.get("history_hot_snapshot")
+        if saved is not None and saved[0] == version and saved[1] is rows:
+            return saved[2]
         if not rows or any(type(row) is not dict for row in rows):
             return None
         memo = entry.get("history_hot_tokens")
@@ -19273,12 +19282,20 @@ def _archive_history_hot_snapshot(key, captured=None):
             return None
         by_sid[sid] = row
         tokens[sid] = token
-    if generated:
+    result = by_sid, tokens
+    # Count the new mappings and shallow row copies. Their values already
+    # belong to the captured serve generation.
+    size = sys.getsizeof(by_sid) + sys.getsizeof(tokens) + sum(map(sys.getsizeof, by_sid.values()))
+    retain = size <= _ARCHIVE_HISTORY_HOT_SNAPSHOT_BYTES
+    if generated or retain:
         with _archive_serve_lock:
             current = _archive_serve_cache.get(key)
             if current is not None and current.get("ver") == version and current.get("rows") is rows:
-                current["history_hot_tokens"] = (version, rows, tokens_by_row | generated)
-    return by_sid, tokens
+                if generated:
+                    current["history_hot_tokens"] = (version, rows, tokens_by_row | generated)
+                if retain:
+                    current["history_hot_snapshot"] = (version, rows, result)
+    return result
 
 
 @contextlib.contextmanager
@@ -19376,7 +19393,8 @@ def _archive_history_read_cut(key, cache_options, now, *, phases=None, check_cli
                 inputs.sources.keys() - extra_by_sid.keys() if session_ids is None
                 else session_ids - extra_by_sid.keys())
             if session_ids is None:
-                current = hydrate(hot.values(), wanted, check_client=check_client)
+                current = hydrate((row.copy() for row in hot.values()), wanted,
+                                  check_client=check_client)
             else:
                 # read_inputs already matched hot identities to this pinned
                 # inventory. Only the remaining candidates need SQLite bodies.
@@ -19387,7 +19405,7 @@ def _archive_history_read_cut(key, cache_options, now, *, phases=None, check_cli
                 by_sid = {_archive_row_sid(row): row for row in stored}
                 if by_sid.keys() != cold or len(by_sid) != len(stored):
                     return None
-                by_sid.update((sid, hot[sid]) for sid in wanted & hot.keys())
+                by_sid.update((sid, hot[sid].copy()) for sid in wanted & hot.keys())
                 current = [by_sid[sid] for sid in inputs.order if sid in by_sid]
             if current is None:
                 return None

@@ -95,12 +95,15 @@ def activity(row):
     return newest
 
 
+_ENCODE_IDENTITY = json.JSONEncoder(separators=(',', ':')).encode
+
+
 def identity(row, index=0):
     if isinstance(row, _RowIndexEntry):
         return row.rid
     sid = row.get('session_id') or row.get('id')
-    return json.dumps([row.get('engine'), row.get('source'), sid or f'#{index}',
-                       row.get('jsonl_path')], separators=(',', ':'))
+    return _ENCODE_IDENTITY([row.get('engine'), row.get('source'), sid or f'#{index}',
+                             row.get('jsonl_path')])
 
 
 def sticky(row, *, stamp=None):

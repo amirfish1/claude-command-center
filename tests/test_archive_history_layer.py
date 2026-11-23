@@ -135,6 +135,26 @@ def test_history_hot_guard_reuses_tokens_for_unchanged_published_rows(monkeypatc
     assert hashed == ["changed"]
 
 
+def test_history_hot_cut_reuses_capture_and_invalidates_on_lifecycle_change(monkeypatch):
+    rows = [{"session_id": "stable", "archived": False}]
+    entry = {"rows": rows, "ver": 1}
+    monkeypatch.setattr(server, "_archive_serve_cache", {"base": entry})
+    monkeypatch.setattr(server, "_archive_serve_version", 1)
+    monkeypatch.setattr(server, "_archive_serve_generation", 1)
+    monkeypatch.setattr(server, "_archive_serve_refreshing", set())
+
+    cut = server._archive_history_hot_snapshot("base", (rows, 1))
+    assert server._archive_history_hot_snapshot("base") is cut
+    server._restamp_archive_serve_cache_after_mutation(archived_set={"stable"},
+                                                      mutated_sids={"stable"})
+
+    assert cut[0]["stable"]["archived"] is False
+    assert server._archive_history_hot_snapshot("base", (rows, 1)) is None
+    updated = server._archive_history_hot_snapshot("base", (rows, 2))
+    assert updated[0]["stable"]["archived"] is True
+    assert updated[1]["stable"] != cut[1]["stable"]
+
+
 def test_history_hot_guard_uses_durable_tokens_only_before_lifecycle_changes(tmp_path, monkeypatch):
     key = server._archive_response_cache_key()
     path = tmp_path / 'archive.json'
@@ -556,3 +576,6 @@ def test_cold_read_pins_the_selected_hot_rows_after_a_row_ages_out(tmp_path, mon
         assert hydrate({"recent", "extra"}) == [hot, extra]
         assert hydrate({"extra"}) == [extra]
         assert sqlite_reads == [None, {"aged"}]
+        hydrate(None)[0]["mtime"] = 0
+        hydrate({"recent"})[0]["mtime"] = 1
+        assert hydrate({"recent"}) == [hot]
