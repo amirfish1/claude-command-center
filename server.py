@@ -19985,7 +19985,7 @@ def _archive_history_response(key, cache_options, since, saved_order, encodings,
             else:
                 patch = layer.delta_payload(
                     base.inputs.order, current.inputs.order, base.token, current.token, payload,
-                    saved_order=not delta or saved_order == _archive_list_order_token(base.inputs.order))
+                    saved_order=not delta or saved_order == layer.order_token(base.inputs.order))
                 if delta:
                     body = layer.delta_representation(patch, encoding)
                 else:

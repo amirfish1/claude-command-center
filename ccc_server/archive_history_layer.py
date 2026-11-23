@@ -259,16 +259,22 @@ def load_basis(target, scope):
         return None
 
 
+@lru_cache(maxsize=8)
+def order_token(order):
+    """Reuse the wire digest of an immutable, bounded history order."""
+    return archive_list_replay.order_token(order)
+
+
 def delta_payload(previous_order, current_order, previous_token, current_token, payload, *, saved_order=True):
     """Describe stable, spliced, and explicitly reordered archive responses."""
-    order = archive_list_replay.order_token(current_order)
+    order = order_token(current_order)
     patch = dict(payload, delta=True, since=previous_token, delta_token=current_token,
                  order_token=order, ids=[])
     if saved_order and previous_order == current_order:
         patch["same_order"] = True
     elif (saved_order and
           (spans := archive_list_replay._order_spans(previous_order, current_order)) is not None):
-        patch.update(base_order=archive_list_replay.order_token(previous_order), order_spans=spans)
+        patch.update(base_order=order_token(previous_order), order_spans=spans)
     else:
         patch["ids"] = current_order
     return patch
