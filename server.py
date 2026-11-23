@@ -19816,6 +19816,23 @@ def _archive_history_warm_rebased_basis(target, artifact):
         _ARCHIVE_HISTORY_LOCK.release()
 
 
+def _archive_history_warm_saved_basis():
+    """Prepare a persisted rebased basis before the first All request."""
+    from ccc_server import archive_history_layer as layer
+
+    state = _ARCHIVE_HISTORY_STATE
+    if state["loaded"] or "rebased" in state:
+        return
+    target = layer.rebased_path(_ARCHIVE_RESPONSE_CACHE_FILE)
+    artifact = _archive_history_artifact(target)
+    if artifact is None:
+        return
+    started = time.perf_counter()
+    cached = _archive_history_warm_rebased_basis(target, artifact)
+    record_diag("archive_rebuild", (time.perf_counter() - started) * 1000.0,
+                {"stage": "startup_rebased_basis", "rebased_cached": cached})
+
+
 def _archive_history_rebased_basis(state, key, encodings):
     from ccc_server import archive_history_layer as layer
 
@@ -52710,6 +52727,8 @@ def main():
                 target()
             return _run
 
+        threading.Thread(target=_after_boot_delay(_archive_history_warm_saved_basis),
+                         daemon=True, name="ccc-sidebar-basis-warm").start()
         threading.Thread(target=_after_boot_delay(_session_fts_warm.warm_start), daemon=True, name="ccc-session-fts-warm").start()
         threading.Thread(target=_after_boot_delay(_ship_graph_warm.warm_start), daemon=True, name="ccc-ship-graph-warm").start()
         # Sandbox-transcript harvest (multi-machine S8b): copies queue-worker

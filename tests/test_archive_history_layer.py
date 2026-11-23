@@ -397,6 +397,36 @@ def test_background_rebase_warms_only_the_published_artifact(tmp_path, monkeypat
     assert server._archive_history_rebased_basis(state, key, ("gzip",)) == old
 
 
+def test_startup_warms_saved_rebased_basis_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(layer.list_encoding, "_zstd", lambda raw: None)
+    path = tmp_path / "archive.json"
+    target = layer.rebased_path(path)
+    key = server._archive_response_cache_key()
+    state = {"loaded": False}
+    events = []
+    monkeypatch.setattr(server, "_ARCHIVE_HISTORY_STATE", state)
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", path)
+    monkeypatch.setattr(server, "record_diag", lambda *args: events.append(args))
+
+    server._archive_history_warm_saved_basis()
+    assert events == []
+
+    inputs = layer.read_inputs(inventory("a"), {}, {}, (), overlay_maps=(), edges=())
+    payload = {"window": "all", "count": 1, "conversations": [{"session_id": "a"}]}
+    basis = layer.make_basis(inputs, (), {}, payload, rebased=True)
+    assert layer.write_basis(target, server._archive_history_scope(key), basis)
+    state["loaded"] = True
+    server._archive_history_warm_saved_basis()
+    assert events == []
+
+    state["loaded"] = False
+    server._archive_history_warm_saved_basis()
+    server._archive_history_warm_saved_basis()
+    assert len(events) == 1
+    assert events[0][2] == {"stage": "startup_rebased_basis", "rebased_cached": True}
+    assert server._archive_history_rebased_basis(state, key, ("gzip",)) == basis
+
+
 def test_gzip_basis_and_patch_work_without_zstd(tmp_path, monkeypatch):
     monkeypatch.setattr(layer.list_encoding, "_zstd", lambda raw: None)
     source = layer.read_inputs(inventory("a"), {}, {}, (), overlay_maps=(), edges=())
