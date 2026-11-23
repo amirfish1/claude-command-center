@@ -19687,12 +19687,14 @@ def _archive_history_publisher_main(rebase_source=None, *, refresh_source=None):
     _WT_DISPLAY_SNAPSHOT_ONLY = True
     cpu_priority.set_background_priority("archive")
     key = _archive_response_cache_key()
+    rebased_target = layer.rebased_path(_ARCHIVE_RESPONSE_CACHE_FILE)
+    previous_target = layer.previous_rebased_path(_ARCHIVE_RESPONSE_CACHE_FILE)
     if rebase_source is not None:
         scope = _archive_history_scope(key)
         seed = layer.load_basis(rebase_source, scope + ":rebase")
         basis = layer.rebase_basis(seed) if seed is not None else None
         return basis is not None and layer.write_basis(
-            layer.rebased_path(_ARCHIVE_RESPONSE_CACHE_FILE), scope, basis)
+            rebased_target, scope, basis, previous=previous_target)
     transfer_rows = None
     if refresh_source is not None:
         result, _ = _read_archive_refresh_result(refresh_source)
@@ -19728,7 +19730,7 @@ def _archive_history_publisher_main(rebase_source=None, *, refresh_source=None):
                                            topic_reader=reader) as cut:
                 basis = _archive_history_rebase_cut(cut, key) if cut is not None else None
             return basis is not None and layer.write_basis(
-                layer.rebased_path(_ARCHIVE_RESPONSE_CACHE_FILE), _archive_history_scope(key), basis)
+                rebased_target, _archive_history_scope(key), basis, previous=previous_target)
         return _archive_history_publish_basis(
             key, {}, {}, captured_hot=snapshot, topic_reader=reader) is not None
 
@@ -19866,15 +19868,29 @@ def _archive_history_rebased_basis(state, key, encodings):
 
 
 def _archive_history_cache_rebased_basis(state, artifact, basis):
-    from ccc_server.archive_history_layer import View
-
-    _, previous = state.get("rebased", (None, None))
+    previous_artifact, previous = state.get("rebased", (None, None))
     if previous is not None and (basis is None or previous.token != basis.token):
         # A browser may still validate the superseded base. Keep its guards
         # without retaining a second set of full compressed frames.
-        state["prior_rebased"] = View(previous.inputs, previous.working, previous.activity,
-                                      previous.token, previous.metadata, previous.effect_rows)
+        state["prior_rebased"] = previous.view()
+        state["prior_rebased_artifact"] = previous_artifact
+        state.pop("saved_previous_rebase", None)
     state["rebased"] = artifact, basis
+
+
+def _archive_history_previous_rebased_view(state, key, since):
+    from ccc_server import archive_history_layer as layer
+
+    target = layer.previous_rebased_path(_ARCHIVE_RESPONSE_CACHE_FILE)
+    artifact = _archive_history_artifact(target)
+    if artifact is not None and artifact == state.get("prior_rebased_artifact"):
+        return None  # The in-memory copy was already checked for this validator.
+    last, view = state.get("saved_previous_rebase", (None, None))
+    if artifact != last:
+        basis = layer.load_basis(target, _archive_history_scope(key)) if artifact is not None else None
+        view = basis.view() if basis is not None else None
+        state["saved_previous_rebase"] = artifact, view
+    return view if view is not None and view.token == since else None
 
 
 def _archive_history_should_rebase(state, basis, tail, changes, now):
@@ -19979,6 +19995,11 @@ def _archive_history_response(key, cache_options, since, saved_order, encodings,
                 encoding = next((item for item in encodings if item in basis.frames), None)
                 if encoding is None:
                     return None
+                saved_previous = None
+                if previous is None and since and since.startswith(layer.REBASED_TOKEN_PREFIX):
+                    with _archive_history_timing(phases, "load_previous_rebased"):
+                        saved_previous = _archive_history_previous_rebased_view(state, key, since)
+                    previous = saved_previous
                 delta = previous is not None
                 base = previous if delta else basis
                 # Try the already decoded artifact with a small hydration
@@ -19986,7 +20007,15 @@ def _archive_history_response(key, cache_options, since, saved_order, encodings,
                 cold_probe = preferred is not None and not delta
                 result = _archive_history_project_cut(
                     cut, base, phases=phases.setdefault("projection", {}), check_client=check_client,
-                    max_rows=_ARCHIVE_HISTORY_COLD_REBASE_MAX_ROWS if cold_probe else None)
+                    max_rows=(_ARCHIVE_HISTORY_COLD_REBASE_MAX_ROWS
+                              if cold_probe or saved_previous is not None else None))
+                if result is None and saved_previous is not None:
+                    phases["previous_rebased_fallback"] = phases["projection"]
+                    base, delta, cold_probe = basis, False, preferred is not None
+                    phases["projection"] = {}
+                    result = _archive_history_project_cut(
+                        cut, base, phases=phases["projection"], check_client=check_client,
+                        max_rows=_ARCHIVE_HISTORY_COLD_REBASE_MAX_ROWS if cold_probe else None)
                 if result is None and cold_probe:
                     probe = phases["cold_rebased_probe"] = phases["projection"]
                     basis = _archive_history_raw_basis(state, key, phases)

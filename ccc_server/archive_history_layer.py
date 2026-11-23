@@ -118,6 +118,10 @@ class Basis:
     metadata: dict
     effect_rows: dict
 
+    def view(self):
+        return View(self.inputs, self.working, self.activity, self.token, self.metadata,
+                    self.effect_rows)
+
 
 @dataclass(frozen=True)
 class View:
@@ -156,6 +160,10 @@ def basis_path(cache_file):
 
 def rebased_path(cache_file):
     return cache_file.with_suffix(f".sidebar-layer-rebased-v{VERSION}")
+
+
+def previous_rebased_path(cache_file):
+    return cache_file.with_suffix(f".sidebar-layer-previous-rebase-v{VERSION}")
 
 
 def _digest(parts):
@@ -199,7 +207,7 @@ def make_basis(inputs, working, activity, payload, *, effect_rows=None, rebased=
                  metadata, effect_rows)
 
 
-def write_basis(target, scope, basis):
+def write_basis(target, scope, basis, *, previous=None):
     """Replace one bounded, private artifact. A failed write leaves the old one."""
     target = Path(target)
     inputs = basis.inputs
@@ -222,6 +230,20 @@ def write_basis(target, scope, basis):
             stream.write(_digest((header, *parts)))
             for part in parts:
                 stream.write(part)
+        if previous is not None:
+            # Keep the outgoing immutable artifact before replacing the current
+            # one. Both names are independently safe if publication is interrupted.
+            link = name + ".previous"
+            try:
+                os.link(target, link)
+                os.replace(link, previous)
+            except OSError:
+                pass  # An unavailable previous generation must not prevent publication.
+            finally:
+                try:
+                    os.unlink(link)
+                except FileNotFoundError:
+                    pass
         os.replace(name, target)
     finally:
         try:

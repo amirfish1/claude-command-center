@@ -3,6 +3,8 @@ import gzip
 import json
 import zlib
 
+import pytest
+
 import server
 from ccc_server import archive_history_layer as layer, archive_store
 
@@ -484,7 +486,8 @@ def test_aged_rebased_tail_requires_a_large_patch_and_an_existing_basis():
     assert server._archive_history_should_rebase({}, basis, b"tail", changes, now)
 
 
-def test_superseded_rebased_validator_still_receives_a_delta(tmp_path, monkeypatch):
+@pytest.mark.parametrize("restarted", [False, True])
+def test_superseded_rebased_validator_still_receives_a_delta(tmp_path, monkeypatch, restarted):
     from collections import OrderedDict
 
     monkeypatch.setattr(layer.list_encoding, "_zstd", lambda raw: None)
@@ -497,9 +500,16 @@ def test_superseded_rebased_validator_still_receives_a_delta(tmp_path, monkeypat
     current = layer.make_basis(after, (), {}, dict(metadata, conversations=[row]), rebased=True)
     archive = tmp_path / "archive.json"
     target = layer.rebased_path(archive)
+    previous_target = layer.previous_rebased_path(archive)
     key = server._archive_response_cache_key()
-    assert layer.write_basis(target, server._archive_history_scope(key), current)
-    state = {"views": OrderedDict(), "loaded": False, "rebased": ((0, 0, 0, 0), previous)}
+    scope = server._archive_history_scope(key)
+    assert layer.write_basis(target, scope, previous)
+    old_artifact = server._archive_history_artifact(target)
+    assert layer.write_basis(target, scope, current, previous=previous_target)
+    assert server._archive_history_artifact(previous_target) == old_artifact
+    state = {"views": OrderedDict(), "loaded": False}
+    if not restarted:
+        state["rebased"] = old_artifact, previous
     monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", archive)
     monkeypatch.setattr(server, "_ARCHIVE_HISTORY_STATE", state)
     monkeypatch.setattr(server, "_archive_history_read_cut",
@@ -507,17 +517,22 @@ def test_superseded_rebased_validator_still_receives_a_delta(tmp_path, monkeypat
     monkeypatch.setattr(server, "_trace_row_flicker", lambda *args, **kwargs: None)
     monkeypatch.setattr(server, "_archive_list_ticket_effects", lambda *args, **kwargs: None)
 
-    def project(cut, basis, **kwargs):
+    def project(cut, basis, *, max_rows, **kwargs):
         assert basis.token == previous.token
+        assert max_rows == (server._ARCHIVE_HISTORY_COLD_REBASE_MAX_ROWS if restarted else None)
         view = layer.View(after, frozenset(), {}, "current-view", metadata, {})
         return view, [row], []
 
     monkeypatch.setattr(server, "_archive_history_project_cut", project)
     assert server._archive_history_warm_rebased_basis(target, server._archive_history_artifact(target))
-    assert isinstance(state["prior_rebased"], layer.View)
-    assert not hasattr(state["prior_rebased"], "frames")
+    phases = {}
     body, encoding, validator = server._archive_history_response(
-        key, {}, previous.token, previous.order_token, ("gzip",), phases={}, check_client=None)
+        key, {}, previous.token, previous.order_token, ("gzip",), phases=phases, check_client=None)
+
+    assert ("load_previous_rebased" in phases) == restarted
+    assert "load_basis" not in phases
+    retained = state["saved_previous_rebase"][1] if restarted else state["prior_rebased"]
+    assert retained == previous.view()
 
     assert encoding == "gzip"
     assert validator == '"d-current-view"'
@@ -525,6 +540,28 @@ def test_superseded_rebased_validator_still_receives_a_delta(tmp_path, monkeypat
     assert patch["since"] == previous.token
     assert patch["same_order"] is True
     assert patch["conversations"] == [row]
+
+    if restarted:
+        oversized = server._ARCHIVE_HISTORY_COLD_REBASE_MAX_ROWS + 1
+
+        def reject_old_projection(cut, basis, *, phases, max_rows, **kwargs):
+            if basis.token == previous.token:
+                assert max_rows < oversized
+                phases["scope_rejected"] = oversized
+                return None
+            assert basis.token == current.token
+            return current.view(), [], []
+
+        monkeypatch.setattr(server, "_archive_history_project_cut", reject_old_projection)
+        phases = {}
+        body, encoding, validator = server._archive_history_response(
+            key, {}, previous.token, previous.order_token, ("gzip",), phases=phases, check_client=None)
+        assert phases["previous_rebased_fallback"] == {"scope_rejected": oversized}
+        assert encoding == "gzip"
+        assert validator == '"d-' + current.token + '"'
+        document = json.loads(gzip.decompress(body))
+        assert document["history_layer"] == 1
+        assert document["base"]["delta_token"] == current.token
 
 
 def test_background_rebase_warms_only_the_published_artifact(tmp_path, monkeypatch):
@@ -693,9 +730,16 @@ def test_detached_rebase_keeps_boot_basis_and_publishes_exact_order(tmp_path, mo
     assert choose(state, key, old, before, published.token, ("gzip",)) == published
     assert choose(state, key, old, after, old.token, ("gzip",)) == old
 
+    assert server._archive_history_publisher_main(path)
+    replacement = layer.load_basis(layer.rebased_path(archive), scope)
+    previous_path = layer.previous_rebased_path(archive)
+    assert replacement.token != published.token
+    assert layer.load_basis(previous_path, scope) == published
+
     assert layer.write_basis(path, scope + ":rebase", replace(seed, token="unrelated"))
     assert not server._archive_history_publisher_main(path)
-    assert layer.load_basis(layer.rebased_path(archive), scope) == published
+    assert layer.load_basis(layer.rebased_path(archive), scope) == replacement
+    assert layer.load_basis(previous_path, scope) == published
 
 
 def test_refresh_rebases_only_large_hot_changes(tmp_path, monkeypatch):
