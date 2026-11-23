@@ -789,6 +789,32 @@ def test_inventory_generation_can_retry_failed_read(tmp_path, monkeypatch):
     assert result['conversations'][0]['session_id'] == 'old'
 
 
+@pytest.mark.parametrize('body_size', [64, 33 << 10])
+def test_sidebar_history_scoped_batch_matches_pinned_canonical_rows(tmp_path, monkeypatch, body_size):
+    target = tmp_path / 'archive.json'
+    original = data()
+    rows = original['entries']['base']['conversations']
+    rows.extend({'session_id': f'old-{i}', 'first_message': 'é\0' + 'a' * body_size}
+                for i in range(34))
+    store.save(target, original, complete=True, sidebar_key='base')
+    criteria = dict(schema_version=original['schema_version'], build_id=original['build_id'],
+                    max_rows=len(rows))
+    scope = {row['session_id'] for row in rows}
+    legacy_reads = []
+    load_override = store._load_override_entry
+
+    def record_legacy_read(*args, **kwargs):
+        legacy_reads.append(True)
+        return load_override(*args, **kwargs)
+
+    monkeypatch.setattr(store, '_load_override_entry', record_legacy_read)
+    updated = data(stamp=11)
+    with store.sidebar_history_cut(target, 'base', **criteria) as (_, hydrate):
+        store.save(target, updated, complete=True, sidebar_key='base')
+        assert hydrate([], scope, check_client=lambda: None) == rows
+    assert bool(legacy_reads) == (body_size > store._HISTORY_BODY_BATCH_MAX_ROW_BYTES)
+
+
 def test_sidebar_history_cut_keeps_candidate_bodies_in_the_ordered_inventory_cut(tmp_path):
     target = tmp_path / 'archive.json'
     original = data()

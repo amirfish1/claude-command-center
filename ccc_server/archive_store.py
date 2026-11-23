@@ -33,6 +33,8 @@ _SIGNATURE_MAP_MAX_BYTES = 64 << 20
 _POINT_WAL_CHECKPOINT_BYTES = 32 << 20
 _HISTORY_INVENTORY_PROBE_ROWS = 2048
 _HISTORY_INVENTORY_MIN_STALL = 0.008
+_HISTORY_BODY_BATCH_MAX_ROWS = 512
+_HISTORY_BODY_BATCH_MAX_ROW_BYTES = 32 << 10
 
 # The peer inventory never consumes transcript/parser detail. Publish its
 # projection in the same transaction as each canonical row, so polling peers
@@ -1213,6 +1215,33 @@ def _sidebar_history_inventory_batch(con, query, params, *, max_rows=None):
     return tuple(zip(*values)) if all(len(column) == count for column in values) else None
 
 
+def _sidebar_history_scoped_bodies(con, key, session_ids):
+    # Keep canonical position order and avoid stepping SQLite once per body
+    # while the request holds the pinned inventory cut. The row and body
+    # limits bound the aggregate even if the index contains duplicate IDs.
+    limit = _HISTORY_BODY_BATCH_MAX_ROWS
+    try:
+        count, invalid, packed = con.execute("""
+            SELECT count(*), max(invalid),
+                   group_concat(CASE WHEN NOT invalid THEN body END, char(0))
+            FROM (
+                SELECT body, typeof(body) != 'text' OR
+                       length(CAST(body AS BLOB)) > ? OR instr(body, char(0)) != 0 AS invalid
+                FROM rows INDEXED BY rows_sid
+                WHERE variant=? AND sid IN (SELECT value FROM json_each(?))
+                ORDER BY position, rowid LIMIT ?
+            )
+        """, (_HISTORY_BODY_BATCH_MAX_ROW_BYTES, key, json.dumps(list(session_ids)),
+              limit + 1)).fetchone()
+    except sqlite3.DataError:
+        return None
+    if not count:
+        return []
+    if invalid or count > limit:
+        return None
+    return _decode_full_batch(packed.split('\0'))
+
+
 def _sidebar_history_reader(con, stamp, records, key, schema_version, build_id):
     if records is None:
         return None
@@ -1221,6 +1250,14 @@ def _sidebar_history_reader(con, stamp, records, key, schema_version, build_id):
         current = _archive_override_index(current_rows, session_ids)
         if current is None:
             return None
+        if not current and session_ids is not None and 32 <= len(session_ids) <= _HISTORY_BODY_BATCH_MAX_ROWS:
+            if check_client is not None:
+                check_client()
+            rows = _sidebar_history_scoped_bodies(con, key, session_ids)
+            if rows is not None:
+                if check_client is not None:
+                    check_client()
+                return rows
         loaded = _load_override_entry(
             con, key, current, schema_version, build_id, stamp,
             check_client=check_client, session_ids=session_ids,
