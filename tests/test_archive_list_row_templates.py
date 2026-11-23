@@ -197,11 +197,14 @@ def test_unversioned_full_history_keeps_scoped_templates(monkeypatch):
 
 
 def test_batch_field_layouts_preserve_canonical_output_and_current_value_types(monkeypatch):
+    class QuestionOptions(list):
+        pass
+
     cache = server.ByteBudgetCache(1 << 20, 20)
     monkeypatch.setattr(server, '_ARCHIVE_LIST_ROW_TEMPLATES', cache)
     rows = [
         {'display_name': 'First', 'session_id': 'one', 'goal': 'text',
-         'question_options': ['a'], 'parser_only': 'private metadata'},
+         'question_options': QuestionOptions(['a']), 'parser_only': 'private metadata'},
         {'display_name': 'Second', 'session_id': 'two', 'goal': {'text': 'nested'},
          'question_options': 'plain', 'parser_only': 'private metadata'},
         {'session_id': 'three', 'display_name': 'Third', 'pinned': True},
@@ -213,6 +216,8 @@ def test_batch_field_layouts_preserve_canonical_output_and_current_value_types(m
               _fields_by_shape=layouts) for row in rows]
     assert server.json.dumps(actual) == server.json.dumps(expected)
     assert 'parser_only' not in actual[0]
+    actual[0]['question_options'].append('caller edit')
+    assert rows[0]['question_options'] == ['a']
     actual[1]['goal']['text'] = 'caller edit'
     assert rows[1]['goal']['text'] == 'nested'
 

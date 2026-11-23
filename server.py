@@ -19209,7 +19209,12 @@ def _archive_list_row_template(row, cached=_ARCHIVE_LIST_TEMPLATE_UNREAD, *,
     container_types = (dict, list)
     for key in fields:
         value = row[key]
-        if isinstance(value, container_types):
+        value_type = type(value)
+        # Most projected fields are immutable JSON scalars. Keep the
+        # subclass check for other values so mutable containers stay isolated.
+        if (value_type is not str and value_type is not int and value_type is not bool
+                and value_type is not float and value is not None
+                and isinstance(value, container_types)):
             containers.append(key)
         else:
             scalars[key] = value
