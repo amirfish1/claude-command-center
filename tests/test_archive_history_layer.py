@@ -238,6 +238,60 @@ def test_persisted_basis_replays_and_validates_when_the_current_projection_agree
     assert json.loads(gzip.decompress(body))["patch"]["same_order"] is True
 
 
+def test_cold_rebased_basis_defers_raw_load_and_honors_saved_validators(tmp_path, monkeypatch):
+    from collections import OrderedDict
+
+    monkeypatch.setattr(layer.list_encoding, "_zstd", lambda raw: None)
+    inputs = layer.read_inputs(inventory("a"), {}, {}, (), overlay_maps=(), edges=())
+    metadata = {"window": "all", "count": 1}
+    row = {"session_id": "a"}
+    path = tmp_path / "archive.json"
+    key = server._archive_response_cache_key()
+    scope = server._archive_history_scope(key)
+    raw = layer.make_basis(inputs, (), {}, dict(metadata, conversations=[row]))
+    rebased = layer.make_basis(inputs, (), {}, dict(metadata, conversations=[row]), rebased=True)
+    raw_path, rebased_path = layer.basis_path(path), layer.rebased_path(path)
+    assert layer.write_basis(raw_path, scope, raw)
+    assert layer.write_basis(rebased_path, scope, rebased)
+
+    state = {"basis": None, "views": OrderedDict(), "loaded": False}
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", path)
+    monkeypatch.setattr(server, "_ARCHIVE_HISTORY_STATE", state)
+    monkeypatch.setattr(server, "_archive_history_read_cut",
+                        lambda *args, **kwargs: contextlib.nullcontext((inputs, {"tickets": None})))
+    monkeypatch.setattr(server, "_trace_row_flicker", lambda *args, **kwargs: None)
+    monkeypatch.setattr(server, "_archive_list_ticket_effects", lambda *args, **kwargs: None)
+    projected = []
+    reject_rebased = False
+
+    def project(cut, previous, **kwargs):
+        projected.append(previous.token)
+        if reject_rebased and previous.token == rebased.token:
+            return None
+        return layer.View(inputs, frozenset(), {}, "candidate", metadata, {}), [], []
+
+    monkeypatch.setattr(server, "_archive_history_project_cut", project)
+
+    def request(since=""):
+        return server._archive_history_response(key, {}, since, "", ("gzip",),
+                                                phases={}, check_client=None)
+
+    body, encoding, etag = request()
+    assert encoding == "gzip"
+    assert etag == '"d-' + rebased.token + '"'
+    assert json.loads(gzip.decompress(body))["base"]["conversations"] == [[0, ["a"]]]
+    assert request(rebased.token) == (None, None, etag)
+    assert not state["loaded"]
+    assert request(raw.token) == (None, None, '"d-' + raw.token + '"')
+    assert state["basis"] == raw
+
+    state.update(loaded=False, basis=None, views=OrderedDict())
+    projected.clear()
+    reject_rebased = True
+    assert request()[2] == '"d-' + raw.token + '"'
+    assert projected == [rebased.token, raw.token]
+
+
 def test_gzip_basis_and_patch_work_without_zstd(tmp_path, monkeypatch):
     monkeypatch.setattr(layer.list_encoding, "_zstd", lambda raw: None)
     source = layer.read_inputs(inventory("a"), {}, {}, (), overlay_maps=(), edges=())

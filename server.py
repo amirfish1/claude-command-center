@@ -19534,6 +19534,7 @@ _ARCHIVE_HISTORY_STATE = {"basis": None, "views": collections.OrderedDict(),
 _ARCHIVE_HISTORY_PUBLISH_LOCK = threading.Lock()
 _ARCHIVE_HISTORY_PUBLISH_LAST_START = None
 _ARCHIVE_HISTORY_REBASE_MIN_CHANGES = 1024
+_ARCHIVE_HISTORY_COLD_REBASE_MAX_MISSES = 128
 
 
 def _archive_history_scope(key):
@@ -19747,6 +19748,25 @@ def _archive_history_start_publication(*, rebase=None, refresh_source=None):
         release()
 
 
+def _archive_history_rebased_basis(state, key, encodings):
+    from ccc_server import archive_history_layer as layer
+
+    target = layer.rebased_path(_ARCHIVE_RESPONSE_CACHE_FILE)
+    artifact = _archive_history_artifact(target)
+    previous, basis = state.get("rebased", (None, None))
+    if artifact != previous:
+        basis = layer.load_basis(target, _archive_history_scope(key)) if artifact is not None else None
+        state["rebased"] = artifact, basis
+    if basis is not None and any(encoding in basis.frames for encoding in encodings):
+        return basis
+    return None
+
+
+def _archive_history_source_misses(basis, inputs):
+    previous = basis.inputs.sources
+    return sum(previous.get(sid) != value for sid, value in inputs.sources.items())
+
+
 def _archive_history_select_basis(state, key, raw, inputs, since, encodings):
     """Prefer the rebased archive only when its guards match the current cut better."""
     from ccc_server import archive_history_layer as layer
@@ -19754,24 +19774,25 @@ def _archive_history_select_basis(state, key, raw, inputs, since, encodings):
     if since == raw.token:
         return raw
     expected_rebased = bool(since and since.startswith(layer.REBASED_TOKEN_PREFIX))
-    sources = inputs.sources
-
-    def misses(basis):
-        return sum(basis.inputs.sources.get(sid) != value for sid, value in sources.items())
-
-    raw_misses = misses(raw)
+    raw_misses = _archive_history_source_misses(raw, inputs)
     if raw_misses < _ARCHIVE_HISTORY_REBASE_MIN_CHANGES and not expected_rebased:
         return raw
-    target = layer.rebased_path(_ARCHIVE_RESPONSE_CACHE_FILE)
-    artifact = _archive_history_artifact(target)
-    previous, basis = state.get("rebased", (None, None))
-    if artifact != previous:
-        basis = layer.load_basis(target, _archive_history_scope(key)) if artifact is not None else None
-        state["rebased"] = artifact, basis
-    if (basis is not None and any(encoding in basis.frames for encoding in encodings)
-            and (since == basis.token or misses(basis) < raw_misses)):
+    basis = _archive_history_rebased_basis(state, key, encodings)
+    if basis is not None and (since == basis.token or _archive_history_source_misses(basis, inputs) < raw_misses):
         return basis
     return raw
+
+
+def _archive_history_raw_basis(state, key, phases):
+    from ccc_server import archive_history_layer as layer
+
+    target = layer.basis_path(_ARCHIVE_RESPONSE_CACHE_FILE)
+    artifact = _archive_history_artifact(target)
+    if not state["loaded"] or state["artifact"] != artifact:
+        with _archive_history_timing(phases, "load_basis"):
+            state["basis"] = layer.load_basis(target, _archive_history_scope(key))
+        state.update(loaded=True, artifact=artifact)
+    return state["basis"]
 
 
 def _archive_history_response(key, cache_options, since, saved_order, encodings, *, phases, check_client):
@@ -19790,19 +19811,24 @@ def _archive_history_response(key, cache_options, since, saved_order, encodings,
         if check_client is not None:
             check_client()
         state = _ARCHIVE_HISTORY_STATE
-        target = layer.basis_path(_ARCHIVE_RESPONSE_CACHE_FILE)
-        scope = _archive_history_scope(key)
-        artifact = _archive_history_artifact(target)
-        if not state["loaded"] or state["artifact"] != artifact:
-            with _archive_history_timing(phases, "load_basis"):
-                state["basis"] = layer.load_basis(target, scope)
-            state.update(loaded=True, artifact=artifact)
-        basis = state["basis"]
-        if basis is None:
-            phases["needs_basis"] = True
-            return None
         views = state["views"]
         previous = views.get(since) if since else None
+        preferred = None
+        if not state["loaded"] and (not since or previous is not None
+                                    or since.startswith(layer.REBASED_TOKEN_PREFIX)):
+            # Keep serving a close rebased artifact across the initial load
+            # and its known validators without decoding both artifacts.
+            with _archive_history_timing(phases, "load_cold_rebased"):
+                preferred = _archive_history_rebased_basis(state, key, encodings)
+            if since and previous is None and preferred is not None and since != preferred.token:
+                preferred = None
+        if preferred is None:
+            basis = _archive_history_raw_basis(state, key, phases)
+            if basis is None:
+                phases["needs_basis"] = True
+                return None
+        else:
+            basis = preferred
         now = time.time()
         with _archive_history_timing(phases, "read_cut"):
             with _archive_history_read_cut(
@@ -19811,22 +19837,47 @@ def _archive_history_response(key, cache_options, since, saved_order, encodings,
             ) as cut:
                 if cut is None:
                     return None
-                if previous is None:
-                    with _archive_history_timing(phases, "select_basis"):
-                        basis = _archive_history_select_basis(state, key, basis, cut[0], since, encodings)
-                    if since == basis.token:
-                        previous = basis
+                use_preferred = False
+                if preferred is not None:
+                    with _archive_history_timing(phases, "select_cold_rebased"):
+                        use_preferred = (previous is not None or since == preferred.token
+                                         or _archive_history_source_misses(preferred, cut[0])
+                                         <= _ARCHIVE_HISTORY_COLD_REBASE_MAX_MISSES)
+                if not use_preferred:
+                    if preferred is not None:
+                        basis = _archive_history_raw_basis(state, key, phases)
+                        if basis is None:
+                            phases["needs_basis"] = True
+                            return None
+                    if previous is None:
+                        with _archive_history_timing(phases, "select_basis"):
+                            basis = _archive_history_select_basis(
+                                state, key, basis, cut[0], since, encodings)
+                if previous is None and since == basis.token:
+                    previous = basis
                 encoding = next((item for item in encodings if item in basis.frames), None)
                 if encoding is None:
                     return None
                 delta = previous is not None
                 base = previous if delta else basis
-                phases["rebased"] = base.token.startswith(layer.REBASED_TOKEN_PREFIX)
                 result = _archive_history_project_cut(
                     cut, base, phases=phases.setdefault("projection", {}), check_client=check_client)
+                if result is None and use_preferred and not since:
+                    # Matching source tokens alone cannot prove that topic
+                    # and family changes fit the bounded projection.
+                    basis = _archive_history_raw_basis(state, key, phases)
+                    if basis is not None:
+                        encoding = next((item for item in encodings if item in basis.frames), None)
+                        if encoding is not None:
+                            base = basis
+                            phases["projection"] = {}
+                            result = _archive_history_project_cut(
+                                cut, base, phases=phases["projection"], check_client=check_client)
+                            phases["cold_rebased_fallback"] = True
                 if result is None:
                     phases["needs_basis"] = True
                     return None
+                phases["rebased"] = base.token.startswith(layer.REBASED_TOKEN_PREFIX)
                 current, changed, effects = result
                 ticket_state = cut[1]["tickets"]
         for view in reversed(views.values()):
