@@ -7761,18 +7761,20 @@
     // Transcript eligibility reads wait until the new rows have painted;
     // action controls still update synchronously, and clicks revalidate.
     const rows = Array.from(document.querySelectorAll(selector));
-    // A bulk repaint used to scan the full archive up to three times per
-    // mounted row. Index once for this synchronous update; keeping the first
-    // match preserves the live-list-before-archive lookup rule. Never retain
-    // the map between updates: rows can be replaced or edited in place.
+    // Resolve only the mounted IDs, using the first match from the live list
+    // or archive. Rebuild the lookup each time to see edits made in place.
     let rowFor = _ultraFreshRow;
     if (rows.length > 1) {
+      const pending = new Set(rows.map(row => row.dataset.sessionId));
       const byId = new Map();
       for (const source of [sharedState.conversationsData, sharedState.archiveData]) {
         for (const c of source) {
           const id = String(c.session_id || c.id);
-          if (!byId.has(id)) byId.set(id, c);
+          if (!pending.delete(id)) continue;
+          byId.set(id, c);
+          if (!pending.size) break;
         }
+        if (!pending.size) break;
       }
       rowFor = id => byId.get(id);
     }

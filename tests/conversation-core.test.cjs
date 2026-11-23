@@ -74,3 +74,15 @@ test('bulk row controls preserve first-match precedence and reread changing rows
  h.core.syncRowQuickActions();
  assert.deepEqual(removed,['duplicate','archive-only','missing'],'replaced arrays cannot leave retained controls');
 });
+
+test('bulk row controls stop reading once all mounted sessions are found',()=>{
+ const mounted=['first','second'].map(id=>({dataset:{sessionId:id},querySelector:()=>null,
+  querySelectorAll:()=>[]}));
+ const h=fixture({document:{querySelectorAll:()=>mounted},innerWidth:1440});
+ const unread={get session_id(){throw new Error('Unrelated archive row was read');}};
+ const live=mounted.map(({dataset})=>({session_id:dataset.sessionId,pending_spawn:true}));
+ Object.assign(h.state,{conversationsData:[...live,unread],
+  archiveData:[unread],_rowQuickActionSending:new Set(),_rowQuickActionFeedback:new Map(),
+  _rowInvestigationChecksInFlight:4,_ultraFresh:{entries:new Map()}});
+ h.core.syncRowQuickActions();
+});

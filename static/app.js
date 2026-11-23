@@ -50908,6 +50908,7 @@
     const enabled = !!on;
     document.documentElement.classList.toggle('ccc-debug-mode', enabled);
     if (enabled) {
+      window.__cccRenderThroughputActivity?.();
       if (typeof window.__cccRefreshThroughputStrip === 'function') window.__cccRefreshThroughputStrip();
       return;
     }
@@ -55815,6 +55816,9 @@
   }
 
   function renderActivity() {
+    // The strip is visible only in debug mode. Skip the archive-wide
+    // activity scan until there is a visible consumer.
+    if (!document.documentElement.classList.contains('ccc-debug-mode')) return;
     var strip = document.getElementById('cccThroughputStrip');
     if (!strip) return;
     var now = Date.now() / 1000;
