@@ -209,23 +209,23 @@ def history_delta(history, scope, nonce, since, saved_order, *, order_spans=Fals
     return payload, (nonce, fingerprint)
 
 
-def _encoded_run(rows):
+def _encoded_run(rows, *, deflate=True):
     try:
         buffer = io.BytesIO()
         _GuardPickler(buffer, protocol=pickle.HIGHEST_PROTOCOL).dump(rows)
         guard = buffer.getvalue()
     except (TypeError, pickle.PicklingError):
         raw = json.dumps(rows).encode()[1:-1]
-        return raw, _deflate_fragment(raw)
+        return raw, _deflate_fragment(raw) if deflate else None
     # The immutable bytes already describe the exact projected values.
     # Dictionary lookup compares them on a hash match.
     entry = _RUN_CACHE.get(guard)
-    if entry is not None:
+    if entry is not None and (not deflate or entry[1] is not None):
         return entry
-    raw = json.dumps(rows).encode()[1:-1]
-    compressed = _deflate_fragment(raw)
+    raw = entry[0] if entry is not None else json.dumps(rows).encode()[1:-1]
+    compressed = _deflate_fragment(raw) if deflate else None
     _RUN_CACHE.put(guard, (raw, compressed),
-                   len(guard) + len(raw) + len(compressed) + 512)
+                   len(guard) + len(raw) + len(compressed or b'') + 512)
     return raw, compressed
 
 
@@ -298,10 +298,10 @@ def encode_payload(payload, *, packed_runs=None, compact=False, check_client=Non
     return b''.join(chunks)
 
 
-def encode_rows(rows, overlay_ids):
+def encode_rows(rows, overlay_ids, *, deflate=True):
     """Return the JSON array, overlay offsets, and fixed DEFLATE fragments."""
     chunks, spans, fixed = [b'['], [], []
-    pending = [_deflate_fragment(b'[')]
+    pending = [_deflate_fragment(b'[')] if deflate else None
     offset = 1  # opening bracket
     index = 0
     while index < len(rows):
@@ -324,23 +324,26 @@ def encode_rows(rows, overlay_ids):
         if overlay:
             raw = json.dumps(rows[start:index]).encode()[1:-1]
         else:
-            raw, compressed = _encoded_run(rows[start:index])
+            raw, compressed = _encoded_run(rows[start:index], deflate=deflate)
         if start:
             chunks.append(b', ')
             offset += 2  # comma and space
-            pending.append(_deflate_fragment(b', '))
+            if pending is not None:
+                pending.append(_deflate_fragment(b', '))
         if overlay:
             spans.append((start, offset, offset + len(raw)))
-            fixed.append(b''.join(pending))
-            pending = []
-        else:
+            if pending is not None:
+                fixed.append(b''.join(pending))
+                pending = []
+        elif pending is not None:
             pending.append(compressed)
         chunks.append(raw)
         offset += len(raw)
-    pending.append(_deflate_fragment(b']'))
-    fixed.append(b''.join(pending))
+    if pending is not None:
+        pending.append(_deflate_fragment(b']'))
+        fixed.append(b''.join(pending))
     chunks.append(b']')
-    return b''.join(chunks), tuple(spans), tuple(fixed)
+    return b''.join(chunks), tuple(spans), tuple(fixed) if deflate else None
 
 
 def replay_rows(entry, overlays, *, overlay_order=None):
@@ -372,7 +375,7 @@ def with_owned_rows(entry, rows):
 
 
 def entry_weight(entry):
-    return (len(entry[0]) + sum(map(len, entry[2]))
+    return (len(entry[0]) + sum(map(len, entry[2] or ()))
             + (len(entry[3] or b'') if len(entry) > 3 else 0)
             + 256 * len(entry[1]) + 1024
             + (256 + 2 * len(entry.ticket_context) if isinstance(entry, TicketContextEntry) else 0))
@@ -390,6 +393,8 @@ def encode_replay(entry, rows):
 
 def compress_replay(entry, rows):
     _, spans, fixed = entry[:3]
+    if fixed is None:
+        return None
     chunks = []
     for slot, (index, _, _) in enumerate(spans):
         chunks.extend((fixed[slot], _deflate_fragment(json.dumps(rows[index]).encode())))

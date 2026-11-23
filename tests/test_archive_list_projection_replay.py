@@ -338,7 +338,11 @@ def test_encoding_reuses_unchanged_runs_after_membership_changes(monkeypatch, ch
 def test_encoding_caps_runs_without_identity_boundaries(monkeypatch):
     lengths = []
     encode = replay._encoded_run
-    monkeypatch.setattr(replay, '_encoded_run', lambda rows: (lengths.append(len(rows)), encode(rows))[1])
+    def track_run(rows, **options):
+        lengths.append(len(rows))
+        return encode(rows, **options)
+
+    monkeypatch.setattr(replay, '_encoded_run', track_run)
     rows = [{'title': str(i)} for i in range(1000)]
     raw, _, _ = replay.encode_rows(rows, set())
     assert raw == json.dumps(rows).encode()
@@ -474,6 +478,78 @@ def test_http_full_versions_reuse_projection_and_keep_body_etags_current(inputs,
         server_instance.shutdown()
         server_instance.server_close()
         thread.join(5)
+
+
+def test_scoped_http_defers_gzip_and_preserves_the_same_body(inputs, monkeypatch, tmp_path):
+    import threading
+    import urllib.error
+    import urllib.request
+    from ccc_server import list_encoding
+
+    rows = fixture_rows()
+    rows[0]['first_message'] = 'archive body ' * 120
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_DISK_DIR', tmp_path)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_DISK_STATE', {'saved': {}, 'warming': set()})
+    monkeypatch.setattr(server, '_archive_list_disk_candidate', lambda *a: None)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_CACHE', server.ByteBudgetCache(1 << 22, 8))
+    monkeypatch.setattr(server, '_archive_list_source_rows_cached',
+                        lambda *a, **kw: (rows, True, 1))
+    monkeypatch.setattr(server, '_archive_list_delta_state',
+                        lambda *a, **kw: {'ver': 1, 'ctx': 'fixed', 'extra': rows[1:], 'token': '1'})
+    monkeypatch.setattr(list_encoding, '_zstd', lambda raw: None)
+    monkeypatch.setattr(list_encoding, '_CACHE', server.ByteBudgetCache(1 << 20, 8))
+    gzip_builds = []
+    compress = gzip.compress
+
+    def track_gzip(raw, **options):
+        gzip_builds.append(True)
+        return compress(raw, **options)
+
+    monkeypatch.setattr(gzip, 'compress', track_gzip)
+    monkeypatch.setattr(replay, '_deflate_fragment',
+                        lambda raw: pytest.fail('optional encoding built eager gzip fragments'))
+    saved = threading.Event()
+    replace = server.os.replace
+
+    def mark_saved(src, dest):
+        replace(src, dest)
+        if server.Path(dest).parent == tmp_path:
+            saved.set()
+
+    monkeypatch.setattr(server.os, 'replace', mark_saved)
+    with server.http.server.ThreadingHTTPServer(('127.0.0.1', 0), server.CommandCenterHandler) as httpd:
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        url = f'http://127.0.0.1:{httpd.server_port}/api/conversations/list?window=7d'
+
+        def read(accept, **headers):
+            request = urllib.request.Request(url, headers={'Accept-Encoding': accept, **headers})
+            return urllib.request.urlopen(request, timeout=5)
+
+        try:
+            with read('zstd, gzip') as fallback:
+                assert fallback.headers['Content-Encoding'] == 'gzip'
+                etag = fallback.headers['ETag']
+                expected = gzip.decompress(fallback.read())
+            with read('identity') as response:
+                assert response.headers['ETag'] == etag
+                assert response.read() == expected
+            with read('gzip') as response:
+                assert response.headers['ETag'] == etag
+                assert gzip.decompress(response.read()) == expected
+            with pytest.raises(urllib.error.HTTPError) as response:
+                read('gzip', **{'If-None-Match': etag})
+            assert response.value.code == 304
+            response.value.close()
+            assert inputs['calls'] == 1
+            assert saved.wait(5)
+            files = list(tmp_path.glob('*.json.gz'))
+            assert len(files) == 1
+            assert gzip.decompress(files[0].read_bytes().split(b'\n', 1)[1]) == expected
+            assert len(gzip_builds) == 1
+        finally:
+            httpd.shutdown()
+            thread.join(5)
 
 
 def test_projection_replay_retains_only_budgeted_immutable_bytes(inputs, monkeypatch):

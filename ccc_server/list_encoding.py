@@ -82,6 +82,8 @@ def _encoded_list(raw, encoding):
                 return cached
             if encoding == "zstd":
                 compressed = _zstd(raw)
+            elif encoding == "gzip":
+                compressed = gzip.compress(raw, compresslevel=1)
             else:
                 # A 1 MiB window keeps Brotli CPU bounded on large changing lists.
                 compressed = static_encoding.brotli(raw, quality=5, window_bits=20)
@@ -95,16 +97,25 @@ def _encoded_list(raw, encoding):
                 del _FLIGHTS[key]
 
 
+def accepted_list_encodings(accept):
+    supports_zstd = any(item.partition(";")[0].strip().lower() == "zstd"
+                        for item in (accept or "").split(","))
+    # Full list misses have already paid to project and encode the rows.
+    # Prefer the faster encoder on equal client quality weights.
+    supported = ("zstd", "br", "gzip") if supports_zstd else ("br", "gzip")
+    return static_encoding.accepted_encodings(accept, supported=supported)
+
+
+def gzip_list(raw):
+    """Share fallback encodings with the disk writer for the same body."""
+    return _encoded_list(raw, "gzip")
+
+
 def representation(raw, gzip_body, accept, *, encode_gzip=None, encodings=None):
     """Choose a supported representation, preserving gzip on optional failure."""
     if len(raw) >= 1024:
         if encodings is None:
-            supports_zstd = any(item.partition(";")[0].strip().lower() == "zstd"
-                                for item in (accept or "").split(","))
-            # Full list misses have already paid to project and encode the rows.
-            # Prefer the faster encoder on equal client quality weights.
-            supported = ("zstd", "br", "gzip") if supports_zstd else ("br", "gzip")
-            encodings = static_encoding.accepted_encodings(accept, supported=supported)
+            encodings = accepted_list_encodings(accept)
         for encoding in encodings:
             if encoding == "gzip":
                 if gzip_body is not None:

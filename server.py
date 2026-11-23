@@ -18015,7 +18015,7 @@ _ARCHIVE_LIST_BODY_BUILD_LOCKS = {}  # body key -> Lock; single-flight body buil
 
 
 def _archive_list_body_get_or_build(cache_key, window, from_cache, build_payload, snap_ver,
-                                    diagnostics=None):
+                                    diagnostics=None, *, eager_gzip=True):
     """(raw, gzip, etag) for a /list body: replayed from the body cache when
     the version matches, else built once per key (single-flight)."""
     # The version is part of the key (not just the equality check) so two
@@ -18066,7 +18066,7 @@ def _archive_list_body_get_or_build(cache_key, window, from_cache, build_payload
             # (~240ms -> ~120ms) for ~30% more bytes on a local poll.
             gzip_body = (
                 (_list_replay.encode_gzip_payload(payload, raw) or gzip.compress(raw, compresslevel=1))
-                if len(raw) >= _ARCHIVE_LIST_GZIP_MIN_BYTES else None
+                if eager_gzip and len(raw) >= _ARCHIVE_LIST_GZIP_MIN_BYTES else None
             )
             if snap_ver:
                 with _ARCHIVE_LIST_BODY_LOCK:
@@ -18126,7 +18126,9 @@ def _archive_list_disk_save(cache_key, window, raw, gzip_body, etag_val, now=Non
 
     def _write():
         try:
-            blob = gzip_body if gzip_body is not None else gzip.compress(raw, compresslevel=1)
+            from ccc_server.list_encoding import gzip_list
+
+            blob = gzip_body if gzip_body is not None else gzip_list(raw)
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(f".{os.getpid()}.tmp")
             with open(tmp, "wb") as fh:
@@ -21445,7 +21447,7 @@ _ARCHIVE_LIST_PROJECTION_DIAG_LOCK = threading.Lock()
 
 def _archive_list_projection_diag(window, key, hit):
     """Describe replay invalidation without logging row identities or values."""
-    names = ("window", "cached", "snapshot", "context", "overlay", "graph", "topics")
+    names = ("window", "cached", "snapshot", "context", "overlay", "graph", "topics", "gzip")
     with _ARCHIVE_LIST_PROJECTION_DIAG_LOCK:
         previous = _ARCHIVE_LIST_PROJECTION_DIAG_KEYS.get(window)
         changed = [name for name, before, after in zip(names, previous or (), key)
@@ -21462,7 +21464,7 @@ def _archive_list_projection_diag(window, key, hit):
 
 
 def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=None, phases=None,
-                                 check_client=None):
+                                 check_client=None, eager_gzip=True):
     row_overlays = delta.get("row_overlays") if delta else None
     if not delta:
         # Unversioned All reads sweep the cold store. Reuse matching templates
@@ -21521,7 +21523,7 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
                                    sort_keys=True, default=str).encode()).hexdigest()
     from ccc_server import continuation_topics
     key = (window, bool(cached), delta["ver"], projection_ctx or delta["ctx"], guard,
-           _session_graph.projection_revision(), continuation_topics.revision())
+           _session_graph.projection_revision(), continuation_topics.revision(), eager_gzip)
     entry = _ARCHIVE_LIST_PROJECTION_CACHE.get(key)
     if phases is not None:
         phases["projection_cache"] = _archive_list_projection_diag(window, key, entry is not None)
@@ -21531,7 +21533,7 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
                                        check_client=check_client)
         if check_client is not None:
             check_client()
-        entry = _list_replay.encode_rows(payload["conversations"], overlay_set)
+        entry = _list_replay.encode_rows(payload["conversations"], overlay_set, deflate=eager_gzip)
         raw = entry[0]
         if projection_ctx is not None:
             entry = _list_replay.TicketContextEntry(entry, delta["ctx"])
@@ -21577,7 +21579,7 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
         if changed:
             # Ticket work may change archive rows outside the live spans.
             # Validate every current run, reusing only exact encoded content.
-            updated = _list_replay.encode_rows(projected, overlay_set)
+            updated = _list_replay.encode_rows(projected, overlay_set, deflate=eager_gzip)
             raw = updated[0]
             compressed = _list_replay.compress_replay(updated, projected)
         else:
@@ -39120,6 +39122,14 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                         _since_diag = "unmergeable"
 
             _check_client = check_client if window != "all" or not body_ver else None
+            eager_gzip = True
+            if _status is None and window != "all":
+                from ccc_server.list_encoding import accepted_list_encodings
+
+                encodings = accepted_list_encodings(self.headers.get("Accept-Encoding", ""))
+                # Prepare the primary encoding on the response path. The
+                # disk writer and gzip fallback can share a later gzip build.
+                eager_gzip = bool(encodings and encodings[0] == "gzip")
 
             _packed_history_projection = None
 
@@ -39152,7 +39162,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                         _check_client()
                     payload = _archive_list_replay_payload(
                         rows, _delta, window=window, cached=from_cache, phases=_payload_phases,
-                        check_client=_check_client)
+                        check_client=_check_client, eager_gzip=eager_gzip)
                     if _check_client is not None:
                         _check_client()
                     if _delta is not None:
@@ -39172,7 +39182,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     diagnostics=_body_cache_diag, since=since, saved_order=saved_order,
                     row_layouts=qs.get("row_layouts", ["0"])[0] == "1",
                     order_spans=qs.get("order_spans", ["0"])[0] == "1",
-                    check_client=_check_client,
+                    check_client=_check_client, eager_gzip=eager_gzip,
                 )
             if (_packed_history_projection is not None and _status == 200
                     and _body_cache_diag.get("history") == "full"):
@@ -49840,9 +49850,9 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
 
     def _send_archive_list_json(self, cache_key, window, from_cache, build_payload, snap_ver,
                                 diagnostics=None, *, since="", saved_order="", row_layouts=False,
-                                order_spans=False, check_client=None):
+                                order_spans=False, check_client=None, eager_gzip=True):
         """send_json for /api/conversations/list: same etag/304/gzip
-        semantics, but the serialized body + sha1 etag + gzip copy are built
+        semantics, but the serialized body + sha1 etag are built
         once per (cache key, window, snapshot version) and replayed for every
         tab polling the same snapshot. build_payload is called ONLY on a body
         cache miss, so repeat polls skip the row projection too. snap_ver
@@ -49891,16 +49901,19 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
 
         try:
             raw, gzip_body, etag_val = _archive_list_body_get_or_build(
-                cache_key, window, from_cache, build_payload, snap_ver, diagnostics=diagnostics)
+                cache_key, window, from_cache, build_payload, snap_ver,
+                diagnostics=diagnostics, eager_gzip=eager_gzip)
         except _ArchiveListClientDisconnected:
             return "abandoned"
         return self._send_archive_list_body(raw, gzip_body, etag_val)
 
     def _send_archive_list_body(self, raw, gzip_body, etag_val, extra_headers=()):
-        from ccc_server.list_encoding import representation
+        from ccc_server.list_encoding import gzip_list, representation
         if self.headers.get("If-None-Match") == etag_val:
             return self._send_archive_list_representation(None, None, etag_val)
-        body, encoding = representation(raw, gzip_body, self.headers.get("Accept-Encoding", ""))
+        body, encoding = representation(
+            raw, gzip_body, self.headers.get("Accept-Encoding", ""),
+            encode_gzip=lambda: gzip_list(raw))
         return self._send_archive_list_representation(body, encoding, etag_val, extra_headers)
 
     def _send_archive_list_representation(self, body, encoding, etag_val, extra_headers=()):
