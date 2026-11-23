@@ -67,7 +67,13 @@ def test_indexed_preview_preserves_order_counts_and_live_context(tmp_path, monke
     overlay = {
         "session_id": "new-overlay", "mtime": now + 1, "parent_session_id": "old-root",
     }
-    hot = [dict(recent[0], mtime=2), {"session_id": "new-hot", "mtime": now + 2}]
+    hot = [
+        dict(recent[0], mtime=2),
+        dict(older[5], trashed=False),
+        dict(older[7], archived=False, pinned=True),
+        dict(older[8]),
+        {"session_id": "new-hot", "mtime": now + 2},
+    ]
     monkeypatch.setattr(server, "_archive_serve_hot_rows_versioned",
                         lambda *args, **kwargs: (hot, True, 3))
     seen = set()
@@ -80,13 +86,16 @@ def test_indexed_preview_preserves_order_counts_and_live_context(tmp_path, monke
     expected = archive_store.load_with_overrides(
         path, key, hot, schema_version=schema, build_id=build, min_cached_at=0,
     )["conversations"]
-    expected = server._overlay_conversation_lifecycle_flags(expected) + [overlay]
+    expected = server._overlay_conversation_lifecycle_flags(expected, copy_on_change=True) + [overlay]
     normal = server._archive_list_initial_payload(expected, window="all", now=now, cached=True)
     source_phases = {}
     indexed = server._archive_list_indexed_initial_payload({}, phases={}, source_phases=source_phases)
     assert indexed is not None
     assert seen == server._archive_overlay_existing_ids(expected) - {"new-overlay"}
     assert json.dumps(indexed) == json.dumps(normal)
+    archived_row = next(row for row in indexed["conversations"] if row["session_id"] == "archived")
+    assert archived_row["archived"] is True and archived_row["all_lane_override"] == "other"
+    assert not hot[1]["trashed"] and not hot[2]["archived"]
     assert set(source_phases) == {"hot", "lifecycle", "index", "engine_overlays", "selection"}
     for timing in source_phases.values():
         assert set(timing) == {"wall_ms", "cpu_ms"}

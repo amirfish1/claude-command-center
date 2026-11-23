@@ -21265,12 +21265,14 @@ def _archive_list_indexed_initial_payload(cache_options, *, phases, source_phase
                 min_cached_at = float((_ARCHIVE_RESPONSE_CACHE.get(key) or {}).get("cached_at") or 0)
             if not hot_rows or cached_at < min_cached_at:
                 return None
-            def overlay_cold(row):
+            def overlay_row(row):
                 return _overlay_conversation_lifecycle_flags(
                     [row], copy_on_change=True, snapshot=lifecycle)[0]
 
             with _archive_history_timing(source_phases, "lifecycle"):
                 lifecycle = _conversation_lifecycle_snapshot()
+                # Deleted hot identities still mask their persisted bodies.
+                # The index drops them before selection.
                 current = {}
                 for row in hot_rows:
                     sid = row.get("session_id") or row.get("id")
@@ -21278,13 +21280,8 @@ def _archive_list_indexed_initial_payload(cache_options, *, phases, source_phase
                         return None
                     current[archive_store.identity(row)] = row
 
-                # Keep deleted hot identities as overrides until the index has
-                # masked their persisted body and can drop the resulting row.
-                current = {identity: overlay_cold(row) if not (
-                    row.get("engine") == "codex" and _archive_row_sid(row) in lifecycle[2]
-                ) else row for identity, row in current.items()}
             with _archive_history_timing(source_phases, "index"):
-                preview = _archive_preview.Preview(connection, key, current, lifecycle[2], overlay_cold)
+                preview = _archive_preview.Preview(connection, key, current, lifecycle[2], overlay_row)
             with _archive_history_timing(source_phases, "engine_overlays"):
                 existing_ids = {item[0] for item in preview.items}
                 _, extra = _archive_list_source_overlays([], existing_ids, lambda _phase: None)

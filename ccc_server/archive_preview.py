@@ -355,10 +355,11 @@ def _ordered_rows(con, key):
 class Preview:
     """A view of one consistent canonical generation plus current hot rows."""
 
-    def __init__(self, con, key, overrides, deleted_codex, overlay_cold):
+    def __init__(self, con, key, overrides, deleted_codex, overlay_row):
         self.con = con
         self.key = key
-        self.overlay_cold = overlay_cold
+        self.overlay_row = overlay_row
+        self.resolved = {}
         self.items = []
         self.sources = {}
         self.cold_positions = {}
@@ -372,6 +373,7 @@ class Preview:
                 self.items.append((sid, stamp, pinned, working, identity))
                 self.cold_positions[identity] = offset
         self.append(overrides.values(), deleted_codex=deleted_codex)
+        self.indexed_count = len(self.items)
 
     def append(self, rows, *, deleted_codex=()):
         for row in rows:
@@ -382,12 +384,20 @@ class Preview:
             self.items.append((sid, activity(row), bool(row.get("pinned")), _working(row), None))
 
     def _row(self, offset):
+        resolved = self.resolved.get(offset)
+        if resolved is not None:
+            return resolved
         row = self.sources.get(offset)
         if row is None:
             identity = self.items[offset][-1]
             body, = self.con.execute("SELECT body FROM rows WHERE variant=? AND identity=?",
                                      (self.key, identity)).fetchone()
-            row = self.sources[offset] = self.overlay_cold(json.loads(body))
+            row = json.loads(body)
+        # Selection only needs fresh lifecycle flags for rows it inspects.
+        # Engine overlays appended after the index already have their flags.
+        if offset < self.indexed_count:
+            row = self.overlay_row(row)
+        self.resolved[offset] = row
         return row
 
     def _indexed_children(self):
