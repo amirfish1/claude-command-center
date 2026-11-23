@@ -19382,7 +19382,7 @@ def _archive_history_read_cut(key, cache_options, now, *, phases=None, check_cli
             inputs = archive_history_layer.read_inputs(
                 inventory, hot, hot_tokens, extra, overlay_maps=overlays,
                 edges=(*parents.items(), *topic_edges), removed=removed,
-                pinned_overlays=(records, origins),
+                pinned_overlays=(records, origins), pinned_hot=not removed,
             )
         if inputs is None:
             yield None

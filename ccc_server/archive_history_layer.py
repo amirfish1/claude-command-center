@@ -349,6 +349,7 @@ def row_edges(rows):
 
 _INVENTORY = (None, frozenset(), None)
 _PINNED_OVERLAY_GUARDS = ((), ())
+_PINNED_MEMBERSHIP = (None, None, None)
 
 
 def _canonical_inputs(inventory, removed):
@@ -388,15 +389,15 @@ def _overlay_guards(overlay_maps, pinned):
                  {sid: _guard_value(value) for sid, value in values.items()} for values in overlay_maps)
 
 
-def read_inputs(inventory, hot, hot_tokens, extra, *, overlay_maps, edges,
-                removed=frozenset(), pinned_overlays=()):
-    """Build guards from the same sources the complete reader would merge."""
-    canonical = _canonical_inputs(inventory, removed)
-    if canonical is None:
-        return None
+def _membership_guards(canonical, hot, hot_tokens, pinned):
+    # A captured hot cut owns its token map for its lifetime. Keep the
+    # tokens as the identity proof without retaining the copied row bodies.
+    global _PINNED_MEMBERSHIP
+    previous, tokens, guard = _PINNED_MEMBERSHIP
+    if pinned and previous is canonical and tokens is hot_tokens:
+        return guard
     canonical_sources, identities, canonical_edges = canonical
     sources = canonical_sources.copy()
-    observed_edges = [*edges, *canonical_edges]
     for sid, row in hot.items():
         if sid not in hot_tokens:
             return None
@@ -404,18 +405,37 @@ def read_inputs(inventory, hot, hot_tokens, extra, *, overlay_maps, edges,
         if identity is not None and archive_store.identity(row) != identity:
             return None
         sources[sid] = ("hot", hot_tokens[sid])
+    guard = sources, (*canonical_edges, *row_edges(hot.values()))
+    if pinned:
+        _PINNED_MEMBERSHIP = canonical, hot_tokens, guard
+    return guard
+
+
+def read_inputs(inventory, hot, hot_tokens, extra, *, overlay_maps, edges,
+                removed=frozenset(), pinned_overlays=(), pinned_hot=False):
+    """Read projection guards. A pinned hot cut must own an immutable token map."""
+    canonical = _canonical_inputs(inventory, removed)
+    if canonical is None:
+        return None
+    guard = _membership_guards(canonical, hot, hot_tokens, pinned_hot)
+    if guard is None:
+        return None
+    members, membership_edges = guard
+    # Overlay rows vary independently, and a published membership is shared
+    # by in-flight reads and previous views. Copy only when adding overlays.
+    sources = members
     for row in extra:
         sid = row.get("session_id") or row.get("id")
         if not isinstance(sid, str) or not sid or sid in sources:
             return None
+        if sources is members:
+            sources = members.copy()
         sources[sid] = ("overlay", row_token(row))
     if not sources or len(sources) > MAX_ROWS:
         return None
 
-    observed_edges.extend(row_edges(hot.values()))
-    observed_edges.extend(row_edges(extra))
     overlays = _overlay_guards(overlay_maps, pinned_overlays)
-    return Inputs(tuple(sources), sources, overlays, tuple(observed_edges))
+    return Inputs(tuple(sources), sources, overlays, (*edges, *membership_edges, *row_edges(extra)))
 
 
 class Changes:

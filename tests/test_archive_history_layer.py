@@ -74,6 +74,34 @@ def test_hot_replacement_requires_exact_identity_and_a_content_token():
     assert valid.sources["b"] == ("hot", "token")
 
 
+def test_pinned_membership_reuses_only_the_captured_cut(monkeypatch):
+    source = tuple(inventory("older", "active"))
+    hot = {"active": {"session_id": "active", "parent_session_id": "older"}}
+    tokens = {"active": "hot-token"}
+
+    def read(cut, changed_hot=hot, changed_tokens=tokens, extra=(), sidecars=(), **kwargs):
+        return layer.read_inputs(cut, changed_hot, changed_tokens, extra,
+                                 overlay_maps=sidecars, edges=(), pinned_hot=True, **kwargs)
+
+    baseline = read(source)
+    assert baseline.edges == (("active", "older"),)
+    overlay = {"session_id": "overlay", "parent_session_id": "active"}
+    repeated = read(source, extra=[overlay], sidecars=({"active": True},))
+    assert repeated.order == ("older", "active", "overlay")
+    assert repeated.edges == baseline.edges + (("overlay", "active"),)
+    assert repeated.overlays == ({"active": "b1"},)
+    assert read(source).sources is baseline.sources
+    assert "overlay" not in baseline.sources
+
+    replaced = read(source, {"active": {"session_id": "active"}},
+                    {"active": "new-token"})
+    assert replaced.sources["active"] == ("hot", "new-token")
+    assert replaced.edges == ()
+    assert read(tuple(inventory("older")), removed={"older"}).order == ("active",)
+    wrong_identity = (("active", "wrong-identity", "", "digest"),)
+    assert read(wrong_identity) is None
+
+
 def test_history_hot_guard_ignores_top_level_order_across_refresh(monkeypatch):
     persisted = {"all_lane_override": "", "archived": False, "session_id": "a",
                  "subagent_recent": [{"id": "child", "type": "task"}]}
