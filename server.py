@@ -19963,7 +19963,7 @@ def _archive_history_raw_basis(state, key, phases):
 
 
 def _archive_history_response(key, cache_options, since, saved_order, encodings, *, phases, check_client,
-                              wide_order_spans=False):
+                              wide_order_spans=False, row_layouts=False):
     """Build one exact All response using a stored projection basis."""
     import sqlite3
     from ccc_server import archive_history_layer as layer, continuation_topics
@@ -20084,7 +20084,8 @@ def _archive_history_response(key, cache_options, since, saved_order, encodings,
                     saved_order=not delta or saved_order == layer.order_token(base.inputs.order),
                     wide_order_spans=wide_order_spans)
                 if delta:
-                    body = layer.delta_representation(patch, encoding)
+                    body = layer.delta_representation(
+                        patch, encoding, row_layouts=row_layouts, check_client=check_client)
                 else:
                     tail = layer.layer_tail(patch)
                     body = layer.join_layer(basis, tail, encoding)
@@ -38983,16 +38984,17 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     # Full layers carry their own base order. Conditional
                     # deltas still need to match the client's saved order.
                     wide_order_spans = qs.get("wide_order_spans") == ["1"]
+                    row_layouts = qs.get("row_layouts", ["0"])[0] == "1"
 
                     def build_history(check_client):
                         return _archive_history_response(
                             list_cache_key, cache_options, since, saved_order, encodings,
                             phases=history_phases, check_client=check_client,
-                            wide_order_spans=wide_order_spans)
+                            wide_order_spans=wide_order_spans, row_layouts=row_layouts)
 
                     try:
                         layer_response = _archive_list_history_projection(
-                            (list_cache_key, since, saved_order, encodings, wide_order_spans), None,
+                            (list_cache_key, since, saved_order, encodings, wide_order_spans, row_layouts), None,
                             build_history, history_phases, check_client)
                     except _ArchiveListClientDisconnected:
                         return

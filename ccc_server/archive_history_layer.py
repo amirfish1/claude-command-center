@@ -34,6 +34,7 @@ _MAX_REBASE_BYTES = 96 << 20
 REBASED_TOKEN_PREFIX = "layer-rebased."
 VIEW_TOKEN_PREFIX = "layer-view."
 _GZIP_LEVEL = 3
+_MIN_PACKED_DELTA_ROWS = 512
 _ENCODE_GUARD = json.JSONEncoder(separators=(",", ":")).encode
 
 
@@ -372,7 +373,11 @@ def rebase_basis(seed):
         return None
 
 
-def delta_representation(patch, encoding):
+def delta_representation(patch, encoding, *, row_layouts=False, check_client=None):
+    if row_layouts and len(patch["conversations"]) >= _MIN_PACKED_DELTA_ROWS:
+        layouts, rows = archive_list_replay.pack_row_layouts(
+            patch["conversations"], check_client=check_client)
+        patch = dict(patch, row_layouts=layouts, conversations=rows)
     raw = _ENCODE_GUARD(patch).encode("ascii")
     if encoding == "zstd":
         return list_encoding._zstd(raw)

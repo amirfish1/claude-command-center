@@ -722,6 +722,29 @@ def test_gzip_basis_and_patch_work_without_zstd(tmp_path, monkeypatch):
     assert json.loads(gzip.decompress(layer.delta_representation(patch, "gzip")))["ids"] == ["a", "b"]
 
 
+def test_large_delta_packs_rows_only_for_layout_capable_clients():
+    rows = [{"session_id": f"sid-{i}", "title": "caf\u00e9"} for i in range(512)]
+    rows[-1] = {"id": "last", "ticket": {"ref": "TEST-1"}}
+    order = tuple(row.get("session_id") or row["id"] for row in rows)
+    patch = layer.delta_payload(order[::-1], order, "old", "new",
+                                {"count": len(rows), "conversations": rows})
+    plain = json.loads(gzip.decompress(layer.delta_representation(patch, "gzip")))
+    assert "row_layouts" not in plain
+    checks = []
+    packed = json.loads(gzip.decompress(layer.delta_representation(
+        patch, "gzip", row_layouts=True, check_client=lambda: checks.append(True))))
+    layouts = packed.pop("row_layouts")
+    packed["conversations"] = [dict(zip(layouts[index], values, strict=True))
+                               for index, values in packed["conversations"]]
+    assert packed == plain
+    assert checks
+    assert patch["conversations"] == rows
+
+    small = dict(patch, conversations=rows[:17])
+    assert layer.delta_representation(small, "gzip", row_layouts=True) == (
+        layer.delta_representation(small, "gzip"))
+
+
 def test_known_deletion_rechecks_remaining_family_and_explicit_order():
     previous = layer.read_inputs(inventory("a", "b"), {}, {}, (), overlay_maps=(),
                                  edges=(("a", "b"),))
