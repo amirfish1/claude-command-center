@@ -36661,3 +36661,13 @@ body.ccc-app-embed.conversation-popout .main > .toolbar {
   background: color-mix(in srgb, var(--surface) 72%, var(--bg));
 }
 .conv-pane.reader-scrollaway > .conversations-view { padding-top: var(--ctb-h, 0px); scroll-padding-top: var(--ctb-h, 0px); }
+/* Engine allowance: two bars per engine on one 0-100% scale (used, time elapsed). */
+.ns-pace-line { display: grid; grid-template-columns: 92px 1fr 34px; align-items: center; gap: 8px; margin-top: 5px; font-size: 11px; color: var(--text-muted); }
+.ns-pace-head + .ns-pace-line { margin-top: 7px; }
+.ns-pace-line b { text-align: right; color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.ns-pace-track { position: relative; height: 8px; border-radius: 4px; overflow: hidden; background: color-mix(in srgb, var(--text-muted) 16%, transparent); }
+.ns-pace-track i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: var(--text-muted); }
+.ns-pace-line.is-used .ns-pace-track i { background: var(--accent, #58a6ff); }
+.ns-pace-line.is-used.is-ahead .ns-pace-track i { background: var(--green); }
+.ns-pace-line.is-used.is-behind .ns-pace-track i { background: var(--orange); }
+.ns-pace-line + .ns-pace-legend { margin-top: 3px; }

@@ -22385,7 +22385,7 @@
       group.rows.push(c);
     }
     if (!groups.length) return '';
-    return '<h4 class="ns-advisor-heading">Pace vs. time left</h4><div class="ns-pace-scale" aria-hidden="true"><span>◀ behind · save it</span><span>on pace</span><span>ahead · use it ▶</span></div>'
+    return '<h4 class="ns-advisor-heading">Used vs. time elapsed</h4>'
       + groups.map(group => {
         const c = group.rows.find(r => !r.unavailable) || group.rows[0];
         const [tone, verdict] = nsAdvisorVerdict(c, now);
@@ -22393,15 +22393,19 @@
         if (c.metered) {
           body = '<div class="ns-pace-legend"><span>No weekly window. Costs real credits, so used only when subscriptions are behind.</span></div>';
         } else if (typeof c.pace === 'number') {
-          const width = Math.min(50, Math.abs(c.pace) / 2);
-          const bank = c.banked?.length ? '<i class="ns-pace-bank" style="left:' + (50 + Math.max(0, c.pace) / 2) + '%"></i><span class="ns-pace-arrow" aria-hidden="true">▶</span>' : '';
-          const windowLabel = c.windowHours === 24 ? 'daily' : c.windowHours === 168 ? 'weekly' : Math.round(c.windowHours) + 'h window';
-          body = '<div class="ns-pace-bar" role="img" aria-label="' + esc(nsAdvisorPaceText(c) + ' points versus pace') + '">'
-            + '<i class="ns-pace-fill ' + (c.pace >= 0 ? 'is-over' : 'is-under') + '" style="width:' + width + '%"></i>' + bank + '<i class="ns-pace-mid"></i></div>'
-            + '<div class="ns-pace-legend"><span' + (c.source === 'reported' ? ' title="Reported by the provider"' : '') + '><b>' + esc(nsAdvisorPaceText(c)) + '</b> · ' + Math.round(c.pct) + '% of '
-            + (c.windowHours === 24 ? 'today' : c.windowHours === 168 ? 'the week' : 'the window') + ' left · '
-            + (c.windowHours === 24 ? esc(nsAdvisorSpan(c.reset - now)) + ' of 24h' : Math.round(c.timePct) + '% of ' + (c.windowHours === 168 ? 'the week' : 'the window')) + ' to go</span><span title="' + windowLabel + '">'
-            + esc(nsAdvisorResetText(c, now)) + '</span></div>';
+          // Two plain bars on the same 0-100% scale: how much of the allowance is
+          // used, and how much of its window has passed. Used shorter than
+          // elapsed means there is room to spend.
+          const span = c.windowHours === 24 ? 'day' : c.windowHours === 168 ? 'week' : 'window';
+          const used = Math.max(0, Math.min(100, 100 - c.pct));
+          const elapsed = Math.max(0, Math.min(100, 100 - c.timePct));
+          const usedTone = c.pace > 15 ? 'is-ahead' : c.pace < -5 ? 'is-behind' : 'is-even';
+          const row = (cls, text, pctValue, title) => '<div class="ns-pace-line ' + cls + '"' + (title ? ' title="' + esc(title) + '"' : '') + '><span class="ns-pace-label">' + text + '</span>'
+            + '<span class="ns-pace-track" role="img" aria-label="' + esc(text + ' ' + Math.round(pctValue) + '%') + '"><i style="width:' + pctValue + '%"></i></span>'
+            + '<b>' + Math.round(pctValue) + '%</b></div>';
+          body = row('is-used ' + usedTone, 'Used', used, c.source === 'reported' ? 'Reported by the provider' : '')
+            + row('is-elapsed', span.charAt(0).toUpperCase() + span.slice(1) + ' elapsed', elapsed, '')
+            + '<div class="ns-pace-legend"><span>' + esc(nsAdvisorResetText(c, now)) + '</span></div>';
         } else {
           body = '<div class="ns-pace-legend"><span>' + esc(c.notes.join(' · ') || 'No usage reading') + '</span></div>';
         }
