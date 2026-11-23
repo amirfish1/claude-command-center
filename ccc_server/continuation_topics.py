@@ -427,15 +427,18 @@ def _archive_topic_records(conn, max_rows):
 
 
 def _archive_fallback_titles():
-    from ccc_server.log_parse import _archive_topic_metadata_items
+    from ccc_server.log_parse import _archive_topic_metadata_titles
 
-    external = _external_titles(_archive_topic_metadata_items())
+    fallback = dict(_archive_topic_metadata_titles(_project_archive_metadata_titles))
     codex_cache = getattr(_core, '_codex_titles_cache', {}).get('data') or {}
-    fallback = {sid: title for sid, title in external.items() if title}
     for sid, value in codex_cache.items():
         if isinstance(value, dict) and (name := value.get('title') or value.get('agent_nickname')):
             fallback.setdefault(sid, name)
     return fallback
+
+
+def _project_archive_metadata_titles(items):
+    return {sid: title for sid, title in _external_titles(items).items() if title}
 
 
 def archive_projection_inputs(conn, *, max_rows, max_native_roots=32, diagnostics=None):

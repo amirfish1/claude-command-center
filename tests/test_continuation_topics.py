@@ -876,6 +876,36 @@ def test_archive_topic_batch_preserves_types_and_order(store, title, named):
     assert topics._archive_topic_records(store, 1) is None
 
 
+def test_archive_title_snapshot_reuses_metadata_until_title_changes(monkeypatch):
+    from ccc_server.log_parse import _ConvMetaCache
+
+    first, duplicate = '/old/shared.jsonl', '/new/shared.jsonl'
+    cache = _ConvMetaCache({first: {'custom_title': 'First'}})
+    monkeypatch.setattr(server, '_conv_meta_cache', cache)
+    monkeypatch.setattr(server, '_codex_titles_cache', {'data': {'shared': {'title': 'Native'}}})
+
+    assert topics._archive_fallback_titles() == {'shared': 'First'}
+    snapshot = cache.title_snapshot
+    cache[first] = {'custom_title': 'First', 'mtime': 42}
+    assert topics._archive_fallback_titles() == {'shared': 'First'}
+    assert cache.title_snapshot is snapshot
+
+    cache[first] = {'custom_title': 'Renamed', 'mtime': 42}
+    assert topics._archive_fallback_titles() == {'shared': 'Renamed'}
+    assert snapshot == {'shared': 'First'}
+
+    cache[duplicate] = {'mtime': 43}
+    assert topics._archive_fallback_titles() == {'shared': 'Native'}
+    cache[first] = {'custom_title': 'Shadowed'}
+    assert topics._archive_fallback_titles() == {'shared': 'Native'}
+    cache.pop(duplicate)
+    assert topics._archive_fallback_titles() == {'shared': 'Shadowed'}
+    cache.update({first: {'agent_name': 'Agent', 'ai_title': 'Automatic'}})
+    assert topics._archive_fallback_titles() == {'shared': 'Agent'}
+    cache.clear()
+    assert topics._archive_fallback_titles() == {'shared': 'Native'}
+
+
 def test_archive_projection_reuses_committed_records_but_refreshes_titles(store, monkeypatch):
     from contextlib import closing
 

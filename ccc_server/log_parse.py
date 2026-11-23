@@ -17,6 +17,7 @@ import sys
 import tempfile
 import threading
 import time
+from types import MappingProxyType
 
 try:
     import fcntl as _fcntl
@@ -736,6 +737,44 @@ def get_model_picker_picks() -> list:
 
 
 
+def _conv_meta_title(meta):
+    return meta.get('custom_title') or meta.get('agent_name') or meta.get('ai_title')
+
+
+def _same_conv_meta_title(before, after):
+    old, new = _conv_meta_title(before) or None, _conv_meta_title(after) or None
+    return old is new or (type(old) is str and type(new) is str and old == new)
+
+
+class _ConvMetaCache(dict):
+    """Track the title projection shared by sidebar readers."""
+
+    title_snapshot = None
+
+    def __setitem__(self, path, meta):
+        if self.title_snapshot is not None:
+            previous = self.get(path)
+            # New paths can replace the last title of a same-ID transcript
+            # even when the new entry itself has no title.
+            if (type(previous) is not dict or type(meta) is not dict
+                    or not _same_conv_meta_title(previous, meta)):
+                self.title_snapshot = None
+        super().__setitem__(path, meta)
+
+    def update(self, entries):
+        super().update(entries)
+        self.title_snapshot = None
+
+    def pop(self, path, *default):
+        if path in self:
+            self.title_snapshot = None
+        return super().pop(path, *default)
+
+    def clear(self):
+        super().clear()
+        self.title_snapshot = None
+
+
 # {path: {mtime, custom_title, last_prompt, agent_name, ...}}
 # Persistent across restarts via _CONV_META_CACHE_FILE — without it, every
 # repo switch on a project with hundreds of large JSONLs (one real repo has
@@ -744,7 +783,7 @@ def get_model_picker_picks() -> list:
 # (custom-title, /rename) correctly invalidate the entry; bump
 # _CONV_META_SCHEMA_VERSION when the extracted shape changes so old
 # entries are dropped on load.
-_conv_meta_cache = {}
+_conv_meta_cache = _ConvMetaCache()
 _conv_meta_cache_dirty = False
 _conv_meta_cache_lock = threading.Lock()
 _conv_meta_cache_save_lock = threading.Lock()
@@ -971,11 +1010,17 @@ class _DetachedConvMetaCache(dict):
         return super().get(key, default)
 
 
-def _archive_topic_metadata_items():
+def _archive_topic_metadata_titles(project):
     cache = _core._conv_meta_cache
     if isinstance(cache, _DetachedConvMetaCache):
-        return cache.title_items()
-    return list(cache.items())
+        return project(cache.title_items())
+    if isinstance(cache, _ConvMetaCache):
+        # Parser writes replace complete entries while holding this lock.
+        with _core._conv_meta_cache_lock:
+            if cache.title_snapshot is None:
+                cache.title_snapshot = MappingProxyType(project(cache.items()))
+            return cache.title_snapshot
+    return project(list(cache.items()))
 
 
 def _conv_meta_lineage(key):

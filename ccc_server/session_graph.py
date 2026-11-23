@@ -2080,7 +2080,8 @@ def _append_custom_title(path, session_id, name):
     with open(path, "a", encoding="utf-8") as f:
         f.write("\n" + json.dumps(event) + "\n")
     # Invalidate our meta cache so next listing picks up the change
-    _core._conv_meta_cache.pop(str(path), None)
+    with _core._conv_meta_cache_lock:
+        _core._conv_meta_cache.pop(str(path), None)
 
 
 def rename_session(session_id, name, source="user"):
