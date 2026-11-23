@@ -22331,7 +22331,7 @@
     let effortLabel = effort ? (sharedState.REASONING_LEVEL_LABELS[effort] || effort) : '';
     const trailing = name.match(/\s*\(([^)]+)\)$/);
     if (trailing) { name = name.slice(0, trailing.index); effortLabel = effortLabel || trailing[1]; }
-    name = name.replace(/\b[a-z]/g, c => c.toUpperCase());
+    name = name.replace(/^Claude\s+(?=\w)/, '').replace(/\b[a-z]/g, c => c.toUpperCase());
     return { name, effort: effortLabel && !name.toLowerCase().includes(effortLabel.toLowerCase()) ? effortLabel : '' };
   }
 
@@ -22436,7 +22436,7 @@
       const parts = nsAdvisorModelParts(row.engine, row.model, row.effort);
       return (i === cut ? line : '') + '<li class="ns-rank-row' + (i >= cut ? ' is-fallback' : '') + (c.unavailable ? ' is-unavailable' : '') + '" draggable="true" tabindex="0" data-rank-i="' + i + '"'
         + (c.unavailable ? ' title="' + esc(c.unavailable) + '"' : '') + '><span class="ns-rank-grip" aria-hidden="true">⋮⋮</span><span class="ns-rank-num">' + (i + 1) + '</span>'
-        + '<span class="ns-rank-name">' + esc(parts.name) + (parts.effort ? ' <em>' + esc(parts.effort) + '</em>' : '') + ' <small>' + esc(spawnEngineLabel(row.engine)) + '</small></span>'
+        + '<span class="ns-rank-name">' + esc(parts.name) + (parts.effort ? ' <em>' + esc(parts.effort) + '</em>' : '') + ' <small>' + esc(row.engine === 'antigravity' ? 'Gemini' : spawnEngineLabel(row.engine)) + '</small></span>'
         + '<span class="ns-pace-verdict ' + tone + '">' + esc(pace) + '</span></li>';
     }).join('') + (cut >= rows.length ? line : '');
     return '<div class="ns-rank-top"><div class="ns-advisor-depth" role="group" aria-label="Ranking to edit">'
