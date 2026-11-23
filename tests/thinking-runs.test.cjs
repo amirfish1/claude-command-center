@@ -221,10 +221,16 @@ test('real renderers replace consecutive thoughts in a steady slot, then preserv
           let line = 990000;
           const render = block => h.renderConversationEvents([{type:'assistant',line:++line,blocks:[block]}], paneId, {initialLoad:true});
           const tool = (id, detail) => render({kind:'tool_use',name:'Bash',id,detail});
-          if (narration) render({kind:'text',text:'Checking the report.'});
+          const noteText = 'Checking the report against the settings and the latest activity. '.repeat(4).trim();
+          if (narration) render({kind:'text',text:noteText});
           const findPreview = () => view.querySelector('.activity-run-preview');
           tool('compact-first','Read the report');
           const slot = view.querySelector('.activity-run');
+          const note = slot.querySelector('.activity-run-note');
+          const noteReadable = () => !narration || (note.textContent === noteText && note.checkVisibility()
+            && note.clientHeight >= note.scrollHeight
+            && note.clientHeight > parseFloat(getComputedStyle(note).lineHeight));
+          const compactNote = noteReadable();
           const first = findPreview()?.textContent;
           render({kind:'thinking', text:'Compare the report with the recorded activity.'});
           const thought = findPreview()?.textContent;
@@ -245,20 +251,21 @@ test('real renderers replace consecutive thoughts in a steady slot, then preserv
             && [...view.querySelectorAll('.tool-call-group-header, .kimi-tool-group-head')].every(el=>!el.checkVisibility())
             && [...view.querySelectorAll('.thinking-run')].every(el=>el.checkVisibility());
           slot.querySelector('button').click();
-          const expanded = !latest.checkVisibility()
+          const expanded = !latest.checkVisibility() && !note.checkVisibility()
             && [...view.querySelectorAll('.tool-call-group-header, .kimi-tool-group-head, .thinking-run')].every(row=>row.checkVisibility());
           slot.querySelector('button').click();
           const collapsed = latest?.checkVisibility();
           document.body.classList.remove('conv-compact');
           document.body.dataset.convView = 'normal';
           const normal = latest?.checkVisibility();
+          const normalNote = noteReadable();
           document.body.classList.add('conv-compact');
           document.body.dataset.convView = 'compact';
-          return {first,thought,second,stable,description,newestOnly,oneHeading,overflow,expanded,collapsed,normal};
+          return {first,thought,second,stable,description,newestOnly,oneHeading,overflow,expanded,collapsed,normal,compactNote,normalNote};
         }, {merged, narration});
         assert.deepEqual(result,{first:'Read the report...',thought:'Read the report...',
           second:'Look up the OAuth project owner...',stable:true,description:true,newestOnly:true,
-          oneHeading:true,overflow:false,expanded:true,collapsed:true,normal:true},
+          oneHeading:true,overflow:false,expanded:true,collapsed:true,normal:true,compactNote:true,normalNote:true},
           JSON.stringify({width,merged,narration}));
         if (process.env.CCC_THINKING_SCREENSHOTS && narration) {
           await page.screenshot({path:process.env.CCC_THINKING_SCREENSHOTS + '/compact-activity-' + width + '-' + merged + '.png'});
