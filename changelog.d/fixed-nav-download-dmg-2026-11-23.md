@@ -1,0 +1,1 @@
+- Fixed the nav "Download" link to download the macOS DMG directly instead of scrolling to the install section. On mobile it was the only visible nav item, so tapping "Download" appeared to do nothing.
