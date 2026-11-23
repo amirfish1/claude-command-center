@@ -41,6 +41,7 @@ test('backlog draft identity follows repo and command recall uses the same stora
 });
 test('composer availability uses current live session rather than the prior selection',()=>{
  const h=fixture();h.controller.updateInputBar();assert.equal(h.send.disabled,false);assert.equal(h.input.readOnly,false);
+ assert.equal(h.steer.disabled,false);
  h.state.currentSession={id:'cloud',source:'codex',codex_cloud:true};h.controller.updateInputBar();assert.equal(h.send.disabled,true);assert.equal(h.input.readOnly,true);
  h.state.currentSession={id:'local',source:'codex'};h.controller.updateInputBar();assert.equal(h.send.disabled,false);assert.equal(h.input.readOnly,false);
 });

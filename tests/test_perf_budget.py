@@ -6942,6 +6942,7 @@ def test_detached_archive_reuses_proven_row_bodies_after_one_canonical_change(tm
 
     monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", cache)
     monkeypatch.setattr(server, "_ARCHIVE_SERVE_TTL", 0)
+    monkeypatch.setattr(server, "_WT_DISPLAY_SNAPSHOT_ONLY", False)
     monkeypatch.setattr(server.time, "time", lambda: now)
     monkeypatch.setattr(server, "_archive_corpus_signature", lambda: signature)
     monkeypatch.setattr(server, "_archive_signature_delta", lambda *_: (["changed.jsonl"], [], refresh_engines))

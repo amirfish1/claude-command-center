@@ -489,6 +489,7 @@ def test_detached_rebase_keeps_boot_basis_and_publishes_exact_order(tmp_path, mo
     from ccc_server import cpu_priority
 
     monkeypatch.setattr(cpu_priority, "set_background_priority", lambda _: None)
+    monkeypatch.setattr(server, "_WT_DISPLAY_SNAPSHOT_ONLY", False)
     monkeypatch.setattr(layer.list_encoding, "_zstd", lambda raw: None)
     archive = tmp_path / "archive.json"
     monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", archive)

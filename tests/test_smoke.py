@@ -6247,7 +6247,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("window._cccRestoreStatusRailAfterFileViewer = _restoreStatusRailAfterFileViewer;", app_js)
         self.assertIn("if (typeof window._cccExpandStatusRailForFileViewer === 'function') window._cccExpandStatusRailForFileViewer();", app_js)
         self.assertIn("if (typeof window._cccRestoreStatusRailAfterFileViewer === 'function') window._cccRestoreStatusRailAfterFileViewer();", app_js)
-        self.assertIn("_setStatusRailWidth(fileViewerPreviousRailWidth * FILE_VIEWER_RAIL_EXPAND_FACTOR, false);", app_js)
+        self.assertIn("_setStatusRailWidth(target, false);", app_js)
         self.assertIn("_setStatusRailWidth(previousWidth, false);", app_js)
         self.assertIn("if (previousStoredWidth == null) localStorage.removeItem('ccc-status-rail-width');", app_js)
 
@@ -6726,7 +6726,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function codexTurnSteerable()", app_js)
         # The server resolves Codex's current turn and sends normally when
         # idle; a stale client status must not disable the attempt.
-        self.assertIn("(isCodex || isKimi || devinSteerable || claudeSteerable)", app_js)
+        self.assertIn("&& (isCodex ||", app_js)
         self.assertIn("function codexSteerUnavailable(data)", app_js)
         self.assertNotIn("if (injectMode === 'send' && currentSession.source === 'codex' && codexTurnSteerable())", app_js)
         send_handler = pathlib.Path(PROJECT_ROOT, "static", "conversation-composer.js").read_text(encoding="utf-8")

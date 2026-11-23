@@ -32,9 +32,10 @@ Backfills keep a detached tag worktree under `dmg-builds/` in the log directory.
 Do not remove this directory during signing or recovery. Existing versioned
 assets are immutable: retries download and sign those bytes instead of rebuilding
 them. Both assets are downloaded and verified before a separate checkout publishes
-only the matching appcast item onto current remote main. An old backfill is
-inserted behind newer versions, preserving the latest update. Failed uploads or
-pushes remain retryable; a completed retry makes no new release or version bump.
+the matching appcast item and synchronizes the homepage download links in the same
+commit. An old backfill is inserted behind newer versions, preserving the latest
+update and download target. Failed uploads or pushes remain retryable. A
+completed retry makes no new release or version bump.
 
 The source test gate runs in a temporary checkout of the current commit, so
 parallel edits cannot change source underneath imported Python functions.

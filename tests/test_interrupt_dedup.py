@@ -226,35 +226,23 @@ def test_emit_interrupts_from_meta_stale_ts_skips_all_sinks():
 
 # ── (e) test_schema_16_payload_dropped ─────────────────────────────────────
 
-def test_schema_16_payload_dropped_on_load():
-    """A cache file with schema_version=16 is dropped because 16 is not
-    in _CONV_META_COMPAT_SCHEMA_VERSIONS (which is now {17})."""
+def test_schema_16_payload_dropped_on_load(tmp_path, monkeypatch):
+    """An incompatible legacy snapshot must not seed an empty row store."""
     import server
 
-    # Write a fake cache file with schema 16
-    cache_file = server._CONV_META_CACHE_FILE
-    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file = tmp_path / "conv_meta_cache.json"
+    monkeypatch.setattr(server, "_CONV_META_CACHE_FILE", cache_file)
+    monkeypatch.setattr(server, "_conv_meta_cache", {})
     cache_file.write_text(json.dumps({
         "schema_version": 16,
         "entries": {
             "/fake/path.jsonl": {
+                "mtime": 123456,
                 "cache_key": [123456, 100],
                 "custom_title": "should be dropped",
             }
         }
     }))
 
-    # Clear the in-memory cache
-    server._conv_meta_cache.clear()
-
-    # Load — should drop the schema-16 payload
     server._load_conv_meta_cache()
-
-    # The cache should be empty (payload dropped, not loaded)
-    assert len(server._conv_meta_cache) == 0
-
-    # Cleanup
-    try:
-        cache_file.unlink()
-    except OSError:
-        pass
+    assert server._conv_meta_cache == {}

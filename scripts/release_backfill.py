@@ -224,7 +224,7 @@ def publish(tag, directory, dry=False):
                 "--pattern", "ccc.dmg", "--dir", temp)
             if any(sha256(Path(temp) / n) != sha256(dmg) for n in (name, "ccc.dmg")):
                 raise ValueError("published DMG bytes do not match signed bytes")
-        # Publish only the one new XML item, from a fresh checkout of remote main.
+        # Publish the signed item and its landing links together on remote main.
         # A failed push leaves its commit only in this disposable worktree; retry
         # merges the signed item onto the latest remote instead of changing main.
         with tempfile.TemporaryDirectory(prefix="ccc-appcast-", dir=directory) as temp:
@@ -236,7 +236,8 @@ def publish(tag, directory, dry=False):
                 after = merge_feed(before, built, tag)
                 if after != before:
                     feed.write_text(after)
-                    run("git", "commit", "--only", "docs/appcast.xml", "-m",
+                    run("python3", "scripts/update-release-page.py", "--dmg-only", cwd=checkout)
+                    run("git", "commit", "--only", "docs/appcast.xml", "docs/index.html", "-m",
                         f"chore(release): backfill {tag} appcast", cwd=checkout)
                     run("git", "push", "origin", "HEAD:refs/heads/main", cwd=checkout)
                 run("git", "fetch", "origin", "main")

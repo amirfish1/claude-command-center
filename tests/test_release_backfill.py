@@ -142,7 +142,7 @@ def feed(ver, size=8):
 
 
 @pytest.fixture
-def publication(transport, monkeypatch):
+def publication(transport, monkeypatch, request):
     directory, assets, calls = transport
     repo = directory / "source"
     repo.mkdir()
@@ -156,6 +156,12 @@ def publication(transport, monkeypatch):
     (repo / "docs").mkdir()
     (repo / "scripts").mkdir()
     (repo / "docs/appcast.xml").write_text(feed("0.9.0"))
+    shutil.copyfile(ROOT / "scripts/update-release-page.py", repo / "scripts/update-release-page.py")
+    (repo / "docs/index.html").write_text(
+        '<span class="version">v2.1</span>'
+        '<a href="releases/download/v0.9.0/ccc-v0.9.0.dmg">Download</a>'
+        'macOS app v0.9.0 &middot; source and Homebrew v2.1.0'
+    )
     (repo / "scripts/release-dmg.sh").write_text('''#!/usr/bin/env bash
 set -e
 if [ "${SKIP_BUILD:-0}" != 1 ]; then
@@ -174,11 +180,15 @@ ver=sys.argv[1]; name=f'ccc-v{ver}.dmg'
 Path('docs/appcast.xml').write_text(f'<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item><sparkle:version>{ver}</sparkle:version><enclosure url="https://example.invalid/v{ver}/{name}" length="{Path(name).stat().st_size}" sparkle:edSignature="test-signature" /></item></channel></rss>')
 PY
 ''')
-    cmd("git", "add", "docs/appcast.xml", "scripts/release-dmg.sh", cwd=repo)
+    cmd("git", "add", "docs/appcast.xml", "docs/index.html", "scripts/release-dmg.sh",
+        "scripts/update-release-page.py", cwd=repo)
     cmd("git", "commit", "-m", "test: initial source", cwd=repo)
     cmd("git", "tag", "-a", "v1.0.0", "-m", "Release v1.0.0", cwd=repo)
-    (repo / "docs/appcast.xml").write_text(feed("2.0.0"))
-    cmd("git", "add", "docs/appcast.xml", cwd=repo)
+    latest_dmg = getattr(request, "param", "2.0.0")
+    (repo / "docs/appcast.xml").write_text(feed(latest_dmg))
+    page = repo / "docs/index.html"
+    page.write_text(page.read_text().replace("0.9.0", latest_dmg))
+    cmd("git", "add", "docs/appcast.xml", "docs/index.html", cwd=repo)
     cmd("git", "commit", "-m", "test: newer release", cwd=repo)
     cmd("git", "remote", "add", "origin", str(remote), cwd=repo)
     cmd("git", "push", "origin", "main", "--tags", cwd=repo)
@@ -187,7 +197,8 @@ PY
     return directory, repo, remote, assets, calls
 
 
-def test_isolated_build_and_partial_upload_recovery_keep_latest_first(publication):
+@pytest.mark.parametrize("publication", ["0.9.1", "2.0.0"], indirect=True)
+def test_isolated_backfill_keeps_latest_download_first(publication):
     directory, repo, remote, assets, calls = publication
     head = cmd("git", "rev-parse", "HEAD", cwd=repo)
     (repo / "unrelated.txt").write_text("another worker's edit")
@@ -200,7 +211,14 @@ def test_isolated_build_and_partial_upload_recovery_keep_latest_first(publicatio
     assert (assets / "ccc.dmg").read_bytes() == b"test-dmg"
     assert (directory / "builds").read_text().splitlines() == ["build"]
     remote_feed = cmd("git", "--git-dir", str(remote), "show", "main:docs/appcast.xml", cwd=repo)
-    assert remote_feed.index("2.0.0") < remote_feed.index("1.0.0")
+    before_feed = cmd("git", "show", f"{head}:docs/appcast.xml", cwd=repo)
+    latest = max(backfill.version(backfill.ET.fromstring(before_feed).find("./channel/item")), (1, 0, 0))
+    latest_version = ".".join(map(str, latest))
+    assert backfill.version(backfill.ET.fromstring(remote_feed).find("./channel/item")) == latest
+    assert backfill.item_for(remote_feed, "v1.0.0") is not None
+    remote_page = cmd("git", "--git-dir", str(remote), "show", "main:docs/index.html", cwd=repo)
+    assert f'href="releases/download/v{latest_version}/ccc-v{latest_version}.dmg"' in remote_page
+    assert f"macOS app v{latest_version} &middot; source and Homebrew v2.1.0" in remote_page
     assert cmd("git", "rev-parse", "HEAD", cwd=repo) == head
     assert (repo / "unrelated.txt").read_text() == "another worker's edit"
     # A completed duplicate is safe: immutable versioned asset is never overwritten.
