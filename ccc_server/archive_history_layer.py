@@ -444,13 +444,30 @@ def read_inputs(inventory, hot, hot_tokens, extra, *, overlay_maps, edges,
     return Inputs(tuple(sources), sources, overlays, (*edges, *membership_edges, *row_edges(extra)))
 
 
+def _add_neighbors(neighbors, edges):
+    for first, second in edges:
+        if first and second and first != second:
+            neighbors[first].add(second)
+            neighbors[second].add(first)
+
+
+@lru_cache(maxsize=4)
+def _prior_neighbors(previous, current):
+    """Share the adjacency of exact pre-hydration edge sequences."""
+    neighbors = defaultdict(set)
+    # Edges unique to either cut still affect the family of a removed row.
+    _add_neighbors(neighbors, set(chain(previous, current)))
+    return neighbors
+
+
 class Changes:
     """Reuse the graph and dirty set while candidate hydration exposes edges."""
 
     def __init__(self, previous, current, *, allow_shrink=False, max_rows=MAX_PATCH_ROWS):
         self.ids = current.sources.keys()
         self.max_rows = max_rows
-        self.neighbors = defaultdict(set)
+        self._observed_neighbors = defaultdict(set)
+        self._prior_neighbors = {}
         self.removed = previous.sources.keys() - self.ids
         valid = ((allow_shrink or not self.removed)
                  and len(previous.overlays) == len(current.overlays))
@@ -465,15 +482,11 @@ class Changes:
                     old_value = old.get
                     self.dirty.update(sid for sid, value in new.items() if old_value(sid) != value)
                     self.dirty.update(sid for sid in old.keys() - new.keys() if old[sid] is not None)
-            # An edge observed in both cuts only needs one insertion. Keep
-            # edges unique to either cut so removals still dirty their family.
-            self.add_edges(set(chain(previous.edges, current.edges)))
+            if len(self.dirty) <= self.max_rows:
+                self._prior_neighbors = _prior_neighbors(previous.edges, current.edges)
 
     def add_edges(self, edges):
-        for first, second in edges:
-            if first and second and first != second:
-                self.neighbors[first].add(second)
-                self.neighbors[second].add(first)
+        _add_neighbors(self._observed_neighbors, edges)
 
     def scope(self, additional=()):
         if self.dirty is None:
@@ -483,7 +496,9 @@ class Changes:
             return None
         pending = deque(dirty)
         while pending:
-            for member in self.neighbors.get(pending.popleft(), ()):
+            sid = pending.popleft()
+            # Edges discovered while hydrating rows belong only to this read.
+            for member in chain(self._prior_neighbors.get(sid, ()), self._observed_neighbors.get(sid, ())):
                 if member not in dirty:
                     dirty.add(member)
                     pending.append(member)

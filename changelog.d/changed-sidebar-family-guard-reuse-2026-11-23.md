@@ -1,0 +1,1 @@
+- Reuse unchanged session-family graphs when checking for sidebar updates.

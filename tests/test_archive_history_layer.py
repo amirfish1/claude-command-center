@@ -483,6 +483,20 @@ def test_known_deletion_rechecks_remaining_family_and_explicit_order():
     assert patch["delta_token"] == "new"
 
 
+def test_changes_do_not_share_edges_discovered_during_hydration():
+    rows = inventory("a", "b", "c")
+    previous = layer.read_inputs(rows, {}, {}, (), overlay_maps=(), edges=(("a", "b"),))
+    current = layer.read_inputs(rows, {}, {}, (), overlay_maps=(), edges=(("a", "b"),))
+
+    first = layer.Changes(previous, current)
+    assert first.scope(("a",)) == {"a", "b"}
+    first.add_edges((("b", "c"),))
+    assert first.scope(("a",)) == {"a", "b", "c"}
+
+    second = layer.Changes(previous, current)
+    assert second.scope(("a",)) == {"a", "b"}
+
+
 def test_detached_rebase_keeps_boot_basis_and_publishes_exact_order(tmp_path, monkeypatch):
     from dataclasses import replace
 
