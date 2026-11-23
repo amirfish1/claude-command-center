@@ -184,6 +184,11 @@
   const maxPatchBytes = 1024 * 1024;
   const maxPatchRows = 256;
   const maxRows = 30000;
+  const spanPatchPrefix = 'spans:';
+  // Older open tabs treat this version as unreadable and fall back to a
+  // full snapshot. They must not append changes while dropping the order.
+  const parseSnapshotPatch = text => JSON.parse(text.startsWith(spanPatchPrefix)
+    ? text.slice(spanPatchPrefix.length) : text);
   const rowId = row => row?.session_id || row?.id;
   const packRows = rows => {
     const layouts = [], slots = new Map(), encoded = [];
@@ -308,7 +313,15 @@
             if (hasPatch) {
               try {
                 const {patchJson, baseAt, baseDelta, ...metadata} = savedHeader;
-                const patch = JSON.parse(patchJson);
+                const patch = parseSnapshotPatch(patchJson);
+                if (Object.hasOwn(patch, 'spans')) {
+                  const rows = _mergeArchiveListDelta(value.rows, {
+                    ids: [], conversations: patch.changes, order_spans: patch.spans,
+                    count: patch.count, base_order: value.order,
+                  }, value.order);
+                  finish(rows && rows.length <= maxRows ? {...metadata, rows} : null);
+                  return;
+                }
                 const byId = new Map(value.rows.map(row => [rowId(row), row]));
                 for (const row of patch.changes) byId.set(rowId(row), row);
                 const ids = patch.ids === null ? value.rows.map(rowId) : patch.ids;
@@ -390,16 +403,25 @@
           if (validHeader(old) && old.delta === delta.from
               && (delta.ids !== null || old.order === metadata.order)) {
             try {
-              const previous = old.patchJson ? JSON.parse(old.patchJson) : null;
+              const previous = old.patchJson ? parseSnapshotPatch(old.patchJson) : null;
               const changes = new Map((previous?.changes || []).map(row => [rowId(row), row]));
               for (const row of delta.changes) changes.set(rowId(row), row);
-              // An order-preserving delta can keep the base's order or the
-              // last explicit patch order without writing every ID again.
+              // Spans are relative to the original body. A same-order patch
+              // can keep them. A further reorder uses its complete ID list.
+              let spanOrder = null;
+              if (delta.ids === null && previous?.spans) {
+                spanOrder = {spans:previous.spans, count:previous.count};
+              } else if (delta.ids !== null && delta.spans && delta.baseOrder === old.order
+                         && !previous?.spans && previous?.ids == null) {
+                spanOrder = {spans:delta.spans, count:rows.length};
+              }
               const ids = delta.ids === null ? previous?.ids ?? null : delta.ids;
               const present = ids === null ? null : new Set(ids);
               const changedRows = [...changes.values()].filter(row => !present || present.has(rowId(row)));
               if (changedRows.length > maxPatchRows) { writeFull(); return; }
-              const patchJson = JSON.stringify({ids, changes: changedRows});
+              const patchJson = spanOrder
+                ? spanPatchPrefix + JSON.stringify({...spanOrder, changes:changedRows})
+                : JSON.stringify({ids, changes:changedRows});
               const baseBytes = old.baseBytes || old.bytes;
               const bytes = baseBytes + 2 * patchJson.length;
               if (bytes <= maxBytes && 2 * patchJson.length <= maxPatchBytes) {

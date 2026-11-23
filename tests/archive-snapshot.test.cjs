@@ -237,6 +237,8 @@ test('an All order delta reconstructs slices and survives the next saved-order p
     }
     assert.deepEqual(Array.from(result),[rows[1],changed,updated]);
     assert.deepEqual(Array.from(f.savedDeltas[0].ids),['older','new','recent']);
+    assert.equal(f.savedDeltas[0].spans,delta.order_spans);
+    assert.equal(f.savedDeltas[0].baseOrder,order);
     assert.equal(f.reads.length,0);
     f.context.backgroundApiFetch = async url => {
       const params = new URL(url,'http://localhost').searchParams;
@@ -413,6 +415,44 @@ async function waitForSnapshot(page, delta, key = 'last', windowName = '7d') {
     finally {db.close();}
   },{},delta,key,windowName);
 }
+
+test('saved spans retain the original body through a same-order update', async () => {
+  const context = await browser.createBrowserContext(), page = await context.newPage();
+  try {
+    await page.goto(origin);
+    await page.evaluate(rows => {
+      const snapshot = window.__cccArchiveSnapshot;
+      window.__cccArchiveSettled = true;
+      snapshot.save({url:snapshot.url, rows, delta:'original', order:'first-order'});
+    }, rows);
+    await waitForSnapshot(page, 'original');
+    await page.evaluate(() => {
+      const snapshot = window.__cccArchiveSnapshot;
+      const older = {session_id:'older'};
+      const added = {session_id:'added', name:'new'};
+      snapshot.save({url:snapshot.url, rows:[older,added], delta:'reordered', order:'second-order'},
+        {from:'original', ids:['older','added'], spans:[[1,1],'added'],
+          baseOrder:'first-order', changes:[added]});
+    });
+    await waitForSnapshot(page, 'reordered', 'header');
+    await page.evaluate(() => {
+      const snapshot = window.__cccArchiveSnapshot;
+      const older = {session_id:'older', name:'updated'};
+      const added = {session_id:'added', name:'new'};
+      snapshot.save({url:snapshot.url, rows:[older,added], delta:'valid', order:'second-order'},
+        {from:'reordered', ids:null, changes:[older]});
+    });
+    await waitForSnapshot(page, 'valid', 'header');
+    await waitForSnapshot(page, 'original', 'last');
+    await page.reload();
+    assert.deepEqual(await page.evaluate(async () => {
+      const snapshot = window.__cccArchiveSnapshot;
+      const saved = await snapshot.read;
+      return {rows:saved?.rows, order:saved?.order, status:(await snapshot.fetch)?.status};
+    }), {rows:[{session_id:'older',name:'updated'},{session_id:'added',name:'new'}],
+      order:'second-order', status:304});
+  } finally {await context.close();}
+});
 
 test('All reload keeps a compact snapshot when a delta overtakes the first save', {timeout:10000}, async () => {
   const url = '/api/conversations/list?window=all&stale_ok=1';

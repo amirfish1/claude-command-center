@@ -5094,6 +5094,8 @@
             _merged ? {from: deltaToken,
               ids:d.same_order ? null : Object.hasOwn(d, 'order_spans')
                 ? _merged.map(row => String(row.session_id || row.id)) : d.ids,
+              spans:d.order_spans,
+              baseOrder:d.base_order,
               changes: d.conversations} : null,
             !_merged && !d.delta
               ? packedBytes || (raw.row_layouts ? [raw.row_layouts, raw.conversations] : null) : null);
