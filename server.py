@@ -19584,6 +19584,8 @@ _ARCHIVE_HISTORY_PUBLISH_LOCK = threading.Lock()
 _ARCHIVE_HISTORY_PUBLISH_LAST_START = None
 _ARCHIVE_HISTORY_REBASE_MIN_CHANGES = 1024
 _ARCHIVE_HISTORY_COLD_REBASE_MAX_ROWS = 512
+_ARCHIVE_HISTORY_AGED_TAIL_BYTES = 512 << 10
+_ARCHIVE_HISTORY_AGED_TAIL_SECONDS = 15 * 60
 
 
 def _archive_history_scope(key):
@@ -19815,7 +19817,7 @@ def _archive_history_warm_rebased_basis(target, artifact):
     try:
         if state.get("rebased", (None, None))[0] == artifact or _archive_history_artifact(target) != artifact:
             return False
-        state["rebased"] = artifact, basis
+        _archive_history_cache_rebased_basis(state, artifact, basis)
         return True
     finally:
         _ARCHIVE_HISTORY_LOCK.release()
@@ -19846,10 +19848,34 @@ def _archive_history_rebased_basis(state, key, encodings):
     previous, basis = state.get("rebased", (None, None))
     if artifact != previous:
         basis = layer.load_basis(target, _archive_history_scope(key)) if artifact is not None else None
-        state["rebased"] = artifact, basis
+        _archive_history_cache_rebased_basis(state, artifact, basis)
     if basis is not None and any(encoding in basis.frames for encoding in encodings):
         return basis
     return None
+
+
+def _archive_history_cache_rebased_basis(state, artifact, basis):
+    from ccc_server.archive_history_layer import View
+
+    _, previous = state.get("rebased", (None, None))
+    if previous is not None and (basis is None or previous.token != basis.token):
+        # A browser may still validate the superseded base. Keep its guards
+        # without retaining a second set of full compressed frames.
+        state["prior_rebased"] = View(previous.inputs, previous.working, previous.activity,
+                                      previous.token, previous.metadata, previous.effect_rows)
+    state["rebased"] = artifact, basis
+
+
+def _archive_history_should_rebase(state, basis, tail, changes, now):
+    if tail is None or "gzip" not in basis.frames:
+        return False
+    if changes.get("hot:hot", 0) >= _ARCHIVE_HISTORY_REBASE_MIN_CHANGES:
+        return True
+    artifact, published = state.get("rebased", (None, None))
+    # Gradual drift can produce large repeated patches without crossing the
+    # hot-row burst threshold. Age-gate this case to bound publisher work.
+    return (basis is published and artifact is not None and len(tail) >= _ARCHIVE_HISTORY_AGED_TAIL_BYTES
+            and now - artifact[3] / 1_000_000_000 >= _ARCHIVE_HISTORY_AGED_TAIL_SECONDS)
 
 
 def _archive_history_source_misses(basis, inputs):
@@ -19903,6 +19929,11 @@ def _archive_history_response(key, cache_options, since, saved_order, encodings,
         state = _ARCHIVE_HISTORY_STATE
         views = state["views"]
         previous = views.get(since) if since else None
+        if previous is None and since and since.startswith(layer.REBASED_TOKEN_PREFIX):
+            for candidate in (state.get("rebased", (None, None))[1], state.get("prior_rebased")):
+                if candidate is not None and candidate.token == since:
+                    previous = candidate
+                    break
         preferred = None
         if not state["loaded"] and (not since or previous is not None
                                     or since.startswith(layer.REBASED_TOKEN_PREFIX)):
@@ -19996,8 +20027,7 @@ def _archive_history_response(key, cache_options, since, saved_order, encodings,
         if check_client is not None:
             check_client()
         changes = phases["projection"].get("large_scope", {}).get("sources", {})
-        if (tail is not None and "gzip" in basis.frames
-                and changes.get("hot:hot", 0) >= _ARCHIVE_HISTORY_REBASE_MIN_CHANGES):
+        if _archive_history_should_rebase(state, basis, tail, changes, now):
             _archive_history_start_publication(rebase=(key, basis, current, tail))
         _trace_row_flicker(None, now=now, activity=current.activity)
         _archive_list_ticket_effects(effects, state=ticket_state)

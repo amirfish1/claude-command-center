@@ -392,6 +392,67 @@ def test_cold_rebased_basis_defers_raw_load_and_honors_saved_validators(tmp_path
                          (rebased.token, None)]
 
 
+def test_aged_rebased_tail_requires_a_large_patch_and_an_existing_basis():
+    from types import SimpleNamespace
+
+    basis = SimpleNamespace(frames={"gzip": b"frame"})
+    now = 100_000
+    deadline = server._ARCHIVE_HISTORY_AGED_TAIL_SECONDS
+    tail = b"x" * server._ARCHIVE_HISTORY_AGED_TAIL_BYTES
+    state = {"rebased": ((0, 0, 0, (now - deadline) * 1_000_000_000), basis)}
+
+    assert server._archive_history_should_rebase(state, basis, tail, {}, now)
+    assert not server._archive_history_should_rebase(state, basis, tail, {}, now - 1)
+    assert not server._archive_history_should_rebase(state, basis, tail[:-1], {}, now)
+    assert not server._archive_history_should_rebase({}, basis, tail, {}, now)
+    assert not server._archive_history_should_rebase(state, basis, None, {}, now)
+    changes = {"hot:hot": server._ARCHIVE_HISTORY_REBASE_MIN_CHANGES}
+    assert server._archive_history_should_rebase({}, basis, b"tail", changes, now)
+
+
+def test_superseded_rebased_validator_still_receives_a_delta(tmp_path, monkeypatch):
+    from collections import OrderedDict
+
+    monkeypatch.setattr(layer.list_encoding, "_zstd", lambda raw: None)
+    before = layer.read_inputs(inventory("a"), {}, {}, (), overlay_maps=({"a": False},), edges=())
+    after = layer.read_inputs(inventory("a"), {}, {}, (), overlay_maps=({"a": True},), edges=())
+    metadata = {"window": "all", "count": 1}
+    row = {"session_id": "a", "archived": True}
+    previous = layer.make_basis(
+        before, (), {}, dict(metadata, conversations=[dict(row, archived=False)]), rebased=True)
+    current = layer.make_basis(after, (), {}, dict(metadata, conversations=[row]), rebased=True)
+    archive = tmp_path / "archive.json"
+    target = layer.rebased_path(archive)
+    key = server._archive_response_cache_key()
+    assert layer.write_basis(target, server._archive_history_scope(key), current)
+    state = {"views": OrderedDict(), "loaded": False, "rebased": ((0, 0, 0, 0), previous)}
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", archive)
+    monkeypatch.setattr(server, "_ARCHIVE_HISTORY_STATE", state)
+    monkeypatch.setattr(server, "_archive_history_read_cut",
+                        lambda *args, **kwargs: contextlib.nullcontext((after, {"tickets": None})))
+    monkeypatch.setattr(server, "_trace_row_flicker", lambda *args, **kwargs: None)
+    monkeypatch.setattr(server, "_archive_list_ticket_effects", lambda *args, **kwargs: None)
+
+    def project(cut, basis, **kwargs):
+        assert basis.token == previous.token
+        view = layer.View(after, frozenset(), {}, "current-view", metadata, {})
+        return view, [row], []
+
+    monkeypatch.setattr(server, "_archive_history_project_cut", project)
+    assert server._archive_history_warm_rebased_basis(target, server._archive_history_artifact(target))
+    assert isinstance(state["prior_rebased"], layer.View)
+    assert not hasattr(state["prior_rebased"], "frames")
+    body, encoding, validator = server._archive_history_response(
+        key, {}, previous.token, previous.order_token, ("gzip",), phases={}, check_client=None)
+
+    assert encoding == "gzip"
+    assert validator == '"d-current-view"'
+    patch = json.loads(gzip.decompress(body))
+    assert patch["since"] == previous.token
+    assert patch["same_order"] is True
+    assert patch["conversations"] == [row]
+
+
 def test_background_rebase_warms_only_the_published_artifact(tmp_path, monkeypatch):
     monkeypatch.setattr(layer.list_encoding, "_zstd", lambda raw: None)
     inputs = layer.read_inputs(inventory("a"), {}, {}, (), overlay_maps=(), edges=())
