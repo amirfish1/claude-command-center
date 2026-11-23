@@ -19777,10 +19777,15 @@ def _archive_history_start_publication(*, rebase=None, refresh_source=None):
                     timeout=_ARCHIVE_REFRESH_WATCHDOG_S, check=False,
                 )
             updated = _archive_history_artifact(target)
-            record_diag("archive_rebuild", (time.perf_counter() - started) * 1000.0, {
+            published = result.returncode == 0 and updated is not None and updated != previous
+            diagnostics = {
                 "stage": stage,
-                "published": result.returncode == 0 and updated is not None and updated != previous,
-            })
+                "published": published,
+            }
+            if published and stage != "sidebar_basis":
+                with _archive_history_timing(diagnostics, "warm_rebased"):
+                    diagnostics["rebased_cached"] = _archive_history_warm_rebased_basis(target, updated)
+            record_diag("archive_rebuild", (time.perf_counter() - started) * 1000.0, diagnostics)
         except (OSError, subprocess.TimeoutExpired):
             pass
         finally:
@@ -19790,6 +19795,25 @@ def _archive_history_start_publication(*, rebase=None, refresh_source=None):
         threading.Thread(target=publish, name="ccc-sidebar-basis", daemon=True).start()
     except RuntimeError:
         release()
+
+
+def _archive_history_warm_rebased_basis(target, artifact):
+    """Decode a published replacement outside the foreground projection lock."""
+    from ccc_server import archive_history_layer as layer
+
+    state = _ARCHIVE_HISTORY_STATE
+    if _ARCHIVE_HISTORY_LOCK.locked() or state.get("rebased", (None, None))[0] == artifact:
+        return False
+    basis = layer.load_basis(target, _archive_history_scope(_archive_response_cache_key()))
+    if basis is None or not _ARCHIVE_HISTORY_LOCK.acquire(blocking=False):
+        return False
+    try:
+        if state.get("rebased", (None, None))[0] == artifact or _archive_history_artifact(target) != artifact:
+            return False
+        state["rebased"] = artifact, basis
+        return True
+    finally:
+        _ARCHIVE_HISTORY_LOCK.release()
 
 
 def _archive_history_rebased_basis(state, key, encodings):

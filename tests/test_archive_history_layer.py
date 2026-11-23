@@ -355,6 +355,48 @@ def test_cold_rebased_basis_defers_raw_load_and_honors_saved_validators(tmp_path
                          (rebased.token, None)]
 
 
+def test_background_rebase_warms_only_the_published_artifact(tmp_path, monkeypatch):
+    monkeypatch.setattr(layer.list_encoding, "_zstd", lambda raw: None)
+    inputs = layer.read_inputs(inventory("a"), {}, {}, (), overlay_maps=(), edges=())
+    payload = {"window": "all", "count": 1, "conversations": [{"session_id": "a"}]}
+    path = tmp_path / "archive.json"
+    target = layer.rebased_path(path)
+    key = server._archive_response_cache_key()
+    scope = server._archive_history_scope(key)
+    old = layer.make_basis(inputs, (), {}, payload, rebased=True)
+    new = layer.make_basis(inputs, (), {}, payload, rebased=True)
+    assert layer.write_basis(target, scope, old)
+    initial = server._archive_history_artifact(target)
+    state = {}
+    monkeypatch.setattr(server, "_ARCHIVE_HISTORY_STATE", state)
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", path)
+
+    with server._ARCHIVE_HISTORY_LOCK:
+        assert not server._archive_history_warm_rebased_basis(target, initial)
+    assert server._archive_history_warm_rebased_basis(target, initial)
+    assert not server._archive_history_warm_rebased_basis(target, initial)
+    with monkeypatch.context() as patch:
+        def unneeded_load(*args):
+            raise AssertionError("the published artifact was already decoded")
+        patch.setattr(layer, "load_basis", unneeded_load)
+        assert server._archive_history_rebased_basis(state, key, ("gzip",)) == old
+
+    assert layer.write_basis(target, scope, new)
+    published = server._archive_history_artifact(target)
+    real_load = layer.load_basis
+
+    def replaced_during_load(*args):
+        basis = real_load(*args)
+        assert layer.write_basis(target, scope, old)
+        return basis
+
+    with monkeypatch.context() as patch:
+        patch.setattr(layer, "load_basis", replaced_during_load)
+        assert not server._archive_history_warm_rebased_basis(target, published)
+        assert state["rebased"] == (initial, old)
+    assert server._archive_history_rebased_basis(state, key, ("gzip",)) == old
+
+
 def test_gzip_basis_and_patch_work_without_zstd(tmp_path, monkeypatch):
     monkeypatch.setattr(layer.list_encoding, "_zstd", lambda raw: None)
     source = layer.read_inputs(inventory("a"), {}, {}, (), overlay_maps=(), edges=())
