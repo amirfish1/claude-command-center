@@ -168,7 +168,13 @@ def make_basis(inputs, working, activity, payload, *, effect_rows=None, rebased=
         dict(payload, row_layouts=packed[0], conversations=packed[1],
              delta_token=token, order_token=order), compact=True)
     frames = {}
-    zstd_frame = list_encoding._zstd(raw)
+    # Publication runs out of process and each frame can serve many cold
+    # reads. Spend more compression work once on large, reusable frames.
+    zstd_frame = None
+    if len(raw) >= (8 << 20):
+        zstd_frame = list_encoding._zstd(raw, level=6)
+    if zstd_frame is None:
+        zstd_frame = list_encoding._zstd(raw)
     if zstd_frame and len(zstd_frame) <= _MAX_BASE_BYTES:
         frames["zstd"] = zstd_frame
     # Leave the gzip member open so a small patch can complete it later.

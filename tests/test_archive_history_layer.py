@@ -253,6 +253,21 @@ def test_layer_never_adopts_duplicate_overlay_identity():
                              overlay_maps=(), edges=()) is None
 
 
+def test_large_published_basis_spends_more_compression_than_a_delta(monkeypatch):
+    levels = []
+
+    def encode(raw, *, level=3):
+        levels.append(level)
+        return b"frame"
+
+    monkeypatch.setattr(layer.list_encoding, "_zstd", encode)
+    inputs = layer.read_inputs(inventory("a"), {}, {}, (), overlay_maps=(), edges=())
+    row = {"session_id": "a", "title": "a" * (8 << 20)}
+    assert layer.make_basis(inputs, (), {}, {"conversations": [row]}).frames["zstd"] == b"frame"
+    assert layer.delta_representation({"conversations": [row]}, "zstd") == b"frame"
+    assert levels == [6, 3]
+
+
 def test_persisted_basis_is_scoped_and_corruption_falls_back(tmp_path, monkeypatch):
     monkeypatch.setattr(layer.list_encoding, "_zstd", lambda raw: b"frame:" + raw)
     inputs = layer.read_inputs(inventory("a"), {}, {}, (), overlay_maps=({"a": False},),

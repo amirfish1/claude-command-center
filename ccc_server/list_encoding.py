@@ -42,7 +42,7 @@ def _zstd_encoder():
         return None
 
 
-def _zstd(raw):
+def _zstd(raw, *, level=3):
     library = _zstd_encoder()
     if library is None:
         return None
@@ -52,7 +52,7 @@ def _zstd(raw):
     try:
         # ZSTD_c_compressionLevel and ZSTD_c_windowLog. RFC 9659 caps the
         # window at 8 MiB for HTTP content encoding.
-        for parameter, value in ((100, 3), (101, 23)):
+        for parameter, value in ((100, level), (101, 23)):
             if library.ZSTD_isError(library.ZSTD_CCtx_setParameter(context, parameter, value)):
                 return None
         capacity = library.ZSTD_compressBound(len(raw))
