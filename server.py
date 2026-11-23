@@ -18225,7 +18225,7 @@ def _archive_list_warm(cache_options, window, stale_ok, *, scoped_layouts=False,
     def _payload():
         payload = _archive_list_replay_payload(
             rows, delta, window=window, cached=from_cache, row_layouts=scoped_layouts,
-            eager_gzip=eager_gzip)
+            eager_gzip=eager_gzip, _wire_only=True)
         if delta is not None:
             payload["order_token"] = _archive_list_order_token(
                 [_archive_row_sid(row) for row in payload["conversations"]])
@@ -19271,10 +19271,11 @@ def _archive_list_pack_static(row, fields_by_shape):
 
 def _archive_list_project_row(row, *, resumes=None, parents=None,
                               _template=_ARCHIVE_LIST_TEMPLATE_UNREAD, _fields_by_shape=None,
-                              _retain_template=True, _prepared=None, _resume_now=None):
+                              _retain_template=True, _prepared=None, _resume_now=None,
+                              _borrow_containers=False):
     """Project one row, applying the current graph and resume information."""
     out = (dict(_prepared) if _prepared is not None else _archive_list_static_row(
-        row, _template, _fields_by_shape, _retain_template))
+        row, _template, _fields_by_shape, _retain_template, borrow_containers=_borrow_containers))
     # CCC-863: cheap in-memory lookup (no file I/O) -- surfaces the live
     # countdown for a session parked on a usage-limit auto-resume.
     sid = row.get("session_id") or row.get("id")
@@ -20202,7 +20203,8 @@ def _archive_list_window_rows(rows, cutoff, idea_tickets_by_sid, parents, *, anc
 
 def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _inputs=None,
                                _retain_templates=True, _row_overlays=None, check_client=None,
-                               _history_projection=None, _sidecars=None, _ticket_effects=True, _topic_persist=True):
+                               _history_projection=None, _sidecars=None, _ticket_effects=True,
+                               _topic_persist=True, _borrow_containers=False):
     # Request-local diagnostics distinguish CPU work from GIL/lock waits on
     # the real corpus, without the per-call overhead of a Python profiler.
     phase_wall = time.perf_counter() if phases is not None else 0
@@ -20274,7 +20276,8 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _in
         projected.append(_archive_list_project_row(
             row, resumes=resumes, parents=parents, _template=template,
             _fields_by_shape=fields_by_shape, _retain_template=_retain_templates,
-            _prepared=static, _resume_now=_sidecars["now"] if _sidecars is not None else None))
+            _prepared=static, _resume_now=_sidecars["now"] if _sidecars is not None else None,
+            _borrow_containers=_borrow_containers))
     phase("rows")
     if check_client is not None:
         check_client()
@@ -21447,12 +21450,13 @@ def _archive_list_indexed_initial_payload(cache_options, *, phases, source_phase
 
 def _archive_list_payload(rows, *, window="all", now=None, cached=None, phases=None, _inputs=None,
                           _retain_templates=True, _row_overlays=None, check_client=None,
-                          _history_projection=None, _working_snapshot=None):
+                          _history_projection=None, _working_snapshot=None, _borrow_containers=False):
     window = _archive_list_window(window)
     projected = _archive_list_project_rows(rows, window=window, now=now, phases=phases, _inputs=_inputs,
                                            _retain_templates=_retain_templates, _row_overlays=_row_overlays,
                                            check_client=check_client,
-                                           _history_projection=_history_projection)
+                                           _history_projection=_history_projection,
+                                           _borrow_containers=_borrow_containers)
     if window == "all":
         _trace_row_flicker(projected, now=now)
     payload = {
@@ -21498,8 +21502,11 @@ def _archive_list_projection_diag(window, key, hit):
 
 
 def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=None, phases=None,
-                                 check_client=None, eager_gzip=True, row_layouts=False):
+                                 check_client=None, eager_gzip=True, row_layouts=False, _wire_only=False):
     row_overlays = delta.get("row_overlays") if delta else None
+    # The scoped wire builder reads nested values only and retains encoded
+    # bytes. Other callers can mutate the returned rows independently.
+    borrow_containers = _wire_only and row_layouts and window == "7d"
 
     def project(**options):
         payload = _archive_list_payload(
@@ -21574,7 +21581,7 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
         payload = _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
                                        _inputs=inputs, _row_overlays=row_overlays,
                                        _retain_templates=retain_templates,
-                                       check_client=check_client)
+                                       check_client=check_client, _borrow_containers=borrow_containers)
         if check_client is not None:
             check_client()
         entry = _list_replay.encode_rows(
@@ -39217,7 +39224,8 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                         _check_client()
                     payload = _archive_list_replay_payload(
                         rows, _delta, window=window, cached=from_cache, phases=_payload_phases,
-                        check_client=_check_client, eager_gzip=eager_gzip, row_layouts=scoped_layouts)
+                        check_client=_check_client, eager_gzip=eager_gzip, row_layouts=scoped_layouts,
+                        _wire_only=True)
                     if _check_client is not None:
                         _check_client()
                     if _delta is not None:

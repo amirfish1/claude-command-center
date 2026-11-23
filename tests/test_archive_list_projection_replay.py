@@ -110,6 +110,25 @@ def test_packed_seven_day_replay_keeps_existing_templates_without_admitting_new_
     assert ('codex', 'live') in cache
 
 
+def test_packed_seven_day_wire_build_reads_nested_values_without_mutating_source(inputs):
+    rows = fixture_rows()
+    source_before = copy.deepcopy(rows)
+    baseline = read(rows, row_layouts=True)
+    server._ARCHIVE_LIST_PROJECTION_CACHE.clear()
+    delta = {'ver': 1, 'ctx': 'context', 'extra': rows[1:]}
+    wire = server._archive_list_replay_payload(
+        rows, delta, window='7d', now=10000, cached=True, row_layouts=True, _wire_only=True)
+    wire['delta_token'] = baseline['delta_token']
+
+    assert replay.encode_payload(wire) == replay.encode_payload(baseline)
+    assert wire['conversations'][0]['session_state'] is rows[0]['session_state']
+    assert rows == source_before
+
+    replayed = read(rows, row_layouts=True)
+    replayed['conversations'][0]['session_state']['todos'][0]['text'] = 'caller change'
+    assert rows == source_before
+
+
 def test_reuses_archive_but_keeps_timestamps_ticket_ticks_and_containers_fresh(inputs):
     rows = fixture_rows()
     first = read(rows)
