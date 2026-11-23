@@ -22122,10 +22122,21 @@
     });
   }
 
+  // Expiry-first ranking. Rows above the depth's "good enough" cutoff form
+  // tier 0; within a tier the allowance that wastes the most per hour if left
+  // alone wins, and the user's order only breaks ties. Pace = % of allowance
+  // left minus % of the window's time left: positive means quota will expire
+  // unused at the plan rate, negative means it runs out before the reset.
+  // Spare is measured in "plan-weeks" (window_hours / 168) so 100% of a daily
+  // window is not mistaken for 100% of a week.
   function rankNsAdvisorChoices(config, depth, catalog, engines, headroom, now) {
     const rows = config?.rankings?.[depth] || [];
+    const rawCut = config?.cutoffs?.[depth];
+    const cutoff = Number.isInteger(rawCut) ? rawCut : rows.length;
     const accounts = headroom?.accounts || [];
     const result = [];
+    const stamp = value => { const n = Date.parse(value || ''); return Number.isFinite(n) ? n : null; };
+    const span = hours => hours >= 24 ? Math.ceil(hours / 24) + 'd' : Math.max(1, Math.ceil(hours)) + 'h';
     for (const [index, row] of rows.entries()) {
       const state = engines[row.engine];
       const model = (catalog[row.engine] || []).find(m => m.id === row.model);
@@ -22138,42 +22149,69 @@
       }
       const resource = config.resources?.[row.engine] || {};
       const live = accounts.find(a => a.engine === row.engine);
-      const stamp = value => { const n = Date.parse(value || ''); return Number.isFinite(n) ? n : null; };
       const manualReset = stamp(resource.resets_at);
       const observed = stamp(resource.observed_at);
       const manualFresh = observed !== null && now >= observed && now - observed <= 86400000
         && (manualReset === null || manualReset > now);
-      const liveFresh = resource.kind !== 'credits' && resource.kind !== 'metered'
-        && live?.available === true && !live.stale && stamp(live.resets_at) > now;
+      const metered = resource.kind === 'credits' || resource.kind === 'metered';
+      const liveFresh = !metered && live?.available === true && !live.stale && stamp(live.resets_at) > now;
       const pct = liveFresh ? live.percent_left : manualFresh ? resource.remaining_pct : null;
       const reset = liveFresh ? stamp(live.resets_at) : manualFresh ? manualReset : null;
       const projected = liveFresh && live.forecast_available ? live.expires_unused_pct : null;
       const source = liveFresh ? 'live' : manualFresh && typeof pct === 'number' ? 'reported' : 'unknown';
-      let score = -index * 6;
+      const windowHours = Number(resource.window_hours) > 0 ? Number(resource.window_hours)
+        : (live?.window === 'daily' ? 24 : 168);
+      const weeks = windowHours / 168;
       const notes = [];
+      let urgency = 0, pace = null, timePct = null, paceUrgency = null;
       if (typeof pct === 'number') {
         notes.push(Math.round(pct) + '% left' + (source === 'reported' ? ' · reported' : ''));
         if (pct <= 0) unavailable = 'Allowance is exhausted';
-        else if (pct <= 10) { score -= 25; notes.push('Low remaining allowance'); }
-      } else notes.push('Quota unknown');
+        else if (pct <= 10) notes.push('Low remaining allowance');
+      } else if (!metered) notes.push('Quota unknown');
       if (liveFresh && (live.windows || []).some(w => w.available && !w.stale && w.percent_left <= 0)) {
         unavailable = 'A current usage window is exhausted';
       }
       if (reset !== null) {
-        const hours = (reset - now) / 3600000;
-        notes.push('Resets in ' + (hours >= 24 ? Math.ceil(hours / 24) + 'd' : Math.ceil(hours) + 'h'));
-        if (typeof pct === 'number' && pct > 0) {
-          const unused = typeof projected === 'number' ? projected : pct;
-          score += Math.min(24, unused / Math.max(hours, 12) * 12);
+        const hours = Math.max((reset - now) / 3600000, 0.5);
+        notes.push('Resets in ' + span(hours));
+        if (typeof pct === 'number') {
+          timePct = Math.min(100, hours / windowHours * 100);
+          pace = typeof projected === 'number' && projected > 0 ? Math.max(projected, pct - timePct) : pct - timePct;
+          paceUrgency = pace / 100 * weeks / hours;
           if (projected > 0) notes.push(Math.round(projected) + '% projected unused');
         }
       } else if (resource.reset_note) notes.push(resource.reset_note);
-      if (resource.priority === 'early') { score += 5; notes.push('Prefer early use'); }
-      if (resource.priority === 'soon' && (manualFresh || liveFresh) && (manualReset === null || manualReset > now)) {
-        score += 12; notes.push('Prioritize this allowance');
+      // Banked resets only pay off if the window is emptied before they
+      // expire, so each one adds a deadline of its own.
+      const banked = [];
+      for (const item of resource.banked_resets || []) {
+        const expires = stamp(item.expires_at);
+        if (expires !== null && expires <= now) continue;
+        banked.push({ label: item.label || 'reset', count: item.count || 1, expires });
+        if (expires !== null) urgency += (item.count || 1) * weeks / Math.max((expires - now) / 3600000, 1);
       }
-      if (resource.kind === 'credits' || resource.kind === 'metered') {
-        score -= resource.kind === 'metered' ? 10 : 5;
+      const planEnds = stamp(resource.plan_ends_at);
+      if (planEnds !== null && planEnds <= now) unavailable = unavailable || 'Plan has ended';
+      else if (planEnds !== null && !metered) {
+        // The plan ending replaces every other deadline: what can still be
+        // used before it (current window, refills that start before the end,
+        // banked resets) minus the plan-rate time left. A final window cut
+        // short by the end date is the waste this captures.
+        const hoursToEnd = Math.max((planEnds - now) / 3600000, 1);
+        const refills = reset !== null && reset < planEnds ? Math.ceil((planEnds - reset) / 3600000 / windowHours) : 0;
+        const capacity = (typeof pct === 'number' ? pct / 100 : 0) + refills
+          + banked.reduce((n, b) => n + b.count, 0);
+        urgency = (capacity - hoursToEnd / windowHours) * weeks / hoursToEnd;
+        notes.push('Plan ends in ' + span(hoursToEnd));
+      } else if (typeof paceUrgency === 'number') {
+        // Running out early is harmless while a banked reset can refill it.
+        urgency += banked.length ? Math.max(0, paceUrgency) : paceUrgency;
+      }
+      if (resource.priority === 'early') { urgency += 0.002; notes.push('Prefer early use'); }
+      if (resource.priority === 'soon' && (manualFresh || liveFresh)) { urgency += 0.005; notes.push('Prioritize this allowance'); }
+      if (metered) {
+        urgency -= resource.kind === 'metered' ? 0.02 : 0.01;
         notes.push(resource.kind === 'credits' ? 'Uses credits on the configured route' : 'Metered billing');
         if (typeof resource.balance_usd === 'number') {
           notes.push('$' + resource.balance_usd.toLocaleString() + ' last reported balance');
@@ -22181,11 +22219,14 @@
         }
         const expires = stamp(resource.expires_at);
         if (expires !== null && expires <= now) unavailable = 'Credits have expired';
-        else if (expires !== null) score += Math.min(24, 168 / Math.max(1, (expires - now) / 3600000));
       }
-      result.push({ ...row, score, unavailable, notes, funding: resource.label || 'Engine configured billing', source });
+      result.push({ ...row, index, tier: index < cutoff ? 0 : 1, score: urgency, urgency, pace, timePct, windowHours,
+        reset, banked, planEnds, pct: typeof pct === 'number' ? pct : null, metered, balance: resource.balance_usd,
+        creditsExpire: stamp(resource.expires_at), unavailable, notes,
+        funding: resource.label || 'Engine configured billing', source });
     }
-    return result.sort((a, b) => Number(!!a.unavailable) - Number(!!b.unavailable) || b.score - a.score);
+    return result.sort((a, b) => Number(!!a.unavailable) - Number(!!b.unavailable)
+      || a.tier - b.tier || b.urgency - a.urgency || a.index - b.index);
   }
 
   function markNsAdvisorManual() {
@@ -22257,26 +22298,219 @@
     } finally { sharedState.nsAdvisor.applying = false; }
   }
 
-  // The other ranked options and why each lost: eligible ones can be picked
-  // directly; skipped ones show the reason (no reading, exhausted, blocked).
-  function nsAdvisorOtherOptionsHtml(choices, best, label) {
+  // Why panel: "Allowances" groups the ranked models by account and shows
+  // each account's pace (allowance left minus window time left) on a bar
+  // centred on "on pace"; "Ranking" is the drag-to-reorder list per depth
+  // with the "good enough" line that splits preferred models from fallbacks.
+  function nsAdvisorSpan(ms) {
+    const hours = ms / 3600000;
+    return hours >= 24 ? Math.round(hours / 24) + 'd' : Math.max(1, Math.round(hours)) + 'h';
+  }
+
+  function nsAdvisorDate(ms) {
+    return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+
+  function nsAdvisorVerdict(c, now) {
+    if (c.unavailable) return ['is-muted', 'unavailable'];
+    if (c.metered) return ['is-credits', typeof c.balance === 'number' ? '$' + c.balance.toLocaleString() + ' credits' : 'credits'];
+    if (c.planEnds) return ['is-ahead', 'plan ends in ' + nsAdvisorSpan(c.planEnds - now) + ' · use it'];
+    if (typeof c.pace !== 'number') return ['is-muted', 'quota unknown'];
+    if (c.pace > 15) return ['is-ahead', c.reset && c.reset - now < 12 * 3600000
+      ? 'expires in ' + nsAdvisorSpan(c.reset - now) + ' · use now' : 'ahead · use it'];
+    if (c.pace >= -5) return ['is-muted', 'on pace'];
+    return c.banked?.length ? ['is-ahead', 'behind · reset banked'] : ['is-behind', 'behind · save it'];
+  }
+
+  function nsAdvisorPaceText(c) {
+    return typeof c.pace === 'number' ? (c.pace > 0 ? '+' : c.pace < 0 ? '−' : '') + Math.abs(Math.round(c.pace)) : '';
+  }
+
+  function nsAdvisorPickSummary(best, choices) {
+    const parts = [best.reason || 'Your preferred eligible model for this task depth.'];
+    const pace = nsAdvisorPaceText(best);
+    if (pace) parts.push('Its allowance is ' + (best.pace >= 0 ? pace + ' ahead of' : pace.slice(1) + ' behind') + ' pace.');
+    const urgent = choices.find(c => !c.unavailable && c.tier > best.tier && c.urgency > best.urgency);
+    if (urgent) parts.push(spawnEngineLabel(urgent.engine) + ' is closer to expiring but sits below your good-enough line.');
+    return parts.join(' ');
+  }
+
+  function nsAdvisorTabsHtml(config, choices, label) {
     const esc = sharedState.escapeHtml;
-    const others = choices.filter(c => c !== best);
-    if (!others.length) return '';
-    return '<div class="ns-advisor-others"><span>Other options</span><ul>' + others.map(c => {
-      const index = choices.indexOf(c);
-      const detail = c.unavailable ? 'Skipped: ' + c.unavailable : [c.funding, ...c.notes].filter(Boolean).join(' · ');
-      return '<li' + (c.unavailable ? ' class="is-unavailable"' : '') + '>'
-        + (c.unavailable ? '<strong>' + esc(label(c)) + '</strong>'
-          : '<button type="button" data-advisor-pick="' + index + '">' + esc(label(c)) + '</button>')
-        + '<small>' + esc(detail) + '</small></li>';
-    }).join('') + '</ul></div>';
+    const tab = sharedState.nsAdvisor.whyTab === 'ranking' ? 'ranking' : 'allowances';
+    return '<div class="ns-advisor-tabs" role="tablist">'
+      + [['allowances', 'Allowances'], ['ranking', 'Ranking']].map(([id, text]) => '<button type="button" role="tab" data-advisor-tab="' + id
+        + '" aria-selected="' + (tab === id) + '">' + text + '</button>').join('') + '</div>'
+      + (tab === 'ranking' ? nsAdvisorRankingHtml(config, esc) : nsAdvisorAllowancesHtml(choices, label, esc));
+  }
+
+  function nsAdvisorAllowancesHtml(choices, label, esc) {
+    const now = Date.now();
+    const held = currentSpawnChoice();
+    const groups = [];
+    for (const c of choices) {
+      let group = groups.find(g => g.engine === c.engine);
+      if (!group) groups.push(group = { engine: c.engine, rows: [] });
+      group.rows.push(c);
+    }
+    if (!groups.length) return '';
+    return '<div class="ns-pace-scale" aria-hidden="true"><span>◀ behind · save it</span><span>on pace</span><span>ahead · use it ▶</span></div>'
+      + groups.map(group => {
+        const c = group.rows.find(r => !r.unavailable) || group.rows[0];
+        const [tone, verdict] = nsAdvisorVerdict(c, now);
+        let body = '';
+        if (c.metered) {
+          body = '<div class="ns-pace-legend"><span>No usage window; costs real credits, so it ranks below subscriptions.</span>'
+            + (c.creditsExpire ? '<span>expires ' + esc(nsAdvisorDate(c.creditsExpire)) + '</span>' : '') + '</div>';
+        } else if (typeof c.pace === 'number') {
+          const width = Math.min(50, Math.abs(c.pace) / 2);
+          const bank = c.banked?.length ? '<i class="ns-pace-bank" style="left:' + (50 + Math.max(0, c.pace) / 2) + '%"></i>' : '';
+          const windowLabel = c.windowHours === 24 ? 'daily' : c.windowHours === 168 ? 'weekly' : Math.round(c.windowHours) + 'h window';
+          body = '<div class="ns-pace-bar" role="img" aria-label="' + esc(nsAdvisorPaceText(c) + ' points versus pace') + '">'
+            + '<i class="ns-pace-fill ' + (c.pace >= 0 ? 'is-over' : 'is-under') + '" style="width:' + width + '%"></i>' + bank + '<i class="ns-pace-mid"></i></div>'
+            + '<div class="ns-pace-legend"><span><b>' + esc(nsAdvisorPaceText(c)) + '</b> · ' + Math.round(c.pct) + '% left' + (c.source === 'reported' ? ' (reported)' : '')
+            + ' · ' + Math.round(c.timePct) + '% of window to go</span><span>' + windowLabel + ' · resets in ' + esc(nsAdvisorSpan(c.reset - now)) + '</span></div>';
+        } else {
+          body = '<div class="ns-pace-legend"><span>' + esc(c.notes.join(' · ') || 'No usage reading') + '</span></div>';
+        }
+        const tokens = (c.banked || []).map(b => '<span class="ns-pace-token">↻ ' + (b.count > 1 ? b.count + '× ' : '') + esc(b.label)
+          + (b.expires ? ' · use by ' + esc(nsAdvisorDate(b.expires)) : '') + '</span>')
+          .concat(c.planEnds ? ['<span class="ns-pace-token is-warn">Plan ends ' + esc(nsAdvisorDate(c.planEnds)) + '</span>'] : []);
+        const chips = group.rows.map(r => {
+          const index = choices.indexOf(r);
+          const on = held && r.engine === held.engine && _normalizeModelId(r.model) === _normalizeModelId(held.model) && (r.effort || '') === (held.effort || '');
+          const name = getModelPillLabel(r.engine, r.model, r.effort);
+          return '<button type="button" class="ns-pace-chip' + (on ? ' is-selected' : '') + '"' + (r.unavailable ? ' disabled title="' + esc(r.unavailable) + '"'
+            : ' data-advisor-pick="' + index + '"') + '>' + (on ? '✓ ' : '') + esc(name) + '</button>';
+        }).join('');
+        return '<div class="ns-pace-account"><div class="ns-pace-head"><strong>' + esc(c.funding || spawnEngineLabel(group.engine)) + '</strong>'
+          + '<span class="ns-pace-verdict ' + tone + '"' + (c.unavailable ? ' title="' + esc(c.unavailable) + '"' : '') + '>' + esc(verdict) + '</span></div>'
+          + body + (tokens.length ? '<div class="ns-pace-tokens">' + tokens.join('') + '</div>' : '')
+          + '<div class="ns-pace-chips">' + chips + '</div></div>';
+      }).join('');
+  }
+
+  function nsAdvisorRankingHtml(config, esc) {
+    const depth = sharedState.nsAdvisor.rankDepth || sharedState.nsAdvisor.depth || 'deep';
+    const rows = config?.rankings?.[depth] || [];
+    const raw = config?.cutoffs?.[depth];
+    const cut = Number.isInteger(raw) ? Math.min(raw, rows.length) : rows.length;
+    const saved = depth === sharedState.nsAdvisor.depth ? nsAdvisorChoices() : (() => {
+      const keep = sharedState.nsAdvisor.depth;
+      sharedState.nsAdvisor.depth = depth;
+      try { return nsAdvisorChoices(); } finally { sharedState.nsAdvisor.depth = keep; }
+    })();
+    const line = '<li class="ns-rank-cut" draggable="true" tabindex="0" data-rank-cut aria-label="Good enough line; Alt+arrow keys move it">good enough</li>';
+    const items = rows.map((row, i) => {
+      const c = saved.find(x => x.index === i) || {};
+      const [tone] = nsAdvisorVerdict(c, Date.now());
+      const pace = c.metered ? 'credits' : nsAdvisorPaceText(c) || '?';
+      return (i === cut ? line : '') + '<li class="ns-rank-row' + (i >= cut ? ' is-fallback' : '') + (c.unavailable ? ' is-unavailable' : '') + '" draggable="true" tabindex="0" data-rank-i="' + i + '"'
+        + (c.unavailable ? ' title="' + esc(c.unavailable) + '"' : '') + '><span class="ns-rank-grip" aria-hidden="true">⋮⋮</span><span class="ns-rank-num">' + (i + 1) + '</span>'
+        + '<span class="ns-rank-name">' + esc(getModelPillLabel(row.engine, row.model, row.effort)) + ' <small>' + esc(spawnEngineLabel(row.engine)) + '</small></span>'
+        + '<span class="ns-pace-verdict ' + tone + '">' + esc(pace) + '</span></li>';
+    }).join('') + (cut >= rows.length ? line : '');
+    return '<div class="ns-rank-top"><div class="ns-advisor-depth" role="group" aria-label="Ranking to edit">'
+      + ['deep', 'routine'].map(d => '<button type="button" data-rank-depth="' + d + '" aria-pressed="' + (d === depth) + '">' + (d === 'deep' ? 'Deep' : 'Routine') + '</button>').join('')
+      + '</div><small>Drag to reorder. Above the line, the allowance closest to expiring wins; below it, fallbacks only.</small></div>'
+      + '<ol class="ns-rank-list" data-rank-list="' + depth + '">' + items + '</ol><p class="ns-advisor-error" role="status"></p>';
+  }
+
+  async function saveNsAdvisorRanking(host, depth, rows, cut) {
+    const config = sharedState.nsAdvisor.data?.config;
+    if (!config) return;
+    const next = JSON.parse(JSON.stringify(config));
+    next.rankings[depth] = rows;
+    next.cutoffs = { ...(next.cutoffs || {}), [depth]: cut };
+    sharedState.nsAdvisor.data.config = next;
+    sharedState.nsAdvisor.applied = null;
+    renderNsAdvisor();
+    try {
+      const response = await fetch('/api/spawn-advisor', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next) });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Could not save the ranking');
+      sharedState.nsAdvisor.data.config = data.config;
+      renderNsAdvisor();
+      sharedState.nsAdvisor.focusRank = undefined;
+    } catch (error) {
+      sharedState.nsAdvisor.focusRank = undefined;
+      sharedState.nsAdvisor.data.config = config;
+      renderNsAdvisor();
+      const status = document.querySelector('#nsComposerAdvisor .ns-rank-list + .ns-advisor-error');
+      if (status) status.textContent = error.message;
+    }
+  }
+
+  function bindNsAdvisorTabs(host, config) {
+    host.querySelectorAll('[data-advisor-tab]').forEach(button => button.addEventListener('click', () => {
+      sharedState.nsAdvisor.whyTab = button.dataset.advisorTab;
+      renderNsAdvisor();
+    }));
+    host.querySelectorAll('[data-rank-depth]').forEach(button => button.addEventListener('click', () => {
+      sharedState.nsAdvisor.rankDepth = button.dataset.rankDepth;
+      renderNsAdvisor();
+    }));
+    const list = host.querySelector('[data-rank-list]');
+    if (!list || !config) return;
+    const depth = list.dataset.rankList;
+    const commit = order => {
+      const rows = [];
+      let cut = null;
+      for (const el of order) {
+        if (el.hasAttribute('data-rank-cut')) cut = rows.length;
+        else rows.push(config.rankings[depth][Number(el.dataset.rankI)]);
+      }
+      saveNsAdvisorRanking(host, depth, rows, cut === null ? rows.length : cut);
+    };
+    let dragged = null;
+    list.querySelectorAll('li').forEach(li => {
+      li.addEventListener('dragstart', event => {
+        dragged = li; sharedState.nsAdvisor.dragging = true; li.classList.add('is-dragging');
+        event.dataTransfer.effectAllowed = 'move';
+        try { event.dataTransfer.setData('text/plain', ''); } catch (_) {}
+      });
+      li.addEventListener('dragend', () => {
+        li.classList.remove('is-dragging'); sharedState.nsAdvisor.dragging = false;
+        list.querySelectorAll('.is-drop-before, .is-drop-after').forEach(x => x.classList.remove('is-drop-before', 'is-drop-after'));
+      });
+      li.addEventListener('dragover', event => {
+        if (!dragged || dragged === li) return;
+        event.preventDefault();
+        const after = event.offsetY > li.offsetHeight / 2;
+        li.classList.toggle('is-drop-after', after); li.classList.toggle('is-drop-before', !after);
+      });
+      li.addEventListener('dragleave', () => li.classList.remove('is-drop-before', 'is-drop-after'));
+      li.addEventListener('drop', event => {
+        event.preventDefault();
+        if (!dragged || dragged === li) return;
+        const after = li.classList.contains('is-drop-after');
+        const order = Array.from(list.children).filter(x => x !== dragged);
+        order.splice(order.indexOf(li) + (after ? 1 : 0), 0, dragged);
+        sharedState.nsAdvisor.dragging = false;
+        dragged = null;
+        commit(order);
+      });
+      li.addEventListener('keydown', event => {
+        if (!event.altKey || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return;
+        event.preventDefault();
+        const order = Array.from(list.children);
+        const i = order.indexOf(li), j = i + (event.key === 'ArrowUp' ? -1 : 1);
+        if (j < 0 || j >= order.length) return;
+        [order[i], order[j]] = [order[j], order[i]];
+        sharedState.nsAdvisor.focusRank = j;
+        commit(order);
+      });
+    });
+    const focus = sharedState.nsAdvisor.focusRank;
+    if (focus !== undefined) {
+      list.children[focus]?.focus();
+    }
   }
 
   function renderNsAdvisor() {
     if (!sharedState.nsAdvisor || sharedState.nsAdvisor.applying || sharedState.currentConversation !== '__new__') return;
     const host = document.getElementById('nsComposerAdvisor');
-    if (!host || sharedState.nsAdvisor.editing) return;
+    if (!host || sharedState.nsAdvisor.editing || sharedState.nsAdvisor.dragging) return;
     host.hidden = false;
     host.classList.remove('is-editing');
     const whyOpen = !!host.querySelector('.ns-advisor-why')?.open;
@@ -22329,12 +22563,10 @@
       + (sharedState.nsAdvisor.error ? '<p role="status">' + (0, sharedState.escapeHtml)(sharedState.nsAdvisor.error) + ' <button type="button" data-advisor-refresh>Retry</button></p>'
         : !config ? '<p role="status">Loading your preferences…</p>'
         : !config.enabled ? '<p>Enable automatic selection in model preferences.</p>'
-        : best ? '<div class="ns-advisor-result"><strong>' + (0, sharedState.escapeHtml)(label(best)) + '</strong>'
-          + '<span>' + (0, sharedState.escapeHtml)(best.reason || 'Your preferred eligible model for this task depth.') + '</span>'
-          + '<small>' + (0, sharedState.escapeHtml)([best.funding, ...best.notes].filter(Boolean).join(' · ')) + '</small></div>'
-          + nsAdvisorOtherOptionsHtml(choices, best, label)
-        : '<p role="status">No eligible model. Check availability and allowances, or choose a model.</p>'
-          + nsAdvisorOtherOptionsHtml(choices, null, label))
+        : (best ? '<div class="ns-advisor-result"><strong>' + (0, sharedState.escapeHtml)(label(best)) + '</strong>'
+          + '<span>' + (0, sharedState.escapeHtml)(nsAdvisorPickSummary(best, choices)) + '</span></div>'
+          : '<p role="status">No eligible model. Check availability and allowances, or choose a model.</p>')
+          + nsAdvisorTabsHtml(config, choices, label))
       + '<div class="ns-advisor-actions"><button type="button" data-advisor-refresh>Refresh usage</button>'
       + '<button type="button" data-advisor-edit>Preferences</button></div></div></details></div>'
       + suggestHtml;
@@ -22359,6 +22591,7 @@
       renderNsAdvisor();
     });
     host.querySelectorAll('[data-advisor-refresh]').forEach(button => button.addEventListener('click', () => loadNsAdvisor(true)));
+    bindNsAdvisorTabs(host, config);
     renderNsModelPickerPills();
     host.querySelector('[data-advisor-edit]')?.addEventListener('click', () => {
       if (!config) { loadNsAdvisor(true); return; }

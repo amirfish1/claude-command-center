@@ -52,3 +52,33 @@ def test_corrupt_file_does_not_silently_replace_preferences(tmp_path):
     with pytest.raises(json.JSONDecodeError):
         advisor.load(tmp_path, ENGINES)
     assert target.read_text() == "broken"
+
+
+def test_cutoffs_windows_and_banked_resets_round_trip(tmp_path):
+    data = config()
+    data["cutoffs"] = {"deep": 5, "routine": None}
+    data["resources"]["codex"].update(window_hours=24, plan_ends_at="2026-02-01T00:00:00Z",
+                                      banked_resets=[{"label": "weekly", "count": 2,
+                                                      "expires_at": "2026-01-10T00:00:00Z"}])
+    saved = advisor.save(tmp_path, data, ENGINES)
+    assert saved["cutoffs"] == {"deep": 1, "routine": None}  # clamped to the ranking length
+    res = saved["resources"]["codex"]
+    assert res["window_hours"] == 24 and res["banked_resets"][0]["count"] == 2
+    assert res["plan_ends_at"].startswith("2026-02-01")
+    assert advisor.load(tmp_path, ENGINES) == saved
+
+
+@pytest.mark.parametrize("patch", [{"cutoffs": {"deep": -1}}, {"cutoffs": {"deep": True}},
+                                   {"cutoffs": {"other": 1}}])
+def test_rejects_invalid_cutoffs(patch):
+    data = config()
+    data.update(patch)
+    with pytest.raises(ValueError):
+        advisor.validate(data, ENGINES)
+
+
+def test_rejects_invalid_banked_resets():
+    data = config()
+    data["resources"]["codex"]["banked_resets"] = [{"count": 0}]
+    with pytest.raises(ValueError):
+        advisor.validate(data, ENGINES)

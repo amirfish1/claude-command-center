@@ -75,3 +75,44 @@ test('credit expiry and zero balance exclude the route; subscription readings do
   data.resources.codex = {kind:'credits', expires_at:'2026-01-01T11:00:00Z'};
   assert.equal(rank(data,'deep',catalog,engines,{},now)[0].unavailable, 'Credits have expired');
 });
+
+// Expiry-first scoring with the "good enough" cutoff.
+const now2 = Date.parse('2026-11-23T00:15:00Z');
+const engines2 = {claude:{available:true, efforts:['medium']}, devin:{available:true, efforts:[]}, codex:{available:true, efforts:['medium']}};
+const catalog2 = {claude:[{id:'opus'}], devin:[{id:'swe'}], codex:[{id:'sol'}]};
+const fresh = (extra) => ({observed_at:new Date(now2).toISOString(), ...extra});
+const real = () => ({
+  rankings:{deep:[choice('codex','sol','medium'), choice('claude','opus','medium'), choice('devin','swe')]},
+  resources:{
+    codex:fresh({remaining_pct:25, resets_at:'2026-11-26T05:05:00Z'}),
+    claude:fresh({remaining_pct:82, resets_at:'2026-11-27T07:00:00Z'}),
+    devin:fresh({remaining_pct:100, resets_at:'2026-11-23T07:58:00Z', window_hours:24}),
+  }});
+
+test('a daily allowance expiring soon outranks weekly spare; behind-pace accounts sink', () => {
+  const rows = rank(real(), 'deep', catalog2, engines2, {}, now2);
+  assert.deepEqual([...rows.map(r => r.engine)], ['devin', 'claude', 'codex']);
+  assert.ok(rows[0].pace > 60 && rows[1].pace > 15 && rows[2].pace < -15);
+});
+
+test('rows below the good-enough cutoff are fallbacks even when most urgent', () => {
+  const data = real(); data.cutoffs = {deep: 2};
+  const rows = rank(data, 'deep', catalog2, engines2, {}, now2);
+  assert.deepEqual([...rows.map(r => r.engine)], ['claude', 'codex', 'devin']);
+  assert.equal(rows[2].tier, 1);
+});
+
+test('banked resets and a plan end date raise urgency', () => {
+  const data = real(); data.cutoffs = {deep: 2};
+  data.resources.claude.remaining_pct = 10; // behind pace on its own
+  assert.equal(rank(data, 'deep', catalog2, engines2, {}, now2)[0].engine, 'codex');
+  data.resources.claude.banked_resets = [{label:'weekly', count:2, expires_at:'2026-12-10T00:00:00Z'}];
+  assert.equal(rank(data, 'deep', catalog2, engines2, {}, now2)[0].engine, 'claude');
+  delete data.resources.claude.banked_resets;
+  data.resources.claude.plan_ends_at = '2026-11-30T00:00:00Z';
+  const top = rank(data, 'deep', catalog2, engines2, {}, now2)[0];
+  assert.equal(top.engine, 'claude');
+  assert.ok(top.notes.some(n => /Plan ends in/.test(n)));
+  data.resources.claude.plan_ends_at = '2026-11-01T00:00:00Z';
+  assert.equal(rank(data, 'deep', catalog2, engines2, {}, now2).find(r => r.engine === 'claude').unavailable, 'Plan has ended');
+});

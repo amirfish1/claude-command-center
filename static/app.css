@@ -32337,6 +32337,46 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 #nsComposerAdvisor .ns-advisor-others li.is-unavailable { opacity: .65; }
 #nsComposerAdvisor .ns-advisor-others small { color: var(--text-muted); font-size: 11px; }
 #nsComposerAdvisor .ns-auto-restore { font-size: 11px; padding: 3px 8px; }
+/* Why panel tabs: Allowances (pace bars) and Ranking (drag list). */
+#nsComposerAdvisor .ns-advisor-why[open] .ns-advisor-explanation { max-height: min(70vh, 640px); }
+.ns-advisor-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin: 0 0 8px; }
+.ns-advisor .ns-advisor-tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--text-muted); font-weight: 600; padding: 4px 10px; margin-bottom: -1px; }
+.ns-advisor .ns-advisor-tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent, #58a6ff); }
+.ns-pace-scale { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); }
+.ns-pace-account { padding: 7px 0; border-top: 1px solid var(--border); }
+.ns-pace-scale + .ns-pace-account { border-top: 0; }
+.ns-pace-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.ns-pace-head strong { font-size: 12.5px; overflow-wrap: anywhere; }
+.ns-pace-verdict { flex: none; font-size: 11px; font-weight: 600; padding: 0 7px; border-radius: 99px; white-space: nowrap; color: var(--text-muted); background: color-mix(in srgb, var(--text-muted) 14%, transparent); }
+.ns-pace-verdict.is-ahead { color: var(--green); background: color-mix(in srgb, var(--green) 15%, transparent); }
+.ns-pace-verdict.is-behind { color: var(--orange); background: color-mix(in srgb, var(--orange) 16%, transparent); }
+.ns-pace-verdict.is-credits { color: var(--accent, #58a6ff); background: color-mix(in srgb, var(--accent, #58a6ff) 14%, transparent); }
+.ns-pace-bar { position: relative; height: 10px; margin: 6px 0 2px; border-radius: 5px; background: color-mix(in srgb, var(--text-muted) 16%, transparent); }
+.ns-pace-bar i { position: absolute; top: 0; bottom: 0; }
+.ns-pace-fill.is-over { left: 50%; background: var(--green); border-radius: 0 5px 5px 0; }
+.ns-pace-fill.is-under { right: 50%; background: var(--orange); border-radius: 5px 0 0 5px; }
+.ns-pace-bank { right: 0; border-radius: 0 5px 5px 0; background: repeating-linear-gradient(135deg, var(--green) 0 3px, transparent 3px 6px); }
+.ns-pace-mid { left: 50%; top: -3px !important; bottom: -3px !important; width: 2px; margin-left: -1px; background: var(--text); }
+.ns-pace-legend { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 0 10px; font-size: 11px; color: var(--text-muted); }
+.ns-pace-legend b { color: var(--text); }
+.ns-pace-tokens, .ns-pace-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.ns-pace-token { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 5px; color: var(--accent, #58a6ff); background: color-mix(in srgb, var(--accent, #58a6ff) 13%, transparent); }
+.ns-pace-token.is-warn { color: var(--orange); background: color-mix(in srgb, var(--orange) 15%, transparent); }
+.ns-advisor .ns-pace-chip { font-size: 11.5px; padding: 1px 9px; border-radius: 99px; }
+.ns-advisor .ns-pace-chip.is-selected { border-color: var(--green); color: var(--green); font-weight: 600; }
+.ns-rank-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.ns-rank-list { list-style: none; margin: 0; padding: 0; }
+.ns-rank-row { display: flex; align-items: center; gap: 8px; padding: 3px 8px; margin: 3px 0; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); cursor: grab; }
+.ns-rank-row.is-fallback, .ns-rank-row.is-unavailable { opacity: .6; }
+.ns-rank-row.is-dragging, .ns-rank-cut.is-dragging { opacity: .35; }
+.ns-rank-list .is-drop-before { box-shadow: 0 -2px 0 var(--accent, #58a6ff); }
+.ns-rank-list .is-drop-after { box-shadow: 0 2px 0 var(--accent, #58a6ff); }
+.ns-rank-list li:focus-visible { outline: 2px solid var(--accent, #58a6ff); outline-offset: 1px; }
+.ns-rank-grip { color: var(--text-muted); letter-spacing: -2px; }
+.ns-rank-num { width: 16px; font-weight: 700; color: var(--text-muted); font-size: 11px; }
+.ns-rank-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ns-rank-cut { display: flex; align-items: center; gap: 8px; margin: 5px 0; font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--orange); cursor: grab; }
+.ns-rank-cut::before, .ns-rank-cut::after { content: ""; flex: 1; border-top: 2px dashed var(--orange); }
 #nsComposerAdvisor .ns-advisor-suggest {
   flex: 1 0 100%; font-size: 12px; color: var(--text-muted);
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
