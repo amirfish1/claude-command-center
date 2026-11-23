@@ -897,6 +897,19 @@ def test_archive_topic_batch_preserves_types_and_order(store, title, named):
     assert topics._archive_topic_records(store, 1) is None
 
 
+def test_archive_indexed_origins_keep_scan_order_and_legacy_values(store):
+    topics._connection(store)
+    store.execute("CREATE INDEX idx_session_meta_continuation_origin ON session_meta(continuation_origin)")
+    store.executemany("INSERT INTO session_meta VALUES (?, ?)", [
+        ('first', 'z'), ('empty', ''), ('second', 'a'), ('missing', None), ('legacy', b'root'),
+    ])
+
+    _, indexed, _, edges = topics._archive_topic_records(store, 3)
+
+    assert list(indexed.items()) == list(edges) == [('first', 'z'), ('second', 'a'), ('legacy', b'root')]
+    assert topics._archive_topic_records(store, 2) is None
+
+
 def test_archive_title_snapshot_reuses_metadata_until_title_changes(monkeypatch):
     from ccc_server.log_parse import _ConvMetaCache
 
@@ -940,6 +953,8 @@ def test_archive_projection_reuses_committed_records_but_refreshes_titles(store,
     first, first_edges, version = topics.archive_projection_inputs(
         store, max_rows=20, diagnostics=cold)
     assert set(cold["topics_phases"]) == {"fallback_titles", "revision", "records", "native_titles"}
+    assert set(cold["topics_records_phases"]) == {"topic_rows", "indexed_origins", "build_edges"}
+    assert cold["topics_records_tid"] > 0
 
     metadata['/sessions/solo.jsonl']['ai_title'] = 'Second external title'
     monkeypatch.setattr(topics, '_native_title', lambda sid: 'Second native title')
@@ -947,7 +962,9 @@ def test_archive_projection_reuses_committed_records_but_refreshes_titles(store,
     second, second_edges, repeat_version = topics.archive_projection_inputs(
         store, max_rows=20, diagnostics=warm)
     assert set(warm["topics_phases"]) == {"fallback_titles", "revision", "native_titles"}
-    for phases in (cold["topics_phases"], warm["topics_phases"]):
+    assert "topics_records_phases" not in warm
+    assert "topics_records_tid" not in warm
+    for phases in (cold["topics_phases"], cold["topics_records_phases"], warm["topics_phases"]):
         for phase in phases.values():
             assert phase["wall_ms"] >= 0
             assert phase["cpu_ms"] >= 0
@@ -1043,9 +1060,9 @@ def test_archive_projection_includes_peer_commit_before_snapshot_without_retry(s
     reads = []
     fetch = topics._archive_topic_records
 
-    def record_read(conn, max_rows):
+    def record_read(conn, max_rows, **kwargs):
         reads.append(max_rows)
-        return fetch(conn, max_rows)
+        return fetch(conn, max_rows, **kwargs)
 
     monkeypatch.setattr(topics, '_archive_topic_records', record_read)
     filename = store.execute("PRAGMA database_list").fetchone()[2]

@@ -6,7 +6,7 @@ session_meta rows. Ordinary spawn/report-to parent links are never consulted.
 from __future__ import annotations
 
 from collections import OrderedDict
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import functools
 import json
 import os
@@ -413,29 +413,39 @@ def _archive_topic_rows(conn, max_rows):
     return _sqlite_fetch_rows(conn, query, params, columns)
 
 
-def _archive_topic_records(conn, max_rows):
-    records = _archive_topic_rows(conn, max_rows)
+def _archive_topic_records(conn, max_rows, *, timing=nullcontext):
+    with timing("topic_rows"):
+        records = _archive_topic_rows(conn, max_rows)
     if records is None:
         return None
-    indexed = _sqlite_fetch_rows(
-        conn, "SELECT sid,continuation_origin FROM session_meta WHERE continuation_origin!='' LIMIT ?",
-        (max_rows + 1,), ("sid", "continuation_origin"),
-    )
+    with timing("indexed_origins"):
+        # Two indexable ranges skip the wide rows with empty origins. Keep
+        # the scan bounded before restoring row order. OFFSET 0 prevents
+        # SQLite from flattening the two queries into a rowid table scan.
+        indexed = _sqlite_fetch_rows(
+            conn, "SELECT sid,continuation_origin FROM ("
+            "SELECT rowid,sid,continuation_origin FROM session_meta "
+            "WHERE continuation_origin>'' OR continuation_origin<'' LIMIT ? OFFSET 0"
+            ") ORDER BY rowid",
+            (max_rows + 1,), ("sid", "continuation_origin"),
+        )
     if len(indexed) > max_rows:
         return None
-    by_sid, linked_roots, edges = {}, set(), []
-    is_native_id = _NATIVE_ID_RE.fullmatch
-    for sid, origin, root, title, named in records:
-        by_sid[sid] = (origin, root, title, named)
-        if origin:
-            if origin != sid:
-                edges.append((sid, origin))
-            if root and is_native_id(root):
-                linked_roots.add(root)
-        if root and root != sid:
-            edges.append((sid, root))
-    edges.extend(indexed)
-    return MappingProxyType(by_sid), MappingProxyType(dict(indexed)), frozenset(linked_roots), tuple(edges)
+    with timing("build_edges"):
+        by_sid, linked_roots, edges = {}, set(), []
+        is_native_id = _NATIVE_ID_RE.fullmatch
+        for sid, origin, root, title, named in records:
+            by_sid[sid] = (origin, root, title, named)
+            if origin:
+                if origin != sid:
+                    edges.append((sid, origin))
+                if root and is_native_id(root):
+                    linked_roots.add(root)
+            if root and root != sid:
+                edges.append((sid, root))
+        edges.extend(indexed)
+        return (MappingProxyType(by_sid), MappingProxyType(dict(indexed)),
+                frozenset(linked_roots), tuple(edges))
 
 
 def _archive_fallback_titles():
@@ -463,7 +473,7 @@ def archive_projection_inputs(conn, *, max_rows, max_native_roots=32, diagnostic
         return None
 
     @contextmanager
-    def timing(phase):
+    def timing(phase, group="topics_phases"):
         if diagnostics is None:
             yield
             return
@@ -473,7 +483,7 @@ def archive_projection_inputs(conn, *, max_rows, max_native_roots=32, diagnostic
         finally:
             wall_ms = (time.perf_counter() - wall) * 1000
             cpu_ms = (time.thread_time() - cpu) * 1000
-            totals = diagnostics.setdefault("topics_phases", {}).setdefault(
+            totals = diagnostics.setdefault(group, {}).setdefault(
                 phase, {"wall_ms": 0.0, "cpu_ms": 0.0})
             totals["wall_ms"] = round(totals["wall_ms"] + wall_ms, 1)
             totals["cpu_ms"] = round(totals["cpu_ms"] + cpu_ms, 1)
@@ -498,7 +508,12 @@ def archive_projection_inputs(conn, *, max_rows, max_native_roots=32, diagnostic
                     with timing("revision"):
                         version = _archive_read_version(conn, pinned=True)
                     with timing("records"):
-                        snapshot = _archive_topic_records(conn, max_rows)
+                        if diagnostics is not None:
+                            diagnostics["topics_records_tid"] = threading.get_native_id()
+                        snapshot = _archive_topic_records(
+                            conn, max_rows,
+                            timing=functools.partial(timing, group="topics_records_phases"),
+                        )
                 finally:
                     conn.rollback()
             if snapshot is None:
