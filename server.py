@@ -18368,7 +18368,12 @@ def _archive_serve_cache_store(key, rows, generation, ts=None, *, transfer_rows=
         if diff is not None and diff["identical"]:
             if history_tokens:
                 prev["history_hot_tokens"] = (prev["ver"], rows, history_tokens)
-            if prev.get("rows") is not diff["rows"]:
+            # An identical diff retained every row object in the same order.
+            # Keep the pinned cut (and its membership memo) with the new list.
+            saved = prev.get("history_hot_snapshot")
+            if saved is not None and saved[0] == prev["ver"] and saved[1] is prev["rows"]:
+                prev["history_hot_snapshot"] = (prev["ver"], diff["rows"], saved[2])
+            else:
                 prev.pop("history_hot_snapshot", None)
             prev["ts"] = stamp
             prev["rows"] = diff["rows"]

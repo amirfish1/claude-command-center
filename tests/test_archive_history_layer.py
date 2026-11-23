@@ -183,6 +183,28 @@ def test_history_hot_cut_reuses_capture_and_invalidates_on_lifecycle_change(monk
     assert updated[1]["stable"] != cut[1]["stable"]
 
 
+def test_history_hot_cut_survives_identical_refresh_but_checks_capture(monkeypatch):
+    monkeypatch.setattr(server, "_archive_serve_cache", {})
+    monkeypatch.setattr(server, "_archive_serve_version", 0)
+    generation = server._archive_serve_generation
+    rows = [{"session_id": "first"}, {"session_id": "second"}]
+    assert server._archive_serve_cache_store("base", rows, generation, hot_selected=True)
+    cut = server._archive_history_hot_snapshot("base", (rows, 1))
+    assert cut is not None
+
+    refreshed = [row.copy() for row in rows]
+    assert server._archive_serve_cache_store("base", refreshed, generation, hot_selected=True)
+    assert server._archive_history_hot_snapshot("base", (refreshed, 1)) is cut
+    assert server._archive_history_hot_snapshot("base", (rows, 1)) is None
+
+    reordered = list(reversed(refreshed))
+    assert server._archive_serve_cache_store("base", reordered, generation, hot_selected=True)
+    new_cut = server._archive_history_hot_snapshot("base", (reordered, 2))
+    assert new_cut is not cut
+    assert list(new_cut[0]) == ["second", "first"]
+    assert new_cut[1] == cut[1]
+
+
 def test_history_hot_guard_uses_durable_tokens_only_before_lifecycle_changes(tmp_path, monkeypatch):
     key = server._archive_response_cache_key()
     path = tmp_path / 'archive.json'
