@@ -50,18 +50,48 @@ def fixture_rows():
 
 
 def read(rows, *, version=1, context='context', now=10000, window='7d', extra=None,
-         projection_context=None):
+         projection_context=None, row_layouts=False):
     delta = {'ver': version, 'ctx': context, 'extra': extra if extra is not None else rows[1:]}
     if projection_context is not None:
         delta['projection_ctx'] = projection_context
     payload = server._archive_list_replay_payload(
-        rows, delta, window=window, now=now, cached=True)
+        rows, delta, window=window, now=now, cached=True, row_layouts=row_layouts)
     payload['delta_token'] = f'{version}.{context}.{now}'
-    assert replay.encode_payload(payload) == json.dumps(dict(payload)).encode()
+    raw = replay.encode_payload(payload)
+    if row_layouts:
+        decoded = json.loads(raw)
+        layouts = decoded.pop('row_layouts')
+        decoded['conversations'] = [dict(zip(layouts[index], values, strict=True))
+                                    for index, values in decoded['conversations']]
+        assert decoded == {key: value for key, value in payload.items() if key != 'row_layouts'}
+    else:
+        assert raw == json.dumps(dict(payload)).encode()
     compressed = replay.encode_gzip_payload(payload)
     if compressed is not None:
         assert gzip.decompress(compressed) == replay.encode_payload(payload)
     return payload
+
+
+def test_packed_projection_replays_overlay_order_and_ticket_layout_changes(inputs):
+    rows = fixture_rows()
+    second_live = dict(rows[-1], session_id='other', mtime=9700, first_message='Different layout')
+    rows.append(second_live)
+    first = read(rows, projection_context='stable', row_layouts=True)
+    first['conversations'][0]['session_state']['todos'][0]['text'] = 'caller edit'
+    rows[1].update(mtime=9800, modified=9800)
+    rows[1], rows[2] = rows[2], rows[1]
+    inputs['ideas'] = {'live': {'ref': 'TEST-1', 'explicitly_archived': False}}
+    updated = read(rows, context='ticket', projection_context='stable', row_layouts=True)
+    assert inputs['calls'] == 1
+    assert [row['session_id'] for row in updated['conversations']] == ['archive', 'other', 'live']
+    assert updated['conversations'][0]['session_state']['todos'] == [{'text': 'nested'}]
+    assert updated['conversations'][-1]['idea_ticket']['ref'] == 'TEST-1'
+    inputs['ideas'] = {}
+    rows[-1].update(mtime=9950, modified=9950)
+    replayed = read(rows, projection_context='stable', row_layouts=True)
+    assert inputs['calls'] == 1
+    assert replayed['conversations'][-1]['mtime'] == 9950
+    assert 'idea_ticket' not in replayed['conversations'][-1]
 
 
 def test_reuses_archive_but_keeps_timestamps_ticket_ticks_and_containers_fresh(inputs):
@@ -480,7 +510,8 @@ def test_http_full_versions_reuse_projection_and_keep_body_etags_current(inputs,
         thread.join(5)
 
 
-def test_scoped_http_defers_gzip_and_preserves_the_same_body(inputs, monkeypatch, tmp_path):
+@pytest.mark.parametrize('row_layouts', [False, True])
+def test_scoped_http_defers_gzip_and_preserves_the_same_body(inputs, monkeypatch, tmp_path, row_layouts):
     import threading
     import urllib.error
     import urllib.request
@@ -496,6 +527,7 @@ def test_scoped_http_defers_gzip_and_preserves_the_same_body(inputs, monkeypatch
                         lambda *a, **kw: (rows, True, 1))
     monkeypatch.setattr(server, '_archive_list_delta_state',
                         lambda *a, **kw: {'ver': 1, 'ctx': 'fixed', 'extra': rows[1:], 'token': '1'})
+    monkeypatch.setattr(server, '_queue_health_stats', lambda rows, now=None: {'working': 0})
     monkeypatch.setattr(list_encoding, '_zstd', lambda raw: None)
     monkeypatch.setattr(list_encoding, '_CACHE', server.ByteBudgetCache(1 << 20, 8))
     gzip_builds = []
@@ -521,9 +553,10 @@ def test_scoped_http_defers_gzip_and_preserves_the_same_body(inputs, monkeypatch
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
         url = f'http://127.0.0.1:{httpd.server_port}/api/conversations/list?window=7d'
+        target = url + '&row_layouts=1' if row_layouts else url
 
         def read(accept, **headers):
-            request = urllib.request.Request(url, headers={'Accept-Encoding': accept, **headers})
+            request = urllib.request.Request(target, headers={'Accept-Encoding': accept, **headers})
             return urllib.request.urlopen(request, timeout=5)
 
         try:
@@ -531,6 +564,8 @@ def test_scoped_http_defers_gzip_and_preserves_the_same_body(inputs, monkeypatch
                 assert fallback.headers['Content-Encoding'] == 'gzip'
                 etag = fallback.headers['ETag']
                 expected = gzip.decompress(fallback.read())
+                wire = json.loads(expected)
+                assert ('row_layouts' in wire) is row_layouts
             with read('identity') as response:
                 assert response.headers['ETag'] == etag
                 assert response.read() == expected
@@ -543,10 +578,18 @@ def test_scoped_http_defers_gzip_and_preserves_the_same_body(inputs, monkeypatch
             response.value.close()
             assert inputs['calls'] == 1
             assert saved.wait(5)
-            files = list(tmp_path.glob('*.json.gz'))
-            assert len(files) == 1
-            assert gzip.decompress(files[0].read_bytes().split(b'\n', 1)[1]) == expected
+            key = server._archive_response_cache_key()
+            saved_key = server._archive_list_body_key(key, row_layouts)
+            assert server._archive_list_disk_load(saved_key, '7d')[0] == expected
             assert len(gzip_builds) == 1
+            if row_layouts:
+                with urllib.request.urlopen(url, timeout=5) as legacy:
+                    assert legacy.headers['ETag'] != etag
+                    decoded = json.load(legacy)
+                layouts = wire.pop('row_layouts')
+                wire['conversations'] = [dict(zip(layouts[index], values, strict=True))
+                                         for index, values in wire['conversations']]
+                assert wire == decoded
         finally:
             httpd.shutdown()
             thread.join(5)

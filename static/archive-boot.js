@@ -479,6 +479,8 @@
       if (savedOrder) target += '&saved_order=' + savedOrder;
       if (windowName === 'all') {
         target += '&row_layouts=1&order_spans=1&history_layer=1' + wideOrderSpanQuery;
+      } else if (windowName === '7d') {
+        target += '&row_layouts=1';
       }
       const headers = value?.etag ? {'If-None-Match':value.etag} : {};
       headers['X-CCC-Abort-On-Disconnect'] = '1';

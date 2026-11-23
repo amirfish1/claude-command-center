@@ -209,31 +209,35 @@ def history_delta(history, scope, nonce, since, saved_order, *, order_spans=Fals
     return payload, (nonce, fingerprint)
 
 
-def _encoded_run(rows, *, deflate=True):
+def _encoded_run(rows, *, deflate=True, compact=False):
+    encode = _COMPACT_JSON.encode if compact else json.dumps
     try:
         buffer = io.BytesIO()
         _GuardPickler(buffer, protocol=pickle.HIGHEST_PROTOCOL).dump(rows)
         guard = buffer.getvalue()
     except (TypeError, pickle.PicklingError):
-        raw = json.dumps(rows).encode()[1:-1]
+        raw = encode(rows).encode()[1:-1]
         return raw, _deflate_fragment(raw) if deflate else None
     # The immutable bytes already describe the exact projected values.
     # Dictionary lookup compares them on a hash match.
-    entry = _RUN_CACHE.get(guard)
+    key = (guard, compact) if compact else guard
+    entry = _RUN_CACHE.get(key)
     if entry is not None and (not deflate or entry[1] is not None):
         return entry
-    raw = entry[0] if entry is not None else json.dumps(rows).encode()[1:-1]
+    raw = entry[0] if entry is not None else encode(rows).encode()[1:-1]
     compressed = _deflate_fragment(raw) if deflate else None
-    _RUN_CACHE.put(guard, (raw, compressed),
+    _RUN_CACHE.put(key, (raw, compressed),
                    len(guard) + len(raw) + len(compressed or b'') + 512)
     return raw, compressed
 
 
 class TicketContextEntry(tuple):
     """Keep ticket provenance with the bytes it describes, under one budget."""
-    def __new__(cls, entry, context):
+    def __new__(cls, entry, context, layouts=None):
         result = super().__new__(cls, entry)
         result.ticket_context = context
+        result.layouts = layouts
+        result.layout_ids = {tuple(keys): index for index, keys in enumerate(layouts)} if layouts else None
         return result
 
 
@@ -298,8 +302,11 @@ def encode_payload(payload, *, packed_runs=None, compact=False, check_client=Non
     return b''.join(chunks)
 
 
-def encode_rows(rows, overlay_ids, *, deflate=True):
+def encode_rows(rows, overlay_ids, *, deflate=True, row_layouts=False):
     """Return the JSON array, overlay offsets, and fixed DEFLATE fragments."""
+    layouts, values = pack_row_layouts(rows) if row_layouts else (None, rows)
+    separator = b',' if row_layouts else b', '
+    encode = _COMPACT_JSON.encode if row_layouts else json.dumps
     chunks, spans, fixed = [b'['], [], []
     pending = [_deflate_fragment(b'[')] if deflate else None
     offset = 1  # opening bracket
@@ -322,14 +329,14 @@ def encode_rows(rows, overlay_ids, *, deflate=True):
                     break
                 index += 1
         if overlay:
-            raw = json.dumps(rows[start:index]).encode()[1:-1]
+            raw = encode(values[start:index]).encode()[1:-1]
         else:
-            raw, compressed = _encoded_run(rows[start:index], deflate=deflate)
+            raw, compressed = _encoded_run(values[start:index], deflate=deflate, compact=row_layouts)
         if start:
-            chunks.append(b', ')
-            offset += 2  # comma and space
+            chunks.append(separator)
+            offset += len(separator)
             if pending is not None:
-                pending.append(_deflate_fragment(b', '))
+                pending.append(_deflate_fragment(separator))
         if overlay:
             spans.append((start, offset, offset + len(raw)))
             if pending is not None:
@@ -343,14 +350,21 @@ def encode_rows(rows, overlay_ids, *, deflate=True):
         pending.append(_deflate_fragment(b']'))
         fixed.append(b''.join(pending))
     chunks.append(b']')
-    return b''.join(chunks), tuple(spans), tuple(fixed) if deflate else None
+    entry = (b''.join(chunks), tuple(spans), tuple(fixed) if deflate else None)
+    return TicketContextEntry(entry, None, layouts) if row_layouts else entry
 
 
 def replay_rows(entry, overlays, *, overlay_order=None):
     raw, spans = entry[:2]
     # Clone bytes are created only from our own JSON-decoded rows below;
     # they are never accepted from disk, HTTP or another process.
-    rows = pickle.loads(entry[3]) if len(entry) > 3 and entry[3] is not None else json.loads(raw)
+    if len(entry) > 3 and entry[3] is not None:
+        rows = pickle.loads(entry[3])
+    else:
+        rows = json.loads(raw)
+        layouts = getattr(entry, 'layouts', None)
+        if layouts is not None:
+            rows = [dict(zip(layouts[shape], values, strict=True)) for shape, values in rows]
     by_sid = {str(rows[index].get('session_id') or rows[index].get('id') or ''): rows[index]
               for index, _, _ in spans} if overlay_order is not None else None
     if overlay_order is not None and len(overlay_order) != len(spans):
@@ -369,8 +383,8 @@ def replay_rows(entry, overlays, *, overlay_order=None):
 
 def with_owned_rows(entry, rows):
     """Retain an immutable clone of normalized rows, before ticket mutation."""
-    cloned = (*entry[:3], pickle.dumps(rows, protocol=pickle.HIGHEST_PROTOCOL))
-    return (TicketContextEntry(cloned, entry.ticket_context)
+    cloned = (*entry[:3], pickle.dumps(rows, protocol=pickle.HIGHEST_PROTOCOL) if rows is not None else None)
+    return (TicketContextEntry(cloned, entry.ticket_context, entry.layouts)
             if isinstance(entry, TicketContextEntry) else cloned)
 
 
@@ -378,14 +392,23 @@ def entry_weight(entry):
     return (len(entry[0]) + sum(map(len, entry[2] or ()))
             + (len(entry[3] or b'') if len(entry) > 3 else 0)
             + 256 * len(entry[1]) + 1024
-            + (256 + 2 * len(entry.ticket_context) if isinstance(entry, TicketContextEntry) else 0))
+            + (256 + 2 * len(entry.ticket_context or '')
+               + sum(256 + 24 * len(keys) for keys in entry.layouts or ())
+               if isinstance(entry, TicketContextEntry) else 0))
+
+
+def _encode_overlay(entry, row):
+    layout_ids = getattr(entry, 'layout_ids', None)
+    if layout_ids is None:
+        return json.dumps(row).encode()
+    return _COMPACT_JSON.encode((layout_ids[tuple(row)], list(row.values()))).encode()
 
 
 def encode_replay(entry, rows):
     raw, spans = entry[:2]
     chunks, offset = [], 0
     for index, start, end in spans:
-        chunks.extend((raw[offset:start], json.dumps(rows[index]).encode()))
+        chunks.extend((raw[offset:start], _encode_overlay(entry, rows[index])))
         offset = end
     chunks.append(raw[offset:])
     return b''.join(chunks)
@@ -397,6 +420,6 @@ def compress_replay(entry, rows):
         return None
     chunks = []
     for slot, (index, _, _) in enumerate(spans):
-        chunks.extend((fixed[slot], _deflate_fragment(json.dumps(rows[index]).encode())))
+        chunks.extend((fixed[slot], _deflate_fragment(_encode_overlay(entry, rows[index]))))
     chunks.append(fixed[-1])
     return b''.join(chunks)

@@ -4955,6 +4955,8 @@
             _perfFetchUrl = requestUrl;
             if (requestUrl !== url) {
               _perfFetchUrl += '&history_layer=1' + (window.CCCArchiveWire?.wideOrderSpanQuery || '');
+            } else if (!opts.initial && params.get('window') === '7d') {
+              _perfFetchUrl += '&row_layouts=1';
             }
             if (deltaToken) _perfFetchUrl += '&since=' + encodeURIComponent(deltaToken);
             requestedOrder = baseOrder;

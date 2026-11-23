@@ -18205,7 +18205,11 @@ def _archive_list_start_warm(slot, warm):
     return True
 
 
-def _archive_list_warm(cache_options, window, stale_ok):
+def _archive_list_body_key(cache_key, scoped_layouts):
+    return cache_key + ":layouts" if scoped_layouts else cache_key
+
+
+def _archive_list_warm(cache_options, window, stale_ok, *, scoped_layouts=False, eager_gzip=True):
     """Build and cache the /list body the handler would build for a
     bootstrap read, without a request (see _archive_list_disk_candidate)."""
     rows, from_cache, body_ver = _archive_list_source_rows_cached(
@@ -18219,7 +18223,9 @@ def _archive_list_warm(cache_options, window, stale_ok):
             delta = None
 
     def _payload():
-        payload = _archive_list_replay_payload(rows, delta, window=window, cached=from_cache)
+        payload = _archive_list_replay_payload(
+            rows, delta, window=window, cached=from_cache, row_layouts=scoped_layouts,
+            eager_gzip=eager_gzip)
         if delta is not None:
             payload["order_token"] = _archive_list_order_token(
                 [_archive_row_sid(row) for row in payload["conversations"]])
@@ -18227,8 +18233,8 @@ def _archive_list_warm(cache_options, window, stale_ok):
         return payload
 
     _archive_list_body_get_or_build(
-        cache_key, window, from_cache, _payload,
-        (body_ver, delta["ctx"]) if delta is not None else body_ver)
+        _archive_list_body_key(cache_key, scoped_layouts), window, from_cache, _payload,
+        (body_ver, delta["ctx"]) if delta is not None else body_ver, eager_gzip=eager_gzip)
 
 
 try:
@@ -21447,7 +21453,7 @@ _ARCHIVE_LIST_PROJECTION_DIAG_LOCK = threading.Lock()
 
 def _archive_list_projection_diag(window, key, hit):
     """Describe replay invalidation without logging row identities or values."""
-    names = ("window", "cached", "snapshot", "context", "overlay", "graph", "topics", "gzip")
+    names = ("window", "cached", "snapshot", "context", "overlay", "graph", "topics", "gzip", "layouts")
     with _ARCHIVE_LIST_PROJECTION_DIAG_LOCK:
         previous = _ARCHIVE_LIST_PROJECTION_DIAG_KEYS.get(window)
         changed = [name for name, before, after in zip(names, previous or (), key)
@@ -21464,14 +21470,24 @@ def _archive_list_projection_diag(window, key, hit):
 
 
 def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=None, phases=None,
-                                 check_client=None, eager_gzip=True):
+                                 check_client=None, eager_gzip=True, row_layouts=False):
     row_overlays = delta.get("row_overlays") if delta else None
+
+    def project(**options):
+        payload = _archive_list_payload(
+            rows, window=window, now=now, cached=cached, phases=phases,
+            check_client=check_client, **options)
+        if row_layouts:
+            layouts, packed = _list_replay.pack_row_layouts(payload["conversations"], check_client=check_client)
+            payload["row_layouts"] = layouts
+            packed_bytes = _list_replay.encode_payload(packed, compact=True)
+            payload = _list_replay.EncodedListPayload(payload, packed_bytes)
+        return payload
+
     if not delta:
         # Unversioned All reads sweep the cold store. Reuse matching templates
         # without letting that sweep evict the scoped sidebar's working set.
-        return _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
-                                     _retain_templates=window != "all",
-                                     check_client=check_client)
+        return project(_retain_templates=window != "all")
     window = _archive_list_window(window)
     now = time.time() if now is None else now
     extra = delta.get("extra")
@@ -21487,25 +21503,20 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
             resume_fields = {sid: usage_limit_resume_at_for_session(sid, resumes=resumes)
                              for sid in resumes}
     except Exception:
-        return _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
-                                     _row_overlays=row_overlays, check_client=check_client)
+        return project(_row_overlays=row_overlays)
     parents = _session_graph.parent_snapshot()
     selected = _archive_list_window_rows(
         rows, _archive_list_window_cutoff(window, now=now), ideas, parents)
     inputs = (resumes, parents, ideas, selected)
     if not extra:
-        return _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
-                                     _inputs=inputs, _row_overlays=row_overlays,
-                                     check_client=check_client)
+        return project(_inputs=inputs, _row_overlays=row_overlays)
     ids = [_archive_row_sid(row) for row in selected]
     overlay_ids = [_archive_row_sid(row) for row in extra]
     base_ids = {_archive_row_sid(row) for row in rows[:len(rows) - len(extra)]}
     # Missing/duplicate identities cannot safely address replacement spans.
     if (not all(ids) or len(set(ids)) != len(ids) or not all(overlay_ids)
             or len(set(overlay_ids)) != len(overlay_ids) or base_ids.intersection(overlay_ids)):
-        return _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
-                                     _inputs=inputs, _row_overlays=row_overlays,
-                                     check_client=check_client)
+        return project(_inputs=inputs, _row_overlays=row_overlays)
     # These two fields are copied by projection, not used by topic/driver
     # resolution. Window membership is checked separately on every request.
     # Keep presence in the guard, and every other overlay field unchanged.
@@ -21523,7 +21534,7 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
                                    sort_keys=True, default=str).encode()).hexdigest()
     from ccc_server import continuation_topics
     key = (window, bool(cached), delta["ver"], projection_ctx or delta["ctx"], guard,
-           _session_graph.projection_revision(), continuation_topics.revision(), eager_gzip)
+           _session_graph.projection_revision(), continuation_topics.revision(), eager_gzip, row_layouts)
     entry = _ARCHIVE_LIST_PROJECTION_CACHE.get(key)
     if phases is not None:
         phases["projection_cache"] = _archive_list_projection_diag(window, key, entry is not None)
@@ -21533,10 +21544,11 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
                                        check_client=check_client)
         if check_client is not None:
             check_client()
-        entry = _list_replay.encode_rows(payload["conversations"], overlay_set, deflate=eager_gzip)
+        entry = _list_replay.encode_rows(
+            payload["conversations"], overlay_set, deflate=eager_gzip, row_layouts=row_layouts)
         raw = entry[0]
         if projection_ctx is not None:
-            entry = _list_replay.TicketContextEntry(entry, delta["ctx"])
+            entry = _list_replay.TicketContextEntry(entry, delta["ctx"], getattr(entry, "layouts", None))
         _ARCHIVE_LIST_PROJECTION_CACHE.put(key, entry, _list_replay.entry_weight(entry))
         compressed = _list_replay.compress_replay(entry, payload["conversations"])
     else:
@@ -21550,8 +21562,7 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
             if _list_replay.entry_weight(entry) > _ARCHIVE_LIST_PROJECTION_CACHE.max_bytes:
                 # Keep the usable JSON entry without retrying an oversized
                 # clone on every subsequent read.
-                entry = (_list_replay.TicketContextEntry((*entry[:3], None), entry.ticket_context)
-                         if isinstance(entry, _list_replay.TicketContextEntry) else (*entry[:3], None))
+                entry = _list_replay.with_owned_rows(entry, None)
             _ARCHIVE_LIST_PROJECTION_CACHE.put(key, entry, _list_replay.entry_weight(entry))
         if projection_ctx is not None and getattr(entry, "ticket_context", None) != delta["ctx"]:
             # Cached rows contain the earlier ticket overlay. All ticket
@@ -21579,9 +21590,10 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
         if changed:
             # Ticket work may change archive rows outside the live spans.
             # Validate every current run, reusing only exact encoded content.
-            updated = _list_replay.encode_rows(projected, overlay_set, deflate=eager_gzip)
-            raw = updated[0]
-            compressed = _list_replay.compress_replay(updated, projected)
+            entry = _list_replay.encode_rows(
+                projected, overlay_set, deflate=eager_gzip, row_layouts=row_layouts)
+            raw = entry[0]
+            compressed = _list_replay.compress_replay(entry, projected)
         else:
             raw = _list_replay.encode_replay(entry, projected)
             compressed = _list_replay.compress_replay(entry, projected)
@@ -21598,6 +21610,8 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
                 "ticket_rows_changed": bool(changed),
                 "wall_ms": round((time.perf_counter() - wall) * 1000, 1),
                 "cpu_ms": round((time.thread_time() - cpu) * 1000, 1)}
+    if row_layouts:
+        payload["row_layouts"] = entry.layouts
     return _list_replay.EncodedListPayload(payload, raw, compressed)
 
 
@@ -38941,11 +38955,19 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             if not re.fullmatch(r"[0-9a-f]{64}", saved_order):
                 saved_order = ""
             initial = qs.get("initial", ["0"])[0] == "1"
-            _disk = None if initial else _archive_list_disk_candidate(list_cache_key, window, since)
+            scoped_layouts = window == "7d" and qs.get("row_layouts") == ["1"]
+            body_cache_key = _archive_list_body_key(list_cache_key, scoped_layouts)
+            _disk = None if initial else _archive_list_disk_candidate(body_cache_key, window, since)
+            if (not initial and _disk is None and scoped_layouts
+                    and (body_cache_key, window) not in _ARCHIVE_LIST_BUILT):
+                # The first boot after enabling layouts can reuse a legacy
+                # saved body. Its validator still describes the same rows.
+                _disk = _archive_list_disk_candidate(list_cache_key, window, since)
             if _disk is not None:
                 _archive_list_start_warm(
-                    (list_cache_key, window),
-                    lambda: _archive_list_warm(cache_options, window, stale_ok),
+                    (body_cache_key, window),
+                    lambda: _archive_list_warm(cache_options, window, stale_ok,
+                                               scoped_layouts=scoped_layouts, eager_gzip=not scoped_layouts),
                 )
                 if since and since == _disk[3]:
                     # The open page already holds exactly the saved rows.
@@ -39162,7 +39184,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                         _check_client()
                     payload = _archive_list_replay_payload(
                         rows, _delta, window=window, cached=from_cache, phases=_payload_phases,
-                        check_client=_check_client, eager_gzip=eager_gzip)
+                        check_client=_check_client, eager_gzip=eager_gzip, row_layouts=scoped_layouts)
                     if _check_client is not None:
                         _check_client()
                     if _delta is not None:
@@ -39177,7 +39199,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 # The token's projection-context hash joins the body version so
                 # a replayed body never carries a token for other inputs.
                 _status = self._send_archive_list_json(
-                    list_cache_key, window, from_cache, _timed_payload,
+                    body_cache_key, window, from_cache, _timed_payload,
                     (body_ver, _delta["ctx"]) if _delta is not None else body_ver,
                     diagnostics=_body_cache_diag, since=since, saved_order=saved_order,
                     row_layouts=qs.get("row_layouts", ["0"])[0] == "1",
