@@ -247,6 +247,42 @@ def test_history_hot_cut_reuses_capture_and_invalidates_on_lifecycle_change(monk
     assert updated[1]["stable"] != cut[1]["stable"]
 
 
+@pytest.mark.parametrize("targeted", [False, True])
+def test_lifecycle_restamp_rehashes_only_affected_hot_rows(monkeypatch, targeted):
+    rows = [
+        dict(session_id="stable", archived=False, trashed=False, all_lane_override=""),
+        dict(session_id="changed", archived=False, trashed=False, all_lane_override=""),
+        dict(session_id="legacy", archived=0, trashed=False, all_lane_override=""),
+    ]
+    monkeypatch.setattr(server, "_archive_serve_cache", {"base": {"rows": rows, "ver": 1}})
+    monkeypatch.setattr(server, "_archive_serve_version", 1)
+    monkeypatch.setattr(server, "_archive_serve_generation", 1)
+    monkeypatch.setattr(server, "_archive_serve_refreshing", {})
+    monkeypatch.setattr(server, "_load_conversation_lifecycle_sets", lambda: ({"changed"}, set()))
+    monkeypatch.setattr(server, "_load_session_lane_overrides", lambda: {})
+    before = server._archive_history_hot_snapshot("base")
+
+    rehashed = []
+    token = layer.hot_row_token
+
+    def record_token(row):
+        rehashed.append(row["session_id"])
+        return token(row)
+
+    monkeypatch.setattr(layer, "hot_row_token", record_token)
+    if targeted:
+        server._restamp_archive_serve_cache_after_mutation(archived_set={"changed"},
+                                                          mutated_sids={"changed"})
+    else:
+        server._restamp_archive_serve_cache_after_mutation()
+    after = server._archive_history_hot_snapshot("base")
+
+    assert rehashed == (["changed"] if targeted else ["changed", "legacy"])
+    assert after[1] == {sid: token(row) for sid, row in after[0].items()}
+    assert before[0]["changed"]["archived"] is False
+    assert after[0]["changed"]["archived"] is True
+
+
 def test_history_hot_cut_survives_identical_refresh_but_checks_capture(monkeypatch):
     monkeypatch.setattr(server, "_archive_serve_cache", {})
     monkeypatch.setattr(server, "_archive_serve_version", 0)

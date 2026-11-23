@@ -18760,11 +18760,16 @@ def _restamp_archive_serve_cache_after_mutation(archived_set=None, trashed_set=N
             arch_set = archived_set if archived_set is not None else set()
             tr_set = trashed_set if trashed_set is not None else set()
             for entry in _archive_serve_cache.values():
-                for row in entry.get("rows") or []:
+                rows = entry.get("rows")
+                memo = entry.pop("history_hot_tokens", None)
+                tokens = (memo[2].copy() if memo is not None and memo[0] == entry["ver"]
+                          and memo[1] is rows else {})
+                for row in rows or []:
                     if not isinstance(row, dict):
                         continue
                     sid = str(row.get("session_id") or row.get("id") or "")
                     if sid in mut_set:
+                        tokens.pop(id(row), None)
                         if archived_set is not None:
                             row["archived"] = sid in arch_set
                         if trashed_set is not None:
@@ -18775,6 +18780,8 @@ def _restamp_archive_serve_cache_after_mutation(archived_set=None, trashed_set=N
                 entry["ver"] = _archive_serve_version
                 entry.pop("transfer_rows", None)
                 entry.pop("history_hot_snapshot", None)
+                if tokens:
+                    entry["history_hot_tokens"] = (_archive_serve_version, rows, tokens)
             _archive_serve_refreshing.clear()
             return
 
@@ -18792,30 +18799,47 @@ def _restamp_archive_serve_cache_after_mutation(archived_set=None, trashed_set=N
             lane_overrides = {}
         refreshed = {}
         for key, entry in _archive_serve_cache.items():
+            previous_rows = entry.get("rows")
+            memo = entry.get("history_hot_tokens")
+            previous_tokens = (memo[2] if memo is not None and memo[0] == entry["ver"]
+                               and memo[1] is previous_rows else {})
+            tokens = {}
             rows = []
             row_rev = entry.get("row_rev")
             tracked = row_rev is not None and bool(entry.get("track_since"))
             row_rev = dict(row_rev) if tracked else None
-            for original in entry.get("rows") or []:
+            for original in previous_rows or []:
                 if not isinstance(original, dict):
                     tracked = False
                     continue
                 row = dict(original)
+                unchanged = True
                 sid = row.get("session_id") or row.get("id")
                 if sid:
-                    row["archived"] = sid in archived_set
-                    row["trashed"] = sid in trashed_set
-                    row["all_lane_override"] = lane_overrides.get(str(sid), _default_session_lane(row))
+                    archived, trashed = sid in archived_set, sid in trashed_set
+                    lane = lane_overrides.get(str(sid), _default_session_lane(row))
+                    old_lane = original.get("all_lane_override")
+                    # A proof covers the serialized types as well as values.
+                    # Python considers equal legacy values such as 0 and False.
+                    unchanged = (original.get("archived") is archived
+                                 and original.get("trashed") is trashed
+                                 and type(old_lane) is str and type(lane) is str
+                                 and old_lane == lane)
+                    row.update(archived=archived, trashed=trashed, all_lane_override=lane)
                     # CCC-142: only rows whose lifecycle/lane actually moved
                     # ride the next ?since= delta.
                     if tracked and row != original:
                         row_rev[str(sid)] = _archive_serve_version
+                if unchanged and (token := previous_tokens.get(id(original))) is not None:
+                    tokens[id(row)] = token
                 rows.append(row)
             refreshed[key] = {
                 "ts": 0.0,
                 "rows": rows,
                 "ver": _archive_serve_version,
             }
+            if tokens:
+                refreshed[key]["history_hot_tokens"] = (_archive_serve_version, rows, tokens)
             if tracked:
                 refreshed[key].update(track_since=entry["track_since"], row_rev=row_rev)
         _archive_serve_cache.clear()
