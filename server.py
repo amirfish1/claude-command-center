@@ -19948,13 +19948,13 @@ def _archive_history_response(key, cache_options, since, saved_order, encodings,
                     break
         preferred = None
         if not state["loaded"] and (not since or previous is not None
-                                    or since.startswith(layer.REBASED_TOKEN_PREFIX)):
+                                    or since.startswith((layer.REBASED_TOKEN_PREFIX,
+                                                         layer.VIEW_TOKEN_PREFIX))):
             # Keep serving a close rebased artifact across the initial load
-            # and its known validators without decoding both artifacts.
+            # without decoding both artifacts. An unknown rebased or view
+            # validator can receive a complete response from this basis.
             with _archive_history_timing(phases, "load_cold_rebased"):
                 preferred = _archive_history_rebased_basis(state, key, encodings)
-            if since and previous is None and preferred is not None and since != preferred.token:
-                preferred = None
         if preferred is None:
             basis = _archive_history_raw_basis(state, key, phases)
             if basis is None:
@@ -19983,7 +19983,7 @@ def _archive_history_response(key, cache_options, since, saved_order, encodings,
                 base = previous if delta else basis
                 # Try the already decoded artifact with a small hydration
                 # budget that includes overlay and family changes.
-                cold_probe = preferred is not None and not since
+                cold_probe = preferred is not None and not delta
                 result = _archive_history_project_cut(
                     cut, base, phases=phases.setdefault("projection", {}), check_client=check_client,
                     max_rows=_ARCHIVE_HISTORY_COLD_REBASE_MAX_ROWS if cold_probe else None)

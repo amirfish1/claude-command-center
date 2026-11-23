@@ -385,6 +385,18 @@ def test_cold_rebased_basis_defers_raw_load_and_honors_saved_validators(tmp_path
     assert etag == '"d-' + rebased.token + '"'
     assert json.loads(gzip.decompress(body))["base"]["conversations"] == [[0, ["a"]]]
     assert request(rebased.token) == (None, None, etag)
+    for stale in (layer.REBASED_TOKEN_PREFIX + "old", layer.view_token()):
+        projected.clear()
+        phases = {}
+        body, encoding, current_etag = server._archive_history_response(
+            key, {}, stale, "", ("gzip",), phases=phases, check_client=None)
+        assert (encoding, current_etag) == ("gzip", etag)
+        document = json.loads(gzip.decompress(body))
+        assert document["history_layer"] == 1
+        assert document["base"]["conversations"] == [[0, ["a"]]]
+        assert document["patch"]["since"] == rebased.token
+        assert "load_basis" not in phases
+        assert projected == [(rebased.token, server._ARCHIVE_HISTORY_COLD_REBASE_MAX_ROWS)]
     assert not state["loaded"]
     assert request(raw.token) == (None, None, '"d-' + raw.token + '"')
     assert state["basis"] == raw
@@ -392,7 +404,7 @@ def test_cold_rebased_basis_defers_raw_load_and_honors_saved_validators(tmp_path
     state.update(loaded=False, basis=None, views=OrderedDict())
     projected.clear()
     reject_rebased = True
-    assert request()[2] == '"d-' + raw.token + '"'
+    assert request(layer.view_token())[2] == '"d-' + raw.token + '"'
     assert projected == [(rebased.token, server._ARCHIVE_HISTORY_COLD_REBASE_MAX_ROWS), (raw.token, None)]
 
     def project_with_scope_limit(cut, previous, *, max_rows=None, phases, **kwargs):

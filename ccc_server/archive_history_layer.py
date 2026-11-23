@@ -32,6 +32,7 @@ _MAX_BASE_BYTES = 16 << 20
 _MAX_INDEX_BYTES = 32 << 20
 _MAX_REBASE_BYTES = 96 << 20
 REBASED_TOKEN_PREFIX = "layer-rebased."
+VIEW_TOKEN_PREFIX = "layer-view."
 _GZIP_LEVEL = 3
 _ENCODE_GUARD = json.JSONEncoder(separators=(",", ":")).encode
 
@@ -135,7 +136,7 @@ def observed_inputs(inputs, rows, projected, *, previous=None, changed=()):
 
 
 def view_token():
-    return "layer-view." + uuid.uuid4().hex
+    return VIEW_TOKEN_PREFIX + uuid.uuid4().hex
 
 
 def same_projection(first, second):
