@@ -69,14 +69,17 @@ def test_list_body_cache_drops_stale_snapshots_by_bytes(monkeypatch):
 def test_stale_refresh_results_are_swept_and_fresh_ones_kept(tmp_path):
     prefix = server._ARCHIVE_REFRESH_RESULT_PREFIX
     stale, fresh = tmp_path / (prefix + "old.json"), tmp_path / (prefix + "new.json")
+    handoff = stale.with_suffix(".json.sidebar")
     other = tmp_path / "unrelated.json"
-    for path in (stale, fresh, other):
+    for path in (stale, fresh, handoff, other):
         path.write_text("{}")
     long_ago = time.time() - 86400
     os.utime(stale, (long_ago, long_ago))
+    os.utime(handoff, (long_ago, long_ago))
     os.utime(other, (long_ago, long_ago))
-    assert server._sweep_stale_archive_refresh_results(root=str(tmp_path)) == 1
-    assert not stale.exists() and fresh.exists() and other.exists()
+    assert server._sweep_stale_archive_refresh_results(root=str(tmp_path)) == 2
+    assert not stale.exists() and not handoff.exists()
+    assert fresh.exists() and other.exists()
 
 
 def test_release_runs_on_this_platform():

@@ -280,6 +280,48 @@ def test_detached_rebase_keeps_boot_basis_and_publishes_exact_order(tmp_path, mo
     assert layer.load_basis(layer.rebased_path(archive), scope) == published
 
 
+def test_refresh_rebases_only_large_hot_changes(tmp_path, monkeypatch):
+    monkeypatch.setattr(layer.list_encoding, "_zstd", lambda raw: None)
+    archive = tmp_path / "archive.json"
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", archive)
+    monkeypatch.setattr(server, "_ARCHIVE_HISTORY_REBASE_MIN_CHANGES", 2)
+    key = server._archive_response_cache_key()
+    old_rows = [{"session_id": sid, "state": "idle"} for sid in ("a", "b", "c")]
+    new_rows = [dict(row, state="working") for row in old_rows[:2]] + old_rows[2:]
+
+    def guards(rows):
+        hot = {row["session_id"]: row for row in rows[:2]}
+        return layer.read_inputs(
+            inventory("a", "b", "c"), hot, {sid: layer.hot_row_token(row) for sid, row in hot.items()},
+            (), overlay_maps=(), edges=(),
+        )
+
+    before = guards(old_rows)
+    metadata = {"window": "all", "count": 3}
+    basis = layer.make_basis(before, set(), {}, dict(metadata, conversations=old_rows))
+    target = layer.basis_path(archive)
+    assert layer.write_basis(target, server._archive_history_scope(key), basis)
+
+    def project(cut, previous, *, persist_topics):
+        assert not persist_topics
+        assert previous == basis
+        view = layer.View(cut[0], frozenset(("a", "b")), {}, "next", metadata, {})
+        return view, new_rows[:2], {}
+
+    monkeypatch.setattr(server, "_archive_history_project_cut", project)
+    after = guards(new_rows)
+    assert server._archive_history_rebase_cut((before,), key) is None
+    assert server._archive_history_rebase_cut((guards([new_rows[0], *old_rows[1:]]),), key) is None
+    refreshed = server._archive_history_rebase_cut((after,), key)
+    assert refreshed.inputs == after
+    assert refreshed.working == {"a", "b"}
+    raw = zlib.decompressobj(wbits=31).decompress(refreshed.frames["gzip"])
+    packed = json.loads(raw.removeprefix(layer._LAYER_PREFIX))
+    assert [dict(zip(packed["row_layouts"][index], values))
+            for index, values in packed["conversations"]] == new_rows
+    assert layer.load_basis(target, server._archive_history_scope(key)) == basis
+
+
 def test_changed_cut_reuses_unchanged_effect_rows_and_adds_discovered_children(monkeypatch):
     old_inputs = layer.read_inputs(inventory("tracked", "changed", "untracked"), {}, {}, (),
                                    overlay_maps=({},), edges=())
