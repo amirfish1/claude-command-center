@@ -189,6 +189,44 @@ def test_sidebar_title_omission_falls_back_without_json_each(thread_db, monkeypa
     ) == [{"id": "known", "title": "Original"}]
 
 
+@pytest.mark.parametrize("all_known", [False, True])
+def test_sidebar_title_filter_only_binds_ranked_ids(thread_db, monkeypatch, all_known):
+    with sqlite3.connect(thread_db) as con:
+        con.execute("PRAGMA journal_mode=WAL")
+        _schema(con)
+        con.execute("ALTER TABLE threads ADD COLUMN title TEXT")
+        con.executemany("INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, ?)", [
+            ("known", 3, 3000, 0, 0, 0, "Known title"),
+            ("next", 2, 2000, 0, 0, 0, "Next title"),
+            ("outside", 1, 1000, 0, 0, 0, "Outside title"),
+        ])
+    read = codex._sqlite_fetch_rows
+    title_reads = []
+
+    def capture(con, sql, params, columns):
+        if " AS title" in sql:
+            title_reads.append((sql, params))
+        rows = read(con, sql, params, columns)
+        if "NULL AS title" in sql and not all_known:
+            with sqlite3.connect(thread_db) as writer:
+                writer.execute("UPDATE threads SET title = 'Later title' WHERE id = 'next'")
+        return rows
+
+    monkeypatch.setattr(codex, "_sqlite_fetch_rows", capture)
+    known = {"known", "outside", "unrelated"}
+    if all_known:
+        known.add("next")
+    assert codex._codex_fetch_threads_in_home(
+        limit=2, columns=("id", "title"), omit_titles_for=known,
+    ) == [{"id": "known", "title": None}, {
+        "id": "next", "title": None if all_known else "Next title",
+    }]
+    assert len(title_reads) == (1 if all_known else 2)
+    assert "NULL AS title" in title_reads[0][0]
+    if not all_known:
+        assert title_reads[1][1] == ('["known"]', 2)
+
+
 def test_null_guard_and_top_n_share_a_read_snapshot(thread_db, monkeypatch):
     with sqlite3.connect(thread_db) as con:
         con.execute("PRAGMA journal_mode=WAL")

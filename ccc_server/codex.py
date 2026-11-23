@@ -9307,7 +9307,7 @@ def _codex_fetch_threads_in_home(
                     order = f"{primary} DESC, rowid ASC"
             deleted = _core._codex_deleted_thread_ids()
 
-            def read_rows(order_by, omit_titles=False):
+            def read_rows(order_by, title_filter):
                 if exact_ids is not None:
                     # These rows fill a dictionary by ID. Avoid repeated opens,
                     # schema probes and time sorts for batches from one account.
@@ -9325,15 +9325,17 @@ def _codex_fetch_threads_in_home(
                     return rows
                 fields = selected
                 bindings = query_params
-                if omit_titles:
+                if title_filter is not None:
                     # Keep these rows in the top-N and multi-home merge. The
                     # overlay only needs titles for IDs absent from its snapshot.
-                    fields = [
-                        "CASE WHEN typeof(id) = 'text' AND id COLLATE BINARY IN "
-                        "(SELECT value FROM json_each(?)) THEN NULL ELSE title END AS title"
-                        if field == "title" else field for field in selected
-                    ]
-                    bindings = (json.dumps(list(omit_titles_for)), *bindings)
+                    title = "NULL AS title"
+                    if title_filter:
+                        title = (
+                            "CASE WHEN typeof(id) = 'text' AND id COLLATE BINARY IN "
+                            "(SELECT value FROM json_each(?)) THEN NULL ELSE title END AS title"
+                        )
+                        bindings = (json.dumps(list(title_filter)), *bindings)
+                    fields = [title if field == "title" else field for field in selected]
                 query = f"SELECT {', '.join(fields)} {from_threads} ORDER BY {order_by}"
                 if limit:
                     query += " LIMIT ?"
@@ -9345,24 +9347,37 @@ def _codex_fetch_threads_in_home(
             omit_titles = bool(limit and not where and omit_titles_for
                                and columns is not None and "title" in selected)
 
-            def read_with_order_fallback():
+            def read_with_order_fallback(title_filter):
                 try:
-                    return read_rows(order, omit_titles)
+                    return read_rows(order, title_filter)
                 except sqlite3.OperationalError as exc:
                     if order == fallback_order or "no such column: rowid" not in str(exc):
                         raise
                     # Unusual WITHOUT ROWID stores still support the legacy query.
-                    return read_rows(fallback_order, omit_titles)
+                    return read_rows(fallback_order, title_filter)
 
             try:
-                all_rows = read_with_order_fallback()
+                if omit_titles and 0 < int(limit) < len(omit_titles_for):
+                    # The archive may already know tens of thousands of IDs.
+                    # Test the bounded candidates in Python before binding the
+                    # title filter. Any second read must use the same snapshot.
+                    if not con.in_transaction:
+                        con.execute("BEGIN")
+                    all_rows = read_with_order_fallback(())
+                    known = {row["id"] for row in all_rows
+                             if type(row["id"]) is str and row["id"] in omit_titles_for}
+                    if len(known) != len(all_rows):
+                        all_rows = read_with_order_fallback(known or None)
+                else:
+                    all_rows = read_with_order_fallback(omit_titles_for if omit_titles else None)
             except sqlite3.OperationalError as exc:
                 if not omit_titles or "no such table: json_each" not in str(exc):
                     raise
                 omit_titles = False
-                all_rows = read_with_order_fallback()
+                all_rows = read_with_order_fallback(None)
             if sig is not None and _codex_db_signature(db) == sig:
-                omitted = ({r["id"] for r in all_rows if r["id"] in omit_titles_for}
+                omitted = ({r["id"] for r in all_rows
+                            if type(r["id"]) is str and r["id"] in omit_titles_for}
                            if omit_titles else set())
                 with _CODEX_THREADS_CACHE_LOCK:
                     if len(_CODEX_THREADS_CACHE) > 64:
