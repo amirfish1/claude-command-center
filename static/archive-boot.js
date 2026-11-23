@@ -8,12 +8,20 @@
         || layouts.some(keys => !Array.isArray(keys) || keys.some(key => typeof key !== 'string' || key === '__proto__'))) {
       throw new Error('Invalid archive row layouts');
     }
+    const templates = new Map();
     const rows = conversations.map(encoded => {
       const keys = Array.isArray(encoded) && Number.isInteger(encoded[0]) && layouts[encoded[0]];
       if (!keys || !Array.isArray(encoded[1]) || keys.length !== encoded[1].length) {
         throw new Error('Invalid archive row');
       }
-      const row = {};
+      // Copy an established layout before setting values. Large layouts
+      // otherwise grow a new property's table one field at a time per row.
+      let template = templates.get(keys);
+      if (!template) {
+        template = Object.fromEntries(keys.map(key => [key, null]));
+        templates.set(keys, template);
+      }
+      const row = Object.assign({}, template);
       for (let i = 0; i < keys.length; i++) row[keys[i]] = encoded[1][i];
       return row;
     });
