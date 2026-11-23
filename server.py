@@ -11986,17 +11986,15 @@ def _archive_session_is_live(session_id):
 
 
 def _archive_session_is_live_uncached(session_id):
-    """A session is "live" if any sidecar marker exists for it (Claude only),
-    OR a non-Claude engine CLI (codex/gemini/cursor/antigravity) is running it.
+    """Check engine-specific liveness, including Devin's native session lock.
 
     Claude sidecars are written by Claude Code's hooks. The hook can run
     with a non-Claude session id in scope (e.g. a Claude hook firing a
     `git commit --trailer "Co-authored-by: Cursor"` on behalf of a Cursor
     agent) — that writes a Claude-format sidecar keyed under a Cursor sid,
     polluting liveness detection. The cursor row then falsely lights up
-    WIP "Shell" forever. Defense: non-Claude engines NEVER trust the
-    Claude sidecar — their liveness comes solely from the live-process
-    scan.
+    WIP "Shell" forever. Engines without compatible hooks use their own
+    liveness signals.
     """
     if not session_id:
         return False
@@ -12008,6 +12006,8 @@ def _archive_session_is_live_uncached(session_id):
         return bool(_acp_resolve_bin(engine).get("available"))
     if engine == "hermes":
         return bool(_hermes_active_session_status(session_id).get("live"))
+    if _is_devin_cli_session(session_id) and _devin_cli_session_live(_devin_cli_raw_id(session_id)):
+        return True
     is_non_claude_engine = engine in {
         "codex", "cursor", "gemini", "antigravity", "kilo", "opencode",
     }
@@ -12128,7 +12128,8 @@ def _acp_attached_session_ids():
                 except (TypeError, ValueError):
                     updated = 0.0
                 if updated and (now - updated) < _SIDECAR_LIVE_WINDOW:
-                    sids.add(str(acp_sid))
+                    sid = str(acp_sid)
+                    sids.add(DEVIN_CLI_SESSION_PREFIX + sid if harness == "devin" else sid)
     except Exception:
         pass
     return sids
@@ -12166,6 +12167,7 @@ def _discover_live_session_ids():
         # history. Correctness-preserving: a marker too old to prove liveness is
         # dropped from candidacy, never from a genuinely-live result.
         now = time.time()
+        sidecar_sids = set()
         try:
             for f in SIDECAR_STATE_DIR.iterdir():
                 try:
@@ -12188,9 +12190,16 @@ def _discover_live_session_ids():
                 else:
                     sid = name
                 if sid:
-                    sids.add(sid)
+                    sidecar_sids.add(sid)
         except OSError:
             pass
+        if sidecar_sids:
+            # Devin hooks write native slugs. The lock directory identifies
+            # those slugs without reading sessions.db or guessing from the name.
+            devin_ids = sidecar_sids & _devin_cli_lock_set()
+            sids.update(sidecar_sids)
+            sids.difference_update(devin_ids)
+            sids.update(DEVIN_CLI_SESSION_PREFIX + sid for sid in devin_ids)
     from ccc_server.antigravity_stream import acp_session_ids as antigravity_acp_ids
 
     sids.update(_acp_attached_session_ids())
@@ -12409,19 +12418,25 @@ def _live_activity_entry_for_session(session_id):
     elif engine in ("kimi", "grok"):
         entry.update(_acp_live_activity_fields(engine, session_id))
     elif engine == "devin":
-        _add_sidecar_fields(entry)
+        raw_id = _devin_cli_raw_id(session_id)
         try:
-            raw_id = _devin_cli_raw_id(session_id)
+            entry["acp_status"] = _devin_live_acp_status(raw_id)
+        except Exception:
+            entry["acp_status"] = "idle"
+        if _is_devin_cli_session(session_id) and entry["acp_status"] is None:
+            # The native lock holder owns this turn. Read its hook state using
+            # the raw slug, but keep the conversation ID on the wire.
+            _add_sidecar_fields(entry, marker_sid=raw_id)
+        else:
+            _add_sidecar_fields(entry)
             acp_fields = _acp_live_activity_fields("devin", raw_id)
             if acp_fields.get("needs_approval"):
                 entry["needs_approval"] = True
-                entry["needs_approval_message"] = acp_fields.get(
-                    "needs_approval_message")
-            entry["acp_status"] = _devin_live_acp_status(raw_id)
+                entry["needs_approval_message"] = acp_fields.get("needs_approval_message")
             if acp_fields.get("working_since"):
                 entry["working_since"] = acp_fields["working_since"]
-        except Exception:
-            pass
+            entry["sidecar_ts"] = max(entry.get("sidecar_ts") or 0, acp_fields["sidecar_ts"])
+        entry["state"] = _session_state_label(entry)
     elif engine == "hermes":
         # Hermes has no Claude sidecars; its runtime lease is the liveness
         # signal and was already applied above.
@@ -12439,6 +12454,13 @@ def _live_activity_entry_for_session(session_id):
         ):
             entry["working_since"] = entry["sidecar_ts"]
     return entry
+
+
+def _project_live_activity_entry(entry):
+    fields = {key: entry.get(key) for key in _LIVE_ACTIVITY_FIELD_KEYS}
+    if "state" in entry:
+        fields["state"] = entry["state"]
+    return fields
 
 
 # Coalescing cache for the live-activity snapshot. /api/sessions/live-activity
@@ -14388,7 +14410,7 @@ def _live_activity_via_helper(detail):
                 data.pop(sid, None)
                 continue
             raw = measured("activity", _live_activity_entry_for_session, sid)
-            data[sid] = {k: raw.get(k) for k in _LIVE_ACTIVITY_FIELD_KEYS}
+            data[sid] = _project_live_activity_entry(raw)
     detail.update(reply.get("detail") or {})
     detail["overlay_phases"] = {
         name: {key: round(value, 2) for key, value in phase.items()}
@@ -14540,7 +14562,7 @@ def _build_live_sessions_activity_uncached(detail=None):
         if not measured("liveness", _archive_session_is_live, sid):
             continue
         raw = measured("activity", _live_activity_entry_for_session, sid)
-        out[sid] = {k: raw.get(k) for k in _LIVE_ACTIVITY_FIELD_KEYS}
+        out[sid] = _project_live_activity_entry(raw)
     if detail is not None:
         detail["candidates"] = len(candidates)
         detail["phases"] = {
@@ -29694,7 +29716,7 @@ def _enrich_ask_payload_from_transcript(session_id, payload):
     return payload
 
 
-def _add_sidecar_fields(entry):
+def _add_sidecar_fields(entry, *, marker_sid=None):
     """Add sidecar fields to a session entry, reading state if available.
 
     Prefer the in-flight marker (a tool currently running) over the sidecar's
@@ -29702,11 +29724,17 @@ def _add_sidecar_fields(entry):
     see on the kanban card while they wait.
     """
     sid = entry.get("session_id", "")
+    marker_sid = marker_sid or sid
     is_live = entry.get("is_live")
-    sc = _read_sidecar_state(sid) if is_live else None
-    inflight = _live_in_flight_or_none(sid, _read_in_flight_state(sid)) if is_live else None
-    notif = _read_notification_state(sid) if is_live else None
-    compacting_state = _read_compacting_state(sid) if is_live else None
+    sc = _read_sidecar_state(marker_sid) if is_live else None
+    inflight = _live_in_flight_or_none(sid, _read_in_flight_state(marker_sid)) if is_live else None
+    if (marker_sid != sid and inflight and sc and sc.get("status") == "waiting"
+            and float(inflight.get("started_at") or 0) <= float(sc.get("timestamp") or 0)):
+        # A native Devin Stop can follow an interrupted tool whose start
+        # marker was never removed. Use the newer Stop and its timestamp.
+        inflight = None
+    notif = _read_notification_state(marker_sid) if is_live else None
+    compacting_state = _read_compacting_state(marker_sid) if is_live else None
     # Transient busy state, not a request for human input — deliberately kept
     # separate from needs_approval/question_waiting so it never reclassifies
     # the session into the "waiting" kanban column.
@@ -50351,6 +50379,7 @@ def _session_state_label(c):
         and sidecar_fresh
     )
     if (c.get("pending_tool")
+            or c.get("acp_status") == "running"
             or c.get("sidecar_in_flight")
             or subagents_fresh
             or active_fresh):
