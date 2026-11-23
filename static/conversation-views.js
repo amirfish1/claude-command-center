@@ -2223,11 +2223,15 @@ onDashboardDocumentReady(() => {
         else if (r.anchor) _restoreAnchor(r.$v, r.anchor);
       }
     };
-    const _setStatusRailWidth = (width, persist) => {
+    const _setStatusRailWidth = (width, persist, preserveReaders = true) => {
       const next = _clampStatusRailWidth(width);
-      _preserveReadersAcross(() => {
-        document.documentElement.style.setProperty('--status-rail-width', next + 'px');
-      });
+      const style = document.documentElement.style;
+      const nextWidth = next + 'px';
+      if (style.getPropertyValue('--status-rail-width') !== nextWidth) {
+        const applyWidth = () => style.setProperty('--status-rail-width', nextWidth);
+        if (preserveReaders) _preserveReadersAcross(applyWidth);
+        else applyWidth();
+      }
       if ($statusRailResizer) {
         $statusRailResizer.setAttribute('aria-valuemin', String(STATUS_RAIL_MIN_WIDTH));
         $statusRailResizer.setAttribute('aria-valuemax', String(_statusRailMaxWidth()));
@@ -2326,10 +2330,15 @@ onDashboardDocumentReady(() => {
     window._cccExpandStatusRailForFileViewer = _expandStatusRailForFileViewer;
     window._cccRestoreStatusRailAfterFileViewer = _restoreStatusRailAfterFileViewer;
     const _setStatusRailCollapsed = (collapsed, persist) => {
-      _preserveReadersAcross(() => {
-        document.body.classList.toggle('status-rail-collapsed', !!collapsed);
-        if (!collapsed) _setStatusRailWidth(_savedStatusRailWidth(), false);
-      });
+      const classes = document.body.classList;
+      const collapseChangesLayout = classes.contains('status-rail-collapsed') !== !!collapsed;
+      const applyCollapse = () => {
+        classes.toggle('status-rail-collapsed', !!collapsed);
+        if (!collapsed) _setStatusRailWidth(_savedStatusRailWidth(), false, !collapseChangesLayout);
+      };
+      // Capture once across both layout changes when opening the rail.
+      if (collapseChangesLayout) _preserveReadersAcross(applyCollapse);
+      else applyCollapse();
       if ($statusRailRestore) {
         $statusRailRestore.setAttribute('aria-expanded', String(!collapsed));
       }
