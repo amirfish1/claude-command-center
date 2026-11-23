@@ -166,6 +166,35 @@ def test_pinned_membership_reuses_only_the_captured_cut(monkeypatch):
     assert read(wrong_identity) is None
 
 
+def test_new_hot_cut_reuses_only_unchanged_row_guards(monkeypatch):
+    cut = tuple(inventory("a", "b"))
+    first = {"a": {"session_id": "a", "parent_session_id": "b"},
+             "b": {"session_id": "b"}}
+    second = dict(first, b={"session_id": "b", "continuation_origin": "older"})
+
+    def read(inventory_rows, hot):
+        tokens = {sid: layer.hot_row_token(row) for sid, row in hot.items()}
+        return layer.read_inputs(inventory_rows, hot, tokens, (), overlay_maps=(),
+                                 edges=(), pinned_hot=True)
+
+    assert read(cut, first).edges == (("a", "b"),)
+    original_identity = archive_store.identity
+    checked = []
+
+    def record_identity(row):
+        checked.append(row["session_id"])
+        return original_identity(row)
+
+    monkeypatch.setattr(archive_store, "identity", record_identity)
+    updated = read(cut, second)
+    assert checked == ["b"]
+    assert updated.order == ("a", "b")
+    assert updated.edges == (("a", "b"), ("b", "older"))
+    wrong = (("a", "wrong-identity", "", "digest-a"), cut[1])
+    assert read(wrong, second) is None
+    assert checked == ["b"]
+
+
 def test_history_hot_guard_ignores_top_level_order_across_refresh(monkeypatch):
     persisted = {"all_lane_override": "", "archived": False, "session_id": "a",
                  "subagent_recent": [{"id": "child", "type": "task"}]}

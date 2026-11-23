@@ -392,7 +392,7 @@ def row_edges(rows):
 
 _INVENTORY = (None, frozenset(), None)
 _PINNED_OVERLAY_GUARDS = ((), ())
-_PINNED_MEMBERSHIP = (None, None, None)
+_PINNED_MEMBERSHIP = (None, None, None, {})
 
 
 def _canonical_inputs(inventory, removed):
@@ -455,21 +455,36 @@ def _membership_guards(canonical, hot, hot_tokens, pinned):
     # A captured hot cut owns its token map for its lifetime. Keep the
     # tokens as the identity proof without retaining the copied row bodies.
     global _PINNED_MEMBERSHIP
-    previous, tokens, guard = _PINNED_MEMBERSHIP
+    previous, tokens, guard, previous_rows = _PINNED_MEMBERSHIP
     if pinned and previous is canonical and tokens is hot_tokens:
         return guard
     canonical_sources, identities, canonical_edges = canonical
     sources = canonical_sources.copy()
+    hot_edges = []
+    row_guards = {}
+    if not pinned:
+        previous_rows = {}
     for sid, row in hot.items():
         if sid not in hot_tokens:
             return None
-        identity = identities.get(sid)
-        if identity is not None and archive_store.identity(row) != identity:
+        token = hot_tokens[sid]
+        saved = previous_rows.get(sid)
+        if saved is None or saved[0] != token:
+            saved = token, archive_store.identity(row), tuple(row_edges((row,)))
+        _, identity, edges = saved
+        # A new inventory can disagree even if this hot row is unchanged.
+        expected = identities.get(sid)
+        if expected is not None and identity != expected:
             return None
-        sources[sid] = ("hot", hot_tokens[sid])
-    guard = sources, (*canonical_edges, *row_edges(hot.values()))
+        sources[sid] = ("hot", token)
+        hot_edges.extend(edges)
+        if pinned:
+            row_guards[sid] = saved
+    guard = sources, (*canonical_edges, *hot_edges)
     if pinned:
-        _PINNED_MEMBERSHIP = canonical, hot_tokens, guard
+        # The fingerprint covers identity and ancestry. Keep only the last
+        # pinned cut's derived guards so a changed token map can reuse rows.
+        _PINNED_MEMBERSHIP = canonical, hot_tokens, guard, row_guards
     return guard
 
 
