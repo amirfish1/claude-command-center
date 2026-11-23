@@ -751,8 +751,8 @@ def test_inventory_memo_changes_when_the_pinned_cut_or_exclusion_changes():
 def test_pinned_topic_guards_refresh_with_the_snapshot_and_live_overlays():
     from types import MappingProxyType
 
-    source = tuple(inventory("a", "b"))
-    topics = MappingProxyType({"a": ("", "", "old", 1)})
+    source = tuple(inventory("a", "b", "c"))
+    topics = MappingProxyType({"a": ("", "", "old", 1), "c": ("", "", "stable", 1)})
     live = {"b": False}
 
     def read(records):
@@ -765,8 +765,13 @@ def test_pinned_topic_guards_refresh_with_the_snapshot_and_live_overlays():
     assert first.overlays[0] is second.overlays[0]
     assert layer.candidates(first, second) == {"b"}
 
-    third = read(MappingProxyType({"a": ("", "", "new", 1)}))
+    third = read(MappingProxyType({"a": ("", "", "new", 1), "c": ("", "", "stable", 1)}))
     assert layer.candidates(second, third) == {"a"}
+    assert second.overlays[0]["c"] is third.overlays[0]["c"]
+
+    fourth = read(MappingProxyType({"c": ("", "", "stable", True)}))
+    assert layer.candidates(third, fourth) == {"a", "c"}
+    assert fourth.overlays[0] == {"c": '["","","stable",true]'}
 
 
 def test_cold_read_pins_the_selected_hot_rows_after_a_row_ages_out(tmp_path, monkeypatch):

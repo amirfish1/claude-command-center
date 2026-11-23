@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 import gzip
 import hashlib
-from itertools import chain
+from itertools import chain, zip_longest
 import json
 from operator import itemgetter
 import os
@@ -73,14 +73,19 @@ def hot_body_token(body):
     return hashlib.blake2b(body.encode("ascii"), digest_size=16).hexdigest()
 
 
+def _is_typed_topic_record(value):
+    if type(value) is tuple and len(value) == 4:
+        origin, root, title, named = value
+        return type(origin) is str and type(root) is str and type(title) is str and type(named) is int
+    return False
+
+
 def _guard_value(value):
     if type(value) is str:
         return "s" + value
-    if type(value) is tuple and len(value) == 4:
-        origin, root, title, named = value
-        if type(origin) is str and type(root) is str and type(title) is str and type(named) is int:
-            # The durable topic table uses only these four SQLite types.
-            return "t" + repr(value)
+    if _is_typed_topic_record(value):
+        # The durable topic table uses only these four SQLite types.
+        return "t" + repr(value)
     if value is True:
         return "b1"
     if value is False:
@@ -393,12 +398,31 @@ def _canonical_inputs(inventory, removed):
     return guard
 
 
+def _pinned_overlay(values, previous, encoded):
+    if values is previous:
+        return encoded
+    if previous is None:
+        return {sid: _guard_value(value) for sid, value in values.items()}
+    result = {}
+    for sid, value in values.items():
+        old = encoded.get(sid, "")
+        # Only typed topic tuples have the 't' prefix. Check the new types as
+        # well: equality alone would treat a legacy boolean like an integer.
+        if old.startswith("t") and _is_typed_topic_record(value) and value == previous[sid]:
+            result[sid] = old
+        else:
+            result[sid] = _guard_value(value)
+    return result
+
+
 def _overlay_guards(overlay_maps, pinned):
     """Reuse encoded guards for maps owned by one immutable read snapshot."""
     global _PINNED_OVERLAY_GUARDS
     previous, encoded = _PINNED_OVERLAY_GUARDS
     if len(pinned) != len(previous) or any(a is not b for a, b in zip(pinned, previous)):
-        encoded = tuple({sid: _guard_value(value) for sid, value in values.items()} for values in pinned)
+        encoded = tuple(_pinned_overlay(values, old, guard)
+                        for values, old, guard in zip_longest(pinned, previous, encoded)
+                        if values is not None)
         _PINNED_OVERLAY_GUARDS = pinned, encoded
     by_identity = {id(values): guard for values, guard in zip(pinned, encoded)}
     return tuple(guard if (guard := by_identity.get(id(values))) is not None else
