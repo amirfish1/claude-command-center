@@ -176,6 +176,8 @@
   try { if (localStorage.getItem('ccc-conv-cache') === '0') { startRecent(); return; } } catch (_) { startRecent(); return; }
   const fullUrl = url.replace('&initial=1', '');
   const maxBytes = 32 * 1024 * 1024;
+  const blobMinBytes = 1024 * 1024;
+  const canReadBlob = typeof Blob === 'function' && typeof Blob.prototype.arrayBuffer === 'function';
   const maxPatchBytes = 1024 * 1024;
   const maxPatchRows = 256;
   const maxRows = 30000;
@@ -246,7 +248,7 @@
       let timer = setTimeout(() => finish(null), 500);
       try {
         // Both reads share one transaction. A tiny validation header can start
-        // the request while IndexedDB clones the complete rows onto the page.
+        // the request while IndexedDB retrieves the cached body.
         const store = db.transaction('snapshot').objectStore('snapshot');
         let savedHeader;
         const meta = store.get('header');
@@ -264,7 +266,7 @@
         };
         const request = store.get('last');
         request.onerror = () => finish(null);
-        request.onsuccess = () => {
+        request.onsuccess = async () => {
           if (done) return;
           let value = request.result;
           if (!validHeader(value)) { finish(null); return; }
@@ -273,9 +275,15 @@
           if (Object.hasOwn(value, 'packedRows')) {
             try {
               const {packedRows, ...metadata} = value;
-              const rows = packedRows?.byteLength === value.bytes ? readPackedRows(packedRows) : null;
+              let bytes = packedRows;
+              if (canReadBlob && packedRows instanceof Blob) {
+                bytes = packedRows.size === value.bytes ? await packedRows.arrayBuffer() : null;
+                if (done) return;
+              }
+              const rows = bytes?.byteLength === value.bytes ? readPackedRows(bytes) : null;
               value = rows ? {...metadata, rows} : null;
             } catch (_) { value = null; }
+            if (done) return;
           } else if (typeof value.rowsJson === 'string') {
             try {
               const {rowsJson, ...metadata} = value;
@@ -355,9 +363,14 @@
             const layouts = packed || (windowName === 'all' ? packRows(rows) : null);
             if (layouts) encoded = new TextEncoder().encode(JSON.stringify(layouts)).buffer;
           }
-          const storage = encoded ? {packedRows:encoded} : {rowsJson:JSON.stringify(rows)};
-          const bytes = encoded ? encoded.byteLength : 2 * storage.rowsJson.length;
+          const rowsJson = encoded ? null : JSON.stringify(rows);
+          const bytes = encoded ? encoded.byteLength : 2 * rowsJson.length;
           if (bytes > maxBytes) return;
+          // Large ArrayBuffers are cloned by IndexedDB. A Blob lets the
+          // browser read those bytes asynchronously outside the transaction.
+          const storage = encoded
+            ? {packedRows:canReadBlob && bytes >= blobMinBytes ? new Blob([encoded]) : encoded}
+            : {rowsJson};
           store.put({...metadata, ...storage, bytes, at}, 'last');
           store.put({...metadata, bytes, at}, 'header');
           markSaved(bytes);

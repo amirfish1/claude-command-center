@@ -429,41 +429,72 @@ test('All reload keeps a compact snapshot when a delta overtakes the first save'
   } finally {await context.close();}
 });
 
-test('All reload validates a packed UTF-8 base after applying an ordered patch', async () => {
-  const allUrl = '/api/conversations/list?window=all&stale_ok=1';
-  const context = await browser.createBrowserContext(), page = await context.newPage();
-  try {
-    await page.evaluateOnNewDocument(() => localStorage.setItem('ccc-archive-window', 'all'));
-    await page.goto(origin, {waitUntil:'load'});
-    await page.evaluate(({url, rows}) => {
-      window.__cccArchiveSettled = true;
-      window.__cccArchiveSnapshot.save({url, rows, delta:'old'}, null,
-        [[['session_id', 'nested'], ['session_id']], [[0, ['recent', {items:[1]}]], [1, ['older']]]]);
-    }, {url:allUrl, rows});
-    await waitForSnapshot(page, 'old', 'last', 'all');
-    await page.evaluate(url => {
-      const changed = {session_id:'recent', name:'שלום'};
-      window.__cccArchiveSnapshot.save({url, rows:[{session_id:'older'},changed], delta:'reordered', order:'order'},
-        {from:'old', ids:['older','recent'], changes:[changed]});
-    }, allUrl);
-    await waitForSnapshot(page, 'reordered', 'header', 'all');
-    await page.evaluate(url => {
-      const changed = {session_id:'older', name:'updated'};
-      window.__cccArchiveSnapshot.save({url, rows:[changed,{session_id:'recent',name:'שלום'}],
-        delta:'valid', order:'order'}, {from:'reordered', ids:null, changes:[changed]});
-    }, allUrl);
-    await waitForSnapshot(page, 'valid', 'header', 'all');
-    const conditional = page.waitForRequest(req => req.url().includes('since=valid'));
-    await page.reload({waitUntil:'load'});
-    assert.equal((await conditional).headers()['x-ccc-abort-on-disconnect'],'1');
-    const state = await page.evaluate(async () => {
-      const h = window.__cccArchiveSnapshot;
-      const value = await h.read;
-      return {rows:value?.rows, status:(await h.fetch)?.status};
-    });
-    assert.deepEqual(state,{rows:[{session_id:'older',name:'updated'},{session_id:'recent',name:'שלום'}],status:304});
-  } finally {await context.close();}
-});
+for (const large of [false, true]) {
+  test(`All reload validates an ordered patch over a packed ${large ? 'Blob' : 'ArrayBuffer'} base`, async () => {
+    const allUrl = '/api/conversations/list?window=all&stale_ok=1';
+    const context = await browser.createBrowserContext(), page = await context.newPage();
+    try {
+      await page.evaluateOnNewDocument(() => {
+        localStorage.setItem('ccc-archive-window', 'all');
+        if (sessionStorage.getItem('fail-snapshot-blob')) {
+          Blob.prototype.arrayBuffer = async () => { throw new Error('Unreadable snapshot'); };
+        }
+      });
+      await page.goto(origin, {waitUntil:'load'});
+      await page.evaluate(({url, rows, large}) => {
+        window.__cccArchiveSettled = true;
+        window.__cccArchiveSnapshot.save({url, rows, delta:'old'}, null,
+          [[['session_id', 'nested'], ['session_id']], [[0, ['recent', {
+            items:[large ? 'é'.repeat(600000) : 1],
+          }]], [1, ['older']]]]);
+      }, {url:allUrl, rows, large});
+      await waitForSnapshot(page, 'old', 'last', 'all');
+      const storedAsBlob = await page.evaluate(async () => {
+        const db = await new Promise(resolve => {
+          const open = indexedDB.open('ccc-archive-response', 1);
+          open.onsuccess = () => resolve(open.result);
+        });
+        try {
+          return await new Promise(resolve => {
+            const read = db.transaction('snapshot').objectStore('snapshot').get('last');
+            read.onsuccess = () => resolve(read.result.packedRows instanceof Blob);
+          });
+        } finally {db.close();}
+      });
+      assert.equal(storedAsBlob, large);
+      await page.evaluate(url => {
+        const changed = {session_id:'recent', name:'שלום'};
+        window.__cccArchiveSnapshot.save({url, rows:[{session_id:'older'},changed], delta:'reordered', order:'order'},
+          {from:'old', ids:['older','recent'], changes:[changed]});
+      }, allUrl);
+      await waitForSnapshot(page, 'reordered', 'header', 'all');
+      await page.evaluate(url => {
+        const changed = {session_id:'older', name:'updated'};
+        window.__cccArchiveSnapshot.save({url, rows:[changed,{session_id:'recent',name:'שלום'}],
+          delta:'valid', order:'order'}, {from:'reordered', ids:null, changes:[changed]});
+      }, allUrl);
+      await waitForSnapshot(page, 'valid', 'header', 'all');
+      const conditional = page.waitForRequest(req => req.url().includes('since=valid'));
+      await page.reload({waitUntil:'load'});
+      assert.equal((await conditional).headers()['x-ccc-abort-on-disconnect'],'1');
+      const state = await page.evaluate(async () => {
+        const h = window.__cccArchiveSnapshot;
+        const value = await h.read;
+        return {rows:value?.rows, status:(await h.fetch)?.status};
+      });
+      assert.deepEqual(state,{rows:[{session_id:'older',name:'updated'},{session_id:'recent',name:'שלום'}],status:304});
+      if (large) {
+        await page.evaluate(() => sessionStorage.setItem('fail-snapshot-blob', '1'));
+        await page.reload({waitUntil:'load'});
+        assert.deepEqual(await page.evaluate(async () => ({
+          saved:await window.__cccArchiveSnapshot.read,
+          early:await window.__cccArchiveSnapshot.fetch,
+          recent:(await window.__cccArchiveBootstrap.promise)?.status,
+        })), {saved:null, early:null, recent:200});
+      }
+    } finally {await context.close();}
+  });
+}
 
 test('All startup stores its original packed response bytes and restores them on reload', async () => {
   const context = await browser.createBrowserContext(), page = await context.newPage();
