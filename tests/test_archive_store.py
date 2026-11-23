@@ -2,6 +2,7 @@
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import closing
 import hashlib
+from itertools import count
 import json
 import sqlite3
 import threading
@@ -38,6 +39,42 @@ def test_hot_read_decodes_only_hot_bodies_and_preserves_old_parent(tmp_path, mon
     assert [r['session_id'] for r in rows] == ['recent', 'parent', 'pinned']
     assert not any('history' in body for body in decoded)
     assert store.load(target) == original
+
+
+def test_contended_hot_read_preserves_order_and_body_tokens(tmp_path, monkeypatch):
+    target = tmp_path / 'archive.json'
+    original = data()
+    rows = original['entries']['base']['conversations']
+    rows.extend({'session_id': f'hot-{i}', 'mtime': NOW, 'first_message': 'é\0'}
+                for i in range(600))
+    rows[204]['first_message'] = 'a' * (33 << 10)
+    store.save(target, original, complete=True)
+    with closing(sqlite3.connect(store.database_path(target))) as con:
+        with con:
+            con.execute("UPDATE rows SET body = CAST(body AS BLOB) WHERE sid = 'hot-440'")
+            con.execute("UPDATE rows SET position = -position")
+        con.execute('BEGIN')
+        expected = store._load_hot_bodies(con, 'base', NOW, retain_tokens=True)
+        clock = count(step=0.02)
+        monkeypatch.setattr(store, 'time', SimpleNamespace(
+            perf_counter=lambda: next(clock), thread_time=lambda: 0.0,
+        ))
+        batches = []
+        read_batch = store._read_hot_body_batch
+
+        def record_batch(con, query, rowids):
+            bodies = read_batch(con, query, rowids)
+            batches.append(bodies is not None)
+            return bodies
+
+        monkeypatch.setattr(store, '_read_hot_body_batch', record_batch)
+        result = store._load_hot_bodies(con, 'base', NOW, retain_tokens=True)
+
+    assert batches == [False, False, True]
+    assert result == expected == rows[:0:-1]
+    assert [result.tokens.get(id(row)) for row in result] == [
+        expected.tokens.get(id(row)) for row in expected
+    ]
 
 
 def test_full_read_preserves_batch_boundaries_and_legacy_bodies(tmp_path):

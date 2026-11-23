@@ -1427,15 +1427,43 @@ class HotRows(list):
         self.tokens = tokens
 
 
+def _read_hot_body_batch(con, query, rowids):
+    # Each rowid is already selected in this transaction. Bound the aggregate
+    # before moving it to Python, and keep the cursor path for legacy bodies.
+    try:
+        count, packed = con.execute(
+            "SELECT count(*), group_concat(CASE WHEN typeof(body)='text' "
+            "AND length(CAST(body AS BLOB)) <= ? AND instr(body, char(0))=0 "
+            "THEN body END, char(0)) FROM (SELECT body " + query + " LIMIT -1)",
+            (_HISTORY_BODY_BATCH_MAX_ROW_BYTES, *rowids),
+        ).fetchone()
+    except sqlite3.DataError:
+        return None
+    if count == len(rowids) and isinstance(packed, str):
+        bodies = packed.split('\0')
+        if len(bodies) == count:
+            return bodies
+    return None
+
+
 def _load_hot_bodies(con, key, now, *, reuse=None, stamp=None, retain_tokens=False):
     # Sort the small database keys before loading row bodies. SQLite otherwise
     # copies all hot JSON into a temporary sorter that can spill to disk.
     # The caller's read transaction keeps the ordered rowids and bodies paired.
     params = _hot_params(key, now)
     if reuse is None:
-        ordered = [rowid for rowid, in con.execute(
-            _HOT_ROWS_CTE + "SELECT rowid FROM selected ORDER BY position", params,
-        )]
+        # Rowids are integers. A single scalar preserves selection order
+        # without yielding the GIL for each key on a busy dashboard.
+        try:
+            packed, = con.execute(
+                _HOT_ROWS_CTE + "SELECT group_concat(rowid) FROM "
+                "(SELECT rowid FROM selected ORDER BY position LIMIT -1)", params,
+            ).fetchone()
+            ordered = list(map(int, packed.split(','))) if packed else []
+        except sqlite3.DataError:
+            ordered = [rowid for rowid, in con.execute(
+                _HOT_ROWS_CTE + "SELECT rowid FROM selected ORDER BY position", params,
+            )]
         rows = {}
     else:
         inventory = con.execute(
@@ -1450,13 +1478,21 @@ def _load_hot_bodies(con, key, now, *, reuse=None, stamp=None, retain_tokens=Fal
 
     tokens = {}
     physical = sorted(rowid for rowid in ordered if rowid not in rows)
+    contended = False
     for offset in range(0, len(physical), 192):
         rowids = physical[offset:offset + 192]
         marks = ",".join("?" for _ in rowids)
-        records = con.execute(
-            f"SELECT rowid,body FROM rows WHERE rowid IN ({marks}) ORDER BY rowid", rowids,
-        ).fetchall()
-        ids, bodies = zip(*records)
+        query = f"FROM rows WHERE rowid IN ({marks}) ORDER BY rowid"
+        bodies = _read_hot_body_batch(con, query, rowids) if contended else None
+        if bodies is not None:
+            ids = rowids
+        else:
+            wall, cpu = time.perf_counter(), time.thread_time()
+            ids, bodies = zip(*con.execute("SELECT rowid,body " + query, rowids).fetchall())
+            elapsed, work = time.perf_counter() - wall, time.thread_time() - cpu
+            # Keep the cheaper cursor on a quiet host. Switch when concurrent
+            # Python work makes stepping each result expensive, even mid-read.
+            contended = contended or elapsed - work >= max(_HISTORY_INVENTORY_MIN_STALL, work)
         decoded = _decode_full_batch(bodies)
         rows.update(zip(ids, decoded))
         if retain_tokens:
