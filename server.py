@@ -18412,6 +18412,7 @@ def _archive_serve_cache_store(key, rows, generation, ts=None, *, transfer_rows=
 
 # Delta tokens are only meaningful within one process: versions restart at 0.
 _ARCHIVE_DELTA_NONCE = os.urandom(4).hex()
+_ARCHIVE_DELTA_JSON = json.JSONEncoder(sort_keys=True, separators=(",", ":"), default=str)
 
 
 def _archive_row_sid(row):
@@ -18481,20 +18482,22 @@ def _archive_list_delta_state(key, rows, window, from_cache):
     from ccc_server import continuation_topics
     topic_revision = continuation_topics.revision()
     graph_revision = _session_graph.projection_revision()
-    ctx = hashlib.sha1(json.dumps(
-        [key, window, graph_revision, resumes, ideas, row_overlays, topic_revision],
-        sort_keys=True, separators=(",", ":"), default=str,
-    ).encode()).hexdigest()[:12]
     # Ticket updates run on every projection replay. They still invalidate
     # HTTP bodies/delta tokens, without reprojecting unchanged archive rows.
-    projection_ctx = hashlib.sha1(json.dumps(
-        [key, window, graph_revision, resumes, row_overlays, topic_revision],
-        sort_keys=True, separators=(",", ":"), default=str,
-    ).encode()).hexdigest()[:12]
+    # Join the shared pieces of the original JSON arrays around the idea
+    # snapshot, preserving the exact bytes consumed by each digest.
+    encode = _ARCHIVE_DELTA_JSON.encode
+    start = encode([key, window, graph_revision, resumes])[:-1].encode()
+    end = ("," + encode([row_overlays, topic_revision])[1:]).encode()
+    response_hash = hashlib.sha1(start)
+    projection_hash = response_hash.copy()
+    response_hash.update(("," + encode(ideas)).encode())
+    response_hash.update(end)
+    projection_hash.update(end)
+    ctx = response_hash.hexdigest()[:12]
+    projection_ctx = projection_hash.hexdigest()[:12]
     _archive_delta_ctx_remember(ctx, key, window, resumes, ideas, row_overlays, topic_revision)
-    ovl = hashlib.sha1(json.dumps(
-        extra, sort_keys=True, separators=(",", ":"), default=str,
-    ).encode()).hexdigest()[:8] if extra else "0"
+    ovl = hashlib.sha1(encode(extra).encode()).hexdigest()[:8] if extra else "0"
     return {
         "token": f"{_ARCHIVE_DELTA_NONCE}.{ver}.{ctx}.{ovl}",
         "nonce": _ARCHIVE_DELTA_NONCE, "ver": ver, "ctx": ctx,
@@ -18517,10 +18520,8 @@ _archive_delta_ctx_lock = threading.Lock()
 def _archive_delta_ctx_fingerprints(mapping):
     if not isinstance(mapping, dict):
         return None
-    out = {}
-    for sid, v in mapping.items():
-        out[str(sid)] = json.dumps(v, sort_keys=True, separators=(",", ":"), default=str)
-    return out
+    encode = _ARCHIVE_DELTA_JSON.encode
+    return {str(sid): encode(value) for sid, value in mapping.items()}
 
 
 def _archive_delta_ctx_remember(ctx, key, window, resumes, ideas, titles=None, topic_revision=0):
