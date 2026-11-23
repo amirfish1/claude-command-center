@@ -42710,8 +42710,12 @@
     return !!($list && $list.querySelector('[data-id], [data-gc-id], [data-collapse-key]'));
   }
 
+  let _pendingArchiveScrollRestore = null;
+
   function _captureArchiveListScroll(q, $list) {
     if (!$list || _lastArchiveRenderFilter !== q) return null;
+    // A second replacement in the same frame needs the restored position.
+    _pendingArchiveScrollRestore?.();
     const state = {
       filter: q,
       top: 0,
@@ -42874,9 +42878,8 @@
   function _restoreArchiveListScroll(state, $list) {
     if (!state || !$list) return;
     if (_archiveScrollStateIsPristine(state)) return;
-    // The rAF retry below is useful for post-layout sizing, but it belongs to
-    // this exact render only. A later archive render gets its own anchor; an
-    // older deferred pass must never restore stale scroll state over it.
+    // Measure after the render's DOM changes, before paint. Measuring in the
+    // render task too would force a separate layout after replacing the rows.
     const expectedRenderVersion = _convListRenderVersion;
     const restore = () => {
       if (state.filter !== _lastArchiveRenderFilter) return;
@@ -42909,8 +42912,13 @@
       }
       $list.scrollTop = _archiveScrollTopWithinBounds($list, state.top);
     };
-    restore();
-    requestAnimationFrame(restore);
+    const beforePaint = () => {
+      if (_pendingArchiveScrollRestore !== beforePaint) return;
+      _pendingArchiveScrollRestore = null;
+      restore();
+    };
+    _pendingArchiveScrollRestore = beforePaint;
+    requestAnimationFrame(beforePaint);
   }
 
   // A single origin-scoped, versioned snapshot makes reloads useful before

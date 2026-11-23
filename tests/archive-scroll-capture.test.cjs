@@ -62,7 +62,7 @@ test('archive refresh captures scroll only for rebuilt rows and retains the visi
       if (r.isNavigationRequest()) return r.respond({status:200, contentType:'text/html', body:fs.readFileSync(require.resolve('../static/index.html'),'utf8')});
       if (respondConversationAsset(r)) return;
       if (url.pathname === '/static/app.js') return r.respond({status:200, contentType:'application/javascript', body:exposed});
-      if (url.pathname.startsWith('/static/') && (url.pathname.endsWith('.css') || url.pathname === '/static/sidebar-navigation.js')) {
+      if (url.pathname.startsWith('/static/') && /\.(css|js)$/.test(url.pathname)) {
         const file = path.join(__dirname, '..', url.pathname);
         if (fs.existsSync(file)) return r.respond({status:200, contentType:url.pathname.endsWith('.css')?'text/css':'application/javascript', body:fs.readFileSync(file,'utf8')});
       }
@@ -100,6 +100,11 @@ test('archive refresh captures scroll only for rebuilt rows and retains the visi
     const after = await page.evaluate(() => scrollTest.capture());
     assert.equal(after.anchorValue, before.anchorValue);
     assert.ok(Math.abs(after.anchorOffset-before.anchorOffset) < 2);
+    await page.evaluate(() => { scrollTest.render(true); scrollTest.render(true); });
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const consecutive = await page.evaluate(() => scrollTest.capture());
+    assert.equal(consecutive.anchorValue, before.anchorValue);
+    assert.ok(Math.abs(consecutive.anchorOffset-before.anchorOffset) < 2);
     assert.equal(await page.evaluate(() => scrollTest.deferNewRows()), false, 'deferred new rows must not earn a paint receipt');
     await page.evaluate(() => { scrollCaptures=0; scrollTest.empty(); });
     assert.equal(await page.evaluate(() => scrollCaptures), 1, 'empty-state replacement retains the capture path');
