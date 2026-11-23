@@ -2580,6 +2580,18 @@ document.addEventListener('click', (ev) => {
         && (0, sharedState._canUseStatusRailViewer)()) {
       const rawHref = webLink.getAttribute('href') || '';
       if (/^https?:\/\//i.test(rawHref)) {
+        const isVid = typeof sharedState._isVideoPath === 'function' && (0, sharedState._isVideoPath)(rawHref);
+        const isPdf = typeof sharedState._isPdfPath === 'function' && (0, sharedState._isPdfPath)(rawHref);
+        const isImg = !isPdf && typeof sharedState._isImageOrPdfPath === 'function' && (0, sharedState._isImageOrPdfPath)(rawHref);
+        const kind = isVid ? 'video' : (isImg ? 'image' : 'frame');
+        const label = (webLink.textContent || '').trim() || rawHref.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+        if (kind === 'frame' && typeof sharedState.openWebPreviewInRail === 'function') {
+          // The remote-rendered browser handles X-Frame-Options hosts too, so
+          // there is no frame-blocked check here anymore.
+          ev.preventDefault();
+          (0, sharedState.openWebPreviewInRail)(rawHref, { title: label });
+          return;
+        }
         let blocked = false;
         try {
           const host = new URL(rawHref).hostname.toLowerCase();
@@ -2587,11 +2599,6 @@ document.addEventListener('click', (ev) => {
         } catch (_) {}
         if (!blocked) {
           ev.preventDefault();
-          const isVid = typeof sharedState._isVideoPath === 'function' && (0, sharedState._isVideoPath)(rawHref);
-          const isPdf = typeof sharedState._isPdfPath === 'function' && (0, sharedState._isPdfPath)(rawHref);
-          const isImg = !isPdf && typeof sharedState._isImageOrPdfPath === 'function' && (0, sharedState._isImageOrPdfPath)(rawHref);
-          const kind = isVid ? 'video' : (isImg ? 'image' : 'frame');
-          const label = (webLink.textContent || '').trim() || rawHref.replace(/^https?:\/\//i, '').replace(/\/$/, '');
           _openArtifact(rawHref, { kind, title: label, externalUrl: rawHref });
           return;
         }

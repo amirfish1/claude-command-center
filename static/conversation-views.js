@@ -2125,6 +2125,10 @@ onDashboardDocumentReady(() => {
           }
           return;
         }
+        if (kind === 'browser' && src && typeof sharedState.openBrowserInStatusRail === 'function') {
+          (0, sharedState.openBrowserInStatusRail)(src, { title: label || '' });
+          return;
+        }
         if (kind !== 'markdown' && src) {
           let busted = src;
           try {

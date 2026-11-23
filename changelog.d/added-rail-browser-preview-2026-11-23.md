@@ -1,0 +1,1 @@
+Web links now open in a real remote-rendered browser inside the right-hand preview pane: a headless Chromium streams frames into the rail with click, scroll, and keyboard input, so sites that block iframes (GitHub, Google, Slack…) render and stay interactive. Falls back to the old iframe preview when the browser helper can't start.

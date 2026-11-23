@@ -17871,6 +17871,57 @@
     border: 0;
     background: #fff;
   }
+  .file-viewer-browser {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+    outline: none;
+  }
+  .file-viewer-browser-bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface, #0d1117);
+    flex-shrink: 0;
+  }
+  .file-viewer-browser-bar button {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted, #8b949e);
+    font-size: 13px;
+    line-height: 1;
+    padding: 4px 9px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .file-viewer-browser-bar button:hover {
+    background: var(--surface-2, #161b22);
+    color: var(--text, #c9d1d9);
+  }
+  .file-viewer-browser-url {
+    flex: 1;
+    min-width: 0;
+    margin-left: 6px;
+    font-size: 11px;
+    color: var(--text-muted, #8b949e);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .file-viewer-browser-img {
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+    object-fit: contain;
+    object-position: top left;
+    background: #fff;
+    cursor: default;
+    user-select: none;
+  }
   .file-viewer-code {
     margin: 0;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

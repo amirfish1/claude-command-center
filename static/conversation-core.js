@@ -13258,6 +13258,10 @@
       if (frame) {
         try { frame.src = 'about:blank'; } catch (_) {}
       }
+      if (bodyEl._fvbCleanup) {
+        try { bodyEl._fvbCleanup(); } catch (_) {}
+        bodyEl._fvbCleanup = null;
+      }
       bodyEl.innerHTML = '';
       bodyEl.className = 'file-viewer-body markdown-body assistant-text';
     }

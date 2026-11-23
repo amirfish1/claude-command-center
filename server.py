@@ -34603,6 +34603,11 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             browser_voice.handle(self, "GET")
             return
 
+        if path.startswith("/api/browser/"):
+            from ccc_server import rail_browser
+            if rail_browser.handle(self, "GET", path):
+                return
+
         if path.startswith("/api/decisions-fix/report/"):
             from ccc_server import decision_report_jobs
             result, status = decision_report_jobs.status(path.rsplit("/", 1)[-1])
@@ -39760,6 +39765,10 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             from ccc_server import browser_voice
             browser_voice.handle(self, "POST")
             return
+        if path.startswith("/api/browser/"):
+            from ccc_server import rail_browser
+            if rail_browser.handle(self, "POST", path):
+                return
         if path.startswith("/api/ticket-audio/"):
             from ccc_server import ticket_audio
             if ticket_audio.handle(self, self.command):

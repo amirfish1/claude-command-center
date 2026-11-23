@@ -396,6 +396,10 @@
     if (frame) {
       try { frame.src = 'about:blank'; } catch (_) {}
     }
+    if (bodyEl._fvbCleanup) {
+      try { bodyEl._fvbCleanup(); } catch (_) {}
+      bodyEl._fvbCleanup = null;
+    }
   }
 
   function _setFileViewerImageZoom(bodyEl, scale) {
@@ -474,6 +478,8 @@
     try {
       if (desc.type === 'artifact' && desc.src) {
         if (!openArtifactInStatusRail(desc.src, desc.opts || {})) onFail();
+      } else if (desc.type === 'browser' && desc.url) {
+        openBrowserInStatusRail(desc.url, desc.opts || {}).then((ok) => { if (!ok) onFail(); }).catch(onFail);
       } else if (desc.type === 'text' && desc.url) {
         loadTextIntoFileViewer(desc.url, desc.label || '', desc.filePath || '').catch(onFail);
       } else if (desc.type === 'markdown' && desc.target) {
@@ -611,6 +617,185 @@
       requestAnimationFrame(() => _setFileViewerImageZoom(bodyEl, 0));
     }
     return true;
+  }
+
+  // Remote-rendered browser preview: server-side headless Chromium streams
+  // JPEG frames into the rail and receives forwarded input, so sites that
+  // refuse framing (X-Frame-Options / frame-ancestors) still render — and
+  // the preview is genuinely interactive, unlike an iframe.
+  const FVB_KEYMAP = {
+    Enter: 'Enter', Backspace: 'Backspace', Tab: 'Tab', Escape: 'Escape',
+    Delete: 'Delete', Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
+    ArrowUp: 'ArrowUp', ArrowDown: 'ArrowDown', ArrowLeft: 'ArrowLeft', ArrowRight: 'ArrowRight',
+  };
+  async function openBrowserInStatusRail(url, opts) {
+    if (!url || !_canUseStatusRailViewer()) return false;
+    const rail = document.getElementById('statusRail');
+    const viewer = document.getElementById('statusRailFileViewer');
+    const bodyEl = document.getElementById('fileViewerBody');
+    if (!rail || !viewer || !bodyEl) return false;
+    const title = (opts && opts.title) || url.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+    let payload = null;
+    try {
+      const r = await fetch('/api/browser/open', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url,
+          width: Math.max(320, bodyEl.clientWidth || 800),
+          height: Math.max(240, (bodyEl.clientHeight || 600) - 34),
+        }),
+      });
+      payload = await r.json().catch(() => null);
+    } catch (_) { return false; }
+    if (!payload || payload.ok === false) return false;
+
+    _cleanupFileViewerMedia(bodyEl);
+
+    const titleEl = document.getElementById('fileViewerTitle');
+    const filenameEl = document.getElementById('fileViewerFilename');
+    const dlBtn = document.getElementById('fileViewerDownloadBtn');
+    const fsBtn = document.getElementById('fileViewerFullscreenBtn');
+    const extBtn = document.getElementById('fileViewerOpenExternalBtn');
+    if (titleEl) titleEl.textContent = 'Web Browser';
+    if (filenameEl) filenameEl.textContent = title;
+    viewer.setAttribute('data-viewer-kind', 'browser');
+    viewer.setAttribute('data-current-src', url);
+    viewer.setAttribute('data-external-url', url);
+    viewer.removeAttribute('data-current-path');
+    viewer.removeAttribute('data-viewer-no-preview');
+    if (dlBtn) dlBtn.hidden = true;
+    if (fsBtn) fsBtn.hidden = true;
+    if (extBtn) {
+      extBtn.hidden = false;
+      extBtn.title = 'Open in new tab';
+      extBtn.setAttribute('aria-label', 'Open in new tab');
+    }
+
+    bodyEl.className = 'file-viewer-body is-media-viewer is-media-browser';
+    bodyEl.innerHTML =
+      '<div class="file-viewer-browser" tabindex="0">'
+      + '<div class="file-viewer-browser-bar">'
+      + '<button type="button" data-fvb="back" title="Back" aria-label="Back">&#8249;</button>'
+      + '<button type="button" data-fvb="fwd" title="Forward" aria-label="Forward">&#8250;</button>'
+      + '<button type="button" data-fvb="reload" title="Reload" aria-label="Reload">&#8635;</button>'
+      + '<span class="file-viewer-browser-url" title=""></span>'
+      + '</div>'
+      + '<img class="file-viewer-browser-img" draggable="false" alt="Remote browser view">'
+      + '</div>';
+    const root = bodyEl.querySelector('.file-viewer-browser');
+    const img = bodyEl.querySelector('.file-viewer-browser-img');
+    const urlEl = bodyEl.querySelector('.file-viewer-browser-url');
+    if (urlEl) { urlEl.textContent = payload.url || url; urlEl.title = payload.url || url; }
+
+    let pollTimer = null;
+    let navBusy = false;
+    const post = (sub, body) =>
+      fetch('/api/browser/' + sub, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {}),
+      }).then((r) => r.json()).catch(() => null);
+    const refreshStatus = () => {
+      fetch('/api/browser/status', { cache: 'no-store' }).then((r) => r.json()).then((s) => {
+        if (s && s.url && urlEl) { urlEl.textContent = s.url; urlEl.title = s.url; }
+      }).catch(() => {});
+    };
+    const poll = () => {
+      if (!img.isConnected) return;
+      img.src = '/api/browser/frame?t=' + Date.now();
+    };
+    pollTimer = setInterval(poll, 600);
+    poll();
+
+    const toPageCoords = (e) => {
+      // object-fit: contain + top-left position: the frame is scaled by the
+      // smaller axis ratio and letterboxed on the remainder.
+      const rect = img.getBoundingClientRect();
+      const natW = img.naturalWidth || rect.width || 1;
+      const natH = img.naturalHeight || rect.height || 1;
+      const scale = Math.min(rect.width / natW, rect.height / natH) || 1;
+      return {
+        x: Math.max(0, Math.round((e.clientX - rect.left) / scale)),
+        y: Math.max(0, Math.round((e.clientY - rect.top) / scale)),
+      };
+    };
+    let lastMove = 0;
+    img.addEventListener('click', (e) => {
+      root.focus();
+      const p = toPageCoords(e);
+      post('input', { kind: 'click', x: p.x, y: p.y }).then(() => setTimeout(refreshStatus, 400));
+    });
+    img.addEventListener('mousemove', (e) => {
+      const now = Date.now();
+      if (now - lastMove < 100) return;
+      lastMove = now;
+      const p = toPageCoords(e);
+      post('input', { kind: 'move', x: p.x, y: p.y });
+    });
+    img.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const p = toPageCoords(e);
+      post('input', { kind: 'wheel', x: p.x, y: p.y, dx: e.deltaX, dy: e.deltaY });
+    }, { passive: false });
+    img.addEventListener('contextmenu', (e) => e.preventDefault());
+    root.addEventListener('keydown', (e) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key && e.key.length === 1) {
+        e.preventDefault();
+        post('input', { kind: 'type', text: e.key });
+      } else if (FVB_KEYMAP[e.key]) {
+        e.preventDefault();
+        post('input', { kind: 'key', key: FVB_KEYMAP[e.key] }).then(() => setTimeout(refreshStatus, 400));
+      }
+    });
+    bodyEl.querySelectorAll('[data-fvb]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (navBusy) return;
+        navBusy = true;
+        const sub = { back: 'back', fwd: 'forward', reload: 'reload' }[btn.getAttribute('data-fvb')];
+        post(sub, {}).then(() => { navBusy = false; refreshStatus(); });
+      });
+    });
+    let ro = null;
+    if (typeof ResizeObserver === 'function') {
+      let resizeTimer = null;
+      ro = new ResizeObserver(() => {
+        if (resizeTimer) return;
+        resizeTimer = setTimeout(() => {
+          resizeTimer = null;
+          if (img.isConnected && img.clientWidth > 100) {
+            post('resize', { width: img.clientWidth, height: img.clientHeight });
+          }
+        }, 400);
+      });
+      ro.observe(img);
+    }
+    bodyEl._fvbCleanup = () => {
+      if (pollTimer) clearInterval(pollTimer);
+      if (ro) try { ro.disconnect(); } catch (_) {}
+      fetch('/api/browser/close', { method: 'POST', keepalive: true }).catch(() => {});
+    };
+    root.focus();
+
+    if (typeof window._cccExpandStatusRailForFileViewer === 'function') window._cccExpandStatusRailForFileViewer();
+    rail.classList.add('file-viewer-active');
+    rememberSessionPreview({ type: 'browser', url, opts: { title } }, _previewConvKey());
+    return true;
+  }
+
+  function openWebPreviewInRail(url, opts) {
+    // Prefer the remote-rendered browser (interactive, renders frame-blocked
+    // sites); fall back to a plain iframe, then a new tab.
+    const frameOpts = Object.assign({ kind: 'frame', title: (opts && opts.title) || url.replace(/^https?:\/\//i, ''), externalUrl: url }, opts || {});
+    openBrowserInStatusRail(url, opts).then((ok) => {
+      if (ok) return;
+      if (!_isFrameBlockedUrl(url)) openArtifactViewer(url, frameOpts);
+      else window.open(url, '_blank', 'noopener,noreferrer');
+    }).catch(() => {
+      if (!_isFrameBlockedUrl(url)) openArtifactViewer(url, frameOpts);
+      else window.open(url, '_blank', 'noopener,noreferrer');
+    });
   }
 
   async function loadTextIntoFileViewer(url, label, filePath) {
@@ -1870,12 +2055,8 @@
     if (row.kind === 'url') {
       rowEl.addEventListener('click', (e) => {
         if (e.target.closest('.sidebar-file-path')) return;
-        if (!e.metaKey && !e.ctrlKey && !e.shiftKey && _canUseStatusRailViewer() && !_isFrameBlockedUrl(row.target)) {
-          openArtifactViewer(row.target, {
-            kind: 'frame',
-            title: row.label || row.target.replace(/^https?:\/\//i, ''),
-            externalUrl: row.target,
-          });
+        if (!e.metaKey && !e.ctrlKey && !e.shiftKey && _canUseStatusRailViewer()) {
+          openWebPreviewInRail(row.target, { title: row.label || row.target.replace(/^https?:\/\//i, '') });
           return;
         }
         window.open(row.target, '_blank', 'noopener,noreferrer');
@@ -1955,14 +2136,10 @@
       a.style.color = 'inherit';
       a.style.textDecoration = 'none';
       a.addEventListener('click', (e) => {
-        if (!e.metaKey && !e.ctrlKey && !e.shiftKey && _canUseStatusRailViewer() && !_isFrameBlockedUrl(row.target)) {
+        if (!e.metaKey && !e.ctrlKey && !e.shiftKey && _canUseStatusRailViewer()) {
           e.preventDefault();
           closeFfcModal();
-          openArtifactViewer(row.target, {
-            kind: 'frame',
-            title: row.label || row.target.replace(/^https?:\/\//i, ''),
-            externalUrl: row.target,
-          });
+          openWebPreviewInRail(row.target, { title: row.label || row.target.replace(/^https?:\/\//i, '') });
         }
       });
       a.appendChild(labelEl);
@@ -4375,7 +4552,7 @@
     for (let i = 0; i < list.length; i++) if (test(list[i])) return true;
     return false;
   }
-    return { ffcInvalidate, syncConversationNavigationFocus, mountNewSessionChrome, updateSubagentsPanel, updateOrchestrationPane, _restoreCwdControlsToInputBar, mobileShowForCurrentMode, _simpleOnConversationOpen, syncCodexAccountUi, syncAntigravityAccountUi, renderNewSessionObjectContext, _refreshTokenEconomizerAnnotation, ffcRefreshForCurrent, ffcUpdateSidebar, refreshPresentationForPane, _reconcileAnnotationsForPane, renderSpawnStatsPanel, pollLocalhost, orchContext, orchPaintFamilyRows, orchRefreshRegistry, orchContinuationHtml, orchReplayClock, orchCollectLanes, orchLanesAt, orchNodeHtml, orchDrawEdges, mobileShowConv, mobileShowMain, isSimpleMode, _simpleHideHome, _simpleUpdateUsageLine, _simpleUpdateConvTitle, _simpleSyncTechStrip, _paintTokenEconomizerAnnotation, ffcFetch, ffcEnsurePill, _syncFilesPanelChrome, _ffcRecencyLine, renderSidebarFileRow, presentationSessionIdForPane, presentationConversationIdForPane, presentationModeForSession, presentationFeatureEnabled, normalizePresentationMode, syncPresentationToolbar, disconnectPresentationProjection, disconnectPresentationResizeObserver, buildPresentationDeck, presentationRefreshIndex, firstSlideOfLatestPresentationTurn, ensurePresentationProjection, renderMode3BootstrapState, ensurePresentationResizeObserver, _annotationsForSession, _findTextRangeInElement, _annotationSearchRoots, _wrapRangeInAnnotationMark, _insertAnnotationNote, copyTextValue, localhostContext, _localhostCtxKeyOf, setLocalhostPill, localhostUrl, localhostCommand, orchResolveRoot, orchApplyFamilyRows, rememberSidebarFamilyParents, orchLaneMetaRemember, orchFlattenTree, orchLane, orchLaneMetaAll, orchAppendManualLanes, orchReportTimes, orchSpawnTimeFor, getUiMode, _syncSimpleHomeVisibility, _simpleMemoryBannerEnabled, _simpleMemoryPhrase, _simpleMemoryPercent, _tokenEconomizerAnnotationHtml, openFfcModal, _isMarkdownPath, loadMarkdownIntoFileViewer, loadTextIntoFileViewer, sidebarShowFileToast, _isVideoPath, _isHtmlDocPath, _isImageOrPdfPath, openFilePathInMediaLightbox, openArtifactViewer, openArtifactInStatusRail, _canUseStatusRailViewer, presentationModeState, removePresentationProjectionEntry, presentationPageBudget, presentationTurns, mode3SlidesForTurn, paginatePresentationItemsMeasured, paginatePresentationItems, buildPresentationSlide, presentationProjectionSignature, presentationSourceRoot, presentationRootRefreshesDeck, schedulePresentationProjectionFlush, presentationRootsAfterLatestAnswer, requestMode3Bootstrap, _annotationBlockAnchor, orchSyncFamilyDisclosure, orchParseSpawnedAt, orchLaneMetaGet, orchLaneName, orchLaneStatus, _simpleHomeRefresh, _simpleRefreshScreen, ffcRenderRow, _ffcEscHandler, _isPdfPath, openMediaLightbox, presentationPromptText, presentationAnswerBlocks, presentationClone, presentationBlockWeight, buildMode3Slide, presentationItemGroups, paginatePresentationGroups, presentationCandidateFits, buildPresentationDetails, flushPresentationProjection, _subagentClustersExpandedSet, _subagentClustersCollapsedSet, _subagentClustersSaveExpandedSet, _subagentClustersSaveCollapsedSet, orchLiveActivityForLane, orchSpawnExited, _simpleStartArchiveProgress, _simpleIsNyaDismissed, _simpleNyaCardHtml, _simpleRefreshQueueAlerts, applyOptimisticOverrides, _simpleIsWorkingRow, _simpleFetchArchiveStatus, _simpleTaskCardHtml, _simpleWorkingStatusLine, _simpleRenderHistory, _simpleRenderAutomations, _simpleRenderAutomationDetail, _simpleSyncSettingsScreen, ffcEscapeHtml, ffcShowRowToast, closeFfcModal, _ensureMediaLightbox, _mediaPreviewUrl, setMediaLightboxZoom, presentationListItems, mode3Text, mode3StringList, ensurePresentationMeasureSurface, presentationCloneForProjection, _simpleStopArchiveProgress, _simpleLoadNyaDismissed, _simpleNyaKindLabel, _simpleQueueAlertCardHtml, _simpleIsUnseenFinished, _simpleMemoryLine, _simpleBaseName, _simpleHistoryApply, _simpleAutomationCardHtml, _simpleAutomationStatusLine, _simplePlainAge, _simpleQueueItemCardHtml, getVoiceMobileBtnPref, closeMediaLightbox, _simpleLoadSeenMtimes, _simpleHistoryStatusLine, _simplePlainAgeIso, _bodyHasAny };
+    return { ffcInvalidate, syncConversationNavigationFocus, mountNewSessionChrome, updateSubagentsPanel, updateOrchestrationPane, _restoreCwdControlsToInputBar, mobileShowForCurrentMode, _simpleOnConversationOpen, syncCodexAccountUi, syncAntigravityAccountUi, renderNewSessionObjectContext, _refreshTokenEconomizerAnnotation, ffcRefreshForCurrent, ffcUpdateSidebar, refreshPresentationForPane, _reconcileAnnotationsForPane, renderSpawnStatsPanel, pollLocalhost, orchContext, orchPaintFamilyRows, orchRefreshRegistry, orchContinuationHtml, orchReplayClock, orchCollectLanes, orchLanesAt, orchNodeHtml, orchDrawEdges, mobileShowConv, mobileShowMain, isSimpleMode, _simpleHideHome, _simpleUpdateUsageLine, _simpleUpdateConvTitle, _simpleSyncTechStrip, _paintTokenEconomizerAnnotation, ffcFetch, ffcEnsurePill, _syncFilesPanelChrome, _ffcRecencyLine, renderSidebarFileRow, presentationSessionIdForPane, presentationConversationIdForPane, presentationModeForSession, presentationFeatureEnabled, normalizePresentationMode, syncPresentationToolbar, disconnectPresentationProjection, disconnectPresentationResizeObserver, buildPresentationDeck, presentationRefreshIndex, firstSlideOfLatestPresentationTurn, ensurePresentationProjection, renderMode3BootstrapState, ensurePresentationResizeObserver, _annotationsForSession, _findTextRangeInElement, _annotationSearchRoots, _wrapRangeInAnnotationMark, _insertAnnotationNote, copyTextValue, localhostContext, _localhostCtxKeyOf, setLocalhostPill, localhostUrl, localhostCommand, orchResolveRoot, orchApplyFamilyRows, rememberSidebarFamilyParents, orchLaneMetaRemember, orchFlattenTree, orchLane, orchLaneMetaAll, orchAppendManualLanes, orchReportTimes, orchSpawnTimeFor, getUiMode, _syncSimpleHomeVisibility, _simpleMemoryBannerEnabled, _simpleMemoryPhrase, _simpleMemoryPercent, _tokenEconomizerAnnotationHtml, openFfcModal, _isMarkdownPath, loadMarkdownIntoFileViewer, loadTextIntoFileViewer, sidebarShowFileToast, _isVideoPath, _isHtmlDocPath, _isImageOrPdfPath, openFilePathInMediaLightbox, openArtifactViewer, openArtifactInStatusRail, openBrowserInStatusRail, openWebPreviewInRail, _canUseStatusRailViewer, presentationModeState, removePresentationProjectionEntry, presentationPageBudget, presentationTurns, mode3SlidesForTurn, paginatePresentationItemsMeasured, paginatePresentationItems, buildPresentationSlide, presentationProjectionSignature, presentationSourceRoot, presentationRootRefreshesDeck, schedulePresentationProjectionFlush, presentationRootsAfterLatestAnswer, requestMode3Bootstrap, _annotationBlockAnchor, orchSyncFamilyDisclosure, orchParseSpawnedAt, orchLaneMetaGet, orchLaneName, orchLaneStatus, _simpleHomeRefresh, _simpleRefreshScreen, ffcRenderRow, _ffcEscHandler, _isPdfPath, openMediaLightbox, presentationPromptText, presentationAnswerBlocks, presentationClone, presentationBlockWeight, buildMode3Slide, presentationItemGroups, paginatePresentationGroups, presentationCandidateFits, buildPresentationDetails, flushPresentationProjection, _subagentClustersExpandedSet, _subagentClustersCollapsedSet, _subagentClustersSaveExpandedSet, _subagentClustersSaveCollapsedSet, orchLiveActivityForLane, orchSpawnExited, _simpleStartArchiveProgress, _simpleIsNyaDismissed, _simpleNyaCardHtml, _simpleRefreshQueueAlerts, applyOptimisticOverrides, _simpleIsWorkingRow, _simpleFetchArchiveStatus, _simpleTaskCardHtml, _simpleWorkingStatusLine, _simpleRenderHistory, _simpleRenderAutomations, _simpleRenderAutomationDetail, _simpleSyncSettingsScreen, ffcEscapeHtml, ffcShowRowToast, closeFfcModal, _ensureMediaLightbox, _mediaPreviewUrl, setMediaLightboxZoom, presentationListItems, mode3Text, mode3StringList, ensurePresentationMeasureSurface, presentationCloneForProjection, _simpleStopArchiveProgress, _simpleLoadNyaDismissed, _simpleNyaKindLabel, _simpleQueueAlertCardHtml, _simpleIsUnseenFinished, _simpleMemoryLine, _simpleBaseName, _simpleHistoryApply, _simpleAutomationCardHtml, _simpleAutomationStatusLine, _simplePlainAge, _simpleQueueItemCardHtml, getVoiceMobileBtnPref, closeMediaLightbox, _simpleLoadSeenMtimes, _simpleHistoryStatusLine, _simplePlainAgeIso, _bodyHasAny };
   }
   root.CCCConversationChrome = Object.freeze({ createController });
 })(typeof window === 'undefined' ? globalThis : window);
