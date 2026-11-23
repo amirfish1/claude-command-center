@@ -32336,7 +32336,7 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 #nsComposerAdvisor .ns-advisor-others small { color: var(--text-muted); font-size: 11px; }
 #nsComposerAdvisor .ns-auto-restore { font-size: 11px; padding: 3px 8px; }
 /* Why panel tabs: Allowances (pace bars) and Ranking (drag list). */
-#nsComposerAdvisor .ns-advisor-why[open] .ns-advisor-explanation { max-height: min(70vh, 640px); }
+#nsComposerAdvisor .ns-advisor-why[open] .ns-advisor-explanation { max-height: none; overflow: visible; }
 .ns-advisor-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin: 0 0 8px; }
 .ns-advisor .ns-advisor-tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--text-muted); font-weight: 600; padding: 4px 10px; margin-bottom: -1px; }
 .ns-advisor .ns-advisor-tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent, #58a6ff); }
