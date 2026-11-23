@@ -918,17 +918,21 @@ def test_archive_title_snapshot_reuses_metadata_until_title_changes(monkeypatch)
     monkeypatch.setattr(server, '_conv_meta_cache', cache)
     monkeypatch.setattr(server, '_codex_titles_cache', {'data': {'shared': {'title': 'Native'}}})
 
-    assert topics._archive_fallback_titles() == {'shared': 'First'}
+    assert topics._external_titles() == {'shared': 'First'}
     snapshot = cache.title_snapshot
+    assert topics._archive_fallback_titles() == {'shared': 'First'}
     cache[first] = {'custom_title': 'First', 'mtime': 42}
+    assert topics._external_titles() is snapshot
     assert topics._archive_fallback_titles() == {'shared': 'First'}
     assert cache.title_snapshot is snapshot
 
     cache[first] = {'custom_title': 'Renamed', 'mtime': 42}
+    assert topics._external_titles() == {'shared': 'Renamed'}
     assert topics._archive_fallback_titles() == {'shared': 'Renamed'}
     assert snapshot == {'shared': 'First'}
 
     cache[duplicate] = {'mtime': 43}
+    assert topics._external_title(topics._external_titles(), 'shared') == 'Native'
     assert topics._archive_fallback_titles() == {'shared': 'Native'}
     cache[first] = {'custom_title': 'Shadowed'}
     assert topics._archive_fallback_titles() == {'shared': 'Native'}
@@ -1130,6 +1134,7 @@ def test_archive_projection_collects_unloaded_detached_metadata_titles(store, tm
         detached = log_parse._DetachedConvMetaCache(connection)
         detached['alpha.jsonl'] = {'agent_name': 'Updated title in this process'}
         monkeypatch.setattr(server, '_conv_meta_cache', detached)
+        assert topics._external_titles() == {'alpha': 'Updated title in this process'}
         inputs, _, _ = topics.archive_projection_inputs(store, max_rows=20)
         assert inputs[2] == {
             'alpha': 'Updated title in this process',

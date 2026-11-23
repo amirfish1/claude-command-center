@@ -1010,9 +1010,9 @@ class _DetachedConvMetaCache(dict):
         return super().get(key, default)
 
 
-def _archive_topic_metadata_titles(project):
+def _archive_topic_metadata_titles(project, *, include_detached=True):
     cache = _core._conv_meta_cache
-    if isinstance(cache, _DetachedConvMetaCache):
+    if include_detached and isinstance(cache, _DetachedConvMetaCache):
         return project(cache.title_items())
     if isinstance(cache, _ConvMetaCache):
         # Parser writes replace complete entries while holding this lock.

@@ -307,14 +307,12 @@ def _row_title(row, names, sid):
     return names.get(sid) or row.get('display_name') or row.get('custom_title') or row.get('ai_title')
 
 
-def _external_titles(items=None):
-    if items is None:
-        items = list(getattr(_core, '_conv_meta_cache', {}).items())
-    return {
-        _metadata_session_id(filename): (meta.get('custom_title')
-                                         or meta.get('agent_name') or meta.get('ai_title'))
-        for filename, meta in items if isinstance(meta, dict)
-    }
+def _external_titles():
+    from ccc_server.log_parse import _archive_topic_metadata_titles
+
+    # Scoped sidebar reads use the same title projection as All. Detached
+    # readers still use only the metadata they have already loaded.
+    return _archive_topic_metadata_titles(_project_archive_metadata_titles, include_detached=False)
 
 
 def _external_title(titles, sid):
@@ -460,7 +458,14 @@ def _archive_fallback_titles():
 
 
 def _project_archive_metadata_titles(items):
-    return {sid: title for sid, title in _external_titles(items).items() if title}
+    titles = {
+        _metadata_session_id(filename): (meta.get('custom_title')
+                                         or meta.get('agent_name') or meta.get('ai_title'))
+        for filename, meta in items if isinstance(meta, dict)
+    }
+    # Resolve duplicate session IDs before dropping empty titles. A later
+    # transcript can shadow an earlier title and expose the native fallback.
+    return {sid: title for sid, title in titles.items() if title}
 
 
 def archive_projection_inputs(conn, *, max_rows, max_native_roots=32, diagnostics=None):
@@ -901,7 +906,7 @@ def _try_attach_from_cache(rows, conn, names, diagnostics=None, *, rows_by_sid=N
                 if not candidate:
                     # Match _Batch._title without native I/O: these cached
                     # standalone rows have no ancestor/root-capture lookup.
-                    # Copy items before scanning the concurrently filled map.
+                    # Request one consistent view of the concurrently filled map.
                     if external_titles is None:
                         external_titles = _external_titles()
                     candidate = _external_title(external_titles, sid)
