@@ -630,15 +630,16 @@ def test_history_encoding_builds_gzip_only_when_requested_or_needed(monkeypatch)
     from ccc_server import list_encoding
 
     monkeypatch.setattr(list_encoding, '_HISTORY_CACHE', list_encoding.ByteBudgetCache(1 << 20, 4))
+    monkeypatch.setattr(list_encoding, '_CACHE', list_encoding.ByteBudgetCache(1 << 20, 4))
     payload = {'conversations': [{'first_message': 'history ' * 200}]}
-    monkeypatch.setattr(list_encoding, '_brotli', lambda raw: b'encoded br')
+    monkeypatch.setattr(list_encoding.static_encoding, 'brotli', lambda *a, **kw: b'encoded br')
     gzip_calls = []
     compress = gzip.compress
     monkeypatch.setattr(gzip, 'compress',
                         lambda *a, **kw: gzip_calls.append(True) or compress(*a, **kw))
     assert list_encoding.history_representation(payload, 'gzip, br', None)[:2] == (b'encoded br', 'br')
     assert not gzip_calls
-    monkeypatch.setattr(list_encoding, '_brotli', lambda raw: None)
+    monkeypatch.setattr(list_encoding.static_encoding, 'brotli', lambda *a, **kw: None)
     payload['updated'] = True
     body, encoding, _ = list_encoding.history_representation(payload, 'gzip;q=0.8, br', None)
     assert encoding == 'gzip' and json.loads(gzip.decompress(body)) == payload
@@ -676,7 +677,8 @@ def test_history_zstd_requires_preference_and_client_acceptance(monkeypatch):
     from ccc_server import list_encoding
 
     monkeypatch.setattr(list_encoding, '_HISTORY_CACHE', list_encoding.ByteBudgetCache(1 << 20, 4))
-    monkeypatch.setattr(list_encoding, '_brotli', lambda raw: b'encoded br')
+    monkeypatch.setattr(list_encoding, '_CACHE', list_encoding.ByteBudgetCache(1 << 20, 4))
+    monkeypatch.setattr(list_encoding.static_encoding, 'brotli', lambda *a, **kw: b'encoded br')
     zstd = list_encoding._zstd
     monkeypatch.setattr(list_encoding, '_zstd', lambda raw: b'encoded zstd')
     payload = {'conversations': [{'first_message': 'history ' * 200}]}
@@ -693,7 +695,7 @@ def test_history_zstd_requires_preference_and_client_acceptance(monkeypatch):
     assert read('gzip, br, zstd;q=0.5') == (b'encoded br', 'br')
     monkeypatch.setattr(list_encoding, '_zstd_encoder', lambda: None)
     monkeypatch.setattr(list_encoding, '_zstd', zstd)
-    monkeypatch.setattr(list_encoding, '_brotli', lambda raw: None)
+    monkeypatch.setattr(list_encoding.static_encoding, 'brotli', lambda *a, **kw: None)
     payload['updated'] = True
     body, encoding = read()
     assert encoding == 'gzip'

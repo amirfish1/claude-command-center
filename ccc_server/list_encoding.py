@@ -65,8 +65,8 @@ def _zstd(raw, *, level=3):
         library.ZSTD_freeCCtx(context)
 
 
-def _brotli(raw):
-    key = hashlib.sha256(raw).digest()
+def _encoded_list(raw, encoding):
+    key = (encoding, hashlib.sha256(raw).digest())
     cached = _CACHE.get(key)
     if cached is not None:
         return cached
@@ -80,9 +80,11 @@ def _brotli(raw):
             cached = _CACHE.get(key)
             if cached is not None:
                 return cached
-            # Live list bodies change frequently. A 1 MiB window cut encoder
-            # CPU by 13–19% on full sidebar bodies for under 2% more bytes.
-            compressed = static_encoding.brotli(raw, quality=5, window_bits=20)
+            if encoding == "zstd":
+                compressed = _zstd(raw)
+            else:
+                # A 1 MiB window keeps Brotli CPU bounded on large changing lists.
+                compressed = static_encoding.brotli(raw, quality=5, window_bits=20)
             if compressed is not None:
                 _CACHE.put(key, compressed, len(compressed))
             return compressed
@@ -97,7 +99,12 @@ def representation(raw, gzip_body, accept, *, encode_gzip=None, encodings=None):
     """Choose a supported representation, preserving gzip on optional failure."""
     if len(raw) >= 1024:
         if encodings is None:
-            encodings = static_encoding.accepted_encodings(accept)
+            supports_zstd = any(item.partition(";")[0].strip().lower() == "zstd"
+                                for item in (accept or "").split(","))
+            # Full list misses have already paid to project and encode the rows.
+            # Prefer the faster encoder on equal client quality weights.
+            supported = ("zstd", "br", "gzip") if supports_zstd else ("br", "gzip")
+            encodings = static_encoding.accepted_encodings(accept, supported=supported)
         for encoding in encodings:
             if encoding == "gzip":
                 if gzip_body is not None:
@@ -106,7 +113,7 @@ def representation(raw, gzip_body, accept, *, encode_gzip=None, encodings=None):
                     return encode_gzip(), "gzip"
             else:
                 try:
-                    body = _zstd(raw) if encoding == "zstd" else _brotli(raw)
+                    body = _encoded_list(raw, encoding)
                 except Exception:
                     body = None
                 if body is not None:

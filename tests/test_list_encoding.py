@@ -56,6 +56,33 @@ def test_missing_or_failed_encoder_keeps_gzip_or_identity(monkeypatch, failure):
     assert list_encoding._FLIGHTS == {}
 
 
+def test_zstd_negotiation_caches_each_encoding_and_respects_client_weights(monkeypatch):
+    calls = []
+    raw = b"example" * 200
+    gzip_body = gzip.compress(raw)
+
+    def encode(name):
+        calls.append(name)
+        return name.encode()
+
+    monkeypatch.setattr(list_encoding, "_zstd", lambda raw: encode("zstd"))
+    monkeypatch.setattr(list_encoding.static_encoding, "brotli", lambda *a, **kw: encode("br"))
+    for accept, expected in [
+        ("gzip, br, zstd", "zstd"),
+        ("zstd;q=.7, br;q=.9", "br"),
+        ("gzip, br, ZSTD", "zstd"),
+        ("zstd;q=0, br", "br"),
+        ("*", "br"),
+    ]:
+        assert list_encoding.representation(raw, gzip_body, accept) == (expected.encode(), expected)
+    assert calls == ["zstd", "br"]
+
+    list_encoding._CACHE.clear()
+    monkeypatch.setattr(list_encoding, "_zstd", lambda raw: None)
+    assert list_encoding.representation(raw, gzip_body, "zstd, br") == (b"br", "br")
+    assert list_encoding.representation(raw, gzip_body, "zstd, gzip") == (gzip_body, "gzip")
+
+
 def test_content_cache_and_simultaneous_identical_bodies(monkeypatch):
     calls = []
     def compress(raw, *, quality, window_bits):
