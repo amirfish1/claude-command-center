@@ -589,11 +589,15 @@ class _Batch:
             miss_detail['prefetch_rows'] = miss_detail.get('prefetch_rows', 0) + len(missing)
         self._prefetch(missing)
 
-    def _prefetch(self, sids, chunk=500):
+    def _prefetch(self, sids):
         # Read both indexed inputs in one bounded result. Separate reads of
         # the same IDs double the SQLite/GIL handoffs on a busy dashboard.
         # Start from the requested IDs so missing topic/index rows retain
         # the same defaults as established standalone sessions.
+        # Larger batches reduce SQLite/GIL handoffs on a cold sidebar load.
+        # Keep a bound for cancellation and honor the connection's SQL limit.
+        getlimit = getattr(self.conn, 'getlimit', None)
+        chunk = min(1500, getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER)) if getlimit else 500
         for i in range(0, len(sids), chunk):
             if self.check_client is not None:
                 self.check_client()

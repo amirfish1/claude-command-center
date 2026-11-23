@@ -492,7 +492,7 @@ def test_connection_skips_ddl_and_cached_attach_topics_invalidates_on_mutations(
 
 
 def test_topic_prefetch_has_one_python_result_per_chunk(store):
-    sids = [f'session-{i}' for i in range(1200)]
+    sids = [f'session-{i}' for i in range(3200)]
     store.executemany('INSERT INTO session_meta VALUES (?,?)', [(sid, '') for sid in sids])
     topics._connection(store)
     callbacks = []
@@ -503,9 +503,11 @@ def test_topic_prefetch_has_one_python_result_per_chunk(store):
 
     store.row_factory = factory
     batch = topics._Batch(store, [row(sid, 'Standalone') for sid in sids], {})
-    assert len(batch.records) == 1200
-    assert len(batch.indexed_origins) == 1200
-    assert len(callbacks) == 3  # both indexed tables, three <=500-ID chunks
+    assert len(batch.records) == len(sids)
+    assert len(batch.indexed_origins) == len(sids)
+    getlimit = getattr(store, 'getlimit', None)
+    chunk = min(1500, getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER)) if getlimit else 500
+    assert len(callbacks) == (len(sids) + chunk - 1) // chunk
 
 
 def test_topic_prefetch_preserves_sparse_and_missing_index_rows(store):

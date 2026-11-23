@@ -113,12 +113,18 @@ def test_new_session_prefetches_only_unknown_database_records(store, monkeypatch
                          ('new',)).fetchone() == ('old-599',)
 
 
-def test_disconnected_projection_stops_after_first_topic_read(store, monkeypatch):
+@pytest.mark.parametrize('variable_limit', [None, 128])
+def test_disconnected_projection_stops_after_first_topic_read(store, monkeypatch, variable_limit):
     class Disconnected(Exception):
         pass
 
     store.execute('CREATE TABLE session_meta (sid TEXT PRIMARY KEY, continuation_origin TEXT)')
     store.commit()
+    getlimit = getattr(store, 'getlimit', None)
+    if variable_limit is not None:
+        if getlimit is None:
+            pytest.skip('SQLite connection limits require Python 3.11')
+        previous_limit = store.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, variable_limit)
     fetch = topics._sqlite_fetch_rows
     reads = []
 
@@ -132,16 +138,19 @@ def test_disconnected_projection_stops_after_first_topic_read(store, monkeypatch
 
     monkeypatch.setattr(topics, '_sqlite_fetch_rows', observed)
     rows = [{'session_id': f'child-{i}', 'continued_from_session_id': 'root'}
-            for i in range(600)]
+            for i in range(1600)]
     with pytest.raises(Disconnected):
         topics.attach_topics(rows, conn=store, names={}, check_client=check_client)
-    assert reads == [500]
+    first_batch = min(1500, getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER)) if getlimit else 500
+    assert reads == [first_batch]
     assert store.execute('SELECT count(*) FROM continuation_topics').fetchone() == (1,)
     assert not store.in_transaction
 
+    if variable_limit is not None:
+        store.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, previous_limit)
     topics.attach_topics(rows, conn=store, names={})
     assert rows[-1]['continuation_topic_title'] == 'Original'
-    assert store.execute('SELECT count(*) FROM continuation_topics').fetchone() == (601,)
+    assert store.execute('SELECT count(*) FROM continuation_topics').fetchone() == (1601,)
 
 
 def test_disconnected_cache_replay_leaves_projection_and_cache_available(store):
