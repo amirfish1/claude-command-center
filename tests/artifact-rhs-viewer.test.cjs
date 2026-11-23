@@ -188,3 +188,26 @@ test('On desktop the RHS preview narrows the LHS list to its minimum width and r
   assert.match(viewsJs, /\$sidebar\.style\.width === narrowedSidebarWidth/);
   assert.match(viewsJs, /\$sidebar\.style\.width = previousSidebarWidth \|\| '';/);
 });
+
+test('Opening the RHS preview keeps a readable conversation column beside it', () => {
+  const viewsJs = fs.readFileSync(require.resolve('../static/conversation-views.js'), 'utf8');
+  assert.match(viewsJs, /const FILE_VIEWER_CONV_MIN_WIDTH = 560;/);
+  assert.match(viewsJs, /const roomForPreview = Math\.round\(paneWidth - FILE_VIEWER_CONV_MIN_WIDTH\);/);
+  assert.match(viewsJs, /if \(target > roomForPreview\) target = Math\.max\(halfSplit, roomForPreview\);/);
+});
+
+test('Each session remembers its open preview; only an explicit close forgets it', () => {
+  const chromeJs = fs.readFileSync(require.resolve('../static/conversation-chrome.js'), 'utf8');
+  const coreJs = fs.readFileSync(require.resolve('../static/conversation-core.js'), 'utf8');
+  const viewsJs = fs.readFileSync(require.resolve('../static/conversation-views.js'), 'utf8');
+  const interactionsJs = fs.readFileSync(require.resolve('../static/conversation-interactions.js'), 'utf8');
+  const selectionJs = fs.readFileSync(require.resolve('../static/conversation-selection.js'), 'utf8');
+  assert.match(chromeJs, /const SESSION_PREVIEW_KEY = 'ccc-session-preview-v1';/);
+  assert.match(chromeJs, /rememberSessionPreview\(\{ type: 'artifact'/);
+  assert.match(chromeJs, /rememberSessionPreview\(\{ type: 'text'.*previewStartedFor\);/);
+  assert.match(chromeJs, /rememberSessionPreview\(\{ type: 'markdown'.*previewStartedFor\);/);
+  assert.match(coreJs, /function closeStatusRailFileViewer\(opts\) \{\n.*opts\.forget/);
+  assert.match(viewsJs, /closeStatusRailFileViewer\)\(\{ forget: true \}\)/);
+  assert.match(interactionsJs, /closeStatusRailFileViewer\)\(\{ forget: true \}\)/);
+  assert.match(selectionJs, /window\._cccRestoreSessionPreview\(id\)/);
+});

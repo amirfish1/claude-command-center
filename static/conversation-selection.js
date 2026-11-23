@@ -122,6 +122,11 @@
     if (!_isBootRestore) mobileShowForCurrentMode();
     try { if (typeof _simpleOnConversationOpen === 'function') _simpleOnConversationOpen(id); } catch (_) {}
     state.currentConversation = id;
+    // Reopen the preview this session had open (if any) once the switch's
+    // own closeStatusRailFileViewer() and layout settle.
+    if (id && id !== '__new__' && typeof window._cccRestoreSessionPreview === 'function') {
+      setTimeout(() => { try { window._cccRestoreSessionPreview(id); } catch (_) {} }, 0);
+    }
     // The terminal panel (index.html) keys its cwd off the open
     // conversation's repo — tell it the repo may have changed.
     try { window.dispatchEvent(new Event('ccc-repo-changed')); } catch (_) {}

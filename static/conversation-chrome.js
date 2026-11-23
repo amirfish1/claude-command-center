@@ -423,6 +423,67 @@
     stage.scrollTop = scale === 0 ? 0 : Math.max(0, centerY * stage.scrollHeight - stage.clientHeight / 2);
   }
 
+  // Each session remembers whether a preview was open and which one, so
+  // switching away and back (or reloading) reopens it. Only an explicit
+  // close (× or Esc) forgets it.
+  const SESSION_PREVIEW_KEY = 'ccc-session-preview-v1';
+  const SESSION_PREVIEW_MAX = 60;
+  function _readSessionPreviews() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(SESSION_PREVIEW_KEY) || '{}');
+      return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+    } catch (_) { return {}; }
+  }
+  function _writeSessionPreviews(map) {
+    try { localStorage.setItem(SESSION_PREVIEW_KEY, JSON.stringify(map)); } catch (_) {}
+  }
+  function _previewConvKey() {
+    const id = sharedState.currentConversation;
+    return typeof id === 'string' && id && id !== '__new__' ? id : '';
+  }
+  // startedFor: the session that was open when an async load began; if the
+  // user moved to another session meanwhile, don't file it under that one.
+  function rememberSessionPreview(desc, startedFor) {
+    const key = _previewConvKey();
+    if (!key || !desc) return;
+    if (startedFor !== undefined && startedFor !== key) return;
+    const map = _readSessionPreviews();
+    delete map[key];
+    map[key] = Object.assign({ at: Date.now() }, desc);
+    const keys = Object.keys(map);
+    if (keys.length > SESSION_PREVIEW_MAX) {
+      keys.sort((a, b) => (map[a].at || 0) - (map[b].at || 0));
+      for (const k of keys.slice(0, keys.length - SESSION_PREVIEW_MAX)) delete map[k];
+    }
+    _writeSessionPreviews(map);
+  }
+  function forgetSessionPreview(convId) {
+    const key = convId || _previewConvKey();
+    if (!key) return;
+    const map = _readSessionPreviews();
+    if (!(key in map)) return;
+    delete map[key];
+    _writeSessionPreviews(map);
+  }
+  function restoreSessionPreview(convId) {
+    if (!convId || sharedState.currentConversation !== convId) return;
+    const desc = _readSessionPreviews()[convId];
+    if (!desc || !_canUseStatusRailViewer()) return;
+    const stillHere = () => sharedState.currentConversation === convId;
+    const onFail = () => { if (stillHere()) forgetSessionPreview(convId); };
+    try {
+      if (desc.type === 'artifact' && desc.src) {
+        if (!openArtifactInStatusRail(desc.src, desc.opts || {})) onFail();
+      } else if (desc.type === 'text' && desc.url) {
+        loadTextIntoFileViewer(desc.url, desc.label || '', desc.filePath || '').catch(onFail);
+      } else if (desc.type === 'markdown' && desc.target) {
+        loadMarkdownIntoFileViewer(desc.target, desc.label || null).catch(onFail);
+      }
+    } catch (_) { onFail(); }
+  }
+  window._cccRestoreSessionPreview = restoreSessionPreview;
+  window._cccForgetSessionPreview = forgetSessionPreview;
+
   function openArtifactInStatusRail(src, opts) {
     if (!src) return false;
     const rail = document.getElementById('statusRail');
@@ -545,6 +606,7 @@
 
     if (typeof window._cccExpandStatusRailForFileViewer === 'function') window._cccExpandStatusRailForFileViewer();
     rail.classList.add('file-viewer-active');
+    rememberSessionPreview({ type: 'artifact', src: fullSrc, opts: { kind, title, filePath, noPreview, externalUrl: (opts && opts.externalUrl) || '' } });
     if (isImage) {
       requestAnimationFrame(() => _setFileViewerImageZoom(bodyEl, 0));
     }
@@ -552,6 +614,7 @@
   }
 
   async function loadTextIntoFileViewer(url, label, filePath) {
+    const previewStartedFor = _previewConvKey();
     const r = await fetch(url, { cache: 'no-store', cccPriority: 'user' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const text = await r.text();
@@ -589,6 +652,7 @@
     if (extBtn) extBtn.hidden = !filePath;
     if (typeof window._cccExpandStatusRailForFileViewer === 'function') window._cccExpandStatusRailForFileViewer();
     if (rail) rail.classList.add('file-viewer-active');
+    rememberSessionPreview({ type: 'text', url, label: label || '', filePath: filePath || '' }, previewStartedFor);
   }
 
   function openArtifactViewer(src, opts) {
@@ -1665,6 +1729,7 @@
   }
 
   async function loadMarkdownIntoFileViewer(target, label) {
+    const previewStartedFor = _previewConvKey();
     const sid = sharedState.sessionIdByConv[sharedState.currentConversation] || (sharedState.currentSession && sharedState.currentSession.id) || '';
     const r = await fetch('/api/read-file', {
       method: 'POST',
@@ -1722,6 +1787,7 @@
     }
     if (typeof window._cccExpandStatusRailForFileViewer === 'function') window._cccExpandStatusRailForFileViewer();
     if (rail) rail.classList.add('file-viewer-active');
+    rememberSessionPreview({ type: 'markdown', target, label: label || '' }, previewStartedFor);
   }
 
   function renderSidebarFileRow(row) {

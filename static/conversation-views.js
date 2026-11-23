@@ -2055,7 +2055,7 @@ onDashboardDocumentReady(() => {
     const $fileViewerClose = document.getElementById('fileViewerCloseBtn');
     if ($fileViewerClose) {
       $fileViewerClose.addEventListener('click', () => {
-        if (typeof sharedState.closeStatusRailFileViewer === 'function') (0, sharedState.closeStatusRailFileViewer)();
+        if (typeof sharedState.closeStatusRailFileViewer === 'function') (0, sharedState.closeStatusRailFileViewer)({ forget: true });
       });
     }
     const $fileViewerOpenExt = document.getElementById('fileViewerOpenExternalBtn');
@@ -2165,6 +2165,9 @@ onDashboardDocumentReady(() => {
     const STATUS_RAIL_DEFAULT_WIDTH = 260;
     const STATUS_RAIL_MIN_WIDTH = 220;
     const FILE_VIEWER_RAIL_EXPAND_FACTOR = 2.5;
+    // Minimum conversation width kept beside an open preview (when the pane
+    // is wide enough; on narrow panes the preview still gets about half).
+    const FILE_VIEWER_CONV_MIN_WIDTH = 560;
     // Generous cap so the rail can host the MD file viewer at a
     // readable width on big screens. The natural ceiling is
     // (paneWidth - 260) so the conversation never shrinks below
@@ -2264,15 +2267,17 @@ onDashboardDocumentReady(() => {
       }
       _setStatusRailCollapsed(false, false);
       if (!alreadyExpanded) {
-        _setStatusRailWidth(fileViewerPreviousRailWidth * FILE_VIEWER_RAIL_EXPAND_FACTOR, false);
         const pane = document.querySelector('.conv-pane.is-active')
           || document.querySelector('.conv-pane[data-pane-id="' + (0, sharedState.activePaneId)() + '"]')
           || document.querySelector('.conv-pane');
         const paneWidth = pane ? pane.getBoundingClientRect().width : window.innerWidth;
         const halfSplit = Math.round(paneWidth * 0.48);
-        if (halfSplit > fileViewerPreviousRailWidth * FILE_VIEWER_RAIL_EXPAND_FACTOR) {
-          _setStatusRailWidth(halfSplit, false);
-        }
+        let target = Math.max(fileViewerPreviousRailWidth * FILE_VIEWER_RAIL_EXPAND_FACTOR, halfSplit);
+        // Leave the conversation a readable column next to the preview,
+        // rather than squeezing it down to the rail's 260px floor.
+        const roomForPreview = Math.round(paneWidth - FILE_VIEWER_CONV_MIN_WIDTH);
+        if (target > roomForPreview) target = Math.max(halfSplit, roomForPreview);
+        _setStatusRailWidth(target, false);
       }
     };
     const _restoreStatusRailAfterFileViewer = () => {

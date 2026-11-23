@@ -2639,7 +2639,7 @@ document.addEventListener('keydown', (ev) => {
       const active = document.activeElement;
       const inEditable = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable);
       if (!inEditable && rail && rail.classList.contains('file-viewer-active') && typeof sharedState.closeStatusRailFileViewer === 'function') {
-        (0, sharedState.closeStatusRailFileViewer)();
+        (0, sharedState.closeStatusRailFileViewer)({ forget: true });
         return;
       }
     }

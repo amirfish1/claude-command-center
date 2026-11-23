@@ -13225,7 +13225,10 @@
     return null;
   }
 
-  function closeStatusRailFileViewer() {
+  // opts.forget: the user closed the preview (× / Esc), so this session
+  // stops reopening it. Session switches close without forgetting.
+  function closeStatusRailFileViewer(opts) {
+    if (opts && opts.forget && typeof window._cccForgetSessionPreview === 'function') window._cccForgetSessionPreview();
     const rail = document.getElementById('statusRail');
     if (rail) {
       rail.classList.remove('file-viewer-active');
