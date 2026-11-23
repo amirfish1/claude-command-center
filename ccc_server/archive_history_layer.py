@@ -4,10 +4,12 @@
 
 from collections import defaultdict, deque
 from dataclasses import dataclass
+from functools import lru_cache
 import gzip
 import hashlib
 from itertools import chain
 import json
+from operator import itemgetter
 import os
 from pathlib import Path
 from struct import Struct
@@ -39,11 +41,27 @@ def row_token(row):
     return hashlib.blake2b(encoded, digest_size=16).hexdigest()
 
 
+@lru_cache(maxsize=128)
+def _hot_key_order(keys):
+    # Hot rows share a small number of field layouts. Keep only the order
+    # and the field lookup here; every encode reads the row's current values.
+    ordered = tuple(sorted(keys))
+    return (ordered, itemgetter(*ordered)) if ordered != keys else (ordered, None)
+
+
 def encode_hot_row(row):
     # SQLite sorts persisted metadata keys, while refresh workers use the
     # parser's insertion order. The sidebar projects top-level fields in
     # layout order. Keep the order of nested objects that reach the wire.
-    return _ENCODE_GUARD(dict(sorted(row.items())))
+    if type(row) is not dict:
+        return _ENCODE_GUARD(dict(sorted(row.items())))
+    keys = tuple(row)
+    if not keys:
+        return _ENCODE_GUARD(row)
+    if set(map(type, keys)) != {str}:
+        return _ENCODE_GUARD(dict(sorted(row.items())))
+    ordered, get_values = _hot_key_order(keys)
+    return _ENCODE_GUARD(dict(zip(ordered, get_values(row))) if get_values else row)
 
 
 def hot_row_token(row):

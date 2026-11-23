@@ -93,6 +93,22 @@ def test_history_hot_guard_ignores_top_level_order_across_refresh(monkeypatch):
     assert server._archive_history_hot_snapshot("base")[1] != refreshed_tokens
 
 
+def test_hot_encoding_reuses_layout_without_reusing_values():
+    cases = (
+        {"z": {"b": 1, "a": 2}, "a": "first"},
+        {"z": {"a": 2, "b": 1}, "a": "second"},
+        {"a": "third", "z": [1, None]},
+        {"z": False},
+        {},
+        {1: "legacy"},
+        {True: "legacy"},
+    )
+    for row in cases:
+        assert layer.encode_hot_row(row) == json.dumps(
+            dict(sorted(row.items())), separators=(",", ":"),
+        )
+
+
 def test_history_hot_guard_reuses_tokens_for_unchanged_published_rows(monkeypatch):
     monkeypatch.setattr(server, "_archive_serve_cache", {})
     monkeypatch.setattr(server, "_archive_serve_version", 0)

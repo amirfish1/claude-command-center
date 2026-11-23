@@ -1,0 +1,1 @@
+- Reduce cold sidebar processing by reusing field layouts when encoding hot rows.
