@@ -18492,7 +18492,7 @@ def _archive_list_delta_state(key, rows, window, from_cache):
         "nonce": _ARCHIVE_DELTA_NONCE, "ver": ver, "ctx": ctx,
         "track_since": track_since, "row_rev": row_rev,
         "base": base, "extra": extra, "projection_ctx": projection_ctx,
-        "row_overlays": row_overlays,
+        "row_overlays": row_overlays, "ideas": ideas, "resumes": resumes,
     }
 
 
@@ -18601,7 +18601,13 @@ def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=
             return None
     window = _archive_list_window(window)
     cutoff = _archive_list_window_cutoff(window, now=now)
-    idea_tickets_by_sid = _idea_tickets.idea_ticket_rows_map()
+    ideas = state.get("ideas")
+    if ideas is None:
+        ideas = _idea_tickets.idea_ticket_rows_map()
+    resumes = state.get("resumes")
+    if resumes is None:
+        resumes = _load_usage_limit_resumes()
+    parents = _session_graph.parent_snapshot()
     row_rev, track_since = state["row_rev"], state["track_since"]
     ids, changed = [], []
     extra_sids = {_archive_row_sid(r) for r in state["extra"] if isinstance(r, dict)}
@@ -18610,7 +18616,7 @@ def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=
     ancestor_ids = set()
     visible = _archive_list_window_rows(
         list(state["base"]) + list(state["extra"]), cutoff,
-        idea_tickets_by_sid, _session_graph.parent_snapshot(), ancestor_ids=ancestor_ids,
+        ideas, parents, ancestor_ids=ancestor_ids,
     )
     if check_client is not None:
         check_client()
@@ -18626,6 +18632,7 @@ def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=
                 or id(r) in ancestor_ids):
             changed.append(r)
     projected = _archive_list_project_rows(changed, window="all", now=now,
+                                           _inputs=(resumes, parents, ideas, changed),
                                            _row_overlays=state.get("row_overlays"),
                                            check_client=check_client)
     order_token = _archive_list_order_token(ids)
@@ -21457,34 +21464,46 @@ def _archive_list_projection_diag(window, key, hit):
 def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=None, phases=None,
                                  check_client=None):
     row_overlays = delta.get("row_overlays") if delta else None
-    if not delta or not delta.get("extra"):
+    if not delta:
         # Unversioned All reads sweep the cold store. Reuse matching templates
         # without letting that sweep evict the scoped sidebar's working set.
         return _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
-                                     _retain_templates=window != "all" or bool(delta),
-                                     _row_overlays=row_overlays, check_client=check_client)
+                                     _retain_templates=window != "all",
+                                     check_client=check_client)
     window = _archive_list_window(window)
     now = time.time() if now is None else now
+    extra = delta.get("extra")
     try:
-        ideas = _idea_tickets.idea_ticket_rows_map()
-        resumes = _load_usage_limit_resumes()
-        resume_fields = {sid: usage_limit_resume_at_for_session(sid, resumes=resumes)
-                         for sid in resumes}
+        # Use the same ticket and resume snapshots that qualified the token.
+        ideas = delta.get("ideas")
+        if ideas is None:
+            ideas = _idea_tickets.idea_ticket_rows_map()
+        resumes = delta.get("resumes")
+        if resumes is None:
+            resumes = _load_usage_limit_resumes()
+        if extra:
+            resume_fields = {sid: usage_limit_resume_at_for_session(sid, resumes=resumes)
+                             for sid in resumes}
     except Exception:
         return _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
                                      _row_overlays=row_overlays, check_client=check_client)
     parents = _session_graph.parent_snapshot()
     selected = _archive_list_window_rows(
         rows, _archive_list_window_cutoff(window, now=now), ideas, parents)
+    inputs = (resumes, parents, ideas, selected)
+    if not extra:
+        return _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
+                                     _inputs=inputs, _row_overlays=row_overlays,
+                                     check_client=check_client)
     ids = [_archive_row_sid(row) for row in selected]
-    extra = delta["extra"]
     overlay_ids = [_archive_row_sid(row) for row in extra]
     base_ids = {_archive_row_sid(row) for row in rows[:len(rows) - len(extra)]}
     # Missing/duplicate identities cannot safely address replacement spans.
     if (not all(ids) or len(set(ids)) != len(ids) or not all(overlay_ids)
             or len(set(overlay_ids)) != len(overlay_ids) or base_ids.intersection(overlay_ids)):
         return _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
-                                     _row_overlays=row_overlays, check_client=check_client)
+                                     _inputs=inputs, _row_overlays=row_overlays,
+                                     check_client=check_client)
     # These two fields are copied by projection, not used by topic/driver
     # resolution. Window membership is checked separately on every request.
     # Keep presence in the guard, and every other overlay field unchanged.
@@ -21508,8 +21527,8 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
         phases["projection_cache"] = _archive_list_projection_diag(window, key, entry is not None)
     if entry is None:
         payload = _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
-                                       _inputs=(resumes, parents, ideas, selected),
-                                       _row_overlays=row_overlays, check_client=check_client)
+                                       _inputs=inputs, _row_overlays=row_overlays,
+                                       check_client=check_client)
         if check_client is not None:
             check_client()
         entry = _list_replay.encode_rows(payload["conversations"], overlay_set)

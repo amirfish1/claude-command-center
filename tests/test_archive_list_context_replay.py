@@ -76,3 +76,35 @@ def test_copied_or_reordered_snapshot_rows_cannot_replay(monkeypatch):
     base = server._archive_serve_cache['base']['rows']
     assert server._archive_list_body_ver('base', [dict(r) for r in base], []) == 0
     assert server._archive_list_body_ver('base', list(reversed(base)), []) == 0
+
+
+def test_full_and_delta_use_the_ticket_context_captured_for_the_token(monkeypatch):
+    now = time.time()
+    base = [{'session_id': 'base', 'mtime': now, 'display_name': 'Base'}]
+    overlay = {'session_id': 'overlay', 'mtime': now, 'display_name': 'Overlay'}
+    rows = base + [overlay]
+    state = {'ideas': {}, 'resumes': {}}
+    monkeypatch.setattr(server, '_archive_serve_cache', {
+        'scope': {'rows': base, 'ver': 1, 'track_since': 1, 'row_rev': {}},
+    })
+    monkeypatch.setattr(server._idea_tickets, 'idea_ticket_rows_map', lambda: state['ideas'])
+    monkeypatch.setattr(server, '_load_usage_limit_resumes', lambda: state['resumes'])
+    monkeypatch.setattr(server, '_archive_list_ticket_effects', lambda *a, **kw: None)
+    original = server._archive_list_delta_state('scope', base, '7d', True)
+    state['ideas'] = {'overlay': {'ref': 'TEST-1', 'explicitly_archived': False}}
+    captured = server._archive_list_delta_state('scope', rows, '7d', True)
+
+    # A sibling request committed new inputs after this response built its
+    # token. They must take effect on the next token, not under this one.
+    state['ideas'] = {'overlay': {'ref': 'TEST-2', 'explicitly_archived': False}}
+    full = server._archive_list_replay_payload(rows, captured, window='7d', now=now)
+    delta = server._archive_list_delta_payload(captured, original['token'], rows,
+                                             window='7d', now=now)
+    assert full['conversations'][-1]['idea_ticket']['ref'] == 'TEST-1'
+    assert delta['conversations'][-1]['idea_ticket']['ref'] == 'TEST-1'
+
+    next_capture = server._archive_list_delta_state('scope', rows, '7d', True)
+    assert next_capture['token'] != captured['token']
+    next_delta = server._archive_list_delta_payload(next_capture, captured['token'], rows,
+                                                  window='7d', now=now)
+    assert next_delta['conversations'][-1]['idea_ticket']['ref'] == 'TEST-2'
