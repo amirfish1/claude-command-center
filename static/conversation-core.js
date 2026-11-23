@@ -22346,7 +22346,7 @@
 
   function nsAdvisorResetText(c, now) {
     if (c.pace < -5) return 'forecast: runs out before reset';
-    return 'resets ' + new Date(c.reset).toLocaleString(undefined, { weekday: 'short', hour: 'numeric' }).replace(',', '');
+    return 'resets ' + new Date(c.reset).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', timeZone: 'America/Los_Angeles' }).replace(',', '');
   }
 
   function nsAdvisorPaceText(c) {
@@ -22596,8 +22596,9 @@
           + '<span>' + (0, sharedState.escapeHtml)(nsAdvisorPickSummary(best, choices)) + '</span></div>'
           : '<p role="status">No eligible model. Check availability and allowances, or choose a model.</p>')
           + nsAdvisorTabsHtml(config, choices, label))
-      + '<div class="ns-advisor-actions"><button type="button" data-advisor-refresh>Refresh usage</button>'
-      + '<button type="button" data-advisor-edit>Preferences</button></div></div></details></div>'
+      + (config && config.enabled && !sharedState.nsAdvisor.error ? ''
+        : '<div class="ns-advisor-actions"><button type="button" data-advisor-edit>Preferences</button></div>')
+      + '</div></details></div>'
       + suggestHtml;
     host.querySelectorAll('[data-depth]').forEach(button => button.addEventListener('click', () => {
       sharedState.nsAdvisor.depth = button.dataset.depth;
