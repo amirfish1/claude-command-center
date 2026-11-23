@@ -36671,3 +36671,15 @@ body.ccc-app-embed.conversation-popout .main > .toolbar {
 .ns-pace-line.is-used.is-ahead .ns-pace-track i { background: var(--green); }
 .ns-pace-line.is-used.is-behind .ns-pace-track i { background: var(--orange); }
 .ns-pace-line + .ns-pace-legend { margin-top: 3px; }
+/* "Change" is the single engine-choice control; its pace explanation floats
+   beside the picker, above the composer, instead of pushing the page down. */
+.conv-model-picker-strip.has-depth-control { position: relative; }
+#nsComposerAdvisor .ns-advisor-why > summary { display: none; }
+#nsComposerAdvisor .ns-advisor-why[open] { flex: 0 0 auto; }
+#nsComposerAdvisor .ns-advisor-why[open] .ns-advisor-explanation {
+  position: absolute; right: 14px; bottom: calc(100% + 44px); z-index: 30;
+  width: 460px; max-width: calc(100% - 28px); margin: 0; box-sizing: border-box;
+  max-height: min(70vh, 640px); overflow-y: auto;
+  box-shadow: 0 10px 30px color-mix(in srgb, #000 22%, transparent);
+}
+#nsComposerAdvisor .ns-advisor-why.is-inline .ns-advisor-explanation { position: static; width: auto; box-shadow: none; padding: 6px 10px; }

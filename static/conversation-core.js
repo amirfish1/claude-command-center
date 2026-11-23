@@ -22550,8 +22550,14 @@
     if (!host || sharedState.nsAdvisor.editing || sharedState.nsAdvisor.dragging) return;
     host.hidden = false;
     host.classList.remove('is-editing');
-    const whyOpen = !!host.querySelector('.ns-advisor-why')?.open;
     const config = sharedState.nsAdvisor.data?.config;
+    // One control for engine choice: "Change" opens the picker, and the pace
+    // explanation floats beside it instead of a separate "Why?" toggle.
+    const overridesEl = document.getElementById('nsModelOverrides');
+    const whyOpen = !!overridesEl?.open && !overridesEl.classList.contains('is-legacy');
+    // With auto off or a load error there is no pace card to float; show the
+    // note and its Preferences/Retry button inline so they stay reachable.
+    const inlineNote = !!sharedState.nsAdvisor.error || (config && config.enabled === false);
     const choices = nsAdvisorChoices();
     const best = choices.find(c => !c.unavailable);
     // Automatic selection applies once, while the composer has no remembered
@@ -22596,7 +22602,7 @@
         + (depth === 'deep' ? 'Hard debugging, architecture, ambiguous work' : 'Clear implementation, small fixes, routine edits') + '">'
         + (depth === 'routine' ? 'Routine' : 'Deep') + '</button>').join('') + '</div>'
       + (sharedState.nsAdvisor.manual && best && config?.enabled ? '<button type="button" class="ns-auto-restore" data-advisor-use>Use auto</button>' : '')
-      + '<details class="ns-advisor-why"' + (whyOpen ? ' open' : '') + '><summary>Why?</summary><div class="ns-advisor-explanation">'
+      + '<details class="ns-advisor-why' + (inlineNote ? ' is-inline' : '') + '"' + (whyOpen || inlineNote ? ' open' : '') + '><summary hidden>Why?</summary><div class="ns-advisor-explanation" role="note" aria-label="Why this model">'
       + (sharedState.nsAdvisor.error ? '<p role="status">' + (0, sharedState.escapeHtml)(sharedState.nsAdvisor.error) + ' <button type="button" data-advisor-refresh>Retry</button></p>'
         : !config ? '<p role="status">Loading your preferences…</p>'
         : !config.enabled ? '<p>Enable automatic selection in model preferences.</p>'
@@ -22723,6 +22729,8 @@
     const lifted = overrides.open && !overrides.classList.contains('is-legacy');
     const toggle = overrides.querySelector(':scope > summary .ns-model-change');
     if (toggle) toggle.textContent = lifted ? 'Collapse' : 'Change';
+    const why = document.querySelector('#nsComposerAdvisor .ns-advisor-why');
+    if (why) why.open = lifted || why.classList.contains('is-inline');
     for (const select of [sharedState.$convInputEngineSelect, sharedState.$convInputModelSelect, sharedState.$convInputEffortSelect]) {
       if (!select) continue;
       if (lifted) {
