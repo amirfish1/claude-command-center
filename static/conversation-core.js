@@ -22315,13 +22315,38 @@
 
   function nsAdvisorVerdict(c, now) {
     if (c.unavailable) return ['is-muted', 'unavailable'];
-    if (c.metered) return ['is-credits', typeof c.balance === 'number' ? '$' + c.balance.toLocaleString() + ' credits' : 'credits'];
+    if (c.metered) return ['is-credits', typeof c.balance === 'number' ? '$' + c.balance.toLocaleString() + (c.creditsExpire ? ' · until ' + new Date(c.creditsExpire).toLocaleDateString(undefined, { month: 'short', year: 'numeric' }) : ' credits') : 'credits'];
     if (c.planEnds) return ['is-ahead', 'plan ends in ' + nsAdvisorSpan(c.planEnds - now) + ' · use it'];
     if (typeof c.pace !== 'number') return ['is-muted', 'quota unknown'];
     if (c.pace > 15) return ['is-ahead', c.reset && c.reset - now < 12 * 3600000
-      ? 'expires in ' + nsAdvisorSpan(c.reset - now) + ' · use now' : 'ahead · use it'];
+      ? 'expires in ' + nsAdvisorSpan(c.reset - now) + ' · use now' : 'ahead · use more'];
     if (c.pace >= -5) return ['is-muted', 'on pace'];
     return c.banked?.length ? ['is-ahead', 'behind · reset banked'] : ['is-behind', 'behind · save it'];
+  }
+
+  // Model name and effort as separate parts so effort can render muted, as in
+  // the mock ("Sonnet 5.5" + "High"), instead of "Sonnet-5-5 (High)".
+  function nsAdvisorModelParts(engine, model, effort) {
+    let name = formatModelNameForBadge(engine, model).replace(/\b([A-Za-z]+)[- ](\d)[- ](\d)\b/, '$1 $2.$3');
+    let effortLabel = effort ? (sharedState.REASONING_LEVEL_LABELS[effort] || effort) : '';
+    const trailing = name.match(/\s*\(([^)]+)\)$/);
+    if (trailing) { name = name.slice(0, trailing.index); effortLabel = effortLabel || trailing[1]; }
+    name = name.replace(/\b[a-z]/g, c => c.toUpperCase());
+    return { name, effort: effortLabel && !name.toLowerCase().includes(effortLabel.toLowerCase()) ? effortLabel : '' };
+  }
+
+  function nsAdvisorPaceBadge(c, now) {
+    if (c.metered) return 'credits';
+    const pace = nsAdvisorPaceText(c);
+    if (!pace) return '?';
+    if (c.pace > 15) return pace + (c.reset && c.reset - now < 12 * 3600000 ? ' · ' + nsAdvisorSpan(c.reset - now) + ' left' : ' ahead');
+    if (c.pace < -5) return pace + ' behind';
+    return pace + ' on pace';
+  }
+
+  function nsAdvisorResetText(c, now) {
+    if (c.pace < -5) return 'forecast: runs out before reset';
+    return 'resets ' + new Date(c.reset).toLocaleString(undefined, { weekday: 'short', hour: 'numeric' }).replace(',', '');
   }
 
   function nsAdvisorPaceText(c) {
@@ -22356,22 +22381,23 @@
       group.rows.push(c);
     }
     if (!groups.length) return '';
-    return '<div class="ns-pace-scale" aria-hidden="true"><span>◀ behind · save it</span><span>on pace</span><span>ahead · use it ▶</span></div>'
+    return '<h4 class="ns-advisor-heading">Pace vs. time left</h4><div class="ns-pace-scale" aria-hidden="true"><span>◀ behind · save it</span><span>on pace</span><span>ahead · use it ▶</span></div>'
       + groups.map(group => {
         const c = group.rows.find(r => !r.unavailable) || group.rows[0];
         const [tone, verdict] = nsAdvisorVerdict(c, now);
         let body = '';
         if (c.metered) {
-          body = '<div class="ns-pace-legend"><span>No usage window; costs real credits, so it ranks below subscriptions.</span>'
-            + (c.creditsExpire ? '<span>expires ' + esc(nsAdvisorDate(c.creditsExpire)) + '</span>' : '') + '</div>';
+          body = '<div class="ns-pace-legend"><span>No weekly window. Costs real credits, so used only when subscriptions are behind.</span></div>';
         } else if (typeof c.pace === 'number') {
           const width = Math.min(50, Math.abs(c.pace) / 2);
-          const bank = c.banked?.length ? '<i class="ns-pace-bank" style="left:' + (50 + Math.max(0, c.pace) / 2) + '%"></i>' : '';
+          const bank = c.banked?.length ? '<i class="ns-pace-bank" style="left:' + (50 + Math.max(0, c.pace) / 2) + '%"></i><span class="ns-pace-arrow" aria-hidden="true">▶</span>' : '';
           const windowLabel = c.windowHours === 24 ? 'daily' : c.windowHours === 168 ? 'weekly' : Math.round(c.windowHours) + 'h window';
           body = '<div class="ns-pace-bar" role="img" aria-label="' + esc(nsAdvisorPaceText(c) + ' points versus pace') + '">'
             + '<i class="ns-pace-fill ' + (c.pace >= 0 ? 'is-over' : 'is-under') + '" style="width:' + width + '%"></i>' + bank + '<i class="ns-pace-mid"></i></div>'
-            + '<div class="ns-pace-legend"><span><b>' + esc(nsAdvisorPaceText(c)) + '</b> · ' + Math.round(c.pct) + '% left' + (c.source === 'reported' ? ' (reported)' : '')
-            + ' · ' + Math.round(c.timePct) + '% of window to go</span><span>' + windowLabel + ' · resets in ' + esc(nsAdvisorSpan(c.reset - now)) + '</span></div>';
+            + '<div class="ns-pace-legend"><span' + (c.source === 'reported' ? ' title="Reported by the provider"' : '') + '><b>' + esc(nsAdvisorPaceText(c)) + '</b> · ' + Math.round(c.pct) + '% of '
+            + (c.windowHours === 24 ? 'today' : c.windowHours === 168 ? 'the week' : 'the window') + ' left · '
+            + (c.windowHours === 24 ? esc(nsAdvisorSpan(c.reset - now)) + ' of 24h' : Math.round(c.timePct) + '% of ' + (c.windowHours === 168 ? 'the week' : 'the window')) + ' to go</span><span title="' + windowLabel + '">'
+            + esc(nsAdvisorResetText(c, now)) + '</span></div>';
         } else {
           body = '<div class="ns-pace-legend"><span>' + esc(c.notes.join(' · ') || 'No usage reading') + '</span></div>';
         }
@@ -22381,9 +22407,9 @@
         const chips = group.rows.map(r => {
           const index = choices.indexOf(r);
           const on = held && r.engine === held.engine && _normalizeModelId(r.model) === _normalizeModelId(held.model) && (r.effort || '') === (held.effort || '');
-          const name = getModelPillLabel(r.engine, r.model, r.effort);
+          const parts = nsAdvisorModelParts(r.engine, r.model, r.effort);
           return '<button type="button" class="ns-pace-chip' + (on ? ' is-selected' : '') + '"' + (r.unavailable ? ' disabled title="' + esc(r.unavailable) + '"'
-            : ' data-advisor-pick="' + index + '"') + '>' + (on ? '✓ ' : '') + esc(name) + '</button>';
+            : ' data-advisor-pick="' + index + '"') + '>' + (on ? '✓ ' : '') + (parts.effort ? esc(parts.name) + '<i>' + esc(parts.effort) + '</i>' : esc(parts.name)) + '</button>';
         }).join('');
         return '<div class="ns-pace-account"><div class="ns-pace-head"><strong>' + esc(c.funding || spawnEngineLabel(group.engine)) + '</strong>'
           + '<span class="ns-pace-verdict ' + tone + '"' + (c.unavailable ? ' title="' + esc(c.unavailable) + '"' : '') + '>' + esc(verdict) + '</span></div>'
@@ -22406,15 +22432,16 @@
     const items = rows.map((row, i) => {
       const c = saved.find(x => x.index === i) || {};
       const [tone] = nsAdvisorVerdict(c, Date.now());
-      const pace = c.metered ? 'credits' : nsAdvisorPaceText(c) || '?';
+      const pace = nsAdvisorPaceBadge(c, Date.now());
+      const parts = nsAdvisorModelParts(row.engine, row.model, row.effort);
       return (i === cut ? line : '') + '<li class="ns-rank-row' + (i >= cut ? ' is-fallback' : '') + (c.unavailable ? ' is-unavailable' : '') + '" draggable="true" tabindex="0" data-rank-i="' + i + '"'
         + (c.unavailable ? ' title="' + esc(c.unavailable) + '"' : '') + '><span class="ns-rank-grip" aria-hidden="true">⋮⋮</span><span class="ns-rank-num">' + (i + 1) + '</span>'
-        + '<span class="ns-rank-name">' + esc(getModelPillLabel(row.engine, row.model, row.effort)) + ' <small>' + esc(spawnEngineLabel(row.engine)) + '</small></span>'
+        + '<span class="ns-rank-name">' + esc(parts.name) + (parts.effort ? ' <em>' + esc(parts.effort) + '</em>' : '') + ' <small>' + esc(spawnEngineLabel(row.engine)) + '</small></span>'
         + '<span class="ns-pace-verdict ' + tone + '">' + esc(pace) + '</span></li>';
     }).join('') + (cut >= rows.length ? line : '');
     return '<div class="ns-rank-top"><div class="ns-advisor-depth" role="group" aria-label="Ranking to edit">'
       + ['deep', 'routine'].map(d => '<button type="button" data-rank-depth="' + d + '" aria-pressed="' + (d === depth) + '">' + (d === 'deep' ? 'Deep' : 'Routine') + '</button>').join('')
-      + '</div><small>Drag to reorder. Above the line, the allowance closest to expiring wins; below it, fallbacks only.</small></div>'
+      + '</div></div><p class="ns-rank-hint">Drag to reorder. Drag the line to set "good enough": above it, the allowance closest to expiring wins; below it, used only as a fallback.</p>'
       + '<ol class="ns-rank-list" data-rank-list="' + depth + '">' + items + '</ol><p class="ns-advisor-error" role="status"></p>';
   }
 
@@ -22565,7 +22592,7 @@
       + (sharedState.nsAdvisor.error ? '<p role="status">' + (0, sharedState.escapeHtml)(sharedState.nsAdvisor.error) + ' <button type="button" data-advisor-refresh>Retry</button></p>'
         : !config ? '<p role="status">Loading your preferences…</p>'
         : !config.enabled ? '<p>Enable automatic selection in model preferences.</p>'
-        : (best ? '<div class="ns-advisor-result"><strong>' + (0, sharedState.escapeHtml)(label(best)) + '</strong>'
+        : (best ? '<div class="ns-advisor-result"><strong>' + (automatic ? 'Auto · ' : '') + (0, sharedState.escapeHtml)(label(best)) + '</strong>'
           + '<span>' + (0, sharedState.escapeHtml)(nsAdvisorPickSummary(best, choices)) + '</span></div>'
           : '<p role="status">No eligible model. Check availability and allowances, or choose a model.</p>')
           + nsAdvisorTabsHtml(config, choices, label))
