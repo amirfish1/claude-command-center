@@ -848,3 +848,32 @@ def test_sidebar_history_inventory_preserves_values_and_rowid_ties(parent, cover
                         [('base', 0, *row) for row in rows])
 
         assert store._sidebar_history_inventory(con, 'base', 2) == tuple(rows)
+
+
+@pytest.mark.parametrize('parent', ['parent', 'parent\0id', b'\xff', None])
+def test_stalled_sidebar_inventory_batches_the_same_ordered_cut(monkeypatch, parent):
+    monkeypatch.setattr(store, '_HISTORY_INVENTORY_PROBE_ROWS', 1)
+    clock = iter((0.0, 0.02))
+    monkeypatch.setattr(store, 'time', SimpleNamespace(
+        perf_counter=lambda: next(clock), thread_time=lambda: 0.0,
+    ))
+    batches = []
+    batch_inventory = store._sidebar_history_inventory_batch
+
+    def record_batch(con, query, params):
+        result = batch_inventory(con, query, params)
+        batches.append(result)
+        return result
+
+    monkeypatch.setattr(store, '_sidebar_history_inventory_batch', record_batch)
+    with closing(sqlite3.connect(':memory:')) as con:
+        con.execute('CREATE TABLE rows (variant, position, sid, identity, parent, digest)')
+        con.execute('CREATE INDEX rows_sidebar_history '
+                    'ON rows(variant, position, sid, identity, parent, digest)')
+        rows = [('z-child', 'child-identity', 'parent', 'child-digest'),
+                ('parent', 'parent-identity', parent, 'parent-digest')]
+        con.executemany('INSERT INTO rows VALUES (?, ?, ?, ?, ?, ?)',
+                        [('base', 0, *row) for row in rows])
+
+        assert store._sidebar_history_inventory(con, 'base', 2) == tuple(rows)
+        assert batches == [(rows[1],) if parent == 'parent' else None]

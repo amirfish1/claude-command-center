@@ -31,6 +31,8 @@ HOT_SECONDS = 7 * 86400
 _SIGNATURE_MAP_COMPRESS_MIN_BYTES = 64 << 10
 _SIGNATURE_MAP_MAX_BYTES = 64 << 20
 _POINT_WAL_CHECKPOINT_BYTES = 32 << 20
+_HISTORY_INVENTORY_PROBE_ROWS = 2048
+_HISTORY_INVENTORY_MIN_STALL = 0.008
 
 # The peer inventory never consumes transcript/parser detail. Publish its
 # projection in the same transaction as each canonical row, so polling peers
@@ -1134,10 +1136,11 @@ def _sidebar_history_inventory(con, key, max_rows):
     # Older stores keep working until their next archive write.
     if con.execute("SELECT 1 FROM sqlite_master WHERE type='index' "
                    "AND name='rows_sidebar_history'").fetchone():
-        records = tuple(con.execute(
+        query = (
             'SELECT sid, identity, parent, digest FROM rows INDEXED BY rows_sidebar_history '
-            'WHERE variant=? ORDER BY position,rowid LIMIT ?', (key, max_rows + 1),
-        ))
+            'WHERE variant=? ORDER BY position,rowid LIMIT ?'
+        )
+        records = _sidebar_history_covering_inventory(con, query, key, max_rows + 1)
     else:
         records = _sidebar_history_inventory_legacy(con, key, max_rows)
     if not records or len(records) > max_rows:
@@ -1146,13 +1149,52 @@ def _sidebar_history_inventory(con, key, max_rows):
     return records if len(identities) == len(records) else None
 
 
+def _sidebar_history_covering_inventory(con, query, key, limit):
+    params = (key, limit)
+    if limit <= _HISTORY_INVENTORY_PROBE_ROWS or not con.in_transaction:
+        return tuple(con.execute(query, params))
+
+    wall_started, cpu_started = time.perf_counter(), time.thread_time()
+    cursor = con.execute(query, params)
+    try:
+        first = tuple(cursor.fetchmany(_HISTORY_INVENTORY_PROBE_ROWS))
+        wall = time.perf_counter() - wall_started
+        cpu = time.thread_time() - cpu_started
+        if len(first) < _HISTORY_INVENTORY_PROBE_ROWS:
+            return first
+        # A loaded interpreter can reacquire the GIL on every SQLite row.
+        # If the prefix spent most of its time waiting, batch the rest within
+        # the same ordered read transaction. The typed cursor remains usable.
+        if wall - cpu >= max(_HISTORY_INVENTORY_MIN_STALL, 2 * cpu):
+            try:
+                rest = _sidebar_history_inventory_batch(
+                    con, query + ' OFFSET ?', (key, limit - len(first), len(first)),
+                )
+            except sqlite3.DataError:
+                rest = None
+            if rest is not None:
+                return first + rest
+        return first + tuple(cursor)
+    finally:
+        cursor.close()
+
+
 def _sidebar_history_inventory_legacy(con, key, max_rows):
-    # Batch the bounded cut without asking SQLite to JSON-escape every
-    # identity (already JSON) and Python to decode that second layer.
-    columns = ('sid', 'identity', 'parent', 'digest')
     query = ('SELECT sid, identity, parent, digest FROM rows '
              'WHERE variant=? ORDER BY position,rowid LIMIT ?')
     params = (key, max_rows + 1)
+    records = _sidebar_history_inventory_batch(con, query, params, max_rows=max_rows)
+    if records is not None:
+        return records
+    # Preserve SQLite scalar types and embedded separators in legacy stores.
+    columns = ('sid', 'identity', 'parent', 'digest')
+    return tuple(_sqlite_fetch_rows(con, query, params, columns))
+
+
+def _sidebar_history_inventory_batch(con, query, params, *, max_rows=None):
+    # Batch the bounded cut without asking SQLite to JSON-escape every
+    # identity (already JSON) and Python to decode that second layer.
+    columns = ('sid', 'identity', 'parent', 'digest')
     fields = ', '.join(
         f"group_concat(CASE WHEN typeof({column}) = 'text' THEN {column} END, char(0))"
         for column in columns
@@ -1161,18 +1203,14 @@ def _sidebar_history_inventory_legacy(con, key, max_rows):
     count, has_nontext, *packed = con.execute(
         f'SELECT count(*), max({nontext}), {fields} FROM ({query})', params,
     ).fetchone()
-    if not count or count > max_rows:
+    if not count:
+        return ()
+    if max_rows is not None and count > max_rows:
+        return ()
+    if has_nontext:
         return None
-    records = None
-    if not has_nontext:
-        values = [column.split('\0') for column in packed]
-        if all(len(column) == count for column in values):
-            records = tuple(zip(*values))
-    # Each selected column is text in the current store. Fall back to the
-    # typed reader on a legacy scalar or an embedded separator.
-    if records is None:
-        records = tuple(_sqlite_fetch_rows(con, query, params, columns))
-    return records
+    values = [column.split('\0') for column in packed]
+    return tuple(zip(*values)) if all(len(column) == count for column in values) else None
 
 
 def _sidebar_history_reader(con, stamp, records, key, schema_version, build_id):
