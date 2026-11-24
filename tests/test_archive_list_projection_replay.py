@@ -129,6 +129,56 @@ def test_packed_seven_day_wire_build_reads_nested_values_without_mutating_source
     assert rows == source_before
 
 
+def test_packed_seven_day_wire_replay_keeps_effects_order_and_ticket_fallback(inputs):
+    rows = fixture_rows()
+    rows[0]['goal'] = {'objective': 'An archive field outside ticket automation'}
+    rows.append(dict(rows[1], session_id='second-live', mtime=9700))
+
+    def wire(context):
+        phases = {}
+        delta = {'ver': 1, 'ctx': context, 'projection_ctx': 'stable', 'extra': rows[1:]}
+        payload = server._archive_list_replay_payload(
+            rows, delta, window='7d', now=10000, cached=True, row_layouts=True,
+            _wire_only=True, phases=phases)
+        return payload, phases.get('projection_replay', {})
+
+    wire('original')
+    wire('original')
+    rows[1]['mtime'] = 9900
+    rows[1], rows[2] = rows[2], rows[1]
+    compact, phases = wire('original')
+    assert phases['compact_effect_rows']
+    assert 'goal' not in compact['conversations'][0]
+    effects = inputs['ticks'][-1]
+    assert [row['session_id'] for row in effects] == ['archive', 'second-live', 'live']
+    assert effects[-1]['mtime'] == 9900
+
+    full = read(rows, context='original', projection_context='stable', row_layouts=True)
+    full.pop('delta_token')
+    assert [server._idea_tickets.archive_effect_row(row) for row in inputs['ticks'][-1]] == [
+        server._idea_tickets.archive_effect_row(row) for row in effects]
+    assert replay.encode_payload(compact) == replay.encode_payload(full)
+    assert gzip.decompress(replay.encode_gzip_payload(compact)) == replay.encode_payload(full)
+
+    inputs['ideas'] = {'outside-scope': {'ref': 'TEST-2', 'explicitly_archived': False}}
+    unchanged, phases = wire('unrelated')
+    assert phases['compact_effect_rows']
+    assert replay.encode_payload(unchanged) == replay.encode_payload(compact)
+
+    inputs['ideas'] = {'archive': {'ref': 'TEST-1', 'explicitly_archived': True}}
+    updated, phases = wire('changed')
+    assert not phases['compact_effect_rows']
+    assert phases['ticket_rows_changed']
+    assert updated['conversations'][0]['idea_ticket']['ref'] == 'TEST-1'
+    updated_replay, phases = wire('changed')
+    assert phases['compact_effect_rows']
+    assert replay.encode_payload(updated_replay) == replay.encode_payload(updated)
+    inputs['ideas'] = {}
+    restored, phases = wire('original')
+    assert not phases['compact_effect_rows']
+    assert replay.encode_payload(restored) == replay.encode_payload(compact)
+
+
 def test_reuses_archive_but_keeps_timestamps_ticket_ticks_and_containers_fresh(inputs):
     rows = fixture_rows()
     first = read(rows)

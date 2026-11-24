@@ -21533,7 +21533,8 @@ _ARCHIVE_LIST_PROJECTION_DIAG_LOCK = threading.Lock()
 
 def _archive_list_projection_diag(window, key, hit):
     """Describe replay invalidation without logging row identities or values."""
-    names = ("window", "cached", "snapshot", "context", "overlay", "graph", "topics", "gzip", "layouts")
+    names = ("window", "cached", "snapshot", "context", "overlay", "graph", "topics", "gzip",
+             "layouts", "wire_effects")
     with _ARCHIVE_LIST_PROJECTION_DIAG_LOCK:
         previous = _ARCHIVE_LIST_PROJECTION_DIAG_KEYS.get(window)
         changed = [name for name, before, after in zip(names, previous or (), key)
@@ -21623,11 +21624,19 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
     overlay_guard.sort(key=lambda item: _archive_row_sid(item[0]))
     projection_ctx = delta.get("projection_ctx")
     guard_ideas = ideas if projection_ctx is None else None
+    wire_effects = borrow_containers and projection_ctx is not None
+    ticket_context = delta["ctx"]
+    if wire_effects:
+        # The projection key already guards the selected rows and non-ticket
+        # inputs. Changes to tickets outside those rows cannot alter the wire.
+        selected_ideas = {sid: ideas[sid] for sid in ids if sid in ideas}
+        ticket_context = hashlib.sha256(_ARCHIVE_DELTA_JSON.encode(selected_ideas).encode()).hexdigest()
     guard = hashlib.sha1(json.dumps([overlay_guard, guard_ids, sorted(overlay_order), guard_ideas, resume_fields],
                                    sort_keys=True, default=str).encode()).hexdigest()
     from ccc_server import continuation_topics
     key = (window, bool(cached), delta["ver"], projection_ctx or delta["ctx"], guard,
-           _session_graph.projection_revision(), continuation_topics.revision(), eager_gzip, row_layouts)
+           _session_graph.projection_revision(), continuation_topics.revision(), eager_gzip, row_layouts,
+           wire_effects)
     entry = _ARCHIVE_LIST_PROJECTION_CACHE.get(key)
     if phases is not None:
         phases["projection_cache"] = _archive_list_projection_diag(window, key, entry is not None)
@@ -21646,23 +21655,27 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
             payload["conversations"], overlay_set, deflate=eager_gzip, row_layouts=row_layouts)
         raw = entry[0]
         if projection_ctx is not None:
-            entry = _list_replay.TicketContextEntry(entry, delta["ctx"], getattr(entry, "layouts", None))
+            entry = _list_replay.TicketContextEntry(entry, ticket_context, getattr(entry, "layouts", None))
         _ARCHIVE_LIST_PROJECTION_CACHE.put(key, entry, _list_replay.entry_weight(entry))
         compressed = _list_replay.compress_replay(entry, payload["conversations"])
     else:
         wall, cpu = time.perf_counter(), time.thread_time()
+        ticket_context_changed = projection_ctx is not None and entry.ticket_context != ticket_context
+        compact = (wire_effects and not ticket_context_changed
+                   and (len(entry) == 3 or entry.effect_rows))
         projected = _list_replay.replay_rows(
-            entry, dict(zip(overlay_ids, extra)), overlay_order=overlay_order)
-        if len(entry) == 3:
+            entry, dict(zip(overlay_ids, extra)), overlay_order=overlay_order,
+            effect_fields=_idea_tickets.ARCHIVE_EFFECT_FIELDS if compact else ())
+        if len(entry) == 3 and not (wire_effects and ticket_context_changed):
             # Pay clone preparation only on reuse, never on the cold build.
             # Charge the additional bytes to the same bounded cache.
-            entry = _list_replay.with_owned_rows(entry, projected)
+            entry = _list_replay.with_owned_rows(entry, projected, effect_rows=compact)
             if _list_replay.entry_weight(entry) > _ARCHIVE_LIST_PROJECTION_CACHE.max_bytes:
                 # Keep the usable JSON entry without retrying an oversized
                 # clone on every subsequent read.
                 entry = _list_replay.with_owned_rows(entry, None)
             _ARCHIVE_LIST_PROJECTION_CACHE.put(key, entry, _list_replay.entry_weight(entry))
-        if projection_ctx is not None and getattr(entry, "ticket_context", None) != delta["ctx"]:
+        if ticket_context_changed:
             # Cached rows contain the earlier ticket overlay. All ticket
             # routines must instead see the same snapshot inputs as a fresh
             # projection, including when an overlay was removed entirely.
@@ -21681,6 +21694,11 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
             _archive_list_ticket_updates(projected, ideas)
             changed = any(previous != tuple(row.get(field, absent) for field in ticket_fields)
                           for previous, row in zip(before, projected))
+        elif compact:
+            # The exact ticket context already qualified the encoded archive
+            # rows. Effects still inspect current timestamps and live state.
+            _archive_list_ticket_effects(projected)
+            changed = False
         else:
             changed = _archive_list_ticket_updates(projected, ideas)
         if window == "all":
@@ -21695,6 +21713,11 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
         else:
             raw = _list_replay.encode_replay(entry, projected)
             compressed = _list_replay.compress_replay(entry, projected)
+        if wire_effects and ticket_context_changed:
+            # Keep the bytes for the current ticket context. Start its clone
+            # on reuse, since the previous clone contains stale splice rows.
+            entry = _list_replay.TicketContextEntry(entry[:3], ticket_context, entry.layouts)
+            _ARCHIVE_LIST_PROJECTION_CACHE.put(key, entry, _list_replay.entry_weight(entry))
         payload = {
             "ok": True, "conversations": projected, "count": len(projected),
             "total_count": sum(isinstance(row, dict) for row in (rows or [])),
@@ -21705,7 +21728,7 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
             payload["cached"] = bool(cached)
         if phases is not None:
             phases["projection_replay"] = {
-                "ticket_rows_changed": bool(changed),
+                "ticket_rows_changed": bool(changed), "compact_effect_rows": compact,
                 "wall_ms": round((time.perf_counter() - wall) * 1000, 1),
                 "cpu_ms": round((time.thread_time() - cpu) * 1000, 1)}
     if row_layouts:

@@ -615,17 +615,20 @@ def _auto_skip(entry):
             and str(entry.get("skip") or "").startswith(_AUTO_SKIP_PREFIX))
 
 
+# Inputs used by archive sweep, retitle, autopilot, and watchdog.
+ARCHIVE_EFFECT_FIELDS = (
+    "session_id", "id", "continued_from_session_id", "parent_session_id",
+    "last_assistant_preview", "last_assistant_text", "last_event_type", "first_message",
+    "session_cwd", "folder_path", "cwd", "slug",
+    "display_name", "ai_title", "auto_titled", "name_overridden",
+    "mtime", "modified", "last_interacted", "archived", "trashed", "recently_unarchived",
+    "state", "codex_state", "sidecar_status", "sidecar_in_flight", "pending_spawn",
+    "pending_tool", "needs_approval", "question_waiting", "stale_tool_call", "session_state",
+)
+
+
 def archive_effect_row(row):
-    """Keep the inputs used by archive sweep, retitle, autopilot, and watchdog."""
-    return {field: row[field] for field in (
-        "session_id", "id", "continued_from_session_id", "parent_session_id",
-        "last_assistant_preview", "last_assistant_text", "last_event_type", "first_message",
-        "session_cwd", "folder_path", "cwd", "slug",
-        "display_name", "ai_title", "auto_titled", "name_overridden",
-        "mtime", "modified", "last_interacted", "archived", "trashed", "recently_unarchived",
-        "state", "codex_state", "sidecar_status", "sidecar_in_flight", "pending_spawn",
-        "pending_tool", "needs_approval", "question_waiting", "stale_tool_call", "session_state",
-    ) if field in row}
+    return {field: row[field] for field in ARCHIVE_EFFECT_FIELDS if field in row}
 
 
 def sweep_rows(rows, *, data=None):

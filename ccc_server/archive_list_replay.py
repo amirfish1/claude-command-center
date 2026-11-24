@@ -233,11 +233,12 @@ def _encoded_run(rows, *, deflate=True, compact=False):
 
 class TicketContextEntry(tuple):
     """Keep ticket provenance with the bytes it describes, under one budget."""
-    def __new__(cls, entry, context, layouts=None):
+    def __new__(cls, entry, context, layouts=None, *, effect_rows=False):
         result = super().__new__(cls, entry)
         result.ticket_context = context
         result.layouts = layouts
         result.layout_ids = {tuple(keys): index for index, keys in enumerate(layouts)} if layouts else None
+        result.effect_rows = effect_rows
         return result
 
 
@@ -354,16 +355,28 @@ def encode_rows(rows, overlay_ids, *, deflate=True, row_layouts=False):
     return TicketContextEntry(entry, None, layouts) if row_layouts else entry
 
 
-def replay_rows(entry, overlays, *, overlay_order=None):
+def replay_rows(entry, overlays, *, overlay_order=None, effect_fields=()):
     raw, spans = entry[:2]
     # Clone bytes are created only from our own JSON-decoded rows below;
     # they are never accepted from disk, HTTP or another process.
-    if len(entry) > 3 and entry[3] is not None:
+    use_owned = getattr(entry, 'effect_rows', False) == bool(effect_fields)
+    if use_owned and len(entry) > 3 and entry[3] is not None:
         rows = pickle.loads(entry[3])
     else:
         rows = json.loads(raw)
         layouts = getattr(entry, 'layouts', None)
-        if layouts is not None:
+        if effect_fields:
+            # Only the overlay splice positions need a full row. Resolve the
+            # automation field offsets once per layout for the other rows.
+            fields = frozenset(effect_fields)
+            columns = [[(key, index) for index, key in enumerate(layout) if key in fields]
+                       for layout in layouts]
+            splice_positions = {index for index, _, _ in spans}
+            rows = [dict(zip(layouts[shape], values, strict=True))
+                    if index in splice_positions else
+                    {key: values[column] for key, column in columns[shape]}
+                    for index, (shape, values) in enumerate(rows)]
+        elif layouts is not None:
             rows = [dict(zip(layouts[shape], values, strict=True)) for shape, values in rows]
     by_sid = {str(rows[index].get('session_id') or rows[index].get('id') or ''): rows[index]
               for index, _, _ in spans} if overlay_order is not None else None
@@ -381,10 +394,10 @@ def replay_rows(entry, overlays, *, overlay_order=None):
     return rows
 
 
-def with_owned_rows(entry, rows):
+def with_owned_rows(entry, rows, *, effect_rows=False):
     """Retain an immutable clone of normalized rows, before ticket mutation."""
     cloned = (*entry[:3], pickle.dumps(rows, protocol=pickle.HIGHEST_PROTOCOL) if rows is not None else None)
-    return (TicketContextEntry(cloned, entry.ticket_context, entry.layouts)
+    return (TicketContextEntry(cloned, entry.ticket_context, entry.layouts, effect_rows=effect_rows)
             if isinstance(entry, TicketContextEntry) else cloned)
 
 
