@@ -415,8 +415,13 @@ def _archive_topic_columns(conn, max_rows):
     wrong_type = " OR ".join(
         f"typeof({column})!='{kind}'" for column, kind in zip(columns, expected_types)
     )
+    # Skip the validation aggregate step for correctly typed rows.
+    if sqlite3.sqlite_version_info >= (3, 30, 0):
+        invalid = f"count(*) FILTER (WHERE {wrong_type})"
+    else:
+        invalid = f"max({wrong_type})"
     fields = ", ".join(
-        f"CASE WHEN max({wrong_type})=0 THEN group_concat({column}, char(0)) END"
+        f"CASE WHEN {invalid}=0 THEN group_concat({column}, char(0)) END"
         for column in columns
     )
     count, *packed = conn.execute(f"SELECT count(*), {fields} FROM ({query})", params).fetchone()
