@@ -18,7 +18,7 @@ import sqlite3
 import pytest
 
 import server
-from ccc_server import continuation
+from ccc_server import continuation, devin
 from ccc_server import report_routes as rr
 from ccc_server import ship_graph
 
@@ -82,6 +82,53 @@ def _patch_context_sources(monkeypatch, briefs, row=None, path="/tmp/x.jsonl", r
 def test_session_context_not_found(monkeypatch):
     _patch_context_sources(monkeypatch, {})
     assert continuation.session_context("nope") is None
+
+
+def test_devin_continuation_uses_exact_native_session(monkeypatch, tmp_path):
+    sid = "devincli-test-lane"
+    transcript = tmp_path / "test-lane.jsonl"
+    transcript.write_text('{"type":"user_text","text":"Finish the work"}\n')
+    native_db = tmp_path / "sessions.db"
+    with sqlite3.connect(native_db) as db:
+        db.execute("CREATE TABLE sessions (id TEXT, working_directory TEXT, model TEXT)")
+        db.execute("INSERT INTO sessions VALUES (?, ?, NULL)", ("test-lane", str(tmp_path)))
+        db.execute("CREATE TABLE message_nodes (row_id INTEGER, session_id TEXT, chat_message TEXT)")
+        db.execute(
+            "INSERT INTO message_nodes VALUES (1, ?, ?)",
+            ("test-lane", '{"role":"assistant","metadata":{"generation_model":"swe-2-high"}}'),
+        )
+
+    def connect_native(raw):
+        con = sqlite3.connect(native_db)
+        con.row_factory = sqlite3.Row
+        return con
+
+    monkeypatch.setattr(server, "_acp_transcript_path",
+                        lambda engine, raw: tmp_path / f"{raw}.jsonl")
+    monkeypatch.setattr(server, "_devin_cli_connect_for_raw_id", connect_native)
+    monkeypatch.setattr(devin, "_devin_cli_connect_for_raw_id", connect_native)
+    monkeypatch.setattr(server, "_spawn_registry_entry_for_session", lambda *a, **k: None)
+    monkeypatch.setattr(continuation._usage_limit, "_usage_limit_row_for_session", lambda *a, **k: {})
+    monkeypatch.setattr(ship_graph, "search_sessions", lambda *a, **k: [{"session_id": "other-session"}])
+    route = rr.create("dispatcher-1")
+    rr.set_child(route, sid)
+    calls = []
+
+    def spawn(prompt, **kwargs):
+        calls.append((prompt, kwargs))
+        return {"ok": True, "session_id": "devincli-successor"}
+
+    monkeypatch.setattr(server, "spawn_session_devin", spawn)
+    monkeypatch.setattr(server, "spawn_session", lambda *a, **k: pytest.fail("unexpected Claude spawn"))
+    result = continuation.spawn_continuation(sid)
+    assert (result["continue_from"], result["engine"], result["session_id"]) == (
+        sid, "devin", "devincli-successor",
+    )
+    prompt, kwargs = calls[0]
+    assert f"Origin session id: {sid}" in prompt and str(transcript) in prompt
+    assert kwargs["cwd"] == str(tmp_path) and kwargs["model"] == "swe-2-high"
+    assert rr.resolve(result["report_route"]) == "dispatcher-1"
+    assert not continuation.spawn_continuation("devincli-no-such-lane", dry_run=True)["ok"]
 
 
 def test_capture_only_continuation_dry_run_uses_capture(monkeypatch, tmp_path):

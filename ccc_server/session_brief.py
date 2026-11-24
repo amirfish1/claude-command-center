@@ -31,6 +31,7 @@ from pathlib import Path
 
 import federation
 
+from ccc_server import core as _core
 from ccc_server import lineage as _lineage
 from ccc_server import session_fts as _sfts
 from ccc_server import ship_graph as _sg
@@ -130,6 +131,27 @@ def _transcript_path(conn, sid: str) -> str:
         "SELECT path FROM transcripts WHERE sid = ? ORDER BY mtime DESC LIMIT 1", (sid,)
     ).fetchone()
     return row[0] if row else ""
+
+
+def _devin_session_details(sid: str) -> dict:
+    """Resolve a canonical Devin ID outside the Claude/Codex ship graph."""
+    raw = _core._devin_cli_raw_id(sid)
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", raw):
+        return {}
+    path = _core._acp_transcript_path("devin", raw)
+    spawn = _core._spawn_registry_entry_for_session(sid, engine="devin") or {}
+    cwd = (spawn.get("cwd") or _core._devin_cli_session_cwd(raw) or "")
+    transcript = str(path) if path.is_file() else ""
+    if not (cwd or transcript):
+        return {}
+    return {
+        "devin_path": transcript,
+        "cwd": cwd,
+        "repo": _sg._repo_of(spawn.get("repo_path") or cwd),
+        "title": spawn.get("name") or "",
+        "model": _core._devin_cli_session_model(raw, fallback_to_last_turn=True) or spawn.get("model"),
+        "effort": spawn.get("reasoning_effort") or None,
+    }
 
 
 def _sdoc_row(sid: str) -> dict:
@@ -294,6 +316,9 @@ def resolve_session(query: str, *, sync=True) -> dict:
     q = (query or "").strip()
     if not q:
         return {"session_id": None, "alternates": []}
+    if _core._is_devin_cli_session(q):
+        details = _devin_session_details(q)
+        return {"session_id": q if details else None, "alternates": [], **details}
 
     conn = _sg._get_connection()
     if sync:
@@ -334,6 +359,9 @@ def continuation_brief(query: str) -> dict:
     if not sid:
         return dict(resolved, found=False)
     conn = _sg._get_connection()
+    if _core._is_devin_cli_session(sid):
+        return dict(resolved, found=True, engine="devin",
+                    latest=_lineage.latest_successor(conn, sid))
     row = conn.execute('SELECT repo,cwd FROM session_meta WHERE sid=?', (sid,)).fetchone()
     path = _transcript_path(conn, sid)
     # Only the title is needed; the potentially large prompts/reports and
@@ -364,8 +392,11 @@ def brief(query: str) -> dict:
 
     conn = _sg._get_connection()
     meta = _session_meta_row(conn, sid)
-    path = _transcript_path(conn, sid)
-    engine = _engine_of_path(path)
+    if _core._is_devin_cli_session(sid):
+        meta.update(repo=resolved["repo"], cwd=resolved["cwd"])
+        engine = "devin"
+    else:
+        engine = _engine_of_path(_transcript_path(conn, sid))
     sdoc = _sdoc_row(sid)
 
     # Discovery resolves every configured/local clone. The background sync
@@ -386,7 +417,7 @@ def brief(query: str) -> dict:
         "session_id": sid,
         "alternates": resolved["alternates"],
         "found": True,
-        "title": sdoc.get("title") or "",
+        "title": sdoc.get("title") or resolved.get("title") or "",
         "repo": meta.get("repo", ""),
         "cwd": meta.get("cwd", ""),
         "engine": engine,

@@ -46,7 +46,7 @@ from ccc_server.session_brief import _transcript_path, continuation_brief as _br
 DEFAULT_LARGE_TOKENS = 150_000
 DEFAULT_STALE_SECONDS = 60 * 60
 
-_SUPPORTED_ENGINES = ("claude", "codex", "kimi", "antigravity")
+_SUPPORTED_ENGINES = ("claude", "codex", "kimi", "antigravity", "devin")
 
 MAX_MANUAL_FORWARD_HOPS = 25
 _SEND_CONTINUATION_LOCKS = tuple(threading.RLock() for _ in range(64))
@@ -156,8 +156,8 @@ def session_context(query):
         if latest_info.get("found"):
             info = latest_info
     conn = _sg._get_connection()
-    path = _transcript_path(conn, latest)
     engine = info.get("engine") or "claude"
+    path = info.get("devin_path") if engine == "devin" else _transcript_path(conn, latest)
     capture_path = None
     if engine == "codex" and not _core._codex_thread_row(latest) \
             and not _core._resolve_codex_rollout_path(latest):
@@ -194,8 +194,8 @@ def session_context(query):
         "context_tokens": context_tokens,
         "context_known": context_known,
         "idle_seconds": idle_seconds,
-        "model": row.get("model") or (usage or {}).get('model') or None,
-        "effort": row.get("reasoning_effort") or None,
+        "model": info.get("model") or row.get("model") or (usage or {}).get('model') or None,
+        "effort": row.get("reasoning_effort") or info.get("effort"),
         "report_to": report_to,
     }
 
@@ -208,6 +208,7 @@ def build_continuation_prompt(user_prompt, ctx):
     block, _label = _usage_limit.continuation_retrieval_block(
         ctx["engine"], ctx["latest"], ctx["context_tokens"],
         capture_path=ctx.get("capture_path"),
+        devin_path=ctx.get("transcript_path") if ctx["engine"] == "devin" else None,
     )
     title = ctx["title"] or ctx["latest"]
     preamble = (
@@ -345,6 +346,8 @@ def _spawn_continuation(query, prompt="", model=None, effort=None, report_to=Non
         return {"ok": False, "error": f"no session found for {query!r}"}
     source_engine = ctx["engine"]
     engine = engine or source_engine
+    if source_engine == "devin" and not ctx["cwd"]:
+        return {"ok": False, "error": "The original Devin working directory is unavailable"}
     if engine not in _SUPPORTED_ENGINES:
         return {
             "ok": False,
@@ -404,6 +407,10 @@ def _spawn_continuation(query, prompt="", model=None, effort=None, report_to=Non
         spawn_result = _core.spawn_session_antigravity(wrapped_prompt, **account_kwargs, **kwargs)
     elif engine == "kimi":
         spawn_result = _core.spawn_session_kimi(wrapped_prompt, effort=final_effort, **kwargs)
+    elif engine == "devin":
+        spawn_result = _core.spawn_session_devin(
+            wrapped_prompt, reasoning_effort=final_effort, **kwargs,
+        )
     else:
         spawn_result = _core.spawn_session(
             wrapped_prompt, reasoning_effort=final_effort or "", **kwargs,

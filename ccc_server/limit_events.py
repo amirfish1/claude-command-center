@@ -260,6 +260,7 @@ def cached_stop(engine, sid, path, detector):
     sig = signature(path)
     if sig is None:
         return None
+    version = _CACHE_VERSION + (engine == "devin")
     with _lock:
         if cache_path != _cache_path:
             try:
@@ -269,14 +270,14 @@ def cached_stop(engine, sid, path, detector):
             _cache = data if isinstance(data, dict) else {}
             _cache_path = cache_path
         rec = _cache.get(key) or {}
-        if rec.get("v") == _CACHE_VERSION and rec.get("signature") == list(sig):
+        if rec.get("v") == version and rec.get("signature") == list(sig):
             return dict(rec["found"]) if isinstance(rec.get("found"), dict) else None
         found = detector(sid, path)
         if found:
             found = dict(found)
             found["source_text_snippet"] = engine + " usage / rate limit reached"
             found["transcript_path"] = str(path)
-        _cache[key] = {"v": _CACHE_VERSION, "signature": list(sig), "found": found, "checked_at": time.time()}
+        _cache[key] = {"v": version, "signature": list(sig), "found": found, "checked_at": time.time()}
         cutoff = time.time() - 8 * 86400
         _cache = {k: v for k, v in _cache.items()
                   if isinstance(v, dict) and v.get("checked_at", 0) >= cutoff}

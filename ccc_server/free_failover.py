@@ -34,8 +34,8 @@ Detection additionally covers Devin's own free-model wall (the ACP transcript
 ``result/error`` shape, e.g. "Reached free model rate limit. ... Your limit
 will reset in 52 minutes (at 06:22 UTC).") with a real parsed reset time.
 
-Nothing here ever fires unattended: every send requires a prior user click
-(or the per-session "always" opt-in that user granted for this session).
+Engine resumes require user approval. A Devin limit notice goes only to
+the report-to address already set by the dispatcher for that child.
 
 Names still living in server.py are reached via ``_core`` at call time.
 """
@@ -55,6 +55,7 @@ import uuid
 
 from ccc_server import core as _core
 from ccc_server import limit_events as _limit_events
+from ccc_server import report_routes as _report_routes
 
 
 FREE_FAILOVER_FILENAME = "free-failover.json"
@@ -426,6 +427,8 @@ def _detect_devin_usage_limit_stop(session_id, path):
             ev = {"type": "result", "subtype": "error", "error": line}
         if not isinstance(ev, dict):
             continue
+        if ev.get("type") == "user_text":
+            return None  # A new turn supersedes an older stop.
         if ev.get("type") != "result":
             continue
         if ev.get("subtype") != "error":
@@ -442,6 +445,7 @@ def _detect_devin_usage_limit_stop(session_id, path):
             "resume_at": resume_at,
             "resume_at_estimated": estimated,
             "source_text_snippet": err[:200],
+            "free_model_limit": err.lower().startswith("reached free model rate limit"),
         }, session_id, path)
     return None
 
@@ -481,9 +485,44 @@ def _free_failover_scan_devin(now):
             if existing and existing.get("transcript_path") == str(path) and not existing.get("fired"):
                 _core._clear_usage_limit_resume(sid)
             continue
-        if existing and existing.get("detected_at") == found["detected_at"]:
-            continue
-        _core._save_usage_limit_resume_entry(sid, found)
+        if not existing or existing.get("detected_at") != found["detected_at"]:
+            _core._save_usage_limit_resume_entry(sid, found)
+        if found["detected_at"] <= now < found["resume_at"]:
+            try:
+                _report_devin_limit(sid, found, now)
+            except Exception as exc:
+                _core._log_activity("free-failover", "REPORT-FAILED",
+                                    f"session={sid} error={type(exc).__name__}")
+
+
+def _report_devin_limit(sid, stop, now):
+    routes = _report_routes.list_routes(child_session_id=sid)
+    if not routes:
+        return
+    route = routes[-1]
+    route_id = route["route_id"]
+    detected_at = stop["detected_at"]
+    notice = route.get("limit_notice") or {}
+    if notice.get("sent") and notice.get("detected_at", 0) >= detected_at:
+        return
+    if not _report_routes.claim_limit_notice(route_id, detected_at, now):
+        return
+
+    sent = False
+    try:
+        reset = datetime.fromtimestamp(stop["resume_at"], timezone.utc)
+        qualifier = "Estimated reset" if stop["resume_at_estimated"] else "Provider reset"
+        reason = "free-model rate limit" if stop.get("free_model_limit") else "rate limit"
+        text = (f"Devin lane {sid} stopped after reaching a {reason}. "
+                f"{qualifier} {reset:%Y-%m-%d %H:%M UTC}. "
+                "Any partial work is still in the lane's working directory.")
+        result = _core._inject_text_into_session(
+            route_id, text, mode="steer", source="devin-limit",
+            idempotency_key=f"devin-limit:{sid}:{detected_at}",
+        )
+        sent = bool(result.get("ok"))
+    finally:
+        _report_routes.finish_limit_notice(route_id, detected_at, now, sent)
 
 
 # ---------------------------------------------------------------------------

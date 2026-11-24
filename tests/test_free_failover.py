@@ -200,6 +200,42 @@ class DevinLimitMessageTests(_FailoverBase):
         self.assertEqual(entry["engine"], "devin")
         self.assertIn("rate limit", entry["source_text_snippet"].lower())
 
+    def test_scan_reports_devin_stop_via_current_route_and_retries_failure(self):
+        from ccc_server import report_routes
+
+        raw = "test-lane"
+        sid = f"devincli-{raw}"
+        path = self._acp_file(raw, [
+            {"type": "result", "subtype": "error", "error": DEVIN_LIMIT_TEXT,
+             "ts": "2026-01-01T05:30:00Z"},
+        ])
+        now = 1767245401
+        with mock.patch.object(report_routes, "_default_path",
+                               return_value=str(Path(self.tmp_dir) / "report-routes.json")), \
+             mock.patch.object(self.server, "_free_failover_devin_candidates",
+                               return_value=[(sid, path)]), \
+             mock.patch.object(self.server, "_inject_text_into_session",
+                               side_effect=[{"ok": False}, {"ok": True}]) as inject:
+            route = report_routes.create("old-parent", now=now)
+            report_routes.set_child(route, sid)
+            report_routes.rebind("new-parent", route_id=route, now=now)
+            self.server._free_failover_scan_devin(now)
+            self.server._free_failover_scan_devin(now + 45)
+            self.server._free_failover_scan_devin(now + 90)
+            self.assertEqual(inject.call_count, 2)
+            first, second = inject.call_args_list
+            self.assertEqual(first.args[0], route)
+            self.assertEqual(report_routes.resolve(route), "new-parent")
+            self.assertIn(sid, first.args[1])
+            self.assertIn("rate limit", first.args[1])
+            self.assertIn("2026-01-01 06:22 UTC", first.args[1])
+            self.assertEqual(first.kwargs["idempotency_key"], second.kwargs["idempotency_key"])
+            with path.open("a") as transcript:
+                transcript.write('{"type":"user_text","text":"Retry the turn"}\n')
+            self.server._free_failover_scan_devin(now + 135)
+            self.assertNotIn(sid, self.server._load_usage_limit_resumes())
+            self.assertEqual(inject.call_count, 2)
+
 
 class ContinueFreeTests(_FailoverBase):
     def test_claude_continue_refuses_without_free_env(self):

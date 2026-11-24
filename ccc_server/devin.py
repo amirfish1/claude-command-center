@@ -2798,13 +2798,14 @@ def _devin_cli_fusion_sidekick_key(con, raw_id):
     return _devin_cli_norm_model_key(model.rsplit("-sidekick-", 1)[1])
 
 
-def _devin_cli_session_model(raw_id):
+def _devin_cli_session_model(raw_id, *, fallback_to_last_turn=False):
     """The session's configured model uid from ``sessions.model``.
 
     Holds the concrete uid the session is actually running — a variant like
     ``swe-2-high`` or a ``fusion-<lead>-sidekick-<sidekick>`` slug — updated
     by the CLI whenever the model is changed (including over ACP
-    set_config_option). '' when the session or column can't be read.
+    set_config_option). Some archived sessions have no configured uid. A
+    continuation can recover the model from the last recorded assistant turn.
     """
     con = _devin_cli_connect_for_raw_id(raw_id)
     if con is None:
@@ -2813,6 +2814,16 @@ def _devin_cli_session_model(raw_id):
         row = con.execute(
             "SELECT model FROM sessions WHERE id = ?", (raw_id,)
         ).fetchone()
+        if fallback_to_last_turn and row and not row[0]:
+            row = con.execute(
+                "SELECT json_extract(chat_message, '$.metadata.generation_model') "
+                "FROM (SELECT row_id, chat_message FROM message_nodes WHERE session_id = ? "
+                "ORDER BY row_id DESC LIMIT ?) "
+                "WHERE json_valid(chat_message) AND json_extract(chat_message, '$.role') = 'assistant' "
+                "AND json_extract(chat_message, '$.metadata.generation_model') != '' "
+                "ORDER BY row_id DESC LIMIT 1",
+                (raw_id, _DEVIN_CLI_TAIL_WALK_MAX_ROWS),
+            ).fetchone()
         return str((row[0] if row else "") or "")
     except sqlite3.Error:
         return ""

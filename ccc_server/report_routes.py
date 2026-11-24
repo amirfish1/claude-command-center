@@ -167,6 +167,39 @@ def list_routes(report_to=None, child_session_id=None, path=None):
     return out
 
 
+def claim_limit_notice(route_id, detected_at, now):
+    """Reserve one stop notification across concurrent watchers."""
+    def claim(state):
+        route = state.get(route_id)
+        if route is None:
+            return False
+        notice = route.get("limit_notice") or {}
+        if notice.get("detected_at", 0) > detected_at or (
+            notice.get("detected_at") == detected_at
+            and (notice.get("sent") or notice.get("claimed_at", 0) + 300 > now)
+        ):
+            return False
+        route["limit_notice"] = {"detected_at": detected_at, "claimed_at": now}
+        return True
+
+    return _mutate(None, claim)
+
+
+def finish_limit_notice(route_id, detected_at, claimed_at, sent):
+    """Keep an accepted notice as a receipt or release it for retry."""
+    def finish(state):
+        route = state.get(route_id)
+        notice = (route or {}).get("limit_notice") or {}
+        if (notice.get("detected_at"), notice.get("claimed_at")) != (detected_at, claimed_at):
+            return
+        if sent:
+            notice["sent"] = True
+        else:
+            route.pop("limit_notice", None)
+
+    _mutate(None, finish)
+
+
 def rebind(new_report_to, route_id=None, child_session_id=None,
            from_report_to=None, path=None, now=None):
     """Point matching routes at `new_report_to`; returns the rebound route ids.
