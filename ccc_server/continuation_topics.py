@@ -616,7 +616,7 @@ class _Batch:
         # Larger batches reduce SQLite/GIL handoffs on a cold sidebar load.
         # Keep a bound for cancellation and honor the connection's SQL limit.
         getlimit = getattr(self.conn, 'getlimit', None)
-        chunk = min(1500, getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER)) if getlimit else 500
+        chunk = min(3000, getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER)) if getlimit else 500
         for i in range(0, len(sids), chunk):
             if self.check_client is not None:
                 self.check_client()

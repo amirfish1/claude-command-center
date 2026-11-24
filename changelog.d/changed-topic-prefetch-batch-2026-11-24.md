@@ -1,0 +1,1 @@
+- Reduce database round trips when loading continuation titles for large conversation lists.

@@ -491,7 +491,8 @@ def test_connection_skips_ddl_and_cached_attach_topics_invalidates_on_mutations(
     assert [item['continuation_topic_title'] for item in chain_rows] == ['RENAMED TOPIC', 'RENAMED TOPIC']
 
 
-def test_topic_prefetch_has_one_python_result_per_chunk(store):
+@pytest.mark.parametrize('variable_limit', [None, 1200])
+def test_topic_prefetch_has_one_python_result_per_chunk(store, variable_limit):
     sids = [f'session-{i}' for i in range(3200)]
     store.executemany('INSERT INTO session_meta VALUES (?,?)', [(sid, '') for sid in sids])
     topics._connection(store)
@@ -501,13 +502,22 @@ def test_topic_prefetch_has_one_python_result_per_chunk(store):
         callbacks.append(result)
         return result
 
+    getlimit = getattr(store, 'getlimit', None)
+    if variable_limit is not None:
+        if getlimit is None:
+            pytest.skip('SQLite variable limits are unavailable')
+        store.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, variable_limit)
+    chunk = min(3000, getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER)) if getlimit else 500
+    checkpoints = []
     store.row_factory = factory
-    batch = topics._Batch(store, [row(sid, 'Standalone') for sid in sids], {})
+    batch = topics._Batch(
+        store, [row(sid, 'Standalone') for sid in sids], {},
+        check_client=lambda: checkpoints.append(len(callbacks)),
+    )
     assert len(batch.records) == len(sids)
     assert len(batch.indexed_origins) == len(sids)
-    getlimit = getattr(store, 'getlimit', None)
-    chunk = min(1500, getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER)) if getlimit else 500
     assert len(callbacks) == (len(sids) + chunk - 1) // chunk
+    assert checkpoints == list(range(len(callbacks)))
 
 
 def test_topic_prefetch_preserves_sparse_and_missing_index_rows(store):
