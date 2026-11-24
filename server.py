@@ -21340,7 +21340,7 @@ def _archive_list_initial_selection(rows, window, now, parents, ideas, version):
     if version:
         key = _archive_list_selection_key(rows, window, parents, ideas, version)
         entry = _ARCHIVE_LIST_INITIAL_SELECTION_CACHE.get(key)
-        if entry and entry[2] <= now < entry[3]:
+        if entry and entry[0] is not None and entry[2] <= now < entry[3]:
             return [rows[i] for i in entry[0]], entry[1], True
     cutoff = _archive_list_window_cutoff(window, now=now)
     # Share activity across the window filter, recency sort and cache expiry.
@@ -21355,12 +21355,6 @@ def _archive_list_initial_selection(rows, window, now, parents, ideas, version):
 
     activity = remember_activity if key is not None and cutoff is not None else _archive_list_row_ts
     selected = _archive_list_window_rows(rows, cutoff, ideas, parents, activity=activity)
-    recent = sorted(selected, key=activity, reverse=True)[:500]
-    wanted = {id(row) for row in recent}
-    wanted.update(id(row) for row in selected if row.get("pinned"))
-    initial = _archive_list_family_rows(
-        selected, [row for row in selected if id(row) in wanted], ideas, parents)
-
     if key is not None:
         seconds = {"8h": 28800, "1d": 86400, "7d": 604800}.get(_archive_list_window(window))
         # Expire at the first direct member's window boundary. Older ancestors
@@ -21380,15 +21374,29 @@ def _archive_list_initial_selection(rows, window, now, parents, ideas, version):
                     expires = min(expires, stamp + seconds)
         positions = {id(row): i for i, row in enumerate(rows)}
         full_positions = tuple(positions[id(row)] for row in selected) if window == "7d" else ()
-        entry = (tuple(positions[id(row)] for row in initial), len(selected), now, expires, full_positions)
-        weight = 4 * len(marshal.dumps((key, entry), 2)) + 512
-        _ARCHIVE_LIST_INITIAL_SELECTION_CACHE.put(key, entry, weight)
+        membership = (len(selected), now, expires, full_positions)
+        weight = 4 * len(marshal.dumps((key, membership), 2)) + 512
+        # An overlapping full read can use the guarded membership even while
+        # the preview still ranks rows and expands their immediate families.
+        if window == "7d":
+            _ARCHIVE_LIST_INITIAL_SELECTION_CACHE.put(key, (None, *membership), weight)
+
+    recent = sorted(selected, key=activity, reverse=True)[:500]
+    wanted = {id(row) for row in recent}
+    wanted.update(id(row) for row in selected if row.get("pinned"))
+    initial = _archive_list_family_rows(
+        selected, [row for row in selected if id(row) in wanted], ideas, parents)
+
+    if key is not None:
+        initial_positions = tuple(positions[id(row)] for row in initial)
+        weight += 4 * len(marshal.dumps(initial_positions, 2))
+        _ARCHIVE_LIST_INITIAL_SELECTION_CACHE.put(key, (initial_positions, *membership), weight)
     return initial, len(selected), False
 
 
 def _archive_list_full_selection(rows, window, now, parents, ideas, version, phases):
-    # A completed preview can supply exact membership immediately. A full
-    # request without a matching preview does its own selection without waiting.
+    # A preview can supply exact membership before its own selection finishes.
+    # A full request without matching membership selects without waiting.
     wall = time.perf_counter() if phases is not None else 0
     cpu = time.thread_time() if phases is not None else 0
     entry = None

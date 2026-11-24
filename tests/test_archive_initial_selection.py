@@ -203,3 +203,30 @@ def test_full_seven_day_selection_reuses_only_matching_preview():
     assert full(current, now, tickets={}) == (['child', 'kept', 'parent', 'archived'], False)
     assert full(current, now, tag=('other', 1)) == (['child', 'kept', 'parent'], False)
     assert full(current, now, tag=('default', 2)) == (['child', 'kept', 'parent'], False)
+
+
+def test_full_seven_day_selection_reuses_membership_before_preview_finishes(monkeypatch):
+    now = 1000000
+    version = ('default', 1)
+    rows = [{'session_id': str(i), 'mtime': now - 600 + i} for i in range(600)]
+    rows[0]['mtime'] = 1
+    rows[-1]['parent_session_id'] = '0'
+    family_rows = server._archive_list_family_rows
+    observed = []
+
+    def check_during_preview(source, selected, ideas, parents, **kwargs):
+        if len(selected) == 500:
+            current = copy.deepcopy(rows)
+            phases = {}
+            full = server._archive_list_full_selection(
+                current, '7d', now, parents, ideas, version, phases)
+            observed.append(phases['window_selection']['hit'])
+            assert len(full) == 600
+            assert all(row is expected for row, expected in zip(full, current[1:] + current[:1]))
+        return family_rows(source, selected, ideas, parents, **kwargs)
+
+    monkeypatch.setattr(server, '_archive_list_family_rows', check_during_preview)
+    preview = select(rows, window='7d', now=now, version=version)
+    assert observed == [True]
+    assert ids(preview) == [str(i) for i in range(100, 600)] + ['0']
+    assert select(rows, window='7d', now=now, version=version)[2] is True
