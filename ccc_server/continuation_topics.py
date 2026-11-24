@@ -360,6 +360,11 @@ class StaleArchiveTopicCut(UnavailableArchiveProjection):
     """A tracked topic input changed before the projection could be saved."""
 
 
+def archive_cut_superseded(version):
+    """Check whether a known local commit superseded this exact read version."""
+    return version is not None and _ARCHIVE_TOPIC_TRANSITION[0] == version
+
+
 def _archive_read_version(conn, *, pinned=False):
     token = _db_state_token(conn, pinned=pinned)
     if token is not None and token[0] == "topics-v1":
@@ -586,7 +591,7 @@ def archive_projection_inputs(conn, *, max_rows, max_native_roots=32, diagnostic
                 return unavailable("native_root_limit")
             # A local writer can commit while the bounded record scan is
             # running. Skip native account reads for an already stale cut.
-            if native_roots and not attempt and _ARCHIVE_TOPIC_TRANSITION[0] == version:
+            if native_roots and not attempt and archive_cut_superseded(version):
                 with timing("revision"):
                     current = _archive_read_version(conn)
                 if current != version:

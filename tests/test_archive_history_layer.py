@@ -140,7 +140,8 @@ def test_refresh_publisher_receives_accepted_row_encoding(tmp_path, monkeypatch,
     assert list(tmp_path.iterdir()) == [refresh]
 
 
-def test_seven_day_basis_preserves_current_rows_order_and_token(tmp_path, monkeypatch):
+@pytest.mark.parametrize("commit_stage", ["projection", "hydration", "guards"])
+def test_seven_day_basis_preserves_current_rows_order_and_token(tmp_path, monkeypatch, commit_stage):
     import http.client
     import threading
 
@@ -162,8 +163,26 @@ def test_seven_day_basis_preserves_current_rows_order_and_token(tmp_path, monkey
     monkeypatch.setattr(server._session_graph, "projection_revision", lambda: 1)
     monkeypatch.setattr(continuation_topics, "revision", lambda: 2)
     monkeypatch.setattr(continuation_topics, "archive_connection", lambda: None)
-    monkeypatch.setattr(continuation_topics, "archive_projection_inputs",
-                        lambda *args, **kwargs: (({}, {}, {}), (), ()))
+    first_version = ("topics-v1", "db", "epoch", 1, 0)
+    next_version = ("topics-v1", "db", "epoch", 2, 0)
+    monkeypatch.setattr(continuation_topics, "_ARCHIVE_TOPIC_TRANSITION", (None, None, {}))
+
+    pending_commit = False
+
+    def publish_commit():
+        nonlocal pending_commit
+        if pending_commit:
+            monkeypatch.setattr(continuation_topics, "_ARCHIVE_TOPIC_TRANSITION",
+                                (first_version, next_version, {}))
+            pending_commit = False
+
+    def topic_inputs(*args, **kwargs):
+        version = continuation_topics._ARCHIVE_TOPIC_TRANSITION[1] or first_version
+        if commit_stage == "guards":
+            publish_commit()
+        return ({}, {}, {}), (), version
+
+    monkeypatch.setattr(continuation_topics, "archive_projection_inputs", topic_inputs)
     monkeypatch.setattr(continuation_topics, "attach_archive_topics", lambda *args, **kwargs: None)
     monkeypatch.setattr(continuation_topics, "attach_topics", lambda *args, **kwargs: None)
     monkeypatch.setattr(layer.list_encoding, "_zstd", lambda raw: None)
@@ -192,10 +211,19 @@ def test_seven_day_basis_preserves_current_rows_order_and_token(tmp_path, monkey
 
     def attach_archive_topics(rows, **kwargs):
         projections.append(rows)
-        if len(projections) == 1:
+        if commit_stage == "projection" and len(projections) == 1:
             raise continuation_topics.StaleArchiveTopicCut()
 
     monkeypatch.setattr(continuation_topics, "attach_archive_topics", attach_archive_topics)
+    if commit_stage == "hydration":
+        original_cut = server._archive_seven_day_cut
+
+        def cut_after_commit(*args, **kwargs):
+            cut = original_cut(*args, **kwargs)
+            publish_commit()
+            return cut
+
+        monkeypatch.setattr(server, "_archive_seven_day_cut", cut_after_commit)
     wait_reads = []
 
     def queued_waits(*, now):
@@ -203,12 +231,16 @@ def test_seven_day_basis_preserves_current_rows_order_and_token(tmp_path, monkey
         return {"outside": {"items": 2, "wait_s": 20.0}}
 
     monkeypatch.setattr(server, "queued_wait_snapshot", queued_waits)
+    pending_commit = True
     phases = {}
     body, encoding, etag = server._archive_seven_day_response(
         scope, updated, True, delta, ("gzip",), phases)
-    assert len(projections) == 2
+    assert len(projections) == (2 if commit_stage == "projection" else 1)
     assert wait_reads == [now]
     assert "stale_topic_projection" in phases
+    assert bool(phases.get("superseded_before_guards")) == (commit_stage == "guards")
+    assert bool(phases["stale_topic_projection"].get("superseded_before_hydration")) == (
+        commit_stage == "hydration")
     assert encoding == "gzip"
     assert etag == '"d-' + delta["token"] + '"'
     document = json.loads(gzip.decompress(body))

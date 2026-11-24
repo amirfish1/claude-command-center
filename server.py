@@ -19937,6 +19937,9 @@ def _archive_seven_day_cut(key, captured, rows, cached, reader, now, phases, del
     if topics is None:
         return None
     topic_inputs, topic_edges, version = topics
+    if delta is not None and continuation_topics.archive_cut_superseded(version):
+        phases["superseded_before_guards"] = True
+        raise continuation_topics.StaleArchiveTopicCut()
     sidecars["topics"] = (reader, topic_inputs, version)
     resumes = sidecars["resumes"]
     candidates = by_sid.keys() & (resumes.keys() | {"session_" + sid for sid in resumes})
@@ -20017,15 +20020,20 @@ def _archive_seven_day_response(key, rows, cached, delta, encodings, phases, che
             return None
         for attempt in range(2):
             now = time.time()
-            cut = _archive_seven_day_cut(
-                key, (delta["base"], delta["ver"]), rows, cached,
-                continuation_topics.archive_connection(), now, phases, delta, selection_version)
-            if cut is None:
-                return None
-            if check_client is not None:
-                check_client()
             projection = phases["projection"] = {}
             try:
+                cut = _archive_seven_day_cut(
+                    key, (delta["base"], delta["ver"]), rows, cached,
+                    continuation_topics.archive_connection(), now, phases, delta, selection_version)
+                if cut is None:
+                    return None
+                if check_client is not None:
+                    check_client()
+                if continuation_topics.archive_cut_superseded(cut[1]["topics"][2]):
+                    # A published local commit already invalidated this cut.
+                    # Later or external writes still use the transactional check.
+                    projection["superseded_before_hydration"] = True
+                    raise continuation_topics.StaleArchiveTopicCut()
                 result = _archive_history_project_cut(
                     cut, basis, phases=projection, check_client=check_client,
                     max_rows=_ARCHIVE_HISTORY_COLD_REBASE_MAX_ROWS, seven_day_source=rows)
