@@ -18478,7 +18478,7 @@ def _archive_serve_diff(prev, rows):
             "untracked": untracked, "identical": identical}
 
 
-def _archive_list_delta_state(key, rows, window, from_cache):
+def _archive_list_delta_state(key, rows, window, from_cache, *, capture_tickets=False):
     """Current delta token for a /list response, plus what a ?since= delta
     needs. None when this response can't be expressed as a delta (rows are
     not the stored snapshot plus appended overlay rows)."""
@@ -18497,8 +18497,13 @@ def _archive_list_delta_state(key, rows, window, from_cache):
         resumes = _load_usage_limit_resumes()
     except Exception:
         resumes = None
+    ticket_state = None
     try:
-        ideas = _idea_tickets.idea_ticket_rows_map()
+        if capture_tickets and _idea_tickets._enabled():
+            ticket_state = _idea_tickets.load_state()
+            ideas = _idea_tickets.idea_ticket_rows_map(data=ticket_state)
+        else:
+            ideas = _idea_tickets.idea_ticket_rows_map()
     except Exception:
         ideas = None
     # Inputs of the row projection that are not part of the row itself: any
@@ -18531,6 +18536,7 @@ def _archive_list_delta_state(key, rows, window, from_cache):
         "track_since": track_since, "row_rev": row_rev,
         "base": base, "extra": extra, "projection_ctx": projection_ctx,
         "row_overlays": row_overlays, "ideas": ideas, "resumes": resumes,
+        "ticket_state": ticket_state,
         "source_key": key, "sidebar_static": sidebar_static,
         "graph_revision": graph_revision, "topic_revision": topic_revision,
     }
@@ -19403,16 +19409,22 @@ def _archive_list_row_overlays(names=None):
     return overlays
 
 
-def _capture_archive_history_sidecars(now):
+def _capture_archive_history_sidecars(now, *, delta=None):
     """Capture the values used by projection and by the incremental guard."""
     names = _load_session_name_overrides()
     tickets = _idea_tickets.load_state() if _idea_tickets._enabled() else None
+    # The loader republishes its snapshot after a ticket write or lineage
+    # change. Check it again before reusing the validator's projection.
+    if tickets is not None and delta is not None and tickets is delta.get("ticket_state"):
+        ideas = delta["ideas"]
+    else:
+        ideas = _idea_tickets.idea_ticket_rows_map(data=tickets)
     return {
         "now": now,
         "names": names,
         "resumes": _load_usage_limit_resumes(),
         "parents": _session_graph.parent_snapshot(),
-        "ideas": _idea_tickets.idea_ticket_rows_map(data=tickets),
+        "ideas": ideas,
         "overlays": _archive_list_row_overlays(names),
         "drivers": _session_graph.driver_snapshot(),
         "tickets": tickets,
@@ -19891,7 +19903,7 @@ def _archive_seven_day_cut(key, captured, rows, cached, reader, now, phases, del
     if snapshot is None:
         return None
     _, base_tokens = snapshot
-    sidecars = _capture_archive_history_sidecars(now)
+    sidecars = _capture_archive_history_sidecars(now, delta=delta)
     if delta is not None:
         # The ordinary conditional token following this response must describe
         # the same ticket, title and resume snapshot as the complete view.
@@ -39660,6 +39672,9 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             _payload_phases = {}
             _body_cache_diag = {}
             _delta_cpu0 = time.thread_time()
+            seven_day_layer_requested = (scoped_layouts and not since and stale_ok
+                                         and not any(cache_options.values())
+                                         and qs.get("history_layer") == ["1"])
             # CCC-142: ?since=<delta_token> asks for only the rows that changed
             # after the client's last body. Anything the token can't vouch for
             # (restart, projection inputs moved, history trimmed) gets a full
@@ -39667,7 +39682,9 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             _delta = None
             if body_ver:
                 try:
-                    _delta = _archive_list_delta_state(list_cache_key, rows, window, from_cache)
+                    _delta = _archive_list_delta_state(
+                        list_cache_key, rows, window, from_cache,
+                        capture_tickets=seven_day_layer_requested)
                 except Exception:
                     _delta = None
             _delta_phase = {
@@ -39676,8 +39693,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             }
             _status = None
             seven_day_needs_basis = False
-            if (_delta is not None and not since and scoped_layouts and stale_ok
-                    and not any(cache_options.values()) and qs.get("history_layer") == ["1"]
+            if (_delta is not None and seven_day_layer_requested
                     and _ARCHIVE_LIST_BODY_CACHE.get((
                         body_cache_key, window, bool(from_cache), (body_ver, _delta["ctx"]),
                         _delta["graph_revision"], _delta["topic_revision"])) is None):

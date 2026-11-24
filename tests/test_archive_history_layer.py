@@ -223,6 +223,18 @@ def test_seven_day_basis_preserves_current_rows_order_and_token(tmp_path, monkey
     monkeypatch.setattr(server, "_archive_list_source_rows_cached",
                         lambda *args, **kwargs: (updated, True, delta["ver"]))
     monkeypatch.setattr(server, "_ARCHIVE_LIST_BODY_CACHE", server.ByteBudgetCache(1 << 20, 8))
+    tickets = {"sessions": {}, "tickets": {}, "pending": {}}
+    projected = []
+    original_ticket_projection = server._idea_tickets.idea_ticket_rows_map
+
+    def project_tickets(*, data=None):
+        projected.append(data)
+        return original_ticket_projection(data=data)
+
+    monkeypatch.setattr(server._idea_tickets, "_enabled", lambda: True)
+    monkeypatch.setattr(server._idea_tickets, "load_state", lambda: tickets)
+    monkeypatch.setattr(server._idea_tickets, "idea_ticket_rows_map", project_tickets)
+    monkeypatch.setattr(server, "_archive_list_ticket_effects", lambda *args, **kwargs: None)
     url = "/api/conversations/list?window=7d&stale_ok=1&row_layouts=1&history_layer=1"
     with server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), server.CommandCenterHandler) as httpd:
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
@@ -235,6 +247,7 @@ def test_seven_day_basis_preserves_current_rows_order_and_token(tmp_path, monkey
             assert response.getheader("Content-Encoding") == "gzip"
             assert response.getheader("ETag") == etag
             assert json.loads(gzip.decompress(response.read())) == document
+            assert len(projected) == 1 and projected[0] is tickets
             connection.request("GET", url + "&since=" + delta["token"])
             response = connection.getresponse()
             assert response.status == 304
@@ -243,6 +256,37 @@ def test_seven_day_basis_preserves_current_rows_order_and_token(tmp_path, monkey
             connection.close()
             httpd.shutdown()
             thread.join(timeout=5)
+
+
+def test_seven_day_reuses_ticket_projection_only_for_the_same_snapshot(monkeypatch):
+    tickets = [{"sessions": {"example": {"ref": "EX-1"}},
+                "tickets": {"EX-1": {"sessions": ["example"], "queue": "EX"}},
+                "pending": {}}]
+    enabled = [True]
+    monkeypatch.setattr(server._idea_tickets, "_enabled", lambda: enabled[0])
+    monkeypatch.setattr(server._idea_tickets, "load_state", lambda: tickets[0])
+    monkeypatch.setattr(server, "_load_usage_limit_resumes", dict)
+    monkeypatch.setattr(server, "_load_session_name_overrides", dict)
+    monkeypatch.setattr(server, "_archive_list_row_overlays", lambda names=None: {})
+    newer = {"session_id": "example", "modified": 100}
+    key = "scope"
+    base = [newer]
+    monkeypatch.setattr(server, "_archive_serve_cache", {
+        key: {"rows": base, "ver": 1, "track_since": 1, "row_rev": {"example": 1}},
+    })
+    delta = server._archive_list_delta_state(key, base, "7d", True, capture_tickets=True)
+    original = server._capture_archive_history_sidecars(100, delta=delta)
+    assert original["ideas"] is delta["ideas"]
+    assert original["ideas"]["example"]["closed"] is False
+
+    tickets[0] = dict(tickets[0], tickets={"EX-1": dict(tickets[0]["tickets"]["EX-1"], closed=True)})
+    changed = server._capture_archive_history_sidecars(100, delta=delta)
+    assert changed["tickets"] is tickets[0]
+    assert changed["ideas"]["example"]["closed"] is True
+    assert delta["ideas"]["example"]["closed"] is False
+
+    enabled[0] = False
+    assert server._capture_archive_history_sidecars(100, delta=delta)["ideas"] == {}
 
 
 def test_effect_scope_keeps_ticket_members_pending_and_lineage():
