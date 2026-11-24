@@ -271,7 +271,9 @@ def test_history_hot_cut_reuses_capture_and_invalidates_on_lifecycle_change(monk
 
     assert cut[0]["stable"]["archived"] is False
     assert server._archive_history_hot_snapshot("base", (rows, 1)) is None
-    updated = server._archive_history_hot_snapshot("base", (rows, 2))
+    assert rows[0]["archived"] is False
+    current_rows = server._archive_serve_cache["base"]["rows"]
+    updated = server._archive_history_hot_snapshot("base", (current_rows, 2))
     assert updated[0]["stable"]["archived"] is True
     assert updated[1]["stable"] != cut[1]["stable"]
 

@@ -18397,6 +18397,13 @@ def _archive_serve_cache_store(key, rows, generation, ts=None, *, transfer_rows=
                  "transfer_rows": transfer_rows, "partial_refresh": partial, "hot_reuse": hot_reuse}
         if diff is not None:
             entry["rows"] = diff["rows"]
+            previous_static = prev.get("sidebar_static")
+            if previous_static is not None:
+                # Carry only projections of the same row objects. A refresh
+                # can replace a row while retaining the same session ID.
+                entry["sidebar_static"] = previous_static and {
+                    id(row): previous_static[id(row)] for row in rows if id(row) in previous_static
+                }
             if prev.get("track_since") and prev.get("row_rev") is not None and not diff["untracked"]:
                 row_rev = dict(prev["row_rev"])
                 for sid in diff["changed"]:
@@ -18463,6 +18470,7 @@ def _archive_list_delta_state(key, rows, window, from_cache):
             return None
         base = sc.get("rows") or []
         ver, track_since, row_rev = sc.get("ver", 0), sc["track_since"], sc["row_rev"]
+        sidebar_static = sc.get("sidebar_static")
     rows = rows or []
     if len(rows) < len(base) or (rows is not base and any(a is not b for a, b in zip(rows, base))):
         return None
@@ -18505,6 +18513,7 @@ def _archive_list_delta_state(key, rows, window, from_cache):
         "track_since": track_since, "row_rev": row_rev,
         "base": base, "extra": extra, "projection_ctx": projection_ctx,
         "row_overlays": row_overlays, "ideas": ideas, "resumes": resumes,
+        "source_key": key, "sidebar_static": sidebar_static,
     }
 
 
@@ -18798,21 +18807,42 @@ def _restamp_archive_serve_cache_after_mutation(archived_set=None, trashed_set=N
             tr_set = trashed_set if trashed_set is not None else set()
             for entry in _archive_serve_cache.values():
                 rows = entry.get("rows")
+                patched_rows = None
+                row_rev = entry.get("row_rev")
+                if row_rev is not None:
+                    row_rev = dict(row_rev)
                 memo = entry.pop("history_hot_tokens", None)
                 tokens = (memo[2].copy() if memo is not None and memo[0] == entry["ver"]
                           and memo[1] is rows else {})
-                for row in rows or []:
+                sidebar_static = entry.get("sidebar_static")
+                retained = sidebar_static.copy() if sidebar_static else None
+                for index, row in enumerate(rows or []):
                     if not isinstance(row, dict):
                         continue
                     sid = str(row.get("session_id") or row.get("id") or "")
                     if sid in mut_set:
                         tokens.pop(id(row), None)
+                        if retained is not None:
+                            retained.pop(id(row), None)
+                        if archived_set is not None or trashed_set is not None:
+                            # Readers may still be projecting this row. Keep
+                            # their source object intact when flags change.
+                            if patched_rows is None:
+                                patched_rows = list(rows)
+                            row = row.copy()
+                            patched_rows[index] = row
                         if archived_set is not None:
                             row["archived"] = sid in arch_set
                         if trashed_set is not None:
                             row["trashed"] = sid in tr_set
-                        if entry.get("row_rev") is not None:
-                            entry["row_rev"][sid] = _archive_serve_version
+                        if row_rev is not None:
+                            row_rev[sid] = _archive_serve_version
+                if retained is not None:
+                    entry["sidebar_static"] = retained
+                if patched_rows is not None:
+                    rows = entry["rows"] = patched_rows
+                if row_rev is not None:
+                    entry["row_rev"] = row_rev
                 entry["ts"] = 0.0
                 entry["ver"] = _archive_serve_version
                 entry.pop("transfer_rows", None)
@@ -20219,7 +20249,7 @@ def _archive_list_window_rows(rows, cutoff, idea_tickets_by_sid, parents, *, anc
 def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _inputs=None,
                                _retain_templates=True, _row_overlays=None, check_client=None,
                                _history_projection=None, _sidecars=None, _ticket_effects=True,
-                               _topic_persist=True, _borrow_containers=False):
+                               _topic_persist=True, _borrow_containers=False, _scoped_static=None):
     # Request-local diagnostics distinguish CPU work from GIL/lock waits on
     # the real corpus, without the per-call overhead of a Python profiler.
     phase_wall = time.perf_counter() if phases is not None else 0
@@ -20266,6 +20296,11 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _in
     remaining = (_history_projection.max_bytes - _history_projection.source_row_bytes * len(sources)
                  if pending is not None else 0)
     hits = 0
+    scoped_remaining = _ARCHIVE_LIST_SCOPED_STATIC_BYTES
+    scoped_hits = 0
+    scoped_admitted = 0
+    if _scoped_static is not None:
+        previous_static, retained_static, overlay_objects = _scoped_static
     for position, row in enumerate(window_rows):
         if check_client is not None and position % 256 == 0:
             check_client()
@@ -20288,6 +20323,27 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _in
                 remaining -= sys.getsizeof(static) + sys.getsizeof(preview)
                 if remaining >= 0:
                     pending[row_id] = static
+        if _scoped_static is not None and type(row) is dict and id(row) not in overlay_objects:
+            source_id = id(row)
+            saved = previous_static.get(source_id)
+            if saved is not None and saved[0] is row:
+                _, static, weight = saved
+                scoped_hits += 1
+            elif (scoped_remaining > 0
+                  and scoped_admitted < _ARCHIVE_LIST_SCOPED_STATIC_ADMISSIONS + scoped_hits):
+                static = _archive_list_static_row(
+                    row, template, fields_by_shape, False, borrow_containers=True)
+                # The current source snapshot owns the borrowed values.
+                # Charge the extra dict, preview and memo bookkeeping.
+                weight = (sys.getsizeof(static) + sys.getsizeof(static.get("last_assistant_preview", ""))
+                          + 160)
+                saved = (row, static, weight)
+                scoped_admitted += 1
+            else:
+                saved = None
+            if saved is not None and weight <= scoped_remaining:
+                retained_static[source_id] = saved
+                scoped_remaining -= weight
         projected.append(_archive_list_project_row(
             row, resumes=resumes, parents=parents, _template=template,
             _fields_by_shape=fields_by_shape, _retain_template=_retain_templates,
@@ -20302,6 +20358,10 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _in
         archive_store.publish_sidebar_history_projection(_history_projection, pending)
     if phases is not None and _history_projection is not None:
         phases["history_static_rows"] = {"hits": hits, "prepared": len(pending or {})}
+    if phases is not None and _scoped_static is not None:
+        phases["scoped_static_rows"] = {"hits": scoped_hits, "retained": len(retained_static),
+                                        "admitted": scoped_admitted,
+                                        "bytes": _ARCHIVE_LIST_SCOPED_STATIC_BYTES - scoped_remaining}
     # Persisted rows may predate a goal change or a title override.
     if _sidecars is None:
         row_overlays = _archive_list_row_overlays() if _row_overlays is None else _row_overlays
@@ -21498,13 +21558,14 @@ def _archive_list_indexed_initial_payload(cache_options, *, phases, source_phase
 
 def _archive_list_payload(rows, *, window="all", now=None, cached=None, phases=None, _inputs=None,
                           _retain_templates=True, _row_overlays=None, check_client=None,
-                          _history_projection=None, _working_snapshot=None, _borrow_containers=False):
+                          _history_projection=None, _working_snapshot=None, _borrow_containers=False,
+                          _scoped_static=None):
     window = _archive_list_window(window)
     projected = _archive_list_project_rows(rows, window=window, now=now, phases=phases, _inputs=_inputs,
                                            _retain_templates=_retain_templates, _row_overlays=_row_overlays,
                                            check_client=check_client,
                                            _history_projection=_history_projection,
-                                           _borrow_containers=_borrow_containers)
+                                           _borrow_containers=_borrow_containers, _scoped_static=_scoped_static)
     if window == "all":
         _trace_row_flicker(projected, now=now)
     payload = {
@@ -21526,6 +21587,18 @@ def _archive_list_payload(rows, *, window="all", now=None, cached=None, phases=N
 # change can reuse the immutable archive projection inside that new body.
 _ARCHIVE_LIST_PROJECTION_CACHE = ByteBudgetCache(
     _cache_budget_bytes("CCC_LIST_PROJECTION_CACHE_MB", 64), 8)
+_ARCHIVE_LIST_SCOPED_STATIC_BYTES = 16 << 20
+# Limit copying on the first response. Later builds can admit more rows as
+# they save projection work through hits.
+_ARCHIVE_LIST_SCOPED_STATIC_ADMISSIONS = 384
+
+
+def _archive_list_publish_scoped_static(delta, retained):
+    with _archive_serve_lock:
+        current = _archive_serve_cache.get(delta["source_key"])
+        if (current is not None and current["ver"] == delta["ver"] and current["rows"] is delta["base"]
+                and current.get("sidebar_static") is delta["sidebar_static"]):
+            current["sidebar_static"] = retained
 
 _ARCHIVE_LIST_PROJECTION_DIAG_KEYS = collections.OrderedDict()
 _ARCHIVE_LIST_PROJECTION_DIAG_LOCK = threading.Lock()
@@ -21645,12 +21718,20 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
         # Reuse existing scalar templates, but don't populate a second cache
         # for the entire window during a cold build or context change.
         retain_templates = window != "7d" or not row_layouts
+        scoped_static = None
+        reusable_scope = borrow_containers and delta.get("source_key") == _archive_response_cache_key()
+        retained_static = {} if reusable_scope else None
+        if reusable_scope and delta["sidebar_static"] is not None:
+            scoped_static = (delta["sidebar_static"], retained_static, {id(row) for row in extra})
         payload = _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
                                        _inputs=inputs, _row_overlays=row_overlays,
                                        _retain_templates=retain_templates,
-                                       check_client=check_client, _borrow_containers=borrow_containers)
+                                       check_client=check_client, _borrow_containers=borrow_containers,
+                                       _scoped_static=scoped_static)
         if check_client is not None:
             check_client()
+        if reusable_scope:
+            _archive_list_publish_scoped_static(delta, retained_static)
         entry = _list_replay.encode_rows(
             payload["conversations"], overlay_set, deflate=eager_gzip, row_layouts=row_layouts)
         raw = entry[0]

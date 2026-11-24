@@ -694,6 +694,59 @@ def test_projection_replay_retains_only_budgeted_immutable_bytes(inputs, monkeyp
     assert server._ARCHIVE_LIST_PROJECTION_CACHE.max_bytes <= 64 * 1024 * 1024
 
 
+def test_scoped_static_rows_follow_unchanged_published_sources(inputs, monkeypatch):
+    key = server._archive_response_cache_key()
+    monkeypatch.setattr(server, '_archive_serve_cache', {})
+    monkeypatch.setattr(server, '_archive_serve_refreshing', {})
+    monkeypatch.setattr(server, '_archive_serve_generation', 1)
+    monkeypatch.setattr(server, '_archive_serve_version', 0)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_SCOPED_STATIC_BYTES', 4096)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_SCOPED_STATIC_ADMISSIONS', 1)
+    unchanged, live = fixture_rows()
+    changed = dict(unchanged, session_id='changed', archived=False, display_name='Before')
+
+    def store(rows):
+        assert server._archive_serve_cache_store(
+            key, rows, server._archive_serve_generation, hot_selected=True)
+
+    def read_scoped():
+        base = server._archive_serve_cache[key]['rows']
+        rows = base + [live]
+        delta = server._archive_list_delta_state(key, rows, '7d', True)
+        phases = {}
+        actual = server._archive_list_replay_payload(
+            rows, delta, window='7d', now=10000, cached=True, phases=phases,
+            row_layouts=True, _wire_only=True)
+        expected = server._archive_list_payload(rows, window='7d', now=10000, cached=True)
+        layouts, packed = replay.pack_row_layouts(expected['conversations'])
+        assert actual['row_layouts'] == layouts
+        assert actual.conversations_json == replay.encode_payload(packed, compact=True)
+        return delta, phases.get('scoped_static_rows')
+
+    store([unchanged, changed])
+    initial, first = read_scoped()
+    assert first is None and server._archive_serve_cache[key]['sidebar_static'] == {}
+    inputs['graph'] = (2, 1)
+    _, prepared = read_scoped()
+    assert prepared['hits'] == 0 and prepared['retained'] == prepared['admitted'] == 1
+    assert prepared['bytes'] <= 4096
+    assert id(live) not in server._archive_serve_cache[key]['sidebar_static']
+    store([unchanged.copy(), dict(changed, display_name='After')])
+    before_archive, second = read_scoped()
+    assert second['hits'] == second['admitted'] == 1 and second['retained'] == 2
+
+    server._restamp_archive_serve_cache_after_mutation(
+        archived_set={'changed'}, mutated_sids={'changed'})
+    assert initial['base'][1]['archived'] is False
+    assert before_archive['base'][1]['archived'] is False
+    assert before_archive['row_rev']['changed'] == before_archive['ver']
+    server._archive_list_publish_scoped_static(before_archive, {id(changed): (changed, {}, 1)})
+    assert id(changed) not in server._archive_serve_cache[key]['sidebar_static']
+    after_archive, third = read_scoped()
+    assert third['hits'] == 1 and after_archive['base'][1]['archived'] is True
+    assert after_archive['row_rev']['changed'] == after_archive['ver']
+
+
 def test_hidden_duplicate_overlay_cannot_replace_archive_timestamp(inputs):
     rows = fixture_rows()
     rows[1] = dict(rows[0], mtime=1, modified=1)
