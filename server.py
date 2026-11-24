@@ -39552,7 +39552,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                         cache_options, phases=indexed_phases, source_phases=indexed_source)
                 if indexed is not None:
                     with _archive_history_timing(indexed_source, "send"):
-                        self.send_json(indexed)
+                        self._send_archive_list_preview(indexed)
                     record_diag("list_server", (time.perf_counter() - _lt0) * 1000.0, {
                         "window": window, "initial": True, "indexed": True, "status": 200,
                         "rows_src": indexed["total_count"], "projection": indexed_phases,
@@ -39641,7 +39641,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     rows, window=window, cached=from_cache, phases=_initial_phases,
                     selection_version=selection_version)
                 _initial_payload_end = time.perf_counter()
-                self.send_json(_initial_payload)
+                self._send_archive_list_preview(_initial_payload)
                 record_diag("list_server", (time.perf_counter() - _lt0) * 1000.0, {
                     "window": window, "initial": True, "status": 200,
                     "rows_src": len(rows or []),
@@ -50518,6 +50518,12 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         except _ArchiveListClientDisconnected:
             return "abandoned"
         return self._send_archive_list_body(raw, gzip_body, etag_val)
+
+    def _send_archive_list_preview(self, payload):
+        from ccc_server.list_encoding import snapshot_representation
+
+        body, encoding = snapshot_representation(payload, self.headers.get("Accept-Encoding", ""))
+        self._write_json_response(200, body, encoding, None, None, vary_encoding=True)
 
     def _send_archive_list_body(self, raw, gzip_body, etag_val, extra_headers=()):
         from ccc_server.list_encoding import gzip_list, representation
