@@ -71,6 +71,7 @@ _lock = threading.Lock()
 _archive_lock = threading.Lock()
 _inflight = set()
 _queues_ready = set()
+_state_read_lock = threading.Lock()
 _state_cache = {"key": None, "data": None}
 _flock_depth = threading.local()
 _handoff_effect_locks = {}
@@ -164,27 +165,35 @@ def _project_state(raw):
 
 
 def load_state():
-    """The state dict, cached by the file's (mtime, size)."""
-    path = _state_path()
-    try:
-        st = path.stat()
-        key = (st.st_mtime_ns, st.st_size)
-    except OSError:
-        return _empty_state()
-    if _state_cache["key"] == key and _state_cache["data"] is not None:
-        return _project_state(_state_cache["data"])
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        data = None
-    if not isinstance(data, dict):
-        data = _empty_state()
-    data.setdefault("sessions", {})
-    data.setdefault("tickets", {})
-    data.setdefault("pending", {})
-    _state_cache["key"] = key
-    _state_cache["data"] = data
-    return _project_state(data)
+    """Read the ticket state once per file and lineage revision."""
+    # The preview and full archive can both miss just after a restart or a
+    # peer write. They share the same JSON parse and lineage projection, and
+    # cannot observe another reader publishing a key ahead of its data.
+    with _state_read_lock:
+        path = _state_path()
+        try:
+            st = path.stat()
+            key = (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size)
+        except OSError:
+            return _empty_state()
+        if _state_cache["key"] == key and _state_cache["data"] is not None:
+            return _project_state(_state_cache["data"])
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = None
+        if not isinstance(data, dict):
+            data = _empty_state()
+        data.setdefault("sessions", {})
+        data.setdefault("tickets", {})
+        data.setdefault("pending", {})
+        _state_cache.update(key=key, data=data)
+        return _project_state(data)
+
+
+def _invalidate_state_cache():
+    with _state_read_lock:
+        _state_cache["key"] = None
 
 
 def _save_state(data):
@@ -196,7 +205,7 @@ def _save_state(data):
     tmp = path.with_suffix(f".json.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")
     tmp.replace(path)
-    _state_cache["key"] = None
+    _invalidate_state_cache()
 
 
 def _compact_state(data):
@@ -262,7 +271,7 @@ def _file_lock():
 def _mutate(fn):
     """Apply ``fn(state)`` under both locks and persist. Returns fn's result."""
     with _file_lock(), _lock:
-        _state_cache["key"] = None  # another process may have written
+        _invalidate_state_cache()  # another process may have written
         data = json.loads(json.dumps(load_state()))
         result = fn(data)
         _save_state(data)
@@ -293,7 +302,7 @@ def handoff_effect_lock(ref):
 
 
 def _watchtower_owned(ref):
-    _state_cache["key"] = None
+    _invalidate_state_cache()
     ticket = load_state()["tickets"].get(ref) or {}
     return (ticket.get("handoff") or {}).get("owner") == "watchtower"
 
@@ -1125,7 +1134,7 @@ def _archive_worker_locked(sid, ticket, archived):
 
 
 def _legacy_archive_worker_locked(sid, ticket, archived):
-    _state_cache["key"] = None
+    _invalidate_state_cache()
     current = ticket_for_session(sid)
     if not current or current["ref"] != ticket["ref"]:
         return

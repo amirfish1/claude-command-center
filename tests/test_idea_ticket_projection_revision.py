@@ -1,4 +1,9 @@
 """Ticket inheritance follows graph structure independently of activity writes."""
+from concurrent.futures import ThreadPoolExecutor
+import os
+from pathlib import Path
+from threading import Event, Lock
+
 from ccc_server import idea_tickets as tickets
 from ccc_server.session_graph import _SessionGraph
 
@@ -40,3 +45,49 @@ def test_activity_reuses_projection_but_local_and_external_lineage_refresh(tmp_p
     monkeypatch.setattr(tickets, '_graph', lambda: replacement)
     assert tickets._project_state(raw) == third
     assert tickets._project_state(raw) is not third
+
+
+def test_concurrent_ticket_readers_share_the_same_file_load(tmp_path, monkeypatch):
+    state = tmp_path / 'idea-tickets.json'
+    state.write_text('{"sessions":{"old":{"ref":"IDEAS-1"}}}')
+    monkeypatch.setattr(tickets, '_state_path', lambda: state)
+    monkeypatch.setattr(tickets, '_state_cache', {'key': None, 'data': None})
+    first_read = Event()
+    second_reader = Event()
+    lock = Lock()
+    reads = []
+
+    class ObservedLock:
+        def __enter__(self):
+            if lock.locked():
+                second_reader.set()
+            lock.acquire()
+
+        def __exit__(self, *exc):
+            lock.release()
+
+    read_text = Path.read_text
+
+    def read_once(target, *args, **kwargs):
+        if target == state:
+            reads.append(target)
+            first_read.set()
+            assert second_reader.wait(5)
+        return read_text(target, *args, **kwargs)
+
+    monkeypatch.setattr(tickets, '_state_read_lock', ObservedLock())
+    monkeypatch.setattr(Path, 'read_text', read_once)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(tickets.load_state)
+        assert first_read.wait(5)
+        second = pool.submit(tickets.load_state)
+        assert first.result(timeout=5) is second.result(timeout=5)
+    assert reads == [state]
+
+    original = state.stat()
+    replacement = tmp_path / 'replacement.json'
+    replacement.write_text('{"sessions":{"new":{"ref":"IDEAS-1"}}}')
+    os.utime(replacement, ns=(original.st_atime_ns, original.st_mtime_ns))
+    replacement.replace(state)
+    assert set(tickets.load_state()['sessions']) == {'new'}
+    assert reads == [state, state]
