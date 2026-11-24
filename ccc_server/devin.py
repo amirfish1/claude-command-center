@@ -1388,40 +1388,55 @@ def _devin_cli_row_memo_save_locked():
 
 
 def _devin_cli_session_versions(con, raw_ids):
-    """{raw_id: [max_row_id, row_count, max_created_at]} from message_nodes.
+    """{raw_id: [max_row_id, row_count, newest_row_created_at]}.
 
-    A covering-index GROUP BY (idx_message_nodes_session carries the rowid),
-    so it never reads the chat_message blobs — ~50 ms across a 3.7 GB DB.
-    ``max_created_at`` doubles as the row's freshness signal: sessions.
+    Separate covering-index lookups let SQLite seek directly to MAX(row_id)
+    and count the range without grouping every message. The newest row's
+    timestamp doubles as the row's freshness signal: sessions.
     last_activity_at can lag the newest message row (observed: 1 of 42
     sessions had message rows newer than it), so the caller takes
     max(last_activity_at, max_created_at) instead of trusting the column
     alone (CCC-992: a row read "3h" for a session active 46 min ago).
 
-    created_at is NOT in idx_message_nodes_session, so a plain
-    MAX(created_at) in the GROUP BY drops the covering index and reads every
-    message blob (50-260s on a 4 GB DB, parking every sidebar list). Take it
-    from the newest row instead: one rowid lookup per session."""
+    Only the newest message's rowid lookup reads the table. Stores without
+    the native covering index use the grouped query to scan the table once.
+    """
     if not raw_ids or con is None:
         return {}
-    out = {}
-    placeholders = ",".join("?" * len(raw_ids))
+    columns = ("session_id", "max_row", "n", "created_at")
     try:
-        for row in fetch_rows(con,
-            "SELECT v.session_id, v.max_row, v.n, m.created_at FROM ("
-            "SELECT session_id, MAX(row_id) AS max_row, COUNT(*) AS n "
-            "FROM message_nodes WHERE session_id IN ({}) GROUP BY session_id"
-            ") v JOIN message_nodes m ON m.row_id = v.max_row".format(
-                placeholders
-            ),
-            raw_ids, ("session_id", "max_row", "n", "created_at"),
-        ):
-            out[str(row[0] or "").strip()] = [
-                int(row[1] or 0), int(row[2] or 0), row[3],
-            ]
+        try:
+            values = ",".join(["(?)"] * len(raw_ids))
+            rows = fetch_rows(
+                con,
+                f"WITH requested(session_id) AS (VALUES {values}) "
+                "SELECT m.session_id, m.row_id AS max_row, "
+                "(SELECT COUNT(*) FROM message_nodes AS c "
+                " INDEXED BY idx_message_nodes_session WHERE c.session_id = r.session_id) AS n, "
+                "m.created_at FROM (SELECT DISTINCT session_id FROM requested) AS r "
+                "JOIN message_nodes AS m ON m.row_id = ("
+                " SELECT MAX(row_id) FROM message_nodes AS latest "
+                " INDEXED BY idx_message_nodes_session WHERE latest.session_id = r.session_id)",
+                raw_ids, columns,
+            )
+        except sqlite3.OperationalError as exc:
+            if str(exc) != "no such index: idx_message_nodes_session":
+                raise
+            placeholders = ",".join("?" * len(raw_ids))
+            rows = fetch_rows(
+                con,
+                "SELECT v.session_id, v.max_row, v.n, m.created_at FROM ("
+                "SELECT session_id, MAX(row_id) AS max_row, COUNT(*) AS n "
+                f"FROM message_nodes WHERE session_id IN ({placeholders}) GROUP BY session_id"
+                ") v JOIN message_nodes m ON m.row_id = v.max_row",
+                raw_ids, columns,
+            )
     except sqlite3.Error:
-        pass
-    return out
+        return {}
+    return {
+        str(session_id or "").strip(): [int(max_row or 0), int(count or 0), created_at]
+        for session_id, max_row, count, created_at in rows
+    }
 
 
 def _devin_cli_scan_ship_flags(con, raw_id, start, ship):

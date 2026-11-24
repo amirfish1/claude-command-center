@@ -6306,17 +6306,25 @@ def test_decision_projection_batches_large_registries_without_per_request_reads(
     assert len(calls) == 5
 
 
-def test_devin_version_batch_uses_one_row_callback_for_many_sessions():
+@pytest.mark.parametrize("indexed", [False, True])
+def test_devin_version_batch_uses_one_row_callback_for_many_sessions(indexed):
     import sqlite3
     from ccc_server.devin import _devin_cli_session_versions
     with sqlite3.connect(':memory:') as db:
         db.execute('CREATE TABLE message_nodes (row_id INTEGER PRIMARY KEY, session_id TEXT, created_at TEXT)')
+        if indexed:
+            db.execute('CREATE INDEX idx_message_nodes_session ON message_nodes (session_id)')
         db.executemany('INSERT INTO message_nodes VALUES (?,?,?)',
                        [(i, f'session-{i // 2}', str(i)) for i in range(1000)])
+        db.execute("UPDATE message_nodes SET created_at = NULL WHERE row_id = 999")
+        db.execute("DELETE FROM message_nodes WHERE row_id = 998")
         callbacks = []
         db.row_factory = lambda _cur, row: (callbacks.append(1), row)[1]
-        result = _devin_cli_session_versions(db, [f'session-{i}' for i in range(500)])
-    assert len(result) == 500 and result['session-499'] == [999, 2, '999']
+        requested = [f'session-{i}' for i in range(500)]
+        result = _devin_cli_session_versions(db, requested + ['session-499', 'missing'])
+    assert len(result) == 500
+    assert result['session-0'] == [1, 2, '1']
+    assert result['session-499'] == [999, 1, None]
     assert len(callbacks) == 1
 
 
