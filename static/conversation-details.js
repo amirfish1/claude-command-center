@@ -4957,6 +4957,7 @@
               _perfFetchUrl += '&history_layer=1' + (window.CCCArchiveWire?.wideOrderSpanQuery || '');
             } else if (!opts.initial && params.get('window') === '7d') {
               _perfFetchUrl += '&row_layouts=1';
+              if (!deltaToken) _perfFetchUrl += '&history_layer=1' + (window.CCCArchiveWire?.wideOrderSpanQuery || '');
             }
             if (deltaToken) _perfFetchUrl += '&since=' + encodeURIComponent(deltaToken);
             requestedOrder = baseOrder;
@@ -5020,7 +5021,7 @@
         let packedBytes = r._cccArchivePackedBytes;
         if (packedBytes) delete r._cccArchivePackedBytes;
         const layered = raw?.history_layer !== undefined;
-        let d = layered ? _decodeArchiveHistoryLayer(raw) : _decodeArchiveRowLayouts(raw);
+        let d = layered ? _decodeArchiveHistoryLayer(raw, params.get('window')) : _decodeArchiveRowLayouts(raw);
         _perfBodyMs = performance.now() - _perfHdrAt - _perfPaintWaitMs;
         let _merged = null;
         if (d && d.delta) {
