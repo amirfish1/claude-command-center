@@ -455,17 +455,10 @@ def save(cache_file, snapshot, *, complete=False, sidebar_key=None, sidebar_page
                 archive_preview.finish_publication(con, key, stamp)
                 if complete and sidebar_pages is not None:
                     version, project = sidebar_pages
-                    if base_entry is None:
-                        hot = {identity(row) for row in hot_rows(entry.get('conversations') or [], now=stamp)}
-                        archive_sidebar_pages.publish(con, key, stamp, version, hot, project)
-                    else:
-                        hot_rows_by_id = dict(con.execute(
-                            _HOT_ROW_QUERY.format(columns="r.identity,r.rowid"), (*_hot_params(key, stamp), key)))
-                        archive_sidebar_pages.publish(
-                            con, key, stamp, version, hot_rows_by_id, project,
-                            hot_rowids=set(hot_rows_by_id.values()), previous_hot=previous_hot,
-                            previous_changed=previous_changed, inserted=inserted,
-                        )
+                    _publish_sidebar_pages(
+                        con, key, stamp, version, project, previous_hot=previous_hot,
+                        previous_changed=previous_changed, inserted=inserted,
+                    )
         con.commit()
     except BaseException:
         con.rollback()
@@ -1032,17 +1025,13 @@ def backfill_sidebar_pages(cache_file, key, version, project):
                 archive_preview.finish_publication(con, key, stamp)
                 return archive_preview.packed_current(con, key)
             indexed = archive_preview.indexed(con, key)
-            rows = []
             for rid, body in con.execute(
                 "SELECT identity,body FROM rows WHERE variant=? ORDER BY position,rowid", (key,),
             ):
-                row = json.loads(body)
-                rows.append(row)
                 if rid not in indexed:
-                    archive_preview.publish(con, key, rid, row)
+                    archive_preview.publish(con, key, rid, json.loads(body))
             archive_preview.finish_publication(con, key, stamp)
-            hot = {identity(row) for row in hot_rows(rows, now=stamp)}
-            archive_sidebar_pages.publish(con, key, stamp, version, hot, project)
+            _publish_sidebar_pages(con, key, stamp, version, project)
             return _sidebar_pages_current(con, key, version)
     finally:
         con.close()
@@ -1412,6 +1401,22 @@ _HOT_ROWS_CTE = """WITH RECURSIVE selected(rowid,sid,parent,position) AS (
 _HOT_ROW_QUERY = _HOT_ROWS_CTE + """SELECT {columns} FROM selected s CROSS JOIN rows r
   WHERE r.variant=? AND r.rowid=s.rowid ORDER BY s.position
 """
+
+
+def _publish_sidebar_pages(con, key, stamp, version, project, *,
+                           previous_hot=None, previous_changed=(), inserted=()):
+    """Publish pages and their exact hot membership from one transaction."""
+    from ccc_server import archive_sidebar_pages
+
+    hot_rows_by_id = dict(con.execute(
+        _HOT_ROW_QUERY.format(columns="r.identity,r.rowid"),
+        (*_hot_params(key, stamp), key),
+    ))
+    archive_sidebar_pages.publish(
+        con, key, stamp, version, hot_rows_by_id, project,
+        hot_rowids=set(hot_rows_by_id.values()), previous_hot=previous_hot,
+        previous_changed=previous_changed, inserted=inserted,
+    )
 
 
 def _hot_params(key, now=None):
