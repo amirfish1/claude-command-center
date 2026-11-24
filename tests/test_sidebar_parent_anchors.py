@@ -26,6 +26,24 @@ def test_removed_topics_and_cycles_do_not_expand_the_window():
     assert server._archive_list_window_rows([child, parent], 50, tickets, {}) == [child]
 
 
+def test_window_family_expansion_keeps_parent_then_children_in_source_order():
+    server = importlib.import_module('server')
+    first_parent = {'session_id': 'parent', 'modified': 1}
+    last_parent = {'session_id': 'parent', 'modified': 2}
+    child_a = {'session_id': 'a', 'parent_session_id': 'head', 'modified': 1}
+    child_b = {'session_id': 'b', 'hermes_parent_session_id': 'head', 'modified': 1}
+    head = {'session_id': 'head', 'continued_from_session_id': 'parent', 'modified': 100}
+    older_head = {'session_id': 'head', 'parent_session_id': 'unrelated', 'modified': 1}
+    unrelated = {'session_id': 'unrelated', 'modified': 1}
+    rows = [child_a, first_parent, older_head, child_b, head, last_parent, unrelated]
+
+    context = set()
+    result = server._archive_list_window_rows(rows, 50, {}, {}, ancestor_ids=context)
+
+    assert result == [head, last_parent, child_a, child_b]
+    assert context == {id(last_parent), id(child_a), id(child_b)}
+
+
 def test_delta_retains_unchanged_parent_and_sends_it_with_new_child(monkeypatch):
     server = importlib.import_module('server')
     monkeypatch.setattr(server, '_archive_list_delta_reject', lambda *a: None)

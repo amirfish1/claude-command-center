@@ -56,12 +56,16 @@ def _sid(row):
     return str(row.get("session_id") or row.get("id") or "")
 
 
-def parent_ids(row, parents):
-    return {str(value) for value in (
-        row.get("parent_session_id"), row.get("hermes_parent_session_id"),
-        row.get("continued_from_session_id"), row.get("hermes_continued_from"),
-        parents.get(_sid(row)),
-    ) if isinstance(value, str) and value}
+def parent_ids(row, parents, *, sid=None):
+    parent = row.get("parent_session_id")
+    hermes_parent = row.get("hermes_parent_session_id")
+    origin = row.get("continued_from_session_id")
+    hermes_origin = row.get("hermes_continued_from")
+    graph_parent = parents.get(_sid(row) if sid is None else sid)
+    if not (parent or hermes_parent or origin or hermes_origin or graph_parent):
+        return ()
+    return {str(value) for value in (parent, hermes_parent, origin, hermes_origin, graph_parent)
+            if isinstance(value, str) and value}
 
 
 def _working(row):

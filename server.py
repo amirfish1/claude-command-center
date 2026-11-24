@@ -20158,17 +20158,27 @@ _archive_list_parent_ids = _archive_preview.parent_ids
 
 def _archive_list_family_rows(rows, selected, idea_tickets_by_sid, parents, *, context_ids=None):
     """Keep loaded family context together without making unrelated rows recent."""
-    by_sid = {_archive_row_sid(row): row for row in rows}
+    result = list(selected)
+    if not result:
+        return result
+    included = {_archive_row_sid(row) for row in result}
+    # Only initially excluded rows can extend the selection. Keep their
+    # source order as children and the last row per ID for parent lookups.
+    by_sid = {}
     children = {}
     parent_links = {}
     for row in rows:
-        links = _archive_list_parent_ids(row, parents)
-        if links:
-            parent_links[id(row)] = links
-        for pid in links:
-            children.setdefault(pid, []).append(row)
-    result = list(selected)
-    included = {_archive_row_sid(row) for row in result}
+        sid = _archive_row_sid(row)
+        outside = sid not in included
+        if outside:
+            by_sid[sid] = row
+        for pid in _archive_list_parent_ids(row, parents, sid=sid):
+            if outside:
+                children.setdefault(pid, []).append(row)
+            if pid not in included:
+                parent_links.setdefault(id(row), []).append(pid)
+    if not by_sid:
+        return result
     index = 0
     while index < len(result):
         row = result[index]
