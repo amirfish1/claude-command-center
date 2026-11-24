@@ -445,8 +445,8 @@
     else window.addEventListener('ccc:archive-settled', arm, {once:true});
   };
   header.then(value => { if (!value) startRecent(); });
-  const parseFullResponse = async response => {
-    if (windowName !== 'all') return response.json();
+  const parseFullResponse = async (response, conditional) => {
+    if (windowName !== 'all' && (windowName !== '7d' || conditional)) return response.json();
     const bytes = await response.arrayBuffer();
     const payload = JSON.parse(new TextDecoder().decode(bytes));
     // An early response for a different view may never be consumed. Keep
@@ -496,7 +496,7 @@
       if (response.ok && response.status !== 304) {
         // Drain the early response while the application initializes. Leaving
         // it unread behind the preview paint can stall a large full reply.
-        body = response._cccArchiveParsedBody = parseFullResponse(response);
+        body = response._cccArchiveParsedBody = parseFullResponse(response, !!value);
         body.finally(() => clearTimeout(timeout)).catch(() => {});
       }
       const base = await read;

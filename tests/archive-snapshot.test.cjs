@@ -398,6 +398,14 @@ const allPackedBody = JSON.stringify({
   conversations:[[0, ['recent', 'שלום']], [1, ['older']]],
   delta_token:'valid',
 }, null, 1);
+const sevenDayPackedBody = JSON.stringify({
+  history_layer:1,
+  base:{window:'7d', count:1, delta_token:'base', order_token:'a'.repeat(64),
+    conversations:[{session_id:'older'}]},
+  patch:{window:'7d', count:2, delta:true, since:'base', delta_token:'valid',
+    order_token:'b'.repeat(64), ids:['recent','older'],
+    row_layouts:[['session_id','name']], conversations:[[0,['recent','שלום']]]},
+}, null, 1);
 let browser, server, origin, slowPreview=false, coldFullFailure='';
 before(async () => {
   server = http.createServer((req,res) => {
@@ -417,6 +425,10 @@ before(async () => {
       if (req.url.includes('since=valid')) {res.writeHead(304);res.end();return;}
       if (req.url.includes('row_layouts=1') && req.url.includes('window=all')) {
         res.setHeader('Content-Type','application/json');res.end(allPackedBody);return;
+      }
+      if (req.headers['x-test-seven-day-layer'] && req.url.includes('history_layer=1')
+          && req.url.includes('window=7d')) {
+        res.setHeader('Content-Type','application/json');res.end(sevenDayPackedBody);return;
       }
       res.setHeader('Content-Type','application/json');res.end(JSON.stringify({conversations:rows}));return;
     }
@@ -582,40 +594,44 @@ for (const large of [false, true]) {
   });
 }
 
-test('All startup stores its original packed response bytes and restores them on reload', async () => {
-  const context = await browser.createBrowserContext(), page = await context.newPage();
-  try {
-    await page.evaluateOnNewDocument(() => {
-      localStorage.setItem('ccc-archive-window', 'all');
-      window.addEventListener('DOMContentLoaded', () => {
-        window.__cccArchiveSnapshot.consumed = true;
-      }, {once:true});
-    });
-    await page.goto(origin, {waitUntil:'load'});
-    const original = await page.evaluate(async () => {
-      const snapshot = window.__cccArchiveSnapshot;
-      const response = await snapshot.fetch;
-      const payload = await response._cccArchiveParsedBody;
-      const bytes = response._cccArchivePackedBytes;
-      window.__cccArchiveSettled = true;
-      const rows = [{session_id:'recent',name:'שלום'}, {session_id:'older'}];
-      snapshot.save({url:snapshot.url, delta:payload.delta_token, rows}, null, bytes);
-      return new TextDecoder().decode(bytes);
-    });
-    assert.equal(original,allPackedBody);
-    await waitForSnapshot(page, 'valid', 'last', 'all');
-    await page.reload({waitUntil:'load'});
-    const restored = await page.evaluate(async () => {
-      const snapshot = window.__cccArchiveSnapshot;
-      const saved = await snapshot.read;
-      return {rows:saved?.rows, bytes:saved?.bytes, status:(await snapshot.fetch)?.status};
-    });
-    assert.deepEqual(restored,{
-      rows:[{session_id:'recent',name:'שלום'}, {session_id:'older'}],
-      bytes:Buffer.byteLength(allPackedBody), status:304,
-    });
-  } finally {await context.close();}
-});
+for (const [windowName, wireBody] of [['all', allPackedBody], ['7d', sevenDayPackedBody]]) {
+  test(`Startup stores the original ${windowName} response bytes and restores them on reload`, async () => {
+    const context = await browser.createBrowserContext(), page = await context.newPage();
+    try {
+      if (windowName === '7d') await page.setExtraHTTPHeaders({'x-test-seven-day-layer':'1'});
+      await page.evaluateOnNewDocument(windowName => {
+        localStorage.setItem('ccc-archive-window', windowName);
+        window.addEventListener('DOMContentLoaded', () => {
+          window.__cccArchiveSnapshot.consumed = true;
+        }, {once:true});
+      }, windowName);
+      await page.goto(origin, {waitUntil:'load'});
+      const original = await page.evaluate(async () => {
+        const snapshot = window.__cccArchiveSnapshot;
+        const response = await snapshot.fetch;
+        const payload = await response._cccArchiveParsedBody;
+        const bytes = response._cccArchivePackedBytes;
+        window.__cccArchiveSettled = true;
+        const rows = [{session_id:'recent',name:'שלום'}, {session_id:'older'}];
+        const delta = payload.history_layer ? payload.patch.delta_token : payload.delta_token;
+        snapshot.save({url:snapshot.url, delta, rows}, null, bytes);
+        return new TextDecoder().decode(bytes);
+      });
+      assert.equal(original,wireBody);
+      await waitForSnapshot(page, 'valid', 'last', windowName);
+      await page.reload({waitUntil:'load'});
+      const restored = await page.evaluate(async () => {
+        const snapshot = window.__cccArchiveSnapshot;
+        const saved = await snapshot.read;
+        return {rows:saved?.rows, bytes:saved?.bytes, status:(await snapshot.fetch)?.status};
+      });
+      assert.deepEqual(restored,{
+        rows:[{session_id:'recent',name:'שלום'}, {session_id:'older'}],
+        bytes:Buffer.byteLength(wireBody), status:304,
+      });
+    } finally {await context.close();}
+  });
+}
 
 async function seed(page,delta) {
   await page.evaluate(({url,rows,delta})=>{
