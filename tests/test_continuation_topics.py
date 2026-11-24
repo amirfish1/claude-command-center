@@ -1168,7 +1168,9 @@ def test_archive_projection_retries_when_topic_sources_change_during_capture(sto
     assert version == topics._archive_read_version(store)
 
 
-@pytest.mark.parametrize("write_mode", ["local", "outside-write", "caller-transaction"])
+@pytest.mark.parametrize(
+    "write_mode", ["local", "local-during-records", "outside-write", "caller-transaction"],
+)
 def test_archive_projection_retry_reuses_only_exact_local_topic_commit(store, monkeypatch, write_mode):
     from contextlib import closing
 
@@ -1182,18 +1184,19 @@ def test_archive_projection_retry_reuses_only_exact_local_topic_commit(store, mo
     reads = []
     fetch = topics._archive_topic_records
 
-    def record_read(conn, max_rows, **kwargs):
-        result = fetch(conn, max_rows, **kwargs)
-        reads.append(result)
-        return result
-
-    monkeypatch.setattr(topics, '_archive_topic_records', record_read)
     with closing(sqlite3.connect(filename)) as writer:
         lookups = []
 
+        def record_read(conn, max_rows, **kwargs):
+            result = fetch(conn, max_rows, **kwargs)
+            reads.append(result)
+            if len(reads) == 1 and write_mode == 'local-during-records':
+                topics.attach_topics([row('new', 'New subject')], conn=writer, names={})
+            return result
+
         def native_title(sid):
             lookups.append(sid)
-            if len(lookups) == 1:
+            if len(lookups) == 1 and write_mode != 'local-during-records':
                 if write_mode == 'caller-transaction':
                     writer.execute('BEGIN IMMEDIATE')
                 topics.attach_topics([row('new', 'New subject')], conn=writer, names={})
@@ -1204,6 +1207,7 @@ def test_archive_projection_retry_reuses_only_exact_local_topic_commit(store, mo
                         store.execute("INSERT INTO session_meta VALUES ('outside-child', ?)", (root,))
             return 'Native title'
 
+        monkeypatch.setattr(topics, '_archive_topic_records', record_read)
         monkeypatch.setattr(topics, '_native_title', native_title)
         details = {}
         guard_transitions = {}
@@ -1217,7 +1221,7 @@ def test_archive_projection_retry_reuses_only_exact_local_topic_commit(store, mo
     assert version == topics._archive_read_version(store)
     assert 'new' not in reads[0][0]
     assert details['topics_retried']
-    if write_mode != 'local':
+    if write_mode in ('outside-write', 'caller-transaction'):
         assert len(reads) == 2
         assert 'topics_snapshot_advanced' not in details
         assert not guard_transitions
@@ -1225,6 +1229,9 @@ def test_archive_projection_retry_reuses_only_exact_local_topic_commit(store, mo
         assert len(reads) == 1
         assert details['topics_snapshot_advanced']
         assert guard_transitions[id(inputs[0])][0] is reads[0][0]
+    committed_during_records = write_mode == 'local-during-records'
+    assert lookups == [root] * (1 if committed_during_records else 2)
+    assert details.get('topics_skipped_stale_native_titles', False) == committed_during_records
 
 
 def test_archive_projection_includes_peer_commit_before_snapshot_without_retry(store, monkeypatch):

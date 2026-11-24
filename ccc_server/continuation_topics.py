@@ -584,6 +584,15 @@ def archive_projection_inputs(conn, *, max_rows, max_native_roots=32, diagnostic
                             if not fallback.get(sid) and not by_sid.get(sid, ('', '', '', 0))[2]}
             if len(native_roots) > max_native_roots:
                 return unavailable("native_root_limit")
+            # A local writer can commit while the bounded record scan is
+            # running. Skip native account reads for an already stale cut.
+            if native_roots and not attempt and _ARCHIVE_TOPIC_TRANSITION[0] == version:
+                with timing("revision"):
+                    current = _archive_read_version(conn)
+                if current != version:
+                    if diagnostics is not None:
+                        diagnostics["topics_skipped_stale_native_titles"] = True
+                    continue
             with timing("native_titles"):
                 native = _archive_native_titles(native_roots)
             with timing("revision"):
