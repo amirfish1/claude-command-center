@@ -1024,6 +1024,21 @@ def _store_busy_writer_inputs(conn, batch, read_version):
         _TOPIC_CACHE['indexed_origins'].update(batch.indexed_origins)
 
 
+@contextmanager
+def _topic_phase(phases, name):
+    if phases is None:
+        yield
+        return
+    wall, cpu = time.perf_counter(), time.thread_time()
+    try:
+        yield
+    finally:
+        phases[name] = {
+            'wall_ms': round((time.perf_counter() - wall) * 1000, 1),
+            'cpu_ms': round((time.thread_time() - cpu) * 1000, 1),
+        }
+
+
 def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnostics=None,
                   check_client=None):
     """Project topics without waiting behind the ship index's bulk writer.
@@ -1037,43 +1052,51 @@ def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnos
     rows = [row for row in rows if isinstance(row, dict)]
     if not rows:
         return
+    phases = {} if diagnostics is not None else None
+    if diagnostics is not None:
+        diagnostics['phases'] = phases
     rows_by_sid = None
-    if conn is None and not wait_for_writer and _sg._get_connection is _ORIG_GET_CONNECTION:
-        thread_conn = getattr(_sg._tls, 'conn', None)
-        if thread_conn is not None:
-            with _CACHE_LOCK:
-                initialized = _INITIALIZED_CONNS.get(id(thread_conn))
-            if initialized is None or initialized[0] is not thread_conn:
-                # A dashboard request may have opened the ship index before
-                # reading topics. Register that connection before checking the
-                # cache. Share its ID map with the resolver if new rows miss.
-                rows_by_sid = {sid: row for row in rows if (sid := _sid(row))}
-                conn = _connection(thread_conn)
-    if not wait_for_writer and _try_attach_from_cache(
-            rows, conn, names, diagnostics, rows_by_sid=rows_by_sid, check_client=check_client):
-        return
-    conn = _connection(conn)
-    names = _core._load_session_name_overrides() if names is None else names
-    read_version = (conn.total_changes, conn.execute('PRAGMA data_version').fetchone()[0])
+    with _topic_phase(phases, 'register_connection'):
+        if conn is None and not wait_for_writer and _sg._get_connection is _ORIG_GET_CONNECTION:
+            thread_conn = getattr(_sg._tls, 'conn', None)
+            if thread_conn is not None:
+                with _CACHE_LOCK:
+                    initialized = _INITIALIZED_CONNS.get(id(thread_conn))
+                if initialized is None or initialized[0] is not thread_conn:
+                    # The dashboard may already have opened the ship index.
+                    # Register it and share the ID map if new rows miss.
+                    rows_by_sid = {sid: row for row in rows if (sid := _sid(row))}
+                    conn = _connection(thread_conn)
+    with _topic_phase(phases, 'cache_lookup'):
+        if not wait_for_writer and _try_attach_from_cache(
+                rows, conn, names, diagnostics, rows_by_sid=rows_by_sid, check_client=check_client):
+            return
+    with _topic_phase(phases, 'open_and_version'):
+        conn = _connection(conn)
+        names = _core._load_session_name_overrides() if names is None else names
+        read_version = (conn.total_changes, conn.execute('PRAGMA data_version').fetchone()[0])
     miss_detail = (diagnostics.get('miss_detail') if diagnostics is not None
                    and diagnostics.get('reason') == 'new-session' else None)
-    batch = _Batch(conn, rows, names, reuse_cached=not wait_for_writer, rows_by_sid=rows_by_sid,
-                   miss_detail=miss_detail, check_client=check_client)
-    batch.capture_root_titles = wait_for_writer
+    with _topic_phase(phases, 'read_inputs'):
+        batch = _Batch(conn, rows, names, reuse_cached=not wait_for_writer, rows_by_sid=rows_by_sid,
+                       miss_detail=miss_detail, check_client=check_client)
+        batch.capture_root_titles = wait_for_writer
     # Native title reads may perform I/O. Never do them while holding the
     # shared index's writer lock, including on a cold archive projection.
-    _project_topics(batch, rows)
+    with _topic_phase(phases, 'resolve'):
+        _project_topics(batch, rows)
     # Cancellation is safe during reads and request-local projection. Once
     # persistence starts, finish the transaction and cache publication.
     if check_client is not None:
         check_client()
     if not batch.pending:
         if not wait_for_writer:
-            _store_cache(conn, batch, rows, miss_detail=miss_detail)
+            with _topic_phase(phases, 'publish_cache'):
+                _store_cache(conn, batch, rows, miss_detail=miss_detail)
         return
     flushed = False
     try:
-        with _transaction(conn, wait=wait_for_writer):
+        with _topic_phase(phases, 'persist'), _transaction(conn, wait=wait_for_writer):
             # Check after acquiring the writer lock: data_version catches peer
             # commits and total_changes catches writes on this connection.
             # An unchanged database needs neither another bulk read nor a
@@ -1096,9 +1119,11 @@ def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnos
             raise
         if miss_detail is not None:
             miss_detail['writer_busy'] = True
-        _store_busy_writer_inputs(conn, batch, read_version)
+        with _topic_phase(phases, 'publish_cache'):
+            _store_busy_writer_inputs(conn, batch, read_version)
     if flushed and not wait_for_writer:
-        _store_cache(conn, current, rows, miss_detail=miss_detail)
+        with _topic_phase(phases, 'publish_cache'):
+            _store_cache(conn, current, rows, miss_detail=miss_detail)
 
 
 def record_continuation(origin, sid, *, title='', conn=None):

@@ -27,6 +27,15 @@ def warm(rows):
     topics.attach_topics(rows, names={})
 
 
+def without_timings(detail):
+    phases = detail['phases']
+    assert {'register_connection', 'cache_lookup'} <= phases.keys()
+    for timing in phases.values():
+        assert set(timing) == {'wall_ms', 'cpu_ms'}
+        assert all(value >= 0 for value in timing.values())
+    return {key: value for key, value in detail.items() if key != 'phases'}
+
+
 def test_diagnostics_preserve_topic_projection_and_hide_values(store):
     rows = [{'session_id': 'private-root', 'display_name': 'PRIVATE TITLE'},
             {'session_id': 'private-child', 'continued_from_session_id': 'private-root'}]
@@ -35,7 +44,8 @@ def test_diagnostics_preserve_topic_projection_and_hide_values(store):
     detail = {}
     topics.attach_topics(rows, names={}, diagnostics=detail)
     assert rows == expected
-    assert detail == {'hit': True, 'reason': 'hit'}
+    assert set(detail['phases']) == {'register_connection', 'cache_lookup'}
+    assert without_timings(detail) == {'hit': True, 'reason': 'hit'}
     assert 'private' not in json.dumps(detail).lower()
 
 
@@ -47,7 +57,11 @@ def test_database_edit_rejects_cache_and_returns_current_title(store):
     store.commit()
     detail = {}
     topics.attach_topics(rows, names={}, diagnostics=detail)
-    assert detail == {'hit': False, 'reason': 'database'}
+    assert without_timings(detail) == {'hit': False, 'reason': 'database'}
+    assert set(detail['phases']) == {
+        'register_connection', 'cache_lookup', 'open_and_version', 'read_inputs',
+        'resolve', 'publish_cache',
+    }
     assert rows[1]['continuation_topic_title'] == 'AFTER'
 
 
@@ -56,7 +70,8 @@ def test_metadata_title_discovery_names_only_the_changed_dependency(store):
     server._conv_meta_cache['private-root.jsonl'] = {'custom_title': 'PRIVATE TITLE'}
     detail = {}
     topics.attach_topics([{'session_id': 'private-root'}], names={}, diagnostics=detail)
-    assert detail == {'hit': False, 'reason': 'title-discovered'}
+    assert without_timings(detail) == {'hit': False, 'reason': 'title-discovered'}
+    assert 'persist' in detail['phases']
     assert 'private' not in json.dumps(detail).lower()
     assert store.execute("SELECT topic_title FROM continuation_topics WHERE sid='private-root'").fetchone()[0] == 'PRIVATE TITLE'
 
@@ -67,7 +82,7 @@ def test_new_session_diagnostics_count_missing_rows_without_exposing_ids(store):
     topics.attach_topics([{'session_id': 'private-existing'}, {'session_id': 'private-new'},
                          {'session_id': 'private-new'}, {}],
                          names={}, diagnostics=detail)
-    assert detail == {
+    assert without_timings(detail) == {
         'hit': False, 'reason': 'new-session',
         'miss_detail': {'cached_entries': 1, 'missing_rows': 2,
                         'prefetch_rows': 1, 'omitted_rows': 0},
@@ -92,12 +107,12 @@ def test_small_cache_miss_keeps_established_entries_after_fallback_churn(store):
     detail = {}
     topics.attach_topics(rows, names={}, diagnostics=detail)
 
-    assert detail == {'hit': True, 'reason': 'hit'}
+    assert without_timings(detail) == {'hit': True, 'reason': 'hit'}
     assert rows == expected
 
     server._conv_meta_cache['untitled.jsonl'] = {'custom_title': 'FOUND: task'}
     topics.attach_topics(rows, names={}, diagnostics=detail)
-    assert detail == {'hit': False, 'reason': 'title-discovered'}
+    assert without_timings(detail) == {'hit': False, 'reason': 'title-discovered'}
     assert store.execute(
         "SELECT topic_title FROM continuation_topics WHERE sid='untitled'"
     ).fetchone()[0] == 'FOUND'
@@ -114,7 +129,7 @@ def test_empty_continuation_title_reuses_cache_until_root_changes(store, monkeyp
     expected = copy.deepcopy(rows)
     detail = {}
     topics.attach_topics(rows, names={}, diagnostics=detail)
-    assert detail == {'hit': True, 'reason': 'hit'}
+    assert without_timings(detail) == {'hit': True, 'reason': 'hit'}
     assert rows == expected
     assert rows[1]['continuation_topic_title'] == ''
     assert rows[1]['continuation_topic_root_session_id'] == root
@@ -151,7 +166,7 @@ def test_equivalent_persisted_edges_reuse_cache_without_sql(store, explicit_firs
     store.set_trace_callback(queries.append)
     detail = {}
     topics.attach_topics(second, names={}, diagnostics=detail)
-    assert detail == {'hit': True, 'reason': 'hit'}
+    assert without_timings(detail) == {'hit': True, 'reason': 'hit'}
     assert queries == []
     assert second[0]['continuation_topic_title'] == 'ROOT'
     assert second[0]['continuation_topic_root_session_id'] == 'root'
@@ -164,7 +179,7 @@ def test_different_explicit_edge_still_invalidates_cache(store):
     rows = [{'session_id': 'child', 'continued_from_session_id': 'other'}]
     detail = {}
     topics.attach_topics(rows, names={}, diagnostics=detail)
-    assert detail == {'hit': False, 'reason': 'origin-changed'}
+    assert without_timings(detail) == {'hit': False, 'reason': 'origin-changed'}
     assert rows[0]['continuation_topic_title'] == 'OTHER'
     assert rows[0]['continuation_topic_root_session_id'] == 'other'
 
@@ -176,5 +191,5 @@ def test_invalid_explicit_edge_does_not_poison_implicit_root(store):
     detail = {}
     rows = [{'session_id': 'root'}, {'session_id': 'child', 'continued_from_session_id': 'root'}]
     topics.attach_topics(rows, names={}, diagnostics=detail)
-    assert detail == {'hit': False, 'reason': 'origin-changed'}
+    assert without_timings(detail) == {'hit': False, 'reason': 'origin-changed'}
     assert rows[1]['continuation_topic_title'] == 'ROOT'

@@ -656,7 +656,7 @@ def test_topic_cache_reuses_projection_with_preopened_ship_index(store, monkeypa
         child = row('child')
         diagnostics = {}
         topics.attach_topics([child], names={}, diagnostics=diagnostics)
-        assert diagnostics == {'hit': True, 'reason': 'hit'}
+        assert diagnostics['hit'] and diagnostics['reason'] == 'hit'
         assert child['continuation_topic_title'] == 'ROOT'
         assert reader.total_changes == 0
 
@@ -798,7 +798,7 @@ def test_topic_cache_reuses_persisted_titles_across_metadata_churn(store, monkey
     items = [row('child', origin='root'), row('untitled')]
     detail = {}
     topics.attach_topics(items, names={}, diagnostics=detail)
-    assert detail == {'hit': True, 'reason': 'hit'}
+    assert detail['hit'] and detail['reason'] == 'hit'
     assert items[0]['continuation_topic_title'] == 'ROOT'
     assert 'continuation_topic_title' not in items[1]
 
