@@ -1,8 +1,10 @@
+import sqlite3
 from unittest.mock import Mock, call
 
 import pytest
 
 import server
+from ccc_server import codex
 
 
 SID = "00000000-0000-4000-8000-000000000001"
@@ -68,28 +70,66 @@ def test_disabled_goal_can_still_be_stopped(monkeypatch):
     assert rpc.call_count == 1
 
 
-def test_goal_changes_update_existing_sidebar_rows_via_delta(monkeypatch):
+def test_goal_changes_update_existing_sidebar_rows_via_delta(monkeypatch, tmp_path):
+    db = tmp_path / "goals.sqlite"
+    monkeypatch.setattr(server, "CODEX_GOALS_DB_CANDIDATES", (db,))
     row = {"session_id": SID, "engine": "codex", "goal": "Old snapshot", "goal_status": "paused"}
-    goals = {}
-    monkeypatch.setattr(server, "_codex_goals_snapshot", lambda: goals)
     monkeypatch.setattr(server, "_archive_list_title_overlays", lambda: {})
     cache_key = server._archive_response_cache_key()
     monkeypatch.setattr(server, "_archive_serve_cache", {
         cache_key: {"rows": [row], "ver": 2, "track_since": 1, "row_rev": {SID: 1}},
     })
     rows = server._archive_serve_cache[cache_key]["rows"]
-    before = server._archive_list_delta_state(cache_key, rows, "all", True)
-    assert not server._archive_list_replay_payload(rows, before)["conversations"][0]["goal"]
+    writer = sqlite3.connect(db)
+    try:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("CREATE TABLE thread_goals(thread_id TEXT PRIMARY KEY, objective TEXT, status TEXT)")
+        before = server._archive_list_delta_state(cache_key, rows, "all", True)
+        assert not server._archive_list_replay_payload(rows, before)["conversations"][0]["goal"]
+        main_stamp = db.stat().st_mtime_ns
 
-    goals[SID] = {"objective": "Check the report", "status": "active"}
-    active = server._archive_list_delta_state(cache_key, rows, "all", True)
-    payload = server._archive_list_delta_payload(active, before["token"], rows, window="all")
-    assert payload["conversations"][0]["goal"] == "Check the report"
-    assert payload["conversations"][0]["goal_status"] == "active"
+        writer.execute("INSERT INTO thread_goals VALUES (?, ?, ?)", (SID, "Check the report", "active"))
+        writer.commit()
+        active = server._archive_list_delta_state(cache_key, rows, "all", True)
+        payload = server._archive_list_delta_payload(active, before["token"], rows, window="all")
+        assert payload["conversations"][0]["goal"] == "Check the report"
+        assert payload["conversations"][0]["goal_status"] == "active"
 
-    goals.clear()
-    cleared = server._archive_list_delta_state(cache_key, rows, "all", True)
-    payload = server._archive_list_delta_payload(cleared, active["token"], rows, window="all")
-    assert not payload["conversations"][0]["goal"]
-    assert not payload["conversations"][0]["goal_status"]
-    assert row["goal"] == "Old snapshot"
+        with monkeypatch.context() as read_check:
+            connect = Mock(side_effect=AssertionError("Unchanged goals must not reopen SQLite"))
+            read_check.setattr(sqlite3, "connect", connect)
+            assert server._codex_goals_snapshot()[SID]["status"] == "active"
+            connect.assert_not_called()
+
+        writer.execute("DELETE FROM thread_goals")
+        writer.commit()
+        cleared = server._archive_list_delta_state(cache_key, rows, "all", True)
+        payload = server._archive_list_delta_payload(cleared, active["token"], rows, window="all")
+        assert not payload["conversations"][0]["goal"]
+        assert not payload["conversations"][0]["goal_status"]
+        assert row["goal"] == "Old snapshot"
+        assert db.stat().st_mtime_ns == main_stamp
+    finally:
+        writer.close()
+        server._invalidate_codex_goals_cache()
+
+
+def test_goal_snapshot_retries_after_a_temporary_read_failure(monkeypatch, tmp_path):
+    db = tmp_path / "goals.sqlite"
+    monkeypatch.setattr(server, "CODEX_GOALS_DB_CANDIDATES", (db,))
+    writer = sqlite3.connect(db)
+    try:
+        with writer:
+            writer.execute("CREATE TABLE thread_goals(thread_id TEXT PRIMARY KEY, objective TEXT)")
+            writer.execute("INSERT INTO thread_goals VALUES (?, ?)", (SID, "First objective"))
+        assert server._codex_goals_snapshot()[SID]["objective"] == "First objective"
+        with writer:
+            writer.execute("UPDATE thread_goals SET objective = ?", ("Revised objective",))
+
+        with monkeypatch.context() as transient:
+            transient.setattr(codex, "_sqlite_fetch_rows", Mock(side_effect=sqlite3.OperationalError("busy")))
+            assert server._codex_goals_snapshot()[SID]["objective"] == "First objective"
+        assert server._codex_goals_snapshot()[SID]["objective"] == "Revised objective"
+    finally:
+        writer.close()
+        server._invalidate_codex_goals_cache()

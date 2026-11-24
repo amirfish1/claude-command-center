@@ -9178,7 +9178,7 @@ _CODEX_THREADS_CACHE_LOCK = threading.Lock()
 
 
 def _codex_db_signature(db):
-    """(mtime_ns, size) of the state DB and its WAL, or None if unreadable.
+    """File identity and change stamps for a Codex DB and its WAL.
 
     Rows read from a Codex state DB cannot change unless one of these moves,
     so polled callers (stuck-summary, thread rows) reuse them instead of
@@ -9195,7 +9195,7 @@ def _codex_db_signature(db):
             return None
         except OSError:
             return None
-        sig.append((st.st_mtime_ns, st.st_size))
+        sig.append((st.st_dev, st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size))
     return tuple(sig)
 
 
@@ -9509,9 +9509,9 @@ def _codex_spawn_parent_by_child():
     return out
 
 
-_codex_goals_cache = {"key": None, "data": {}, "ts": 0.0}
+_codex_goals_cache = (None, {}, 0.0)
 _codex_goals_lock = threading.Lock()
-_CODEX_GOALS_TTL = 2.0
+_CODEX_GOALS_RECHECK_SEC = 60.0
 
 
 def _codex_goals_db_path():
@@ -9530,10 +9530,9 @@ def _codex_goals_db_path():
 
 
 def _invalidate_codex_goals_cache():
+    global _codex_goals_cache
     with _codex_goals_lock:
-        _codex_goals_cache["key"] = None
-        _codex_goals_cache["data"] = {}
-        _codex_goals_cache["ts"] = 0.0
+        _codex_goals_cache = (None, {}, 0.0)
 
 
 def _codex_goal_store_update(session_id, action, objective=None):
@@ -9672,63 +9671,66 @@ def _codex_goals_snapshot():
     """Map thread_id -> {objective, status, token_budget, tokens_used} for every
     codex thread that currently has a goal.
 
-    ONE batched read of ~/.codex/goals_1.sqlite, cached by (path, mtime, size)
-    with a short TTL so a full conversation build does at most one stat+read
-    regardless of row count (perf gate: never per-row). Returns {} when no
-    goals DB exists or it's empty — codex clears the row on `/goal clear`.
+    Reuse the snapshot while the database and WAL are unchanged. Recheck
+    periodically for filesystems with coarse timestamps. Codex clears the row
+    on `/goal clear`, so every changed snapshot replaces the previous one.
     """
+    global _codex_goals_cache
     now = time.monotonic()
     with _codex_goals_lock:
-        cached_ts = _codex_goals_cache["ts"]
-        cached_key = _codex_goals_cache["key"]
-        cached_data = _codex_goals_cache["data"]
+        previous = _codex_goals_cache
+    cached_key, cached_data, cached_ts = previous
     db = _codex_goals_db_path()
     if db is None:
         with _codex_goals_lock:
-            _codex_goals_cache["key"] = None
-            _codex_goals_cache["data"] = {}
-            _codex_goals_cache["ts"] = now
+            if _codex_goals_cache is previous and cached_key is not None:
+                _codex_goals_cache = (None, {}, 0.0)
         return {}
-    try:
-        st = db.stat()
-        key = (str(db), st.st_mtime, st.st_size)
-    except OSError:
-        return cached_data if cached_key else {}
-    if cached_key == key and (now - cached_ts) < _CODEX_GOALS_TTL:
+    signature = _codex_db_signature(db)
+    key = (db, signature)
+    if signature is not None and cached_key == key and now - cached_ts < _CODEX_GOALS_RECHECK_SEC:
         return cached_data
     data = {}
     try:
         con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=0.25)
-        con.row_factory = sqlite3.Row
     except sqlite3.Error:
         return cached_data if cached_key else {}
     try:
-        cols = {r["name"] for r in con.execute("PRAGMA table_info(thread_goals)").fetchall()}
+        cols = {r[1] for r in con.execute("PRAGMA table_info(thread_goals)").fetchall()}
         if "thread_id" in cols and "objective" in cols:
             sel = [c for c in ("thread_id", "objective", "status",
                                "token_budget", "tokens_used") if c in cols]
-            for r in con.execute(f"SELECT {', '.join(sel)} FROM thread_goals").fetchall():
+            sql = f"SELECT {', '.join(sel)} FROM thread_goals"
+            # The current store is small, but legacy stores can be larger.
+            # Keep the packed SQLite read bounded and preserve every row.
+            rows = _sqlite_fetch_rows(con, sql + " LIMIT 1025", (), sel)
+            if len(rows) > 1024:
+                rows = con.execute(sql)
+            for values in rows:
+                r = dict(zip(sel, values))
                 tid = r["thread_id"]
-                obj = (r["objective"] or "").strip() if "objective" in sel else ""
+                obj = (r["objective"] or "").strip()
                 if not tid or not obj:
                     continue
                 data[tid] = {
                     "objective": obj,
-                    "status": (r["status"] or "").strip() if "status" in sel else "",
-                    "token_budget": r["token_budget"] if "token_budget" in sel else None,
-                    "tokens_used": r["tokens_used"] if "tokens_used" in sel else None,
+                    "status": (r.get("status") or "").strip(),
+                    "token_budget": r.get("token_budget"),
+                    "tokens_used": r.get("tokens_used"),
                 }
     except sqlite3.Error:
-        data = cached_data if cached_key else {}
+        return cached_data if cached_key else {}
     finally:
         try:
             con.close()
         except sqlite3.Error:
             pass
-    with _codex_goals_lock:
-        _codex_goals_cache["key"] = key
-        _codex_goals_cache["data"] = data
-        _codex_goals_cache["ts"] = now
+    # Avoid publishing under a signature that changed while reading, or
+    # replacing a snapshot updated or invalidated by a concurrent caller.
+    if signature is not None and _codex_db_signature(db) == signature:
+        with _codex_goals_lock:
+            if _codex_goals_cache is previous:
+                _codex_goals_cache = (key, data, now)
     return data
 
 

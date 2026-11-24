@@ -1,0 +1,1 @@
+- Reduce sidebar load delays by reusing the Codex goal snapshot while its database and write-ahead log remain unchanged.
