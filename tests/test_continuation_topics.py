@@ -1124,6 +1124,61 @@ def test_archive_projection_retries_when_topic_sources_change_during_capture(sto
     assert version == topics._archive_read_version(store)
 
 
+@pytest.mark.parametrize("write_mode", ["local", "outside-write", "caller-transaction"])
+def test_archive_projection_retry_reuses_only_exact_local_topic_commit(store, monkeypatch, write_mode):
+    from contextlib import closing
+
+    store.execute('PRAGMA journal_mode=WAL')
+    root = '11111111-1111-4111-8111-111111111111'
+    topics.record_continuation(root, 'child', conn=store)
+    filename = store.execute('PRAGMA database_list').fetchone()[2]
+    monkeypatch.setattr(topics, '_ARCHIVE_TOPIC_CONNECTION', (None, store))
+    monkeypatch.setattr(topics, '_ARCHIVE_TOPIC_SNAPSHOT', (None, None, None))
+    monkeypatch.setattr(topics, '_ARCHIVE_TOPIC_TRANSITION', (None, None, {}))
+    reads = []
+    fetch = topics._archive_topic_records
+
+    def record_read(conn, max_rows, **kwargs):
+        result = fetch(conn, max_rows, **kwargs)
+        reads.append(result)
+        return result
+
+    monkeypatch.setattr(topics, '_archive_topic_records', record_read)
+    with closing(sqlite3.connect(filename)) as writer:
+        lookups = []
+
+        def native_title(sid):
+            lookups.append(sid)
+            if len(lookups) == 1:
+                if write_mode == 'caller-transaction':
+                    writer.execute('BEGIN IMMEDIATE')
+                topics.attach_topics([row('new', 'New subject')], conn=writer, names={})
+                if write_mode == 'caller-transaction':
+                    writer.commit()
+                if write_mode == 'outside-write':
+                    with store:
+                        store.execute("INSERT INTO session_meta VALUES ('outside-child', ?)", (root,))
+            return 'Native title'
+
+        monkeypatch.setattr(topics, '_native_title', native_title)
+        details = {}
+        inputs, edges, version = topics.archive_projection_inputs(store, max_rows=20, diagnostics=details)
+
+    expected_records, expected_origins, _, expected_edges = fetch(store, 20)
+    assert list(inputs[0].items()) == list(expected_records.items())
+    assert inputs[1] == expected_origins
+    assert edges == expected_edges
+    assert version == topics._archive_read_version(store)
+    assert 'new' not in reads[0][0]
+    assert details['topics_retried']
+    if write_mode != 'local':
+        assert len(reads) == 2
+        assert 'topics_snapshot_advanced' not in details
+    else:
+        assert len(reads) == 1
+        assert details['topics_snapshot_advanced']
+
+
 def test_archive_projection_includes_peer_commit_before_snapshot_without_retry(store, monkeypatch):
     from contextlib import closing
 

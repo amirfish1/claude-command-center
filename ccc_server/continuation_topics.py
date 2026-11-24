@@ -33,6 +33,8 @@ _REVISION_CACHE: dict[str, object] = {'token': None, 'value': 0}
 _PRECISE_TOKENS = OrderedDict()
 _ARCHIVE_TOPIC_SNAPSHOT = (None, None, None)
 _ARCHIVE_TOPIC_CONNECTION = (None, None)
+_ARCHIVE_TOPIC_TRANSITION = (None, None, {})
+_ARCHIVE_TOPIC_TRANSITION_LIMIT = 32
 _NATIVE_TITLE_STATE = {'data': None, 'generation': 0}
 _SCOPED_TOPIC_SPLIT_MIN = 2000
 _SCOPED_TOPIC_ORIGIN_LIMIT = 4096
@@ -482,6 +484,22 @@ def _project_archive_metadata_titles(items):
     return {sid: title for sid, title in titles.items() if title}
 
 
+def _advance_archive_topic_snapshot(snapshot, previous, current):
+    before, after, updates = _ARCHIVE_TOPIC_TRANSITION
+    if (previous, current) != (before, after):
+        return None
+    records, indexed, roots, edges = snapshot
+    if None in records:
+        return None   # A legacy NULL key can hide duplicate stored rows.
+    # Standalone writes preserve the edge list and native root membership.
+    # Verify that none of them replaced a record that supplied an edge.
+    for sid in updates:
+        old = records.get(sid)
+        if old is not None and (old[0] != '' or old[1] not in ('', sid)):
+            return None
+    return MappingProxyType(records | updates), indexed, roots, edges
+
+
 def archive_projection_inputs(conn, *, max_rows, max_native_roots=32, diagnostics=None):
     """Read topic records and external titles needed to guard an archive layer."""
     global _ARCHIVE_TOPIC_SNAPSHOT
@@ -512,29 +530,37 @@ def archive_projection_inputs(conn, *, max_rows, max_native_roots=32, diagnostic
     try:
         with timing("fallback_titles"):
             fallback = _archive_fallback_titles()
+        # A replaced database can leave an older reader on its previous inode.
+        # Reuse only on the connection that read the cut.
+        owner, version, snapshot = _ARCHIVE_TOPIC_SNAPSHOT
         for attempt in range(2):
-            # A replaced database can leave an older reader on its previous
-            # inode. Reuse only on the connection that read the cut.
-            owner, version, snapshot = _ARCHIVE_TOPIC_SNAPSHOT
             with timing("revision"):
-                reused = owner is conn and _archive_read_version(conn) == version
+                current = _archive_read_version(conn) if owner is conn else None
+                reused = owner is conn and current == version
+            advanced = None
             if not reused:
-                conn.execute("BEGIN")
-                try:
-                    # The revision SELECT establishes the same SQLite
-                    # snapshot that supplies records. A commit before it
-                    # is in the cut and need not force a second bulk read.
-                    with timing("revision"):
-                        version = _archive_read_version(conn, pinned=True)
-                    with timing("records"):
-                        if diagnostics is not None:
-                            diagnostics["topics_records_tid"] = threading.get_native_id()
-                        snapshot = _archive_topic_records(
-                            conn, max_rows,
-                            timing=functools.partial(timing, group="topics_records_phases"),
-                        )
-                finally:
-                    conn.rollback()
+                if owner is conn and snapshot is not None:
+                    with timing("transition"):
+                        advanced = _advance_archive_topic_snapshot(snapshot, version, current)
+                if advanced is not None:
+                    snapshot, version = advanced, current
+                else:
+                    conn.execute("BEGIN")
+                    try:
+                        # The revision SELECT establishes the same SQLite
+                        # snapshot that supplies records.
+                        with timing("revision"):
+                            version = _archive_read_version(conn, pinned=True)
+                        with timing("records"):
+                            if diagnostics is not None:
+                                diagnostics["topics_records_tid"] = threading.get_native_id()
+                            snapshot = _archive_topic_records(
+                                conn, max_rows,
+                                timing=functools.partial(timing, group="topics_records_phases"),
+                            )
+                    finally:
+                        conn.rollback()
+                    owner = conn
             if snapshot is None:
                 return unavailable("row_limit")
             by_sid, indexed, linked_roots, edges = snapshot
@@ -552,6 +578,8 @@ def archive_projection_inputs(conn, *, max_rows, max_native_roots=32, diagnostic
                 _ARCHIVE_TOPIC_SNAPSHOT = conn, version, snapshot
                 if diagnostics is not None:
                     diagnostics["topics_snapshot_reused"] = reused
+                    if advanced is not None:
+                        diagnostics["topics_snapshot_advanced"] = True
                     if attempt:
                         diagnostics["topics_retried"] = True
                 return (by_sid, indexed, fallback, native), edges, version
@@ -1117,6 +1145,25 @@ def _topic_phase(phases, name):
         }
 
 
+def _flush_topics_with_archive_transition(batch, track):
+    """Capture the revision boundaries of one small standalone writer batch."""
+    pending = batch.pending
+    if not (track and 0 < len(pending) <= _ARCHIVE_TOPIC_TRANSITION_LIMIT and
+            all(value[:2] == ('', sid) and type(value[2]) is str and type(value[3]) is int
+                for sid, value in pending.items())):
+        batch.flush()
+        return None
+
+    conn = batch.conn
+    before = _archive_read_version(conn, pinned=True)
+    batch.flush()
+    after = _archive_read_version(conn, pinned=True)
+    if (before[0] == after[0] == 'topics-v1' and before[:3] == after[:3]
+            and before[4] == after[4] and after[3] - before[3] == len(pending)):
+        return before, after, pending
+    return None
+
+
 def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnostics=None,
                   check_client=None):
     """Project topics without waiting behind the ship index's bulk writer.
@@ -1125,6 +1172,7 @@ def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnos
     titles available and persistence is retried on the next load. Explicit
     spawn snapshots/edges wait for durable storage instead.
     """
+    global _ARCHIVE_TOPIC_TRANSITION
     if not rows:
         return
     rows = [row for row in rows if isinstance(row, dict)]
@@ -1173,6 +1221,9 @@ def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnos
                 _store_cache(conn, batch, rows, miss_detail=miss_detail, read_token=batch.read_token)
         return
     flushed = False
+    # A caller's open transaction can still be rolled back later.
+    track_archive = (not wait_for_writer and not conn.in_transaction
+                     and _ARCHIVE_TOPIC_CONNECTION[1] is not None)
     try:
         with _topic_phase(phases, 'persist'), _transaction(conn, wait=wait_for_writer):
             # Check after acquiring the writer lock: data_version catches peer
@@ -1190,7 +1241,7 @@ def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnos
                 current.titles = batch.titles
                 current.cached_titles = batch.cached_titles
                 _project_topics(current, rows)
-            current.flush()
+            transition = _flush_topics_with_archive_transition(current, track_archive)
             flushed = True
     except sqlite3.OperationalError as exc:
         if wait_for_writer or getattr(exc, 'sqlite_errorcode', None) != sqlite3.SQLITE_BUSY:
@@ -1199,6 +1250,9 @@ def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnos
             miss_detail['writer_busy'] = True
         with _topic_phase(phases, 'publish_cache'):
             _store_busy_writer_inputs(conn, batch, read_version)
+    else:
+        if transition is not None:
+            _ARCHIVE_TOPIC_TRANSITION = transition
     if flushed and not wait_for_writer:
         with _topic_phase(phases, 'publish_cache'):
             _store_cache(conn, current, rows, miss_detail=miss_detail)
