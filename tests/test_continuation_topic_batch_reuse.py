@@ -113,6 +113,56 @@ def test_new_session_prefetches_only_unknown_database_records(store, monkeypatch
                          ('new',)).fetchone() == ('old-599',)
 
 
+def test_scoped_projection_batches_unloaded_topic_roots(store, monkeypatch):
+    store.execute('CREATE TABLE session_meta (sid TEXT PRIMARY KEY, continuation_origin TEXT)')
+    store.execute('INSERT INTO session_meta VALUES (?, ?)', ('indexed', 'other'))
+    store.executemany('INSERT INTO continuation_topics VALUES (?, ?, ?, ?, ?)', [
+        ('persisted', 'intermediate', 'root', 'Original', 0),
+        ('other', '', 'other', 'Other title', 0),
+    ])
+    store.commit()
+    fetch = topics._sqlite_fetch_rows
+    reads = []
+
+    def observed(conn, sql, params, columns):
+        if 'WITH wanted(sid)' in sql:
+            reads.append(tuple(params))
+        return fetch(conn, sql, params, columns)
+
+    monkeypatch.setattr(topics, '_sqlite_fetch_rows', observed)
+    rows = [
+        {'session_id': 'persisted'},
+        {'session_id': 'indexed'},
+        {'session_id': 'explicit', 'continued_from_session_id': 'other'},
+    ]
+    topics.attach_topics(rows, conn=store, names={})
+    assert reads == [('persisted', 'indexed', 'explicit'), ('intermediate', 'root', 'other')]
+    assert [row['continuation_topic_title'] for row in rows] == [
+        'Original', 'Other title', 'Other title',
+    ]
+
+
+def test_read_only_projection_cannot_publish_under_a_newer_topic_revision(store, monkeypatch):
+    topics.record_continuation('root', 'child', conn=store)
+    project = topics._project_topics
+
+    def project_then_rename(batch, rows):
+        project(batch, rows)
+        assert not batch.pending
+        with closing(sqlite3.connect(store.execute('PRAGMA database_list').fetchone()[2])) as peer:
+            peer.execute("UPDATE continuation_topics SET topic_title='Corrected' WHERE sid='root'")
+            peer.commit()
+        monkeypatch.setattr(topics, '_project_topics', project)
+
+    monkeypatch.setattr(topics, '_project_topics', project_then_rename)
+    previous = [{'session_id': 'child'}]
+    topics.attach_topics(previous, conn=store, names={})
+    assert previous[0]['continuation_topic_title'] == 'Original'
+    current = [{'session_id': 'child'}]
+    topics.attach_topics(current, conn=store, names={})
+    assert current[0]['continuation_topic_title'] == 'Corrected'
+
+
 @pytest.mark.parametrize('variable_limit', [None, 128])
 def test_disconnected_projection_stops_after_first_topic_read(store, monkeypatch, variable_limit):
     class Disconnected(Exception):

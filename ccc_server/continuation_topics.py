@@ -588,6 +588,25 @@ class _Batch:
         if miss_detail is not None:
             miss_detail['prefetch_rows'] = miss_detail.get('prefetch_rows', 0) + len(missing)
         self._prefetch(missing)
+        if reuse_cached:
+            self._prefetch_related()
+
+    def _prefetch_related(self):
+        # The scoped batch can omit ancestors and saved roots. Fetch their
+        # topic and index records together before the resolver encounters
+        # them one at a time. Deeper or changed chains use its normal lookup.
+        related = {}
+        for sid, row in self.rows.items():
+            origin, root, _, _ = self.records[sid]
+            explicit = _origin(row)
+            parent = explicit or origin or self.indexed_origins.get(sid)
+            if parent and parent not in self.records:
+                related[parent] = None
+            if (origin and root and root != sid and (not explicit or explicit == origin)
+                    and root not in self.records):
+                related[root] = None
+        if related:
+            self._prefetch(list(related))
 
     def _prefetch(self, sids):
         # Read both indexed inputs in one bounded result. Separate reads of
@@ -957,9 +976,13 @@ def _try_attach_from_cache(rows, conn, names, diagnostics=None, *, rows_by_sid=N
     return True
 
 
-def _store_cache(conn, batch, rows, *, miss_detail=None):
+def _store_cache(conn, batch, rows, *, miss_detail=None, read_token=None):
     token = _db_state_token(conn)
     if token is None:
+        return
+    # A peer may change a prefetched ancestor before projection finishes.
+    # Publish read-only results only under the topic revision they read.
+    if read_token is not None and read_token[:-1] != token[:-1]:
         return
     with _CACHE_LOCK:
         previous = _TOPIC_CACHE.get('token')
@@ -1092,7 +1115,7 @@ def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnos
     if not batch.pending:
         if not wait_for_writer:
             with _topic_phase(phases, 'publish_cache'):
-                _store_cache(conn, batch, rows, miss_detail=miss_detail)
+                _store_cache(conn, batch, rows, miss_detail=miss_detail, read_token=batch.read_token)
         return
     flushed = False
     try:
