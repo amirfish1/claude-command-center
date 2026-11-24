@@ -1266,6 +1266,42 @@ def test_commit_owner_edge_lookup_uses_partial_index(tmp_path):
     conn.close()
 
 
+def test_full_sync_covers_archive_origins_without_changing_rows(tmp_path, monkeypatch):
+    from ccc_server import continuation_topics
+
+    conn = ship_graph._connect(tmp_path / "sg.sqlite")
+    try:
+        ship_graph._init_db(conn)
+        continuation_topics._connection(conn)
+        with conn:
+            conn.executemany(
+                "INSERT INTO session_meta (sid, continuation_origin) VALUES (?, ?)",
+                [("first", "z"), ("empty", ""), ("second", "a"),
+                 ("missing", None), ("legacy", b"root")],
+            )
+        expected = continuation_topics._archive_topic_records(conn, 3)
+        assert expected[3] == (("first", "z"), ("second", "a"), ("legacy", b"root"))
+
+        monkeypatch.setattr(ship_graph, "_last_sync_ts", 0.0)
+        monkeypatch.setattr(ship_graph, "discover_repo_roots", lambda: [])
+        monkeypatch.setattr(ship_graph, "_sync_git_repos", lambda *_args: None)
+        monkeypatch.setattr(ship_graph, "_sync_watchtower", lambda *_args: None)
+        monkeypatch.setattr(ship_graph, "_sync_transcripts", lambda *_args: None)
+        ship_graph._sync_all(conn, force=True)
+        assert not conn.in_transaction
+
+        queries = []
+        conn.set_trace_callback(queries.append)
+        assert continuation_topics._archive_topic_records(conn, 3) == expected
+        assert continuation_topics._archive_topic_records(conn, 2) is None
+        conn.set_trace_callback(None)
+        query = next(sql for sql in queries if "session_meta" in sql)
+        plan = " ".join(step[-1] for step in conn.execute("EXPLAIN QUERY PLAN " + query))
+        assert "COVERING INDEX idx_session_meta_archive_origins" in plan
+    finally:
+        conn.close()
+
+
 def test_watchtower_sync_replaces_only_resolution_edges(mock_graph_env):
     with sqlite3.connect(mock_graph_env["db_path"]) as conn:
         ship_graph._init_db(conn)

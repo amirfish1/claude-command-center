@@ -1388,6 +1388,15 @@ def _sync_all(conn: sqlite3.Connection, force: bool = False) -> None:
             return
 
         _init_db(conn)
+        if force:
+            # The archive reads both columns for nonempty origins. Keep those
+            # sparse entries together so cold reads avoid the wide base rows.
+            # Build the index during full sync, away from ordinary reads.
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_session_meta_archive_origins "
+                "ON session_meta(continuation_origin, sid) "
+                "WHERE continuation_origin>'' OR continuation_origin<''"
+            )
         days = _get_days()
 
         # MEMO-FIX-21: one-time re-parse so session_files covers transcripts
