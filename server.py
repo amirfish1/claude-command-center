@@ -19373,8 +19373,8 @@ _ARCHIVE_HISTORY_HOT_SNAPSHOT_BYTES = 16 << 20
 _ARCHIVE_HISTORY_PROCESS_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ccc-archive-processes")
 
 
-def _archive_history_hot_snapshot(key, captured=None):
-    """Pin a read-only cut of the published hot rows and their body tokens."""
+def _archive_history_hot_snapshot(key, captured=None, *, tokens_only=False):
+    """Pin the published hot tokens and, when needed, a copy of their rows."""
     from ccc_server.archive_history_layer import hot_row_token
 
     with _archive_serve_lock:
@@ -19391,6 +19391,18 @@ def _archive_history_hot_snapshot(key, captured=None):
             return None
         memo = entry.get("history_hot_tokens")
         tokens_by_row = memo[2] if memo is not None and memo[0] == version and memo[1] is rows else {}
+        if tokens_only and len(tokens_by_row) == len(rows):
+            # Seven-day projection already owns the source rows. A fully
+            # published proof needs no shallow copy of their bodies.
+            try:
+                tokens = {_archive_row_sid(row): tokens_by_row[id(row)] for row in rows}
+            except KeyError:
+                pass
+            else:
+                if len(tokens) != len(rows) or "" in tokens:
+                    return None
+                if None not in tokens.values():
+                    return None, tokens
         snapshot = [(id(row), dict(row), tokens_by_row.get(id(row))) for row in rows]
 
     by_sid = {}
@@ -19822,7 +19834,7 @@ def _archive_seven_day_cut(key, captured, rows, cached, reader, now, phases, del
     from ccc_server import archive_history_layer as layer, continuation_topics
 
     with _archive_history_timing(phases, "hot"):
-        snapshot = _archive_history_hot_snapshot(key, captured)
+        snapshot = _archive_history_hot_snapshot(key, captured, tokens_only=True)
     if snapshot is None:
         return None
     _, base_tokens = snapshot

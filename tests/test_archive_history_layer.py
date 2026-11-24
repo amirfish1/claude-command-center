@@ -463,6 +463,27 @@ def test_history_hot_cut_reuses_capture_and_invalidates_on_lifecycle_change(monk
     assert updated[1]["stable"] != cut[1]["stable"]
 
 
+def test_scoped_hot_cut_uses_published_tokens_before_copying_rows(monkeypatch):
+    from ccc_server import archive_history_layer as layer
+
+    row = {"session_id": "stable", "archived": False}
+    rows = [row]
+    token = layer.hot_row_token(row)
+    entry = {"rows": rows, "ver": 1, "history_hot_tokens": (1, rows, {id(row): token})}
+    monkeypatch.setattr(server, "_archive_serve_cache", {"base": entry})
+
+    assert server._archive_history_hot_snapshot("base", (rows, 1), tokens_only=True) == (
+        None, {"stable": token})
+    assert "history_hot_snapshot" not in entry
+    assert server._archive_history_hot_snapshot("base", (rows, 0), tokens_only=True) is None
+
+    entry["history_hot_tokens"] = (1, rows, {id(row): None})
+    assert server._archive_history_hot_snapshot("base", (rows, 1), tokens_only=True)[1] == {
+        "stable": token}
+    assert server._archive_history_hot_snapshot("base")[0] == {"stable": row}
+    assert server._archive_history_hot_snapshot("base")[0]["stable"] is not row
+
+
 @pytest.mark.parametrize("targeted", [False, True])
 def test_lifecycle_restamp_rehashes_only_affected_hot_rows(monkeypatch, targeted):
     rows = [
