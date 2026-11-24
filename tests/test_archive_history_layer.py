@@ -91,6 +91,55 @@ def test_seven_day_compatibility_uses_the_refresh_encoding():
     assert server._archive_seven_day_compatible(basis, changed)
 
 
+@pytest.mark.parametrize("retain_persisted", [False, True])
+def test_refresh_publisher_receives_accepted_row_encoding(tmp_path, monkeypatch, retain_persisted):
+    import threading
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", tmp_path / "archive.json")
+    monkeypatch.setattr(server, "_ARCHIVE_HISTORY_PUBLISH_LOCK", threading.Lock())
+    monkeypatch.setattr(server, "_ARCHIVE_SEVEN_DAY_PUBLISH_LAST_START", None)
+    monkeypatch.setattr(server, "_archive_refresh_result_dir", lambda: tmp_path)
+    monkeypatch.setattr(server, "_archive_serve_cache", {})
+    monkeypatch.setattr(server, "_archive_serve_version", 0)
+    monkeypatch.setattr(server, "record_diag", lambda *args: None)
+    key = server._archive_response_cache_key()
+    generation = server._archive_serve_generation
+    incoming = [{"session_id": "kept", "nested": {"z": 1, "a": 2}},
+                {"session_id": "changed", "modified": 2}]
+    if retain_persisted:
+        previous = [{"session_id": "kept", "nested": {"a": 2, "z": 1}},
+                    {"session_id": "changed", "modified": 1}]
+        assert server._archive_serve_cache_store(key, previous, generation, hot_selected=True)
+    refresh = tmp_path / "refresh.json"
+    server._write_archive_refresh_result(
+        refresh, {"ok": True, "key": key, "rows": incoming}, basis=set())
+    result, _ = server._read_archive_refresh_result(refresh)
+    accepted = result["rows"]
+    assert server._archive_serve_cache_store(
+        key, accepted, generation, transfer_rows=result["transfer_rows"], hot_selected=True)
+    observed = []
+
+    def publish(args, **kwargs):
+        assert args[-3:-1] == ["--seven-day", "--refresh"]
+        source, _ = server._read_archive_refresh_result(args[-1])
+        observed.append((args[-1], source["key"], source["rows"]))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(server.subprocess, "run", publish)
+    server._archive_history_start_publication(
+        refresh_source=refresh, refresh_snapshot=(accepted, result["transfer_rows"]), seven_day=True)
+    # The publisher releases its lock only after cleaning up both handoffs.
+    with server._ARCHIVE_HISTORY_PUBLISH_LOCK:
+        assert len(observed) == 1
+    selected, observed_key, rows = observed[0]
+    assert observed_key == key
+    assert rows == accepted
+    assert list(rows[0]["nested"]) == (["a", "z"] if retain_persisted else ["z", "a"])
+    assert (selected == f"{refresh}.sidebar") is not retain_persisted
+    assert list(tmp_path.iterdir()) == [refresh]
+
+
 def test_seven_day_basis_preserves_current_rows_order_and_token(tmp_path, monkeypatch):
     import http.client
     import threading

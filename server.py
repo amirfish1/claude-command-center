@@ -20054,7 +20054,8 @@ def _archive_history_publisher_main(rebase_source=None, *, refresh_source=None, 
 _ARCHIVE_SEVEN_DAY_PUBLISH_LAST_START = None
 
 
-def _archive_history_start_publication(*, rebase=None, refresh_source=None, seven_day=False):
+def _archive_history_start_publication(*, rebase=None, refresh_source=None, refresh_snapshot=None,
+                                       seven_day=False):
     from ccc_server import archive_history_layer as layer, background_work
 
     global _ARCHIVE_HISTORY_PUBLISH_LAST_START, _ARCHIVE_SEVEN_DAY_PUBLISH_LAST_START
@@ -20106,11 +20107,26 @@ def _archive_history_start_publication(*, rebase=None, refresh_source=None, seve
         previous = _archive_history_artifact(target)
         try:
             with background_work.slot(), contextlib.ExitStack() as stack:
+                source = refresh_link
+                if refresh_snapshot is not None:
+                    rows, transfer = refresh_snapshot
+                    transferred_ids = {id(row) for row in transfer.values()}
+                    if any(id(row) not in transferred_ids for row in rows):
+                        # An accepted refresh can retain equal persisted rows.
+                        # Their nested field order can differ from the worker
+                        # transfer, so publish the exact retained row objects.
+                        snapshot_file = stack.enter_context(tempfile.NamedTemporaryFile(
+                            dir=_archive_refresh_result_dir(), prefix=_ARCHIVE_REFRESH_RESULT_PREFIX,
+                            suffix=".json.sidebar"))
+                        source = snapshot_file.name
+                        _write_archive_refresh_result(source, {
+                            "ok": True, "key": _archive_response_cache_key(), "rows": rows,
+                        })
                 args = [*_server_launch_argv(), "--archive-sidebar-basis-worker"]
                 if seven_day:
                     args.append("--seven-day")
-                    if refresh_link is not None:
-                        args.extend(("--refresh", str(refresh_link)))
+                    if source is not None:
+                        args.extend(("--refresh", str(source)))
                 elif rebase is not None:
                     key, basis, current, tail = rebase
                     folder = stack.enter_context(tempfile.TemporaryDirectory(
@@ -20120,8 +20136,8 @@ def _archive_history_start_publication(*, rebase=None, refresh_source=None, seve
                     if not layer.write_basis(seed_path, _archive_history_scope(key) + ":rebase", seed):
                         return
                     args.append(str(seed_path))
-                elif refresh_link is not None:
-                    args.extend(("--refresh", str(refresh_link)))
+                elif source is not None:
+                    args.extend(("--refresh", str(source)))
                 result = subprocess.run(
                     args,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -20133,6 +20149,8 @@ def _archive_history_start_publication(*, rebase=None, refresh_source=None, seve
                 "stage": stage,
                 "published": published,
             }
+            if refresh_snapshot is not None:
+                diagnostics["retained_rows"] = source is not refresh_link
             if published and seven_day:
                 with _archive_history_timing(diagnostics, "warm_basis"):
                     diagnostics["basis_cached"] = _archive_seven_day_load_basis(
@@ -22910,12 +22928,11 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
                 from ccc_server.archive_history_layer import basis_path as sidebar_basis_path
 
                 # The first complete transfer is self-contained. Hand off the
-                # file before cleanup so the publisher uses the actual refresh
-                # cut without copying or reserializing hot rows in the daemon.
-                # Use the transfer for both scopes. SQLite sorts nested keys
-                # while this cut retains parser order.
+                # file before cleanup and keep the accepted row references in
+                # case the diff retained rows from the previous snapshot.
                 _archive_history_start_publication(
                     refresh_source=output_name,
+                    refresh_snapshot=(rows, result.get("transfer_rows") or {}),
                     seven_day=not sidebar_basis_path(_ARCHIVE_RESPONSE_CACHE_FILE).is_file())
         _rt3 = time.perf_counter()
         _rphase["store_ms"] = round((_rt3 - _rt2) * 1000.0, 1)
