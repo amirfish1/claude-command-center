@@ -19932,19 +19932,29 @@ def _archive_seven_day_response(key, rows, cached, delta, encodings, phases, che
         if not compatible:
             phases["fallback"] = "incompatible_hot_rows"
             return None
-        now = time.time()
-        cut = _archive_seven_day_cut(
-            key, (delta["base"], delta["ver"]), rows, cached,
-            continuation_topics.archive_connection(), now, phases, delta, selection_version)
-        if cut is None:
-            return None
-        if check_client is not None:
-            check_client()
-        projection = phases.setdefault("projection", {})
-        result = _archive_history_project_cut(
-            cut, basis, phases=projection, check_client=check_client,
-            max_rows=_ARCHIVE_HISTORY_COLD_REBASE_MAX_ROWS,
-            bounded_metadata=_archive_seven_day_metadata(rows, now))
+        for attempt in range(2):
+            now = time.time()
+            cut = _archive_seven_day_cut(
+                key, (delta["base"], delta["ver"]), rows, cached,
+                continuation_topics.archive_connection(), now, phases, delta, selection_version)
+            if cut is None:
+                return None
+            if check_client is not None:
+                check_client()
+            projection = phases["projection"] = {}
+            try:
+                result = _archive_history_project_cut(
+                    cut, basis, phases=projection, check_client=check_client,
+                    max_rows=_ARCHIVE_HISTORY_COLD_REBASE_MAX_ROWS,
+                    bounded_metadata=_archive_seven_day_metadata(rows, now))
+                break
+            except continuation_topics.StaleArchiveTopicCut:
+                if (attempt or _session_graph.projection_revision() != delta["graph_revision"]
+                        or continuation_topics.revision() != delta["topic_revision"]):
+                    raise
+                # The snapshot changed before any topic writes. Rebuild the
+                # exact cut once while this response's validator is still current.
+                phases["stale_topic_projection"] = projection
         if result is None:
             phases["needs_basis"] = "scope_rejected" in projection or projection.get("expanded_scope_rejected")
             return None

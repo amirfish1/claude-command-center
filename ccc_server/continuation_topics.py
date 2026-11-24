@@ -354,6 +354,10 @@ class UnavailableArchiveProjection(Exception):
     """A title source or topic mutation needs the ordinary full reader."""
 
 
+class StaleArchiveTopicCut(UnavailableArchiveProjection):
+    """A tracked topic input changed before the projection could be saved."""
+
+
 def _archive_read_version(conn, *, pinned=False):
     token = _db_state_token(conn, pinned=pinned)
     if token is not None and token[0] == "topics-v1":
@@ -911,7 +915,7 @@ def attach_archive_topics(rows, *, conn, names, inputs, version, check_client=No
     try:
         with _transaction(conn, wait=False):
             if _archive_read_version(conn) != version:
-                raise UnavailableArchiveProjection()
+                raise StaleArchiveTopicCut()
             batch.flush()
     except sqlite3.OperationalError as exc:
         if getattr(exc, 'sqlite_errorcode', None) != sqlite3.SQLITE_BUSY:

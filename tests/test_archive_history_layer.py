@@ -139,7 +139,19 @@ def test_seven_day_basis_preserves_current_rows_order_and_token(tmp_path, monkey
     assert server._archive_serve_cache_store(scope, updated, generation, hot_selected=True)
     updated = server._archive_serve_cache[scope]["rows"]
     delta = server._archive_list_delta_state(scope, updated, "7d", True)
-    body, encoding, etag = server._archive_seven_day_response(scope, updated, True, delta, ("gzip",), {})
+    projections = []
+
+    def attach_archive_topics(rows, **kwargs):
+        projections.append(rows)
+        if len(projections) == 1:
+            raise continuation_topics.StaleArchiveTopicCut()
+
+    monkeypatch.setattr(continuation_topics, "attach_archive_topics", attach_archive_topics)
+    phases = {}
+    body, encoding, etag = server._archive_seven_day_response(
+        scope, updated, True, delta, ("gzip",), phases)
+    assert len(projections) == 2
+    assert "stale_topic_projection" in phases
     assert encoding == "gzip"
     assert etag == '"d-' + delta["token"] + '"'
     document = json.loads(gzip.decompress(body))

@@ -918,6 +918,28 @@ def test_archive_projection_inputs_capture_topic_and_native_title_sources(store,
     ).fetchone() == ('External',)
 
 
+def test_archive_projection_cannot_persist_after_indexed_origin_changes(store):
+    from contextlib import closing
+
+    topics._connection(store)
+    inputs, _, version = topics.archive_projection_inputs(store, max_rows=20)
+    filename = store.execute("PRAGMA database_list").fetchone()[2]
+    with closing(sqlite3.connect(filename)) as peer, peer:
+        peer.execute("INSERT INTO session_meta VALUES ('child', 'root')")
+
+    with pytest.raises(topics.StaleArchiveTopicCut):
+        topics.attach_archive_topics([row('child')], conn=store, names={},
+                                    inputs=inputs, version=version)
+
+    assert store.execute("SELECT * FROM continuation_topics").fetchall() == []
+    inputs, _, version = topics.archive_projection_inputs(store, max_rows=20)
+    topics.attach_archive_topics([row('child')], conn=store, names={},
+                                inputs=inputs, version=version)
+    assert store.execute(
+        "SELECT origin, root_sid FROM continuation_topics WHERE sid='child'"
+    ).fetchone() == ('root', 'root')
+
+
 @pytest.mark.parametrize("title, named", [
     ('Normal "title"\n with unicode é', -9223372036854775808),
     ("Embedded\0separator", 1),
