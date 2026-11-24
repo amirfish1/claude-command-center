@@ -47,26 +47,38 @@ def test_private_page_reply_matches_canonical_http_and_keeps_no_store(tmp_path, 
     monkeypatch.setattr(server,'USER_APPS_DIR',tmp_path)
     monkeypatch.setattr(server,'_INDEX_HTML_PATH',source)
     monkeypatch.setattr(server,'_resolve_apps',lambda **_: [{'id':'demo','nav':'/view/demo'}])
-    head, body = wire_page(server,path,query,encoding)
+    http_port = 49152
+    page_options = {'http_port': http_port} if path == '/' else {}
+    head, body = wire_page(server, path, query, encoding, **page_options)
     assert head['ok'] and head['encoding']==encoding
     assert set(head['page_timing']) == {'page_build', 'page_build_cpu', 'page_encode', 'page_encode_cpu'}
     assert all(value >= 0 for value in head['page_timing'].values())
     canonical = unpack(body)
+    assert (f'window.__CCC_HTTP_PORT__={http_port};'.encode() in canonical) == (path == '/')
     # The foreground fallback uses exactly the same template and encoder.
-    monkeypatch.setattr(conv_reader,'forward_page',lambda *_: None)
-    status, headers, fallback = _get(server,path+'?'+query,{'Accept-Encoding':encoding})
+    monkeypatch.setattr(conv_reader, 'forward_page', lambda *_, **__: None)
+    status, headers, fallback = _get(
+        server, path+'?'+query, {'Accept-Encoding': encoding}, http_port=http_port,
+    )
     assert status==200 and unpack(fallback)==canonical
     # A prepared reply crosses HTTP with the same security/cache contract.
     calls=[]
-    monkeypatch.setattr(conv_reader,'forward_page',lambda *args: (calls.append(args),{'body':body,'encoding':encoding,'cache':'reader-html-hit','page_timing':head['page_timing']})[1])
-    status, headers, forwarded = _get(server,path+'?'+query,{'Accept-Encoding':encoding})
+    def forward_page(*args, **options):
+        calls.append((args, options))
+        return {'body': body, 'encoding': encoding, 'cache': 'reader-html-hit',
+                'page_timing': head['page_timing']}
+
+    monkeypatch.setattr(conv_reader, 'forward_page', forward_page)
+    status, headers, forwarded = _get(
+        server, path+'?'+query, {'Accept-Encoding': encoding}, http_port=http_port,
+    )
     assert status==200 and forwarded==body
     assert headers['content-encoding']==encoding and headers['vary']=='Accept-Encoding'
     assert headers['cache-control']=='no-store, must-revalidate'
     assert 'reader-html-hit' in headers['server-timing']
     for name in head['page_timing']:
         assert name + ';dur=' in headers['server-timing']
-    assert calls==[(path,query,encoding)]
+    assert calls == [((path, query, encoding), page_options)]
 
 
 def test_page_timing_separates_builder_and_encoder_clocks(monkeypatch):
@@ -91,7 +103,7 @@ def test_page_timing_headers_accept_only_bounded_numeric_fixed_metrics(monkeypat
         'page_encode': '5\r\nInjected: value', 'page_encode_cpu': float('inf'),
         'arbitrary-name': 123,
     }}
-    monkeypatch.setattr(conv_reader, 'forward_page', lambda *_: prepared)
+    monkeypatch.setattr(conv_reader, 'forward_page', lambda *_, **__: prepared)
     status, headers, body = _get(server, '/?ccc_app=demo')
     assert status == 200 and body == prepared['body']
     assert 'page_build;dur=1.250' in headers['server-timing']

@@ -143,6 +143,9 @@ def test_scoped_projection_batches_unloaded_topic_roots(store, monkeypatch):
 
 
 def test_read_only_projection_cannot_publish_under_a_newer_topic_revision(store, monkeypatch):
+    import server
+
+    monkeypatch.setattr(server, '_load_session_name_overrides', lambda: {})
     topics.record_continuation('root', 'child', conn=store)
     project = topics._project_topics
 
@@ -164,43 +167,45 @@ def test_read_only_projection_cannot_publish_under_a_newer_topic_revision(store,
 
 
 @pytest.mark.parametrize('variable_limit', [None, 128])
-def test_disconnected_projection_stops_after_first_topic_read(store, monkeypatch, variable_limit):
+def test_disconnected_projection_stops_after_first_topic_read(store, variable_limit):
     class Disconnected(Exception):
         pass
 
     store.execute('CREATE TABLE session_meta (sid TEXT PRIMARY KEY, continuation_origin TEXT)')
+    store.execute('CREATE INDEX idx_session_meta_continuation_origin ON session_meta(continuation_origin)')
     store.commit()
     getlimit = getattr(store, 'getlimit', None)
     if variable_limit is not None:
         if getlimit is None:
             pytest.skip('SQLite connection limits require Python 3.11')
         previous_limit = store.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, variable_limit)
-    fetch = topics._sqlite_fetch_rows
     reads = []
 
-    def observed(conn, sql, params, columns):
-        reads.append(len(params))
-        return fetch(conn, sql, params, columns)
+    def trace(statement):
+        if 'WITH wanted(sid)' in statement:
+            reads.append(statement)
 
     def check_client():
         if reads:
             raise Disconnected
 
-    monkeypatch.setattr(topics, '_sqlite_fetch_rows', observed)
+    store.set_trace_callback(trace)
     rows = [{'session_id': f'child-{i}', 'continued_from_session_id': 'root'}
-            for i in range(1600)]
+            for i in range(3201)]
     with pytest.raises(Disconnected):
         topics.attach_topics(rows, conn=store, names={}, check_client=check_client)
-    first_batch = min(1500, getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER)) if getlimit else 500
-    assert reads == [first_batch]
+    assert len(reads) == 1
+    assert not any('continuation_topic_title' in row for row in rows)
     assert store.execute('SELECT count(*) FROM continuation_topics').fetchone() == (1,)
     assert not store.in_transaction
 
+    reads.clear()
     if variable_limit is not None:
         store.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, previous_limit)
     topics.attach_topics(rows, conn=store, names={})
+    assert len(reads) > 1
     assert rows[-1]['continuation_topic_title'] == 'Original'
-    assert store.execute('SELECT count(*) FROM continuation_topics').fetchone() == (1601,)
+    assert store.execute('SELECT count(*) FROM continuation_topics').fetchone() == (len(rows) + 1,)
 
 
 def test_disconnected_cache_replay_leaves_projection_and_cache_available(store):

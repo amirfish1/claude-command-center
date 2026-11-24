@@ -207,10 +207,11 @@ def forward(conv_id, query, accept):
     return _forward_binary({"conv_id": conv_id, "query": query or "", "accept": accept or ""})
 
 
-def forward_page(path, query, accept, asset_hints=False):
+def forward_page(path, query, accept, asset_hints=False, *, http_port=None):
     """Read-only app HTML uses the same private channel and local fallback."""
     return _forward_binary({"op": "app_page", "path": path, "query": query or "",
-                            "accept": accept or "", "asset_hints": asset_hints}, timeout=0.75)
+                            "accept": accept or "", "asset_hints": asset_hints,
+                            "http_port": http_port}, timeout=0.75)
 
 
 def _forward_binary(request, timeout=None):
@@ -305,6 +306,9 @@ def _handle(conn, server_mod):
         out = None
         if req.get("op") == "app_page":
             options = {"asset_hints": True} if req.get("asset_hints") is True else {}
+            http_port = req.get("http_port")
+            if type(http_port) is int and 1 <= http_port <= 65535:
+                options["http_port"] = http_port
             out = server_mod._app_page_response(str(req.get("path") or ""),
                                                 req.get("query") or "", req.get("accept") or "",
                                                 **options)

@@ -92,8 +92,9 @@ def test_dashboard_route_keeps_canonical_final_html_after_hints(apps, monkeypatc
     server = _server()
     monkeypatch.setattr(server, 'USER_APPS_DIR', apps)
 
-    def prepared_page(*_args, asset_hints):
+    def prepared_page(*_args, asset_hints, http_port):
         assert asset_hints
+        assert http_port == 8090
         return {'body': b'<p>canonical page</p>', 'encoding': None,
                 'asset_hints': ('</static/conversation-app.js?v=current>; rel=preload; as=script',)}
     monkeypatch.setattr(server._conv_reader, 'forward_page', prepared_page)
@@ -113,7 +114,7 @@ def test_reader_preparation_and_local_fallback_emit_the_same_links(apps, monkeyp
     monkeypatch.setattr(server, 'USER_APPS_DIR', apps)
     monkeypatch.setattr(server, '_static_asset_url', asset_url)
     path, query = '/', 'ccc_app=example'
-    head, body = wire_page(server, path, query, 'identity', asset_hints=True)
+    head, body = wire_page(server, path, query, 'identity', asset_hints=True, http_port=8090)
     from ccc_server.app_asset_hints import _ASSETS
     assert head['asset_hints'] == [f'<{asset_url(name)}>; rel=preload; as={kind}'
                                    for name, kind in _ASSETS]

@@ -10,6 +10,7 @@ import io
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def _server():
@@ -18,13 +19,14 @@ def _server():
     return server
 
 
-def _get(server, path, headers=None):
+def _get(server, path, headers=None, *, http_port=8090):
     handler = server.CommandCenterHandler.__new__(server.CommandCenterHandler)
     handler.path = path
     handler.command = "GET"
     handler.request_version = "HTTP/1.1"
     handler.requestline = f"GET {path} HTTP/1.1"
     handler.client_address = ("127.0.0.1", 0)
+    handler.server = SimpleNamespace(server_port=http_port)
     handler.close_connection = True
     handler.headers = email.message_from_string(
         "".join(f"{k}: {v}\r\n" for k, v in (headers or {}).items()) + "\r\n"

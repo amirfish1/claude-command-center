@@ -192,11 +192,12 @@ def _cross_process_stale_enqueue_worker(
         results.put(("error", os.getpid(), repr(exc)))
 
 
-def _cross_process_nested_file_lock_worker(pending_file, results):
+def _cross_process_nested_file_lock_worker(pending_file, ready, results):
     import ccc_server.pending_inputs as pending_inputs_module
     import server as process_server
 
     process_server.PENDING_INPUTS_FILE = Path(pending_file)
+    ready.set()
     try:
         with pending_inputs_module._pending_inputs_file_exclusive_lock():
             with pending_inputs_module._pending_inputs_file_exclusive_lock():
@@ -1402,18 +1403,24 @@ def test_codex_session_lock_releases_thread_lock_when_unlock_raises(
 
 def test_global_pending_file_lock_is_reentrant(tmp_path):
     context = multiprocessing.get_context("spawn")
+    ready = context.Event()
     results = context.Queue()
     process = context.Process(
         target=_cross_process_nested_file_lock_worker,
-        args=(tmp_path / "pending-inputs.json", results),
+        args=(tmp_path / "pending-inputs.json", ready, results),
     )
     process.start()
-    process.join(2)
-    if process.is_alive():
-        process.terminate()
-        process.join(5)
-    assert process.exitcode == 0
-    assert results.get(timeout=2)[0] == "nested"
+    try:
+        assert ready.wait(30), "the spawned process did not finish importing"
+        result = results.get(timeout=10)
+        assert result[0] == "nested", result
+        process.join(10)
+        assert process.exitcode == 0
+    finally:
+        if process.is_alive():
+            process.terminate()
+            process.join(5)
+        results.close()
 
 
 def test_missing_handoff_source_and_tombstone_clears_metadata(tmp_path):

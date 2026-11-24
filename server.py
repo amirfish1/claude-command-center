@@ -34813,7 +34813,17 @@ def _prepare_html_response(content, accept):
     return {"body": body, "encoding": None}
 
 
-def _app_page_response(path, query, accept, *, asset_hints=False):
+def _inject_runtime_globals(html, http_port):
+    # The bound port is only known after listen(), so add it to the response
+    # before encoding instead of baking it into the cached template.
+    return html.replace(
+        "</head>",
+        f"<script>window.__CCC_HTTP_PORT__={http_port};</script>\n</head>",
+        1,
+    )
+
+
+def _app_page_response(path, query, accept, *, asset_hints=False, http_port=None):
     """Only app shells, conversation embeds and local app pages are delegated.
 
     This runs behind the dashboard's existing request checks and private
@@ -34836,6 +34846,8 @@ def _app_page_response(path, query, accept, *, asset_hints=False):
             from ccc_server.app_asset_hints import prepare
             links = prepare(app_id, USER_APPS_DIR, _static_asset_url)
         html = (_load_app_shell_html(selected) if shell else _load_index_html(app_embed=embed))
+        if http_port is not None:
+            html = _inject_runtime_globals(html, http_port)
     elif re.fullmatch(r"/view/[a-z0-9_-]+", path):
         html = _load_application_html(path[len("/view/"):])
     if html is None:
@@ -35373,12 +35385,14 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             app_id = query.get("ccc_app", [""])[0]
             app_shell = bool(app_id and app_id not in ("sessions", "queues")
                              and not query.get("ccc_popout") and not query.get("popout"))
+            http_port = self.server.server_port
             if app_shell or app_embed:
                 from ccc_server import app_asset_hints
                 needs_hints = app_shell and app_asset_hints.wants_hints(self)
                 page_options = {"asset_hints": True} if needs_hints else {}
                 prepared = _conv_reader.forward_page("/", parsed.query,
                                                     self.headers.get("Accept-Encoding", ""),
+                                                    http_port=http_port,
                                                     **page_options)
                 if needs_hints:
                     if prepared is not None and "asset_hints" in prepared:
@@ -35394,7 +35408,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                             not query.get("ccc_popout") and not query.get("popout") and
                             time.time() - _SERVER_START_TS > _ARCHIVE_LIST_DISK_BOOT_S)
             html = _load_app_shell_html(selected_app) if app_shell else _load_index_html(app_embed=app_embed)
-            html = self._inject_runtime_globals(html)
+            html = _inject_runtime_globals(html, http_port)
             self.send_html(html, dashboard_event_cursor=event_cursor)
         elif path == "/api/control-plane/status":
             self.send_json(_control_plane_request("health"))
@@ -50276,19 +50290,6 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         self._send_server_timing(cache="hit" if cached is not None else "miss")
         self.end_headers()
         self.wfile.write(body)
-
-    def _inject_runtime_globals(self, html):
-        # Cheap per-request </head> replace: the bound port is only known
-        # after listen(), so it can't be baked into the cached template.
-        try:
-            port = int(getattr(self.server, "server_port", 0) or 0)
-        except (TypeError, ValueError):
-            port = 0
-        return html.replace(
-            "</head>",
-            f"<script>window.__CCC_HTTP_PORT__={port};</script>\n</head>",
-            1,
-        )
 
     def send_html(self, content, *, dashboard_event_cursor=False):
         self._send_prepared_html(_prepare_html_response(
