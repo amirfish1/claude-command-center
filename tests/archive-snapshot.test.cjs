@@ -144,26 +144,6 @@ test('a history layer validates independently of the saved browser order', async
   assert.equal(f.savedLayouts[0],bytes);
 });
 
-test('a seven-day layer commits its current validator and rejects another window', async () => {
-  const base = {window:'7d', count:2, conversations:rows, delta_token:'base', order_token:'a'.repeat(64)};
-  const patch = {window:'7d', count:2, delta:true, since:'base', delta_token:'current',
-    ids:['older','new'], conversations:[{session_id:'new'}], order_token:'b'.repeat(64)};
-  const response = reply({history_layer:1, base, patch});
-  const f = setup({response});
-  const loaded = await f.context.loadArchiveAll();
-  assert.deepEqual(Array.from(loaded, row => row.session_id), ['older','new']);
-  assert.equal(f.state._archiveAllDelta.get(fullUrl).token,'current');
-  f.context.backgroundApiFetch = async url => { f.reads.push({url}); return reply(null,304); };
-  assert.deepEqual(Array.from(await f.context.loadArchiveAll(), row => row.session_id), ['older','new']);
-  assert.equal(new URL(f.reads.at(-1).url, 'http://localhost').searchParams.get('since'), 'current');
-
-  const invalid = setup();
-  invalid.context.backgroundApiFetch = async url => url.includes('history_layer=1')
-    ? reply({history_layer:1, base:{...base, window:'all'}, patch:{...patch, window:'all'}})
-    : reply({conversations:rows});
-  assert.equal(JSON.stringify(await invalid.context.loadArchiveAll()), JSON.stringify(rows));
-});
-
 test('a malformed history layer retries the ordinary request exactly once', async () => {
   const url = '/api/conversations/list?window=all&stale_ok=1';
   const f = setup();
@@ -215,16 +195,16 @@ test('same-document polls use the current base order and update it after a reord
     return replies.shift();
   };
   await f.context.loadArchiveAll();
-  assert.equal(f.reads[1].url, fullUrl + '&row_layouts=1&since=first&saved_order=' + firstOrder);
+  assert.equal(f.reads[1].url, fullUrl + '&since=first&saved_order=' + firstOrder);
   const result = await f.context.loadArchiveAll();
-  assert.equal(f.reads[2].url, fullUrl + '&row_layouts=1&since=second&saved_order=' + secondOrder);
+  assert.equal(f.reads[2].url, fullUrl + '&since=second&saved_order=' + secondOrder);
   assert.deepEqual(Array.from(result, row => row.session_id), ['older','recent']);
   assert.equal(result[0].modified, 42);
   assert.equal(f.savedDeltas[2].ids, null);
 
   f.state._archiveAllData.set(fullUrl, rows.slice());
   await f.context.loadArchiveAll();
-  assert.equal(f.reads[3].url, fullUrl + '&row_layouts=1&history_layer=1&wide_order_spans=1', 'a different row base cannot use the old delta token');
+  assert.equal(f.reads[3].url, fullUrl, 'a different row base cannot use the old delta token');
 });
 
 test('an All order delta reconstructs slices and survives the next saved-order poll', async () => {
@@ -924,13 +904,7 @@ test('cancelling a superseded preview aborts the actual early response body', as
 test('the bounded complete boot request opts into disconnect detection', async () => {
   const context = await browser.createBrowserContext(), page = await context.newPage();
   try {
-    const request = page.waitForRequest(r => {
-      const url = new URL(r.url());
-      return url.origin + url.pathname === origin + '/api/conversations/list'
-        && url.searchParams.get('window') === '7d'
-        && url.searchParams.get('history_layer') === '1'
-        && !url.searchParams.has('initial');
-    });
+    const request = page.waitForRequest(r => r.url() === origin + fullUrl);
     await page.goto(origin, {waitUntil:'domcontentloaded'});
     assert.equal((await request).headers()['x-ccc-abort-on-disconnect'], '1');
   } finally {

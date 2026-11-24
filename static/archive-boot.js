@@ -85,7 +85,7 @@
     return out;
   }
 
-  function _decodeArchiveHistoryLayer(raw, expectedWindow) {
+  function _decodeArchiveHistoryLayer(raw) {
     if (raw.history_layer !== 1) return null;
     let base, patch;
     try {
@@ -93,9 +93,8 @@
       patch = _decodeArchiveRowLayouts(raw.patch);
     } catch (_) { return null; }
     if (!Array.isArray(base?.conversations)
-        || !['all', '7d'].includes(base.window) || (expectedWindow && base.window !== expectedWindow)
-        || base.initial || base.delta
-        || patch?.window !== base.window || patch.delta !== true || !base.delta_token
+        || base.window !== 'all' || base.initial || base.delta
+        || patch?.window !== 'all' || patch.delta !== true || !base.delta_token
         || patch.since !== base.delta_token || !patch.delta_token
         || base.count !== base.conversations.length
         || !Array.isArray(patch.conversations) || !Array.isArray(patch.ids)
@@ -214,7 +213,7 @@
     if (!packed || packed.delta || packed.initial) return null;
     if (packed.history_layer !== undefined) {
       if (packed.base?.count > maxRows || packed.patch?.count > maxRows) return null;
-      return _decodeArchiveHistoryLayer(packed, windowName)?.conversations || null;
+      return _decodeArchiveHistoryLayer(packed)?.conversations || null;
     }
     // Older snapshots store the layout pair. A complete boot response can
     // be stored directly without serializing its decoded rows again.
@@ -482,7 +481,6 @@
         target += '&row_layouts=1&order_spans=1&history_layer=1' + wideOrderSpanQuery;
       } else if (windowName === '7d') {
         target += '&row_layouts=1';
-        if (!value?.delta) target += '&history_layer=1' + wideOrderSpanQuery;
       }
       const headers = value?.etag ? {'If-None-Match':value.etag} : {};
       headers['X-CCC-Abort-On-Disconnect'] = '1';

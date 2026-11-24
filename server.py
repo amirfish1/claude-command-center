@@ -18514,7 +18514,6 @@ def _archive_list_delta_state(key, rows, window, from_cache):
         "base": base, "extra": extra, "projection_ctx": projection_ctx,
         "row_overlays": row_overlays, "ideas": ideas, "resumes": resumes,
         "source_key": key, "sidebar_static": sidebar_static,
-        "graph_revision": graph_revision, "topic_revision": topic_revision,
     }
 
 
@@ -19572,8 +19571,7 @@ def _archive_history_effect_ids(inputs, previous, sidecars):
 
 
 def _archive_history_project_cut(cut, previous, *, phases=None, check_client=None,
-                                 persist_topics=True, max_rows=None,
-                                 bounded_metadata=None):
+                                 persist_topics=True, max_rows=None):
     """Project a complete basis or its conservative changed-row closure."""
     from ccc_server import archive_history_layer as layer
 
@@ -19671,8 +19669,6 @@ def _archive_history_project_cut(cut, previous, *, phases=None, check_client=Non
         "window": "all", "fields": list(_ARCHIVE_LIST_FIELDS), "cached": bool(cached),
         "queue_health": _queue_health_stats(None, now=now, working_snapshot=(len(working), working)),
     }
-    if bounded_metadata is not None:
-        metadata.update(bounded_metadata)
     inputs = layer.observed_inputs(
         inputs, rows, projected, previous=previous.inputs if previous is not None else None,
         changed=changed or ())
@@ -19779,179 +19775,7 @@ def _archive_history_rebase_seed(basis, current, tail):
     )
 
 
-_ARCHIVE_SEVEN_DAY_BASIS = (None, None)
-
-
-def _archive_seven_day_basis_path():
-    from ccc_server.archive_history_layer import VERSION
-
-    return _ARCHIVE_RESPONSE_CACHE_FILE.with_suffix(f".sidebar-layer-7d-v{VERSION}")
-
-
-def _archive_seven_day_load_basis(key, target, artifact):
-    from ccc_server import archive_history_layer as layer
-
-    global _ARCHIVE_SEVEN_DAY_BASIS
-    loaded_artifact, basis = _ARCHIVE_SEVEN_DAY_BASIS
-    if artifact != loaded_artifact:
-        basis = layer.load_basis(target, _archive_history_scope(key) + ":7d")
-        if _archive_history_artifact(target) != artifact:
-            return None
-        _ARCHIVE_SEVEN_DAY_BASIS = artifact, basis
-    return basis
-
-
-def _archive_seven_day_cut(key, captured, rows, cached, reader, now, phases, delta=None,
-                           selection_version=None):
-    from ccc_server import archive_history_layer as layer, continuation_topics
-
-    with _archive_history_timing(phases, "hot"):
-        snapshot = _archive_history_hot_snapshot(key, captured)
-    if snapshot is None:
-        return None
-    _, base_tokens = snapshot
-    sidecars = _capture_archive_history_sidecars(now)
-    if delta is not None:
-        # The ordinary conditional token following this response must describe
-        # the same ticket, title and resume snapshot as the complete view.
-        if (delta["ideas"] is None or delta["resumes"] is None
-                or sidecars["ideas"] != delta["ideas"]
-                or sidecars["resumes"] != delta["resumes"]
-                or sidecars["overlays"] != delta["row_overlays"]):
-            return None
-    with _archive_history_timing(phases, "selection"):
-        selected = _archive_list_full_selection(
-            rows, "7d", now, sidecars["parents"], sidecars["ideas"], selection_version, phases)
-        by_sid = {_archive_row_sid(row): row for row in selected}
-        if "" in by_sid or len(by_sid) != len(selected):
-            return None
-        base_objects = {id(row) for row in captured[0]}
-        tokens = {sid: base_tokens[sid] if id(row) in base_objects else layer.hot_row_token(row)
-                  for sid, row in by_sid.items()}
-    with _archive_history_timing(phases, "topics"):
-        topics = continuation_topics.archive_projection_inputs(
-            reader, max_rows=layer.MAX_ROWS, diagnostics=phases)
-    if topics is None:
-        return None
-    topic_inputs, topic_edges, version = topics
-    sidecars["topics"] = (reader, topic_inputs, version)
-    resumes = sidecars["resumes"]
-    candidates = by_sid.keys() & (resumes.keys() | {"session_" + sid for sid in resumes})
-    eligible_resumes = {
-        sid: mark for sid in candidates
-        if (mark := usage_limit_resume_at_for_session(sid, resumes=resumes, now=now))
-    }
-    parents = sidecars["parents"]
-    with _archive_history_timing(phases, "inputs"):
-        inputs = layer.read_inputs(
-            (), by_sid, tokens, (), pinned_overlays=topic_inputs[:2],
-            overlay_maps=(sidecars["names"], eligible_resumes, parents, sidecars["drivers"],
-                          sidecars["ideas"], sidecars["overlays"], *topic_inputs),
-            edges=(*parents.items(), *topic_edges))
-    if inputs is None:
-        return None
-
-    def read_rows(wanted):
-        if wanted is None:
-            return selected
-        return [row for sid, row in by_sid.items() if sid in wanted]
-
-    return inputs, sidecars, read_rows, cached
-
-
-def _archive_seven_day_metadata(rows, now):
-    return {"window": "7d", "total_count": sum(isinstance(row, dict) for row in rows),
-            "queue_health": _queue_health_stats(rows, now=now)}
-
-
-def _archive_publish_seven_day_basis(key, captured, rows, reader):
-    from ccc_server import archive_history_layer as layer
-
-    now = time.time()
-    cut = _archive_seven_day_cut(key, captured, rows, True, reader, now, {})
-    if cut is None:
-        return False
-    result = _archive_history_project_cut(
-        cut, None, persist_topics=False, bounded_metadata=_archive_seven_day_metadata(rows, now))
-    if result is None:
-        return False
-    current, projected, _ = result
-    basis = layer.make_basis(
-        current.inputs, current.working, current.activity,
-        dict(current.metadata, conversations=projected),
-        effect_rows={sid: _idea_tickets.archive_effect_row(row)
-                     for sid, row in current.effect_rows.items()})
-    return basis is not None and layer.write_basis(
-        _archive_seven_day_basis_path(), _archive_history_scope(key) + ":7d", basis)
-
-
-def _archive_seven_day_response(key, rows, cached, delta, encodings, phases, check_client=None,
-                                *, wide_order_spans=False, selection_version=None):
-    """Serve a complete scoped view from a bounded, current projection patch."""
-    import sqlite3
-    from ccc_server import archive_history_layer as layer, continuation_topics
-
-    target = _archive_seven_day_basis_path()
-    artifact = _archive_history_artifact(target)
-    if artifact is None:
-        phases["needs_basis"] = True
-        return None
-    # All and seven-day views share one topic reader and its immutable inputs.
-    # An occupied archive reader must not hold up the ordinary scoped path.
-    if not _ARCHIVE_HISTORY_LOCK.acquire(blocking=False):
-        return None
-    try:
-        if check_client is not None:
-            check_client()
-        with _archive_history_timing(phases, "load_basis"):
-            basis = _archive_seven_day_load_basis(key, target, artifact)
-        if basis is None:
-            phases["needs_basis"] = True
-            return None
-        encoding = next((item for item in encodings if item in basis.frames), None)
-        if encoding is None:
-            return None
-        now = time.time()
-        cut = _archive_seven_day_cut(
-            key, (delta["base"], delta["ver"]), rows, cached,
-            continuation_topics.archive_connection(), now, phases, delta, selection_version)
-        if cut is None:
-            return None
-        if check_client is not None:
-            check_client()
-        projection = phases.setdefault("projection", {})
-        result = _archive_history_project_cut(
-            cut, basis, phases=projection, check_client=check_client,
-            max_rows=_ARCHIVE_HISTORY_COLD_REBASE_MAX_ROWS,
-            bounded_metadata=_archive_seven_day_metadata(rows, now))
-        if result is None:
-            phases["needs_basis"] = "scope_rejected" in projection or projection.get("expanded_scope_rejected")
-            return None
-        if (_session_graph.projection_revision() != delta["graph_revision"]
-                or continuation_topics.revision() != delta["topic_revision"]):
-            return None
-        current, changed, effects = result
-        patch = layer.delta_payload(
-            basis.inputs.order, current.inputs.order, basis.token, delta["token"],
-            dict(current.metadata, conversations=changed), saved_order=wide_order_spans,
-            wide_order_spans=wide_order_spans)
-        with _archive_history_timing(phases, "encode"):
-            body = layer.layer_representation(basis, patch, encoding)
-        if body is None:
-            return None
-        if check_client is not None:
-            check_client()
-        _archive_list_ticket_effects(effects, state=cut[1]["tickets"])
-        return body, encoding, '"d-' + delta["token"] + '"'
-    except (OSError, sqlite3.Error, TypeError, ValueError,
-            continuation_topics.UnavailableArchiveProjection) as exc:
-        phases["fallback"] = type(exc).__name__
-        return None
-    finally:
-        _ARCHIVE_HISTORY_LOCK.release()
-
-
-def _archive_history_publisher_main(rebase_source=None, *, refresh_source=None, seven_day=False):
+def _archive_history_publisher_main(rebase_source=None, *, refresh_source=None):
     """Populate an optional history basis in a detached maintenance process."""
     from ccc_server import archive_history_layer as layer, archive_store, cpu_priority, ship_graph
     import sqlite3
@@ -19998,11 +19822,6 @@ def _archive_history_publisher_main(rebase_source=None, *, refresh_source=None, 
     _session_graph.load()
     with contextlib.closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro",
                                             uri=True, timeout=0)) as reader:
-        if seven_day:
-            source = _archive_serve_bounded_rows(key, hot_rows, "7d")
-            source, _ = _archive_list_source_overlays(
-                source, _archive_overlay_existing_ids(source), lambda _: None)
-            return _archive_publish_seven_day_basis(key, snapshot, source, reader)
         if refresh_source is not None:
             with _archive_history_read_cut(key, {}, time.time(), captured_hot=snapshot,
                                            topic_reader=reader) as cut:
@@ -20013,19 +19832,15 @@ def _archive_history_publisher_main(rebase_source=None, *, refresh_source=None, 
             key, {}, {}, captured_hot=snapshot, topic_reader=reader) is not None
 
 
-_ARCHIVE_SEVEN_DAY_PUBLISH_LAST_START = None
-
-
-def _archive_history_start_publication(*, rebase=None, refresh_source=None, seven_day=False):
+def _archive_history_start_publication(*, rebase=None, refresh_source=None):
     from ccc_server import archive_history_layer as layer, background_work
 
-    global _ARCHIVE_HISTORY_PUBLISH_LAST_START, _ARCHIVE_SEVEN_DAY_PUBLISH_LAST_START
+    global _ARCHIVE_HISTORY_PUBLISH_LAST_START
     now = time.monotonic()
     if not _ARCHIVE_HISTORY_PUBLISH_LOCK.acquire(blocking=False):
         return
-    last_start = (_ARCHIVE_SEVEN_DAY_PUBLISH_LAST_START if seven_day
-                  else _ARCHIVE_HISTORY_PUBLISH_LAST_START)
-    if last_start is not None and now - last_start < (300 if seven_day else 60):
+    if (_ARCHIVE_HISTORY_PUBLISH_LAST_START is not None
+            and now - _ARCHIVE_HISTORY_PUBLISH_LAST_START < 60):
         _ARCHIVE_HISTORY_PUBLISH_LOCK.release()
         return
     refresh_link = None
@@ -20036,10 +19851,7 @@ def _archive_history_start_publication(*, rebase=None, refresh_source=None, seve
         except OSError:
             _ARCHIVE_HISTORY_PUBLISH_LOCK.release()
             return
-    if seven_day:
-        _ARCHIVE_SEVEN_DAY_PUBLISH_LAST_START = now
-    else:
-        _ARCHIVE_HISTORY_PUBLISH_LAST_START = now
+    _ARCHIVE_HISTORY_PUBLISH_LAST_START = now
 
     def release():
         try:
@@ -20051,17 +19863,13 @@ def _archive_history_start_publication(*, rebase=None, refresh_source=None, seve
 
     def publish():
         started = time.perf_counter()
-        if seven_day:
-            stage = "sidebar_7d_basis"
-        elif refresh_link is not None:
+        if refresh_link is not None:
             stage = "sidebar_refresh_basis"
         elif rebase is not None:
             stage = "sidebar_rebase"
         else:
             stage = "sidebar_basis"
-        if seven_day:
-            target = _archive_seven_day_basis_path()
-        elif stage == "sidebar_basis":
+        if stage == "sidebar_basis":
             target = layer.basis_path(_ARCHIVE_RESPONSE_CACHE_FILE)
         else:
             target = layer.rebased_path(_ARCHIVE_RESPONSE_CACHE_FILE)
@@ -20069,9 +19877,7 @@ def _archive_history_start_publication(*, rebase=None, refresh_source=None, seve
         try:
             with background_work.slot(), contextlib.ExitStack() as stack:
                 args = [*_server_launch_argv(), "--archive-sidebar-basis-worker"]
-                if seven_day:
-                    args.append("--seven-day")
-                elif rebase is not None:
+                if rebase is not None:
                     key, basis, current, tail = rebase
                     folder = stack.enter_context(tempfile.TemporaryDirectory(
                         dir=target.parent, prefix=".sidebar-rebase-"))
@@ -20093,11 +19899,7 @@ def _archive_history_start_publication(*, rebase=None, refresh_source=None, seve
                 "stage": stage,
                 "published": published,
             }
-            if published and seven_day:
-                with _archive_history_timing(diagnostics, "warm_basis"):
-                    diagnostics["basis_cached"] = _archive_seven_day_load_basis(
-                        _archive_response_cache_key(), target, updated) is not None
-            elif published and stage in {"sidebar_refresh_basis", "sidebar_rebase"}:
+            if published and stage != "sidebar_basis":
                 with _archive_history_timing(diagnostics, "warm_rebased"):
                     diagnostics["rebased_cached"] = _archive_history_warm_rebased_basis(target, updated)
             record_diag("archive_rebuild", (time.perf_counter() - started) * 1000.0, diagnostics)
@@ -23049,45 +22851,39 @@ def _archive_serve_rows_versioned(key, cache_options, *, copy_rows=True, force_r
                             rows, copy_on_change=True, snapshot=lifecycle), cached, version
                 return _overlay_conversation_lifecycle_flags(rows), cached, version
     if window != "all":
-        bounded = _archive_serve_bounded_rows(key, rows, window)
-        if bounded is not rows:
-            rows, version = bounded, 0
+        from ccc_server import archive_store
+        if archive_store.database_path(_ARCHIVE_RESPONSE_CACHE_FILE).exists():
+            # Keep the existing pin/moved-ticket and topic-parent exceptions,
+            # including parents learned after the stored row was published.
+            present = {str(row.get("session_id") or row.get("id") or "") for row in rows}
+            wanted = set(_pinned_rank_map()) - present
+            tickets = _idea_tickets.idea_ticket_rows_map()
+            cutoff = _archive_list_window_cutoff(window)
+            wanted.update(sid for sid, ticket in tickets.items()
+                          if _archive_list_row_ts({"idea_ticket": ticket}) >= (cutoff or 0))
+            parents = _session_graph.parent_snapshot()
+            pending = list(present | wanted)
+            visited = set(pending)
+            for sid in pending:
+                parent = parents.get(sid)
+                if parent and parent not in visited:
+                    visited.add(parent)
+                    wanted.add(parent)
+                    pending.append(parent)
+            wanted.difference_update(present)
+            if wanted:
+                import sqlite3
+                try:
+                    extra = archive_store.lookup(_ARCHIVE_RESPONSE_CACHE_FILE, key, wanted,
+                                                 schema_version=_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION)
+                    extra = [row for row in extra if str(row.get("session_id") or row.get("id") or "") not in present]
+                    if extra:
+                        _apply_pinned_conversation_fields(extra)
+                        rows = list(rows) + _overlay_conversation_lifecycle_flags(extra)
+                        version = 0
+                except (OSError, ValueError, sqlite3.Error) as exc:
+                    print(f"  [archive-cache] contextual cold read unavailable: {exc}")
     return rows, cached, version
-
-
-def _archive_serve_bounded_rows(key, rows, window):
-    from ccc_server import archive_store
-    if archive_store.database_path(_ARCHIVE_RESPONSE_CACHE_FILE).exists():
-        # Keep the existing pin/moved-ticket and topic-parent exceptions,
-        # including parents learned after the stored row was published.
-        present = {str(row.get("session_id") or row.get("id") or "") for row in rows}
-        wanted = set(_pinned_rank_map()) - present
-        tickets = _idea_tickets.idea_ticket_rows_map()
-        cutoff = _archive_list_window_cutoff(window)
-        wanted.update(sid for sid, ticket in tickets.items()
-                      if _archive_list_row_ts({"idea_ticket": ticket}) >= (cutoff or 0))
-        parents = _session_graph.parent_snapshot()
-        pending = list(present | wanted)
-        visited = set(pending)
-        for sid in pending:
-            parent = parents.get(sid)
-            if parent and parent not in visited:
-                visited.add(parent)
-                wanted.add(parent)
-                pending.append(parent)
-        wanted.difference_update(present)
-        if wanted:
-            import sqlite3
-            try:
-                extra = archive_store.lookup(_ARCHIVE_RESPONSE_CACHE_FILE, key, wanted,
-                                             schema_version=_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION)
-                extra = [row for row in extra if str(row.get("session_id") or row.get("id") or "") not in present]
-                if extra:
-                    _apply_pinned_conversation_fields(extra)
-                    rows = list(rows) + _overlay_conversation_lifecycle_flags(extra)
-            except (OSError, ValueError, sqlite3.Error) as exc:
-                print(f"  [archive-cache] contextual cold read unavailable: {exc}")
-    return rows
 
 
 def _archive_serve_hot_rows_versioned(
@@ -39519,31 +39315,6 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 "cpu_ms": round((time.thread_time() - _delta_cpu0) * 1000, 1),
             }
             _status = None
-            seven_day_needs_basis = False
-            if (_delta is not None and not since and scoped_layouts and stale_ok
-                    and not any(cache_options.values()) and qs.get("history_layer") == ["1"]
-                    and _ARCHIVE_LIST_BODY_CACHE.get((
-                        body_cache_key, window, bool(from_cache), (body_ver, _delta["ctx"]),
-                        _delta["graph_revision"], _delta["topic_revision"])) is None):
-                from ccc_server.archive_history_layer import ENCODINGS
-                from ccc_server.static_encoding import accepted_encodings
-
-                encodings = accepted_encodings(self.headers.get("Accept-Encoding"), supported=ENCODINGS)
-                if encodings:
-                    scoped_phases = _payload_phases["seven_day_layer"] = {}
-                    _pt0 = time.perf_counter()
-                    try:
-                        layer = _archive_seven_day_response(
-                            list_cache_key, rows, from_cache, _delta, encodings,
-                            scoped_phases, check_client,
-                            wide_order_spans=qs.get("wide_order_spans") == ["1"],
-                            selection_version=selection_version)
-                    except _ArchiveListClientDisconnected:
-                        return
-                    if layer is not None:
-                        _payload_ms.append((time.perf_counter() - _pt0) * 1000.0)
-                        _status = self._send_archive_list_representation(*layer)
-                    seven_day_needs_basis = bool(scoped_phases.get("needs_basis"))
             # CCC-201: why a client holding a token still got a full body.
             if not since:
                 _since_diag = "none"
@@ -39647,8 +39418,6 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             _lt2 = time.perf_counter()
             if history_needs_basis and _status in (200, "delta", 304):
                 _archive_history_start_publication()
-            if seven_day_needs_basis and _status == 200:
-                _archive_history_start_publication(seven_day=True)
             record_diag("list_server", (_lt2 - _lt0) * 1000.0, {
                 "window": window,
                 "status": _status,
@@ -53336,14 +53105,7 @@ def main():
                 target()
             return _run
 
-        def warm_sidebar_bases():
-            _archive_history_warm_saved_basis()
-            target = _archive_seven_day_basis_path()
-            artifact = _archive_history_artifact(target)
-            if artifact is not None:
-                _archive_seven_day_load_basis(_archive_response_cache_key(), target, artifact)
-
-        threading.Thread(target=_after_boot_delay(warm_sidebar_bases),
+        threading.Thread(target=_after_boot_delay(_archive_history_warm_saved_basis),
                          daemon=True, name="ccc-sidebar-basis-warm").start()
         threading.Thread(target=_after_boot_delay(_session_fts_warm.warm_start), daemon=True, name="ccc-session-fts-warm").start()
         threading.Thread(target=_after_boot_delay(_ship_graph_warm.warm_start), daemon=True, name="ccc-ship-graph-warm").start()
@@ -53671,14 +53433,12 @@ def _script_main():
         if os.environ.get("CCC_GC_FREEZE", "1") != "0":
             gc.set_threshold(_GC_GEN0_THRESHOLD, *gc.get_threshold()[1:])
         try:
-            if sys.argv[2:] == ["--seven-day"]:
-                published = _archive_history_publisher_main(seven_day=True)
-            elif len(sys.argv) == 4 and sys.argv[2] == "--refresh":
+            if len(sys.argv) == 4 and sys.argv[2] == "--refresh":
                 published = _archive_history_publisher_main(refresh_source=sys.argv[3])
             elif len(sys.argv) in (2, 3):
                 published = _archive_history_publisher_main(*sys.argv[2:])
             else:
-                raise ValueError("expected an optional rebase seed, --refresh RESULT or --seven-day")
+                raise ValueError("expected an optional rebase seed or --refresh RESULT")
         except (OSError, ValueError, sqlite3.Error) as exc:
             print(f"archive sidebar basis worker: {exc}", file=sys.stderr)
             published = False
