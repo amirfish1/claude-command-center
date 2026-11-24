@@ -19207,9 +19207,12 @@ def _archive_list_window(value):
     return value if value in ("8h", "1d", "7d", "all") else "all"
 
 
+_ARCHIVE_LIST_WINDOW_SECONDS = {"8h": 8 * 3600, "1d": 86400, "7d": 7 * 86400}
+
+
 def _archive_list_window_cutoff(window, now=None):
     # "8h" is the "Now" window — the current working shift, not a calendar day.
-    seconds = {"8h": 8 * 3600, "1d": 86400, "7d": 7 * 86400}.get(_archive_list_window(window))
+    seconds = _ARCHIVE_LIST_WINDOW_SECONDS.get(_archive_list_window(window))
     return (time.time() if now is None else now) - seconds if seconds else None
 
 
@@ -21788,25 +21791,36 @@ def _archive_list_initial_selection(rows, window, now, parents, ideas, version):
             stamp = row_times[row_id] = _archive_list_row_ts(row)
         return stamp
 
-    activity = remember_activity if key is not None and cutoff is not None else _archive_list_row_ts
-    selected = _archive_list_window_rows(rows, cutoff, ideas, parents, activity=activity)
-    if key is not None:
-        seconds = {"8h": 28800, "1d": 86400, "7d": 604800}.get(_archive_list_window(window))
-        # Expire at the first direct member's window boundary. Older ancestors
-        # remain only while a qualifying descendant still includes them. A
-        # rewound clock must recompute membership as well.
-        expires = float("inf")
-        if seconds:
-            for row in selected:
-                engine = (row.get('engine') or row.get('source') or '').lower()
-                if row.get('pinned') or engine == 'hermes':
-                    continue
-                stamp = row_times[id(row)]
+    expires = float("inf")
+    if key is not None and cutoff:
+        # Direct members determine the first expiry. Family expansion keeps
+        # older relatives only while a qualifying member still includes them.
+        source_rows = [row for row in rows if isinstance(row, dict)]
+        direct = []
+        earliest = float("inf")
+        for row in source_rows:
+            engine = (row.get("engine") or row.get("source") or "").lower()
+            if row.get("pinned") or engine == "hermes":
+                direct.append(row)
+                continue
+            stamp = remember_activity(row)
+            # A ticket can only increase activity. Read it when that could
+            # affect membership or the earliest qualifying timestamp.
+            if stamp < cutoff or stamp < earliest:
                 ticket = ideas.get(_archive_row_sid(row))
                 if ticket:
                     stamp = max(stamp, _archive_preview.ticket_activity(ticket))
-                if stamp >= now - seconds:
-                    expires = min(expires, stamp + seconds)
+            if stamp >= cutoff:
+                direct.append(row)
+                if stamp < earliest:
+                    earliest = stamp
+        selected = _archive_list_family_rows(source_rows, direct, ideas, parents)
+        expires = earliest + _ARCHIVE_LIST_WINDOW_SECONDS[_archive_list_window(window)]
+        activity = remember_activity
+    else:
+        selected = _archive_list_window_rows(rows, cutoff, ideas, parents)
+        activity = _archive_list_row_ts
+    if key is not None:
         positions = {id(row): i for i, row in enumerate(rows)}
         full_positions = tuple(positions[id(row)] for row in selected) if window == "7d" else ()
         membership = (len(selected), now, expires, full_positions)

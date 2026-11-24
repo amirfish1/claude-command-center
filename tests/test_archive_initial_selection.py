@@ -84,6 +84,19 @@ def test_cached_selection_expires_at_external_ticket_activity_boundary():
     assert ids(after) == [] and after[2] is False
 
 
+def test_ticket_move_postpones_first_expiry_past_the_row_timestamp():
+    now = 1000000
+    cutoff = now - 604800
+    rows = [{'session_id': 'moved', 'mtime': cutoff + 1},
+            {'session_id': 'ordinary', 'mtime': cutoff + 3}]
+    ideas = {'moved': {'moved_at': cutoff + 5}}
+    assert ids(select(rows, window='7d', now=now, ideas=ideas)) == ['moved', 'ordinary']
+    inside = select(rows, window='7d', now=now + 2, ideas=ideas)
+    assert ids(inside) == ['moved', 'ordinary'] and inside[2] is True
+    after = select(rows, window='7d', now=now + 4, ideas=ideas)
+    assert ids(after) == ['moved'] and after[2] is False
+
+
 def test_version_and_scope_and_missing_version_invalidate():
     rows = [{'session_id': 'a', 'mtime': 1}]
     assert select(rows)[2] is False
