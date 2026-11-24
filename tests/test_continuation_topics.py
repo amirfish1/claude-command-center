@@ -536,6 +536,40 @@ def test_topic_prefetch_preserves_sparse_and_missing_index_rows(store):
     assert batch.indexed_origins == {'child': '', 'absent': ''}
 
 
+@pytest.mark.parametrize('fallback', [None, 'old_schema', 'dense', 'real', 'blob'])
+def test_large_topic_prefetch_preserves_exact_results(store, monkeypatch, fallback):
+    topics._connection(store)
+    if fallback != 'old_schema':
+        store.execute('CREATE INDEX idx_session_meta_continuation_origin '
+                      'ON session_meta(continuation_origin)')
+    store.executemany('INSERT INTO session_meta VALUES (?,?)',
+                      [('indexed', 'root'), ('empty', ''), ('null', None),
+                       ('unselected', 'other-root')])
+    if fallback == 'blob':
+        store.execute('UPDATE session_meta SET continuation_origin=? WHERE sid=?',
+                      (b'legacy-root', 'indexed'))
+    store.execute('INSERT INTO continuation_topics VALUES (?,?,?,?,?)',
+                  ('child', 'root', 'root', 'TOPIC',
+                   0.12345678901234567 if fallback == 'real' else 0))
+    rows = [row(sid) for sid in ('child', 'indexed', 'empty', 'null', 'absent')]
+    expected = topics._Batch(store, rows, {})
+    monkeypatch.setattr(topics, '_SCOPED_TOPIC_SPLIT_MIN', 1)
+    if fallback == 'dense':
+        monkeypatch.setattr(topics, '_SCOPED_TOPIC_ORIGIN_LIMIT', 1)
+    legacy_calls = []
+    original = topics._sqlite_fetch_rows
+
+    def legacy(*args):
+        legacy_calls.append(True)
+        return original(*args)
+
+    monkeypatch.setattr(topics, '_sqlite_fetch_rows', legacy)
+    actual = topics._Batch(store, rows, {})
+    assert actual.records == expected.records
+    assert actual.indexed_origins == expected.indexed_origins
+    assert legacy_calls == ([True] if fallback else [])
+
+
 def test_topic_cache_survives_unrelated_peer_writes_and_noop_updates(store, monkeypatch):
     store.execute('PRAGMA journal_mode=WAL')
     topics.attach_topics([row('root', 'TOPIC: task'), row('child', origin='root')], names={})

@@ -34,11 +34,21 @@ _PRECISE_TOKENS = OrderedDict()
 _ARCHIVE_TOPIC_SNAPSHOT = (None, None, None)
 _ARCHIVE_TOPIC_CONNECTION = (None, None)
 _NATIVE_TITLE_STATE = {'data': None, 'generation': 0}
+_SCOPED_TOPIC_SPLIT_MIN = 2000
+_SCOPED_TOPIC_ORIGIN_LIMIT = 4096
 _TRACKED_TABLES = {
     'continuation_topics': ('sid', 'origin', 'root_sid', 'topic_title', 'user_named'),
     'continuation_topic_meta': ('id', 'revision'),
     'session_meta': ('sid', 'continuation_origin'),
 }
+
+
+def _nonintegral_topic_value(value):
+    raise ValueError(f'Inexact SQLite JSON value: {value}')
+
+
+_SCOPED_TOPIC_DECODER = json.JSONDecoder(
+    parse_float=_nonintegral_topic_value, parse_constant=_nonintegral_topic_value)
 
 
 def _install_topic_tracking(conn):
@@ -630,6 +640,14 @@ class _Batch:
                 FROM wanted w LEFT JOIN continuation_topics t ON t.sid=w.sid'''
             columns = ('sid', 'origin', 'root_sid', 'topic_title', 'user_named',
                        'continuation_origin')
+            if len(part) >= _SCOPED_TOPIC_SPLIT_MIN:
+                split = self._prefetch_sparse_origins(wanted, topic_sql, part)
+                if split is not None:
+                    records, origins = split
+                    for sid, origin, root, title, named in records:
+                        self.records.setdefault(sid, (origin, root, title, named))
+                        self.indexed_origins.setdefault(sid, origins.get(sid, ''))
+                    continue
             try:
                 found = _sqlite_fetch_rows(
                     self.conn,
@@ -643,6 +661,39 @@ class _Batch:
             for sid, origin, root, title, named, indexed in found:
                 self.records.setdefault(sid, (origin, root, title, named))
                 self.indexed_origins.setdefault(sid, indexed)
+
+    def _prefetch_sparse_origins(self, wanted, topic_sql, sids):
+        # On large scopes, fetch sparse indexed origins once instead of
+        # probing the wide session_meta table for every session. Keep both
+        # aggregates in one SQLite statement so they see the same snapshot.
+        topic_rows = topic_sql.format(indexed="''")
+        query = wanted + f"""
+            SELECT (SELECT json_group_array(json_array(sid, origin, root_sid, topic_title, user_named))
+                    FROM ({topic_rows})),
+                   (SELECT json_group_array(json_array(sid, continuation_origin))
+                    FROM (
+                        SELECT sid, continuation_origin FROM session_meta
+                        INDEXED BY idx_session_meta_continuation_origin
+                        WHERE continuation_origin > '' OR continuation_origin < ''
+                        LIMIT {_SCOPED_TOPIC_ORIGIN_LIMIT + 1} OFFSET 0
+                    ))
+        """
+        try:
+            packed_topics, packed_origins = self.conn.execute(query, sids).fetchone()
+            origins = _SCOPED_TOPIC_DECODER.decode(packed_origins)
+            if len(origins) <= _SCOPED_TOPIC_ORIGIN_LIMIT:
+                return _SCOPED_TOPIC_DECODER.decode(packed_topics), dict(origins)
+        except sqlite3.OperationalError as exc:
+            message = str(exc).lower()
+            if not (message in ('no such table: session_meta',
+                                'no such index: idx_session_meta_continuation_origin')
+                    or ('no such function:' in message and 'json_' in message)
+                    or 'json cannot hold blob values' in message):
+                raise
+        except ValueError:
+            # Legacy REAL values must use the exact typed read.
+            pass
+        return None
 
     def record(self, sid):
         if self.archive_inputs is not None:
