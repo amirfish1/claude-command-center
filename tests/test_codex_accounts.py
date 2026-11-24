@@ -98,6 +98,29 @@ def test_thread_indexes_merge_and_apply_limit_globally(profiles, monkeypatch):
     assert [r['id'] for r in codex._codex_fetch_threads(limit=1)] == ['newer']
 
 
+def test_thread_index_homes_use_one_current_allowance_read(profiles, monkeypatch):
+    primary, secondary, rows = profiles
+    accounts._register(secondary, 'Secondary')
+    rows[:] = [dict(id='local-codex', source='codex', codex_home=str(primary))]
+    monkeypatch.delenv('CCC_CODEX_DEFAULT_HOME', raising=False)
+    monkeypatch.setenv('CODEX_HOME', str(primary / 'fallback'))
+    calls = []
+
+    def configured():
+        calls.append(None)
+        return rows[:]
+
+    monkeypatch.setattr(accounts, 'configured', configured)
+    assert accounts.homes() == [primary, secondary]
+    assert len(calls) == 1
+
+    override = primary.parent / 'override'
+    monkeypatch.setenv('CCC_CODEX_DEFAULT_HOME', str(override))
+    rows.clear()
+    assert accounts.homes() == [override, secondary]
+    assert len(calls) == 2
+
+
 def test_worker_failure_cannot_send_selected_work_to_default(profiles, monkeypatch):
     import server
     monkeypatch.delenv('CCC_WORKER_PROCESS', raising=False)

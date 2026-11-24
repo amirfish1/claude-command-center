@@ -38,12 +38,18 @@ def _db():
     return con
 
 
-def default_home():
+def _default_home_setting(accounts=None):
     override = os.environ.get('CCC_CODEX_DEFAULT_HOME')
     if not override:
-        row = next((r for r in configured() if r.get('id') == 'local-codex'), None)
+        if accounts is None:
+            accounts = configured()
+        row = next((r for r in accounts if r.get('id') == 'local-codex'), None)
         override = row.get('codex_home') if row else os.environ.get('CODEX_HOME')
-    return Path(override or str(Path.home() / '.codex')).expanduser().resolve()
+    return override or str(Path.home() / '.codex')
+
+
+def default_home():
+    return Path(_default_home_setting()).expanduser().resolve()
 
 
 def configured():
@@ -54,8 +60,10 @@ def configured():
 
 def homes():
     """Include saved bindings even if an allowance is subsequently removed."""
-    result = {str(default_home())}
-    result.update(str(Path(row['codex_home']).expanduser().resolve()) for row in configured())
+    accounts = configured()
+    candidates = {_default_home_setting(accounts)}
+    candidates.update(row['codex_home'] for row in accounts)
+    result = {str(Path(home).expanduser().resolve()) for home in candidates}
     result.update(row['home'] for row in _profiles())
     return [Path(home) for home in sorted(result)]
 
