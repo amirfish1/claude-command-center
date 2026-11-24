@@ -50705,6 +50705,19 @@
   // task-capability shortlist or candidates for automatic selection.
   // Shared conversation-core.js: recentNsModelPicks.
 
+  // Ranked rows carry the allowance that ranked them (bullet meter + verdict).
+  // Shared conversation-core.js: nsAdvisorSpan.
+
+  // Shared conversation-core.js: nsAdvisorDate.
+
+  // Shared conversation-core.js: nsAdvisorVerdict.
+
+  // Shared conversation-core.js: nsAdvisorResetText.
+
+  // Shared conversation-core.js: nsAdvisorRowSub.
+
+  // Shared conversation-core.js: nsAdvisorRowMeter.
+
   // Shared conversation-core.js: renderNsModelPickerPills.
 
   // Shared conversation-services.js: syncNsModelPickerPillsSelection.

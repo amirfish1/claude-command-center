@@ -1920,6 +1920,9 @@
           <section class="ns-advisor" id="nsComposerAdvisor" aria-label="Session thinking" hidden></section>
           <details class="ns-model-overrides" id="nsModelOverrides">
             <summary><span id="nsSelectedModel" aria-live="polite"></span><span class="ns-model-change">Change</span></summary>
+            <!-- One floating panel: ranked models with their allowance, then manual overrides. -->
+            <div class="ns-model-panel" id="nsModelPanel">
+            <div class="ns-model-panel-head" id="nsModelPanelHead"></div>
             <div class="conv-model-picker-inner">
               <span class="conv-model-picker-label">Model</span>
               <div class="conv-model-picker-chips" id="nsModelPickerPills"></div>
@@ -1941,6 +1944,7 @@
                     <option value="secondary">Antigravity (Secondary) · Google OAuth</option>
                   </select>
                 </span>
+            </div>
             </div>
           </details>
         </div>

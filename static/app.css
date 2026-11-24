@@ -32388,31 +32388,12 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 #nsComposerAdvisor .ns-auto-restore { font-size: 11px; padding: 3px 8px; }
 /* Why panel tabs: Allowances (pace bars) and Ranking (drag list). */
 #nsComposerAdvisor .ns-advisor-why[open] .ns-advisor-explanation { max-height: none; overflow: visible; }
-.ns-advisor-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin: 0 0 8px; }
-.ns-advisor .ns-advisor-tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--text-muted); font-weight: 600; padding: 4px 10px; margin-bottom: -1px; }
-.ns-advisor .ns-advisor-tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent, #58a6ff); }
-.ns-pace-scale { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); }
-.ns-pace-account { padding: 7px 0; border-top: 1px solid var(--border); }
-.ns-pace-scale + .ns-pace-account { border-top: 0; }
-.ns-pace-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.ns-pace-head strong { font-size: 12.5px; overflow-wrap: anywhere; }
 .ns-pace-verdict { flex: none; font-size: 11px; font-weight: 600; padding: 0 7px; border-radius: 99px; white-space: nowrap; color: var(--text-muted); background: color-mix(in srgb, var(--text-muted) 14%, transparent); }
 .ns-pace-verdict.is-ahead { color: var(--green); background: color-mix(in srgb, var(--green) 15%, transparent); }
 .ns-pace-verdict.is-behind { color: var(--orange); background: color-mix(in srgb, var(--orange) 16%, transparent); }
 .ns-pace-verdict.is-credits { color: var(--accent, #58a6ff); background: color-mix(in srgb, var(--accent, #58a6ff) 14%, transparent); }
-.ns-pace-bar { position: relative; height: 10px; margin: 6px 0 2px; border-radius: 5px; background: color-mix(in srgb, var(--text-muted) 16%, transparent); }
-.ns-pace-bar i { position: absolute; top: 0; bottom: 0; }
-.ns-pace-fill.is-over { left: 50%; background: var(--green); border-radius: 0 5px 5px 0; }
-.ns-pace-fill.is-under { right: 50%; background: var(--orange); border-radius: 5px 0 0 5px; }
-.ns-pace-bank { right: 0; border-radius: 0 5px 5px 0; background: repeating-linear-gradient(135deg, var(--green) 0 3px, transparent 3px 6px); }
-.ns-pace-mid { left: 50%; top: -3px !important; bottom: -3px !important; width: 2px; margin-left: -1px; background: var(--text); }
-.ns-pace-legend { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 0 10px; font-size: 11px; color: var(--text-muted); }
-.ns-pace-legend b { color: var(--text); }
-.ns-pace-tokens, .ns-pace-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
 .ns-pace-token { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 5px; color: var(--accent, #58a6ff); background: color-mix(in srgb, var(--accent, #58a6ff) 13%, transparent); }
 .ns-pace-token.is-warn { color: var(--orange); background: color-mix(in srgb, var(--orange) 15%, transparent); }
-.ns-advisor .ns-pace-chip { font-size: 11.5px; padding: 1px 9px; border-radius: 99px; }
-.ns-advisor .ns-pace-chip.is-selected { border-color: var(--green); color: var(--green); font-weight: 600; }
 .ns-rank-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
 .ns-rank-list { list-style: none; margin: 0; padding: 0; }
 .ns-rank-row { display: flex; align-items: center; gap: 8px; padding: 3px 8px; margin: 3px 0; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); cursor: grab; }
@@ -32431,23 +32412,8 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 #nsComposerAdvisor .ns-advisor-result { gap: 2px; padding: 10px 12px; border-radius: 10px; margin: 0; background: color-mix(in srgb, var(--green) 16%, transparent); }
 #nsComposerAdvisor .ns-advisor-result > strong { font-size: 14px; }
 #nsComposerAdvisor .ns-advisor-result > span { color: var(--text-muted); }
-.ns-advisor-tabs { gap: 4px; margin: 12px 0 0; }
-.ns-advisor .ns-advisor-tabs button { font-size: 12.5px; padding: 6px 12px; }
-.ns-advisor-heading { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); margin: 14px 0 4px; font-weight: 600; }
-.ns-pace-scale { margin: 0 0 2px; }
-.ns-pace-account { padding: 10px 0; }
-.ns-pace-head { gap: 8px; }
-.ns-pace-head strong { font-size: 13px; }
 .ns-pace-verdict { padding: 1px 7px; }
-.ns-pace-bar { height: 14px; margin: 8px 0 3px; border-radius: 7px; }
-.ns-pace-fill.is-over { border-radius: 0 7px 7px 0; }
-.ns-pace-fill.is-under { border-radius: 7px 0 0 7px; }
-.ns-pace-bank { border-radius: 0 7px 7px 0; background: repeating-linear-gradient(135deg, var(--green) 0 4px, transparent 4px 7px); }
-.ns-pace-mid { top: -4px !important; bottom: -4px !important; }
-.ns-pace-arrow { position: absolute; right: -9px; top: 50%; transform: translateY(-50%); color: var(--green); font-size: 12px; line-height: 1; }
-.ns-pace-tokens, .ns-pace-chips { gap: 5px; margin-top: 6px; }
 .ns-pace-token { padding: 2px 7px; border-radius: 6px; }
-.ns-pace-chip i { font-style: normal; color: var(--text-muted); font-size: 10.5px; margin-left: 3px; }
 .ns-rank-top { display: block; margin: 10px 0 6px; }
 #nsComposerAdvisor .ns-rank-top .ns-advisor-depth { gap: 0; padding: 0; border-radius: 8px; overflow: hidden; background: var(--bg); }
 #nsComposerAdvisor .ns-rank-top .ns-advisor-depth button { padding: 3px 12px; border: 0; border-radius: 0; font-size: 12px; min-height: 0; }
@@ -36661,25 +36627,72 @@ body.ccc-app-embed.conversation-popout .main > .toolbar {
   background: color-mix(in srgb, var(--surface) 72%, var(--bg));
 }
 .conv-pane.reader-scrollaway > .conversations-view { padding-top: var(--ctb-h, 0px); scroll-padding-top: var(--ctb-h, 0px); }
-/* Engine allowance: two bars per engine on one 0-100% scale (used, time elapsed). */
-.ns-pace-line { display: grid; grid-template-columns: 92px 1fr 34px; align-items: center; gap: 8px; margin-top: 5px; font-size: 11px; color: var(--text-muted); }
-.ns-pace-head + .ns-pace-line { margin-top: 7px; }
-.ns-pace-line b { text-align: right; color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
-.ns-pace-track { position: relative; height: 8px; border-radius: 4px; overflow: hidden; background: color-mix(in srgb, var(--text-muted) 16%, transparent); }
-.ns-pace-track i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: var(--text-muted); }
-.ns-pace-line.is-used .ns-pace-track i { background: var(--accent, #58a6ff); }
-.ns-pace-line.is-used.is-ahead .ns-pace-track i { background: var(--green); }
-.ns-pace-line.is-used.is-behind .ns-pace-track i { background: var(--orange); }
-.ns-pace-line + .ns-pace-legend { margin-top: 3px; }
-/* "Change" is the single engine-choice control; its pace explanation floats
-   beside the picker, above the composer, instead of pushing the page down. */
+/* Model panel. "Change" opens one floating panel above the composer strip, so
+   opening it never moves the Routine/Deep row or the selection line. Each
+   ranked model is a row carrying the allowance that ranked it. */
 .conv-model-picker-strip.has-depth-control { position: relative; }
 #nsComposerAdvisor .ns-advisor-why > summary { display: none; }
-#nsComposerAdvisor .ns-advisor-why[open] { flex: 0 0 auto; }
-#nsComposerAdvisor .ns-advisor-why[open] .ns-advisor-explanation {
-  position: absolute; right: 14px; bottom: calc(100% + 44px); z-index: 30;
-  width: 460px; max-width: calc(100% - 28px); margin: 0; box-sizing: border-box;
-  max-height: min(70vh, 640px); overflow-y: auto;
-  box-shadow: 0 10px 30px color-mix(in srgb, #000 22%, transparent);
+#nsComposerAdvisor .ns-advisor-why.is-inline .ns-advisor-explanation { position: static; width: auto; max-width: 460px; box-shadow: none; padding: 6px 10px; margin: 0; }
+#nsModelOverrides:not(.is-legacy) > .ns-model-panel {
+  position: absolute; left: 14px; bottom: calc(100% + 44px); z-index: 30;
+  width: 760px; max-width: calc(100% - 28px); box-sizing: border-box;
+  max-height: min(72vh, 680px); overflow-y: auto; overscroll-behavior: contain;
+  padding: 12px 14px 10px; border: 1px solid var(--border); border-radius: 12px;
+  background: var(--surface); color: var(--text); font-size: 12px;
+  box-shadow: 0 12px 34px color-mix(in srgb, #000 24%, transparent);
 }
-#nsComposerAdvisor .ns-advisor-why.is-inline .ns-advisor-explanation { position: static; width: auto; box-shadow: none; padding: 6px 10px; }
+#nsModelPanel .ns-model-panel-head:empty { display: none; }
+#nsModelPanel .ns-advisor-result { display: flex; flex-direction: column; gap: 1px; padding: 8px 11px; border-radius: 9px; background: color-mix(in srgb, var(--green) 14%, transparent); }
+#nsModelPanel .ns-advisor-result > strong { font-size: 13px; }
+#nsModelPanel .ns-advisor-result > span, #nsModelPanel .ns-panel-note { color: var(--text-muted); font-size: 11.5px; line-height: 1.4; margin: 0; }
+#nsModelPanel .ns-panel-bar { display: flex; align-items: center; gap: 12px; margin: 10px 0 6px; }
+#nsModelPanel .ns-panel-bar > strong { font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); }
+#nsModelPanel .ns-panel-key { display: inline-flex; align-items: center; gap: 7px; margin-left: auto; font-size: 10.5px; color: var(--text-muted); white-space: nowrap; }
+#nsModelPanel .ns-panel-key .ns-pick-meter { width: 44px; }
+#nsModelPanel .ns-panel-bar > strong:only-child, #nsModelPanel .ns-panel-bar > strong + .ns-panel-btn { margin-right: auto; }
+#nsModelPanel :is(.ns-panel-btn, .ns-rank-top button) { font: inherit; font-size: 11px; color: var(--text); border: 1px solid var(--border); border-radius: 6px; background: var(--bg); padding: 2px 9px; cursor: pointer; }
+#nsModelPanel .ns-panel-btn:hover { border-color: var(--accent, #58a6ff); }
+#nsModelPanel :is(.ns-panel-btn, .ns-rank-top button, .ns-pick-row, .ns-model-manual):focus-visible { outline: 2px solid var(--accent, #58a6ff); outline-offset: 1px; }
+#nsModelPanel .ns-rank-top .ns-advisor-depth { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+#nsModelPanel .ns-rank-top .ns-advisor-depth button { border: 0; border-radius: 0; padding: 3px 12px; font-size: 12px; color: var(--text-muted); }
+#nsModelPanel .ns-rank-top .ns-advisor-depth button[aria-pressed="true"] { color: var(--accent, #58a6ff); background: color-mix(in srgb, var(--accent, #58a6ff) 15%, var(--bg)); }
+#nsModelPanel .ns-advisor-error:empty { display: none; }
+#nsModelOverrides #nsModelPanel.is-ordering > :is(.conv-model-picker-inner, .ns-model-override-selects, .ns-model-account-options) { display: none; }
+#nsModelOverrides:not(.is-legacy) .conv-model-picker-inner { display: block; margin: 0; padding: 0; border: 0; }
+#nsModelOverrides:not(.is-legacy) .conv-model-picker-label { display: none; }
+#nsModelOverrides:not(.is-legacy) .ns-model-override-selects { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.conv-model-picker-chips.is-depth-ranked { gap: 4px 6px; }
+.is-depth-ranked > .ns-pick-row {
+  order: 0; flex: 1 0 100%; box-sizing: border-box; display: grid; align-items: center; column-gap: 9px;
+  grid-template-columns: 26px 18px minmax(0, 1fr) 132px 74px 150px;
+  height: auto; min-height: 38px; padding: 4px 10px 4px 8px; border-radius: 9px;
+  background: var(--bg); color: var(--text); font-size: 12.5px; font-weight: 500; text-align: left; white-space: normal;
+}
+.is-depth-ranked > .ns-pick-row.is-unavailable { opacity: .5; border: 1px dashed var(--border); cursor: default; }
+.is-depth-ranked > .ns-pick-row.is-selected { background: color-mix(in srgb, #a371f7 13%, var(--bg)); }
+.is-depth-ranked > .ns-pick-row .ns-model-rank { font-weight: 700; font-variant-numeric: tabular-nums; }
+.ns-pick-name { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.ns-pick-name > b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ns-pick-name > small { display: flex; align-items: center; flex-wrap: wrap; gap: 0 6px; font-size: 10.5px; font-weight: 400; color: var(--text-muted); }
+.ns-pick-name .ns-pace-token { font-style: normal; font-size: 10px; padding: 0 5px; border-radius: 5px; font-weight: 600; color: var(--accent, #58a6ff); background: color-mix(in srgb, var(--accent, #58a6ff) 13%, transparent); }
+.ns-pick-name .ns-pace-token.is-warn { color: var(--orange); background: color-mix(in srgb, var(--orange) 15%, transparent); }
+.ns-pick-meter { position: relative; display: block; height: 6px; border-radius: 3px; background: color-mix(in srgb, var(--text-muted) 20%, transparent); }
+.ns-pick-meter.is-none { background: none; }
+.ns-pick-meter > i { position: absolute; top: 0; bottom: 0; }
+.ns-pick-fill { left: 0; border-radius: 3px; background: var(--accent, #58a6ff); }
+.ns-pick-meter.is-ahead .ns-pick-fill { background: var(--green); }
+.ns-pick-meter.is-behind .ns-pick-fill { background: var(--orange); }
+.ns-pick-mark { top: -4px !important; bottom: -4px !important; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--text); }
+.ns-pick-nums { font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text); }
+.ns-pick-nums > i { font-style: normal; font-weight: 400; color: var(--text-muted); }
+.ns-pick-row > .ns-pace-verdict { justify-self: end; font-size: 10.5px; }
+.ns-pick-divider { order: 0; flex: 1 0 100%; display: flex; align-items: center; gap: 8px; margin: 2px 0; font-size: 10px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--orange); }
+.ns-pick-divider::before, .ns-pick-divider::after { content: ""; flex: 1; border-top: 1px dashed var(--orange); }
+.is-depth-ranked > .orch-tier-chip:not(.ns-pick-row), .is-depth-ranked > .ccc-free-pill { order: 1; margin-top: 6px; }
+.is-depth-ranked > .ns-model-manual { order: 2; margin-top: 6px; }
+@media (max-width: 760px) {
+  #nsModelOverrides:not(.is-legacy) > .ns-model-panel { position: fixed; left: 8px; right: 8px; width: auto; max-width: none; bottom: var(--ns-panel-bottom, 220px); max-height: min(62vh, calc(100vh - var(--ns-panel-bottom, 220px) - 12px)); padding: 10px; }
+  .conv-model-picker-strip.is-new-session #nsModelPickerPills.is-depth-ranked { flex-wrap: wrap !important; overflow: visible !important; }
+  .conv-model-picker-strip.is-new-session .is-depth-ranked > .ns-pick-row { flex: 1 0 100%; max-width: 100%; grid-template-columns: 24px 18px minmax(0, 1fr) 56px auto; font-size: 13px; padding: 4px 8px; min-height: 44px; white-space: normal; order: 0; }
+  .is-depth-ranked > .ns-pick-row .ns-pick-nums, #nsModelPanel .ns-panel-key { display: none; }
+}

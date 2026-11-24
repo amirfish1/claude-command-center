@@ -21949,7 +21949,7 @@
     const container = document.getElementById('nsModelPickerPills');
     if (!container) return;
 
-    const doRender = (picks, ranked = false) => {
+    const doRender = (picks, ranked = false, unavailableRows = []) => {
       if (!Array.isArray(picks)) return;
       const currentEngine = getSpawnEngine();
       const currentModel = (typeof sharedState.$convInputModelSelect !== 'undefined' && sharedState.$convInputModelSelect && sharedState.$convInputModelSelect.style.display !== 'none')
@@ -21971,6 +21971,8 @@
       container.setAttribute('aria-label', ranked ? 'Recent models and ' + (sharedState.nsAdvisor.depth === 'deep' ? 'Deep' : 'Routine') + ' models, ranked' : 'Model shortcuts');
       const labelHost = container.closest('.conv-model-picker-inner')?.querySelector('.conv-model-picker-label');
       if (labelHost) labelHost.textContent = ranked ? (sharedState.nsAdvisor.depth === 'deep' ? 'Deep rank' : 'Routine rank') : 'Model';
+      const now = Date.now();
+      let fallbackShown = false;
       container.innerHTML = picks.map((p, index) => {
         const recommended = ranked && !p.recent;
         const isSel = p.engine === currentEngine && _normalizeModelId(p.model) === _normalizeModelId(currentModel)
@@ -21979,7 +21981,7 @@
         const badge = sharedState.MODEL_PICKER_ENGINE_GLYPHS[p.engine] || '?';
         const badgeClass = 'orch-glyph orch-glyph-' + p.engine;
         const title = [recommended ? '#' + p.rank : p.recent ? 'Recently used · manual choice' : '', p.engine, p.model, recommended ? p.effort : '', recommended ? p.reason : ''].filter(Boolean).join(' · ');
-        return '<button type="button" class="orch-tier-chip' + (isSel ? ' is-selected' : '') + '"'
+        const chip = '<button type="button" class="orch-tier-chip' + (recommended ? ' ns-pick-row' : '') + (isSel ? ' is-selected' : '') + '"'
           + ' role="radio" aria-checked="' + (isSel ? 'true' : 'false') + '"'
           + ' data-engine="' + (0, sharedState.escapeAttr)(p.engine) + '"'
           + ' data-model="' + (0, sharedState.escapeAttr)(p.model) + '"'
@@ -21988,8 +21990,17 @@
           + ' title="' + (0, sharedState.escapeAttr)(title) + '">'
           + (recommended ? '<span class="ns-model-rank">#' + p.rank + '</span>' : '')
           + '<span class="' + badgeClass + '">' + (0, sharedState.escapeHtml)(badge) + '</span>'
-          + (0, sharedState.escapeHtml)(label) + '</button>';
-      }).join('');
+          + (recommended ? '<span class="ns-pick-name"><b>' + (0, sharedState.escapeHtml)(label) + '</b>' + nsAdvisorRowSub(p, now) + '</span>' + nsAdvisorRowMeter(p, now)
+            : (0, sharedState.escapeHtml)(label)) + '</button>';
+        // Rows under the "good enough" line are fallbacks: say so once.
+        if (recommended && p.tier === 1 && !fallbackShown) {
+          fallbackShown = true;
+          return '<div class="ns-pick-divider" role="presentation">fallbacks</div>' + chip;
+        }
+        return chip;
+      }).join('') + (ranked ? unavailableRows.map(c => '<div class="ns-pick-row is-unavailable" title="' + (0, sharedState.escapeAttr)(c.unavailable) + '">'
+        + '<span class="ns-model-rank">–</span><span class="orch-glyph orch-glyph-' + (0, sharedState.escapeAttr)(c.engine) + '">' + (0, sharedState.escapeHtml)(sharedState.MODEL_PICKER_ENGINE_GLYPHS[c.engine] || '?') + '</span>'
+        + '<span class="ns-pick-name"><b>' + (0, sharedState.escapeHtml)(getModelPillLabel(c.engine, c.model, c.effort)) + '</b><small>' + (0, sharedState.escapeHtml)(c.unavailable) + '</small></span></div>').join('') : '');
       container.querySelectorAll('.orch-tier-chip').forEach((chip, index) => {
         chip.addEventListener('click', () => {
           if (ranked && !picks[index].recent) {
@@ -22020,8 +22031,9 @@
     };
 
     const renderRanked = history => {
-      const choices = nsAdvisorChoices().filter(choice => !choice.unavailable);
-      doRender(recentNsModelPicks(choices, history).concat(choices.map((p, index) => ({ ...p, rank: index + 1 }))), true);
+      const all = nsAdvisorChoices();
+      const choices = all.filter(choice => !choice.unavailable);
+      doRender(recentNsModelPicks(choices, history).concat(choices.map((p, index) => ({ ...p, rank: index + 1 }))), true, all.filter(choice => choice.unavailable));
     };
     if (nsAdvisorRanksPicker()) {
       renderRanked(sharedState._cachedServerModelPicks);
@@ -22360,70 +22372,65 @@
   function nsAdvisorPickSummary(best, choices) {
     const parts = [best.reason || 'Your preferred eligible model for this task depth.'];
     const pace = nsAdvisorPaceText(best);
-    if (pace) parts.push('Its allowance is ' + (best.pace >= 0 ? pace + ' ahead of' : pace.slice(1) + ' behind') + ' pace.');
+    if (pace && typeof best.pct === 'number' && typeof best.timePct === 'number') {
+      parts.push(Math.round(100 - best.pct) + '% used with ' + Math.round(100 - best.timePct) + '% of the '
+        + (best.windowHours === 24 ? 'day' : best.windowHours === 168 ? 'week' : 'window') + ' gone.');
+    }
     const urgent = choices.find(c => !c.unavailable && c.tier > best.tier && c.urgency > best.urgency);
     if (urgent) parts.push(spawnEngineLabel(urgent.engine) + ' is closer to expiring but sits below your good-enough line.');
     return parts.join(' ');
   }
 
-  function nsAdvisorTabsHtml(config, choices, label) {
+  // One row = one ranked model with the allowance that put it there. The
+  // meter is a bullet chart: the fill is the share of the allowance used, the
+  // mark is how much of the window has passed. Fill short of the mark means
+  // quota to spare.
+  function nsAdvisorRowSub(c, now) {
     const esc = sharedState.escapeHtml;
-    const tab = sharedState.nsAdvisor.whyTab === 'ranking' ? 'ranking' : 'allowances';
-    return '<div class="ns-advisor-tabs" role="tablist">'
-      + [['allowances', 'Allowances'], ['ranking', 'Ranking']].map(([id, text]) => '<button type="button" role="tab" data-advisor-tab="' + id
-        + '" aria-selected="' + (tab === id) + '">' + text + '</button>').join('') + '</div>'
-      + (tab === 'ranking' ? nsAdvisorRankingHtml(config, esc) : nsAdvisorAllowancesHtml(choices, label, esc));
+    const bits = [], tokens = [];
+    if (c.funding) bits.push(esc(c.funding));
+    if (!c.metered && typeof c.pace === 'number' && c.reset) bits.push(esc(nsAdvisorResetText(c, now)));
+    const banked = (c.banked || []).reduce((n, b) => n + (b.count || 1), 0);
+    if (banked) {
+      const first = Math.min(...c.banked.map(b => b.expires || Infinity));
+      tokens.push('<i class="ns-pace-token" title="' + sharedState.escapeAttr(c.banked.map(b => (b.count > 1 ? b.count + '× ' : '') + b.label + (b.expires ? ' · use by ' + nsAdvisorDate(b.expires) : '')).join('\n')) + '">↻ '
+        + banked + ' banked' + (Number.isFinite(first) ? ' · use by ' + esc(nsAdvisorDate(first)) : '') + '</i>');
+    }
+    if (c.planEnds) tokens.push('<i class="ns-pace-token is-warn">plan ends ' + esc(nsAdvisorDate(c.planEnds)) + '</i>');
+    return bits.length || tokens.length ? '<small><span>' + bits.join(' · ') + '</span>' + tokens.join('') + '</small>' : '';
   }
 
-  function nsAdvisorAllowancesHtml(choices, label, esc) {
-    const now = Date.now();
-    const held = currentSpawnChoice();
-    const groups = [];
-    for (const c of choices) {
-      let group = groups.find(g => g.engine === c.engine);
-      if (!group) groups.push(group = { engine: c.engine, rows: [] });
-      group.rows.push(c);
+  function nsAdvisorRowMeter(c, now) {
+    const esc = sharedState.escapeHtml;
+    const [tone, verdict] = nsAdvisorVerdict(c, now);
+    const pill = '<span class="ns-pace-verdict ' + tone + '">' + esc(verdict) + '</span>';
+    if (c.metered || typeof c.pace !== 'number' || typeof c.pct !== 'number') return '<span class="ns-pick-meter is-none"></span><span class="ns-pick-nums"></span>' + pill;
+    const span = c.windowHours === 24 ? 'day' : c.windowHours === 168 ? 'week' : 'window';
+    const used = Math.max(0, Math.min(100, 100 - c.pct));
+    const elapsed = Math.max(0, Math.min(100, 100 - c.timePct));
+    const text = Math.round(used) + '% used, ' + Math.round(elapsed) + '% of the ' + span + ' gone';
+    return '<span class="ns-pick-meter ' + (c.pace > 15 ? 'is-ahead' : c.pace < -5 ? 'is-behind' : 'is-even') + '" role="img" aria-label="' + esc(text) + '" title="' + esc(text) + '">'
+      + '<i class="ns-pick-fill" style="width:' + used + '%"></i><i class="ns-pick-mark" style="left:' + elapsed + '%"></i></span>'
+      + '<span class="ns-pick-nums">' + Math.round(used) + '%<i> used</i></span>' + pill;
+  }
+
+  // Head of the floating model panel: what auto picked and why, the meter key,
+  // and the switch into drag-to-reorder.
+  function nsAdvisorPanelHeadHtml(config, choices, best, automatic, label) {
+    const esc = sharedState.escapeHtml;
+    if (sharedState.nsAdvisor.error || config?.enabled === false) return '';
+    if (!config) return '<p class="ns-panel-note" role="status">Loading your preferences…</p>';
+    const depth = sharedState.nsAdvisor.depth === 'deep' ? 'Deep' : 'Routine';
+    if (sharedState.nsAdvisor.whyTab === 'ranking') {
+      return '<div class="ns-panel-bar"><strong>Edit order</strong><button type="button" class="ns-panel-btn" data-advisor-tab="allowances">Done</button></div>'
+        + nsAdvisorRankingHtml(config, esc);
     }
-    if (!groups.length) return '';
-    return '<h4 class="ns-advisor-heading">Used vs. time elapsed</h4>'
-      + groups.map(group => {
-        const c = group.rows.find(r => !r.unavailable) || group.rows[0];
-        const [tone, verdict] = nsAdvisorVerdict(c, now);
-        let body = '';
-        if (c.metered) {
-          body = '<div class="ns-pace-legend"><span>No weekly window. Costs real credits, so used only when subscriptions are behind.</span></div>';
-        } else if (typeof c.pace === 'number') {
-          // Two plain bars on the same 0-100% scale: how much of the allowance is
-          // used, and how much of its window has passed. Used shorter than
-          // elapsed means there is room to spend.
-          const span = c.windowHours === 24 ? 'day' : c.windowHours === 168 ? 'week' : 'window';
-          const used = Math.max(0, Math.min(100, 100 - c.pct));
-          const elapsed = Math.max(0, Math.min(100, 100 - c.timePct));
-          const usedTone = c.pace > 15 ? 'is-ahead' : c.pace < -5 ? 'is-behind' : 'is-even';
-          const row = (cls, text, pctValue, title) => '<div class="ns-pace-line ' + cls + '"' + (title ? ' title="' + esc(title) + '"' : '') + '><span class="ns-pace-label">' + text + '</span>'
-            + '<span class="ns-pace-track" role="img" aria-label="' + esc(text + ' ' + Math.round(pctValue) + '%') + '"><i style="width:' + pctValue + '%"></i></span>'
-            + '<b>' + Math.round(pctValue) + '%</b></div>';
-          body = row('is-used ' + usedTone, 'Used', used, c.source === 'reported' ? 'Reported by the provider' : '')
-            + row('is-elapsed', span.charAt(0).toUpperCase() + span.slice(1) + ' elapsed', elapsed, '')
-            + '<div class="ns-pace-legend"><span>' + esc(nsAdvisorResetText(c, now)) + '</span></div>';
-        } else {
-          body = '<div class="ns-pace-legend"><span>' + esc(c.notes.join(' · ') || 'No usage reading') + '</span></div>';
-        }
-        const tokens = (c.banked || []).map(b => '<span class="ns-pace-token">↻ ' + (b.count > 1 ? b.count + '× ' : '') + esc(b.label)
-          + (b.expires ? ' · use by ' + esc(nsAdvisorDate(b.expires)) : '') + '</span>')
-          .concat(c.planEnds ? ['<span class="ns-pace-token is-warn">Plan ends ' + esc(nsAdvisorDate(c.planEnds)) + '</span>'] : []);
-        const chips = group.rows.map(r => {
-          const index = choices.indexOf(r);
-          const on = held && r.engine === held.engine && _normalizeModelId(r.model) === _normalizeModelId(held.model) && (r.effort || '') === (held.effort || '');
-          const parts = nsAdvisorModelParts(r.engine, r.model, r.effort);
-          return '<button type="button" class="ns-pace-chip' + (on ? ' is-selected' : '') + '"' + (r.unavailable ? ' disabled title="' + esc(r.unavailable) + '"'
-            : ' data-advisor-pick="' + index + '"') + '>' + (on ? '✓ ' : '') + (parts.effort ? esc(parts.name) + '<i>' + esc(parts.effort) + '</i>' : esc(parts.name)) + '</button>';
-        }).join('');
-        return '<div class="ns-pace-account"><div class="ns-pace-head"><strong>' + esc(c.funding || spawnEngineLabel(group.engine)) + '</strong>'
-          + '<span class="ns-pace-verdict ' + tone + '"' + (c.unavailable ? ' title="' + esc(c.unavailable) + '"' : '') + '>' + esc(verdict) + '</span></div>'
-          + body + (tokens.length ? '<div class="ns-pace-tokens">' + tokens.join('') + '</div>' : '')
-          + '<div class="ns-pace-chips">' + chips + '</div></div>';
-      }).join('');
+    return (best ? '<div class="ns-advisor-result"><strong>' + (automatic ? 'Auto picks ' : 'Auto would pick ') + esc(label(best)) + '</strong>'
+        + '<span>' + esc(nsAdvisorPickSummary(best, choices)) + '</span></div>'
+      : '<p class="ns-panel-note" role="status">No eligible model. Check availability and allowances, or choose a model.</p>')
+      + '<div class="ns-panel-bar"><strong>' + depth + ' order</strong>'
+      + '<span class="ns-panel-key" aria-hidden="true"><i class="ns-pick-meter is-even"><i class="ns-pick-fill" style="width:45%"></i><i class="ns-pick-mark" style="left:70%"></i></i>bar = used · mark = time gone</span>'
+      + '<button type="button" class="ns-panel-btn" data-advisor-tab="ranking">Edit order</button></div>';
   }
 
   function nsAdvisorRankingHtml(config, esc) {
@@ -22473,7 +22480,7 @@
       sharedState.nsAdvisor.focusRank = undefined;
       sharedState.nsAdvisor.data.config = config;
       renderNsAdvisor();
-      const status = document.querySelector('#nsComposerAdvisor .ns-rank-list + .ns-advisor-error');
+      const status = document.querySelector('#nsModelPanelHead .ns-rank-list + .ns-advisor-error');
       if (status) status.textContent = error.message;
     }
   }
@@ -22551,12 +22558,10 @@
     host.hidden = false;
     host.classList.remove('is-editing');
     const config = sharedState.nsAdvisor.data?.config;
-    // One control for engine choice: "Change" opens the picker, and the pace
-    // explanation floats beside it instead of a separate "Why?" toggle.
-    const overridesEl = document.getElementById('nsModelOverrides');
-    const whyOpen = !!overridesEl?.open && !overridesEl.classList.contains('is-legacy');
-    // With auto off or a load error there is no pace card to float; show the
-    // note and its Preferences/Retry button inline so they stay reachable.
+    // One control for engine choice: "Change" opens a floating panel that
+    // lists the ranked models with their allowance. With auto off or a load
+    // error there is no ranking to show; the note and its Preferences/Retry
+    // button stay inline so they remain reachable.
     const inlineNote = !!sharedState.nsAdvisor.error || (config && config.enabled === false);
     const choices = nsAdvisorChoices();
     const best = choices.find(c => !c.unavailable);
@@ -22602,18 +22607,17 @@
         + (depth === 'deep' ? 'Hard debugging, architecture, ambiguous work' : 'Clear implementation, small fixes, routine edits') + '">'
         + (depth === 'routine' ? 'Routine' : 'Deep') + '</button>').join('') + '</div>'
       + (sharedState.nsAdvisor.manual && best && config?.enabled ? '<button type="button" class="ns-auto-restore" data-advisor-use>Use auto</button>' : '')
-      + '<details class="ns-advisor-why' + (inlineNote ? ' is-inline' : '') + '"' + (whyOpen || inlineNote ? ' open' : '') + '><summary hidden>Why?</summary><div class="ns-advisor-explanation" role="note" aria-label="Why this model">'
-      + (sharedState.nsAdvisor.error ? '<p role="status">' + (0, sharedState.escapeHtml)(sharedState.nsAdvisor.error) + ' <button type="button" data-advisor-refresh>Retry</button></p>'
-        : !config ? '<p role="status">Loading your preferences…</p>'
-        : !config.enabled ? '<p>Enable automatic selection in model preferences.</p>'
-        : (best ? '<div class="ns-advisor-result"><strong>' + (automatic ? 'Auto · ' : '') + (0, sharedState.escapeHtml)(label(best)) + '</strong>'
-          + '<span>' + (0, sharedState.escapeHtml)(nsAdvisorPickSummary(best, choices)) + '</span></div>'
-          : '<p role="status">No eligible model. Check availability and allowances, or choose a model.</p>')
-          + nsAdvisorTabsHtml(config, choices, label))
-      + (config && config.enabled && !sharedState.nsAdvisor.error ? ''
-        : '<div class="ns-advisor-actions"><button type="button" data-advisor-edit>Preferences</button></div>')
-      + '</div></details></div>'
+      + (inlineNote ? '<details class="ns-advisor-why is-inline" open><summary hidden>Why?</summary><div class="ns-advisor-explanation" role="note" aria-label="Why this model">'
+        + (sharedState.nsAdvisor.error ? '<p role="status">' + (0, sharedState.escapeHtml)(sharedState.nsAdvisor.error) + ' <button type="button" data-advisor-refresh>Retry</button></p>'
+          : '<p>Enable automatic selection in model preferences.</p>')
+        + '<div class="ns-advisor-actions"><button type="button" data-advisor-edit>Preferences</button></div></div></details>' : '')
+      + '</div>'
       + suggestHtml;
+    const panel = document.getElementById('nsModelPanel');
+    const panelHead = document.getElementById('nsModelPanelHead');
+    const ordering = !!config?.enabled && !sharedState.nsAdvisor.error && sharedState.nsAdvisor.whyTab === 'ranking';
+    panel?.classList.toggle('is-ordering', ordering);
+    if (panelHead) panelHead.innerHTML = nsAdvisorPanelHeadHtml(config, choices, best, automatic, label);
     host.querySelectorAll('[data-depth]').forEach(button => button.addEventListener('click', () => {
       sharedState.nsAdvisor.depth = button.dataset.depth;
       sharedState.nsAdvisor.manual = false;
@@ -22622,20 +22626,13 @@
       renderNsAdvisor();
     }));
     host.querySelector('[data-advisor-use]')?.addEventListener('click', () => { sharedState.nsAdvisor.manual = false; sharedState.nsAdvisor.applied = null; renderNsAdvisor(); });
-    host.querySelectorAll('[data-advisor-pick]').forEach(button => button.addEventListener('click', () => {
-      const choice = choices[Number(button.dataset.advisorPick)];
-      if (!choice || choice.unavailable) return;
-      applyNsAdvisorChoice(choice);
-      sharedState.nsAdvisor.manual = true;
-      renderNsAdvisor();
-    }));
     host.querySelector('[data-advisor-switch]')?.addEventListener('click', () => {
       const suggestion = nsAdvisorChoices().find(c => !c.unavailable);
       if (suggestion) applyNsAdvisorChoice(suggestion);
       renderNsAdvisor();
     });
     host.querySelectorAll('[data-advisor-refresh]').forEach(button => button.addEventListener('click', () => loadNsAdvisor(true)));
-    bindNsAdvisorTabs(host, config);
+    if (panelHead) bindNsAdvisorTabs(panelHead, config);
     renderNsModelPickerPills();
     host.querySelector('[data-advisor-edit]')?.addEventListener('click', () => {
       if (!config) { loadNsAdvisor(true); return; }
@@ -22729,8 +22726,10 @@
     const lifted = overrides.open && !overrides.classList.contains('is-legacy');
     const toggle = overrides.querySelector(':scope > summary .ns-model-change');
     if (toggle) toggle.textContent = lifted ? 'Collapse' : 'Change';
-    const why = document.querySelector('#nsComposerAdvisor .ns-advisor-why');
-    if (why) why.open = lifted || why.classList.contains('is-inline');
+    // Phones scroll the strip, which would clip the floating panel, so there it
+    // is fixed to the viewport just above the strip.
+    const strip = document.getElementById('convModelPickerStrip');
+    if (lifted && strip) overrides.style.setProperty('--ns-panel-bottom', Math.round(window.innerHeight - strip.getBoundingClientRect().top + 44) + 'px');
     for (const select of [sharedState.$convInputEngineSelect, sharedState.$convInputModelSelect, sharedState.$convInputEffortSelect]) {
       if (!select) continue;
       if (lifted) {
@@ -22752,6 +22751,10 @@
       if (overrides) {
         sharedState.nsAdvisor.overridesListener = true;
         overrides.addEventListener('toggle', syncNsModelOverrideSelects);
+        // The panel floats over the page, so it dismisses like a popover.
+        const dismiss = () => { if (overrides.open && !overrides.classList.contains('is-legacy')) overrides.open = false; };
+        document.addEventListener('pointerdown', event => { if (!event.target.closest?.('#convModelPickerStrip')) dismiss(); });
+        document.addEventListener('keydown', event => { if (event.key === 'Escape' && overrides.open && !sharedState.nsAdvisor.dragging) dismiss(); });
       }
     }
     if (!sharedState.nsAdvisor.runtimeListener) {
@@ -22766,8 +22769,7 @@
       sharedState._nsModelComparisonOpen = false;
       const overrides = document.getElementById('nsModelOverrides');
       if (overrides) overrides.open = false;
-      const why = document.querySelector('#nsComposerAdvisor .ns-advisor-why');
-      if (why) why.open = false;
+      sharedState.nsAdvisor.whyTab = 'allowances';
     }
     ++sharedState.newSessionComposerRevision;
     const initialPrompt = typeof arguments[0] === 'string' ? arguments[0] : null;
