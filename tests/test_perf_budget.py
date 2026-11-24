@@ -6575,8 +6575,6 @@ def test_indexed_hot_change_skips_cold_sidebar_page_scan(tmp_path, monkeypatch):
         assert publish(at, merged, entry)
 
     assert publish(stamp, [*cold, aging, aging_next, recent]) == 303
-    refresh(stamp + 1, dict(recent, first_message="priming change"))
-
     statements = []
     connect = archive_store._connect
 
@@ -6586,7 +6584,7 @@ def test_indexed_hot_change_skips_cold_sidebar_page_scan(tmp_path, monkeypatch):
         return con
 
     monkeypatch.setattr(archive_store, "_connect", traced)
-    refresh(stamp + 2, dict(recent, first_message="another hot change"))
+    refresh(stamp + 2, dict(recent, first_message="first change after full publication"))
     assert not any("SELECT identity,rowid,digest FROM rows" in sql for sql in statements)
     assert not any("INTO sidebar_pages" in sql for sql in statements)
 
