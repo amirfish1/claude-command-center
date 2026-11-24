@@ -727,3 +727,25 @@ def test_diagnostics_distinguish_replay_and_metadata_invalidation(inputs, monkey
     assert phases['projection_cache']['changed'] == ['overlay']
     assert not phases['projection_cache']['hit']
     assert changed['conversations'][1]['display_name'] == 'Renamed'
+
+
+def test_scoped_projection_reuses_preview_selection_without_changing_wire_bytes(inputs, monkeypatch):
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_INITIAL_SELECTION_CACHE', server.ByteBudgetCache(1 << 20, 8))
+    rows = fixture_rows()
+    rows.insert(0, {'session_id': 'expired', 'mtime': 1})
+    now = 1000000
+    rows[-1]['mtime'] = now
+    delta = {'ver': 1, 'ctx': 'context', 'extra': rows[-1:]}
+    options = {'window': '7d', 'now': now, 'cached': True, 'row_layouts': True, '_wire_only': True}
+    baseline = server._archive_list_replay_payload(rows, delta, **options)
+
+    server._ARCHIVE_LIST_PROJECTION_CACHE.clear()
+    version = ('default', delta['ver'])
+    server._archive_list_initial_payload(rows, now=now, window='7d', selection_version=version)
+    phases = {}
+    reused = server._archive_list_replay_payload(
+        rows, delta, phases=phases, selection_version=version, **options)
+
+    assert phases['window_selection']['hit'] is True
+    assert [row['session_id'] for row in reused['conversations']] == ['live', 'archive']
+    assert replay.encode_payload(reused) == replay.encode_payload(baseline)

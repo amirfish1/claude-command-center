@@ -21321,6 +21321,15 @@ def _queue_health_stats(rows, *, now=None, working_snapshot=None):
 _ARCHIVE_LIST_INITIAL_SELECTION_CACHE = ByteBudgetCache(8 * 1024 * 1024, 8)
 
 
+def _archive_list_selection_key(rows, window, parents, ideas, version):
+    parent_key = frozenset((sid, parent) for sid, parent in parents.items()
+                          if isinstance(sid, str) and isinstance(parent, str))
+    idea_key = frozenset((sid, _archive_list_row_ts({"idea_ticket": ticket}),
+                         bool(ticket.get("explicitly_archived")))
+                        for sid, ticket in ideas.items() if isinstance(sid, str))
+    return version, window, len(rows), parent_key, idea_key
+
+
 def _archive_list_initial_selection(rows, window, now, parents, ideas, version):
     """Select the same recent rows until an input or window boundary changes."""
     # Cache positions, never projected rows: titles, tickets, resume state and
@@ -21329,12 +21338,7 @@ def _archive_list_initial_selection(rows, window, now, parents, ideas, version):
     # guard. Explicit freshness requests and unversioned sources bypass reuse.
     key = None
     if version:
-        parent_key = frozenset((sid, parent) for sid, parent in parents.items()
-                              if isinstance(sid, str) and isinstance(parent, str))
-        idea_key = frozenset((sid, _archive_list_row_ts({"idea_ticket": ticket}),
-                              bool(ticket.get("explicitly_archived")))
-                             for sid, ticket in ideas.items() if isinstance(sid, str))
-        key = (version, window, len(rows), parent_key, idea_key)
+        key = _archive_list_selection_key(rows, window, parents, ideas, version)
         entry = _ARCHIVE_LIST_INITIAL_SELECTION_CACHE.get(key)
         if entry and entry[2] <= now < entry[3]:
             return [rows[i] for i in entry[0]], entry[1], True
@@ -21375,10 +21379,31 @@ def _archive_list_initial_selection(rows, window, now, parents, ideas, version):
                 if stamp >= now - seconds:
                     expires = min(expires, stamp + seconds)
         positions = {id(row): i for i, row in enumerate(rows)}
-        entry = (tuple(positions[id(row)] for row in initial), len(selected), now, expires)
+        full_positions = tuple(positions[id(row)] for row in selected) if window == "7d" else ()
+        entry = (tuple(positions[id(row)] for row in initial), len(selected), now, expires, full_positions)
         weight = 4 * len(marshal.dumps((key, entry), 2)) + 512
         _ARCHIVE_LIST_INITIAL_SELECTION_CACHE.put(key, entry, weight)
     return initial, len(selected), False
+
+
+def _archive_list_full_selection(rows, window, now, parents, ideas, version, phases):
+    # A completed preview can supply exact membership immediately. A full
+    # request without a matching preview does its own selection without waiting.
+    wall = time.perf_counter() if phases is not None else 0
+    cpu = time.thread_time() if phases is not None else 0
+    entry = None
+    if _ARCHIVE_LIST_INITIAL_SELECTION_CACHE.has_key_prefix((version, window, len(rows))):
+        key = _archive_list_selection_key(rows, window, parents, ideas, version)
+        entry = _ARCHIVE_LIST_INITIAL_SELECTION_CACHE.get(key)
+    hit = entry is not None and entry[2] <= now < entry[3]
+    if hit:
+        selected = [rows[i] for i in entry[4]]
+    else:
+        selected = _archive_list_window_rows(rows, _archive_list_window_cutoff(window, now), ideas, parents)
+    if phases is not None:
+        phases["window_selection"] = {"hit": hit, "wall_ms": round((time.perf_counter() - wall) * 1000, 1),
+                                      "cpu_ms": round((time.thread_time() - cpu) * 1000, 1)}
+    return selected
 
 
 def _archive_list_initial_payload(rows, *, window="all", now=None, cached=None, phases=None, selection_version=None):
@@ -21517,7 +21542,8 @@ def _archive_list_projection_diag(window, key, hit):
 
 
 def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=None, phases=None,
-                                 check_client=None, eager_gzip=True, row_layouts=False, _wire_only=False):
+                                 check_client=None, eager_gzip=True, row_layouts=False, _wire_only=False,
+                                 selection_version=None):
     row_overlays = delta.get("row_overlays") if delta else None
     # The scoped wire builder reads nested values only and retains encoded
     # bytes. Other callers can mutate the returned rows independently.
@@ -21555,8 +21581,17 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
     except Exception:
         return project(_row_overlays=row_overlays)
     parents = _session_graph.parent_snapshot()
-    selected = _archive_list_window_rows(
-        rows, _archive_list_window_cutoff(window, now=now), ideas, parents)
+    preview_version = None
+    if window == "7d" and selection_version:
+        _, body_version = selection_version
+        snapshot_version = body_version[0] if isinstance(body_version, tuple) else body_version
+        if snapshot_version == delta["ver"]:
+            preview_version = selection_version
+    if preview_version:
+        selected = _archive_list_full_selection(rows, window, now, parents, ideas, preview_version, phases)
+    else:
+        selected = _archive_list_window_rows(
+            rows, _archive_list_window_cutoff(window, now=now), ideas, parents)
     inputs = (resumes, parents, ideas, selected)
     if not extra:
         return project(_inputs=inputs, _row_overlays=row_overlays)
@@ -39125,6 +39160,9 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     "cpu_ms": round((time.thread_time() - _lc0) * 1000.0, 1),
                 })
                 return
+            selection_version = body_ver if stale_ok else None
+            if window == "7d" and selection_version:
+                selection_version = (list_cache_key, selection_version)
             if initial:
                 # No delta token or persisted full-body cache entry can ever
                 # describe this intentionally partial response.
@@ -39132,7 +39170,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 _initial_phases = {}
                 _initial_payload = _archive_list_initial_payload(
                     rows, window=window, cached=from_cache, phases=_initial_phases,
-                    selection_version=body_ver if stale_ok else None)
+                    selection_version=selection_version)
                 _initial_payload_end = time.perf_counter()
                 self.send_json(_initial_payload)
                 record_diag("list_server", (time.perf_counter() - _lt0) * 1000.0, {
@@ -39240,7 +39278,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     payload = _archive_list_replay_payload(
                         rows, _delta, window=window, cached=from_cache, phases=_payload_phases,
                         check_client=_check_client, eager_gzip=eager_gzip, row_layouts=scoped_layouts,
-                        _wire_only=True)
+                        _wire_only=True, selection_version=selection_version)
                     if _check_client is not None:
                         _check_client()
                     if _delta is not None:

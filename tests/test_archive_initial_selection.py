@@ -174,3 +174,32 @@ def test_initial_recent_topic_retains_old_children_beyond_recent_500():
     result = select(rows)
     assert {'599', '0', '1'} <= set(ids(result))
     assert len(result[0]) == 502
+
+
+def test_full_seven_day_selection_reuses_only_matching_preview():
+    now = 1000000
+    cutoff = now - 604800
+    rows = [{'session_id': 'parent', 'mtime': 1},
+            {'session_id': 'child', 'mtime': cutoff + 1},
+            {'session_id': 'archived', 'mtime': 1},
+            {'session_id': 'kept', 'mtime': now}]
+    parents = {'child': 'parent', 'kept': 'archived'}
+    ideas = {'archived': {'explicitly_archived': True}}
+    version = ('default', 1)
+
+    def full(source, at, graph=parents, tickets=ideas, tag=version):
+        phases = {}
+        selected = server._archive_list_full_selection(
+            source, '7d', at, graph, tickets, tag, phases)
+        return [row['session_id'] for row in selected], phases['window_selection']['hit']
+
+    assert full(rows, now) == (['child', 'kept', 'parent'], False)
+    select(rows, window='7d', now=now, parents=parents, ideas=ideas, version=version)
+    current = copy.deepcopy(rows)
+    assert full(current, now + .5) == (['child', 'kept', 'parent'], True)
+    assert full(current, now + 2) == (['kept'], False)
+    assert full(current, now - 1) == (['child', 'kept', 'parent'], False)
+    assert full(current, now, graph={}) == (['child', 'kept'], False)
+    assert full(current, now, tickets={}) == (['child', 'kept', 'parent', 'archived'], False)
+    assert full(current, now, tag=('other', 1)) == (['child', 'kept', 'parent'], False)
+    assert full(current, now, tag=('default', 2)) == (['child', 'kept', 'parent'], False)
