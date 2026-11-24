@@ -2185,10 +2185,10 @@ onDashboardDocumentReady(() => {
       const paneWidth = pane ? pane.getBoundingClientRect().width : window.innerWidth;
       return Math.max(STATUS_RAIL_MIN_WIDTH, Math.min(STATUS_RAIL_MAX_WIDTH, Math.round(paneWidth - 260)));
     };
-    const _clampStatusRailWidth = (width) => {
+    const _clampStatusRailWidth = (width, maxWidth) => {
       const n = Number(width);
       const raw = Number.isFinite(n) && n > 0 ? n : STATUS_RAIL_DEFAULT_WIDTH;
-      return Math.max(STATUS_RAIL_MIN_WIDTH, Math.min(_statusRailMaxWidth(), Math.round(raw)));
+      return Math.max(STATUS_RAIL_MIN_WIDTH, Math.min(maxWidth, Math.round(raw)));
     };
     const _savedStatusRailWidth = () => {
       const saved = parseInt(localStorage.getItem('ccc-status-rail-width') || '0', 10);
@@ -2224,17 +2224,21 @@ onDashboardDocumentReady(() => {
       }
     };
     const _setStatusRailWidth = (width, persist, preserveReaders = true) => {
-      const next = _clampStatusRailWidth(width);
+      const maxWidth = _statusRailMaxWidth();
+      const next = _clampStatusRailWidth(width, maxWidth);
       const style = document.documentElement.style;
       const nextWidth = next + 'px';
-      if (style.getPropertyValue('--status-rail-width') !== nextWidth) {
+      // The stylesheet already supplies the default width on first load.
+      const currentWidth = style.getPropertyValue('--status-rail-width') || STATUS_RAIL_DEFAULT_WIDTH + 'px';
+      const changesWidth = currentWidth !== nextWidth;
+      if (changesWidth) {
         const applyWidth = () => style.setProperty('--status-rail-width', nextWidth);
         if (preserveReaders) _preserveReadersAcross(applyWidth);
         else applyWidth();
       }
       if ($statusRailResizer) {
         $statusRailResizer.setAttribute('aria-valuemin', String(STATUS_RAIL_MIN_WIDTH));
-        $statusRailResizer.setAttribute('aria-valuemax', String(_statusRailMaxWidth()));
+        $statusRailResizer.setAttribute('aria-valuemax', String(changesWidth ? _statusRailMaxWidth() : maxWidth));
         $statusRailResizer.setAttribute('aria-valuenow', String(next));
       }
       if (persist) {
