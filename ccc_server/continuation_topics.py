@@ -33,8 +33,9 @@ _REVISION_CACHE: dict[str, object] = {'token': None, 'value': 0}
 _PRECISE_TOKENS = OrderedDict()
 _ARCHIVE_TOPIC_SNAPSHOT = (None, None, None)
 _ARCHIVE_TOPIC_CONNECTION = (None, None)
-_ARCHIVE_TOPIC_TRANSITION = (None, None, {})
+_ARCHIVE_TOPIC_TRANSITIONS = {}
 _ARCHIVE_TOPIC_TRANSITION_LIMIT = 32
+_ARCHIVE_TOPIC_COMMIT_LIMIT = 8
 _NATIVE_TITLE_STATE = {'data': None, 'generation': 0}
 _SCOPED_TOPIC_SPLIT_MIN = 2000
 _SCOPED_TOPIC_ORIGIN_LIMIT = 4096
@@ -362,7 +363,21 @@ class StaleArchiveTopicCut(UnavailableArchiveProjection):
 
 def archive_cut_superseded(version):
     """Check whether a known local commit superseded this exact read version."""
-    return version is not None and _ARCHIVE_TOPIC_TRANSITION[0] == version
+    return version in _ARCHIVE_TOPIC_TRANSITIONS
+
+
+def _publish_archive_topic_transition(transition):
+    global _ARCHIVE_TOPIC_TRANSITIONS
+    if transition is None:
+        return
+    before, after, updates = transition
+    with _CACHE_LOCK:
+        # Publish after commit. Concurrent writers may report out of order, so
+        # index each proof by its exact predecessor instead of appending a chain.
+        transitions = _ARCHIVE_TOPIC_TRANSITIONS | {before: (after, updates)}
+        if len(transitions) > _ARCHIVE_TOPIC_COMMIT_LIMIT:
+            del transitions[next(iter(transitions))]
+        _ARCHIVE_TOPIC_TRANSITIONS = transitions
 
 
 def _archive_read_version(conn, *, pinned=False):
@@ -500,8 +515,22 @@ def _project_archive_metadata_titles(items):
 
 
 def _advance_archive_topic_snapshot(snapshot, previous, current):
-    before, after, updates = _ARCHIVE_TOPIC_TRANSITION
-    if (previous, current) != (before, after):
+    transitions = _ARCHIVE_TOPIC_TRANSITIONS
+    updates = {}
+    version = previous
+    # A gap (including an external write) cannot be replayed. Retain a bound
+    # on both commits and records, even when each individual commit was small.
+    for _ in range(len(transitions)):
+        transition = transitions.get(version)
+        if transition is None:
+            return None
+        version, batch = transition
+        updates.update(batch)
+        if len(updates) > _ARCHIVE_TOPIC_TRANSITION_LIMIT:
+            return None
+        if version == current:
+            break
+    else:
         return None
     records, indexed, roots, edges = snapshot
     if None in records:
@@ -969,7 +998,6 @@ def _project_topics(batch, rows):
 
 def attach_archive_topics(rows, *, conn, names, inputs, version, check_client=None, persist=True):
     """Resolve a checked archive scope using the authoritative captured titles."""
-    global _ARCHIVE_TOPIC_TRANSITION
     batch = _Batch(conn, rows, names, check_client=check_client, archive_inputs=inputs)
     _project_topics(batch, rows)
     if check_client is not None:
@@ -988,8 +1016,7 @@ def attach_archive_topics(rows, *, conn, names, inputs, version, check_client=No
     else:
         # The next archive cut can reuse the records after this small commit.
         # Caller-owned transactions are excluded because they may roll back.
-        if transition is not None:
-            _ARCHIVE_TOPIC_TRANSITION = transition
+        _publish_archive_topic_transition(transition)
 
 
 def _try_attach_from_cache(rows, conn, names, diagnostics=None, *, rows_by_sid=None,
@@ -1214,7 +1241,6 @@ def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnos
     titles available and persistence is retried on the next load. Explicit
     spawn snapshots/edges wait for durable storage instead.
     """
-    global _ARCHIVE_TOPIC_TRANSITION
     if not rows:
         return
     rows = [row for row in rows if isinstance(row, dict)]
@@ -1293,8 +1319,7 @@ def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False, diagnos
         with _topic_phase(phases, 'publish_cache'):
             _store_busy_writer_inputs(conn, batch, read_version)
     else:
-        if transition is not None:
-            _ARCHIVE_TOPIC_TRANSITION = transition
+        _publish_archive_topic_transition(transition)
     if flushed and not wait_for_writer:
         with _topic_phase(phases, 'publish_cache'):
             _store_cache(conn, current, rows, miss_detail=miss_detail)

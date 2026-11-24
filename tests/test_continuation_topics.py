@@ -943,7 +943,7 @@ def test_archive_projection_cannot_persist_after_indexed_origin_changes(store):
 def test_archive_projection_advances_its_own_committed_topic_snapshot(store, monkeypatch):
     store.execute('PRAGMA journal_mode=WAL')
     monkeypatch.setattr(topics, '_ARCHIVE_TOPIC_SNAPSHOT', (None, None, None))
-    monkeypatch.setattr(topics, '_ARCHIVE_TOPIC_TRANSITION', (None, None, {}))
+    monkeypatch.setattr(topics, '_ARCHIVE_TOPIC_TRANSITIONS', {})
     topics.record_continuation('root', 'child', title='Original topic', conn=store)
     inputs, edges, version = topics.archive_projection_inputs(store, max_rows=20)
 
@@ -971,14 +971,14 @@ def test_archive_projection_advances_its_own_committed_topic_snapshot(store, mon
 def test_archive_projection_does_not_publish_a_caller_owned_write(store, monkeypatch):
     store.execute('PRAGMA journal_mode=WAL')
     topics._connection(store)
-    monkeypatch.setattr(topics, '_ARCHIVE_TOPIC_TRANSITION', (None, None, {}))
+    monkeypatch.setattr(topics, '_ARCHIVE_TOPIC_TRANSITIONS', {})
     inputs, _, version = topics.archive_projection_inputs(store, max_rows=20)
     store.execute('BEGIN IMMEDIATE')
     try:
         topics.attach_archive_topics([row('transient', 'Transient topic')], conn=store,
                                     names={}, inputs=inputs, version=version)
         assert store.in_transaction
-        assert topics._ARCHIVE_TOPIC_TRANSITION == (None, None, {})
+        assert topics._ARCHIVE_TOPIC_TRANSITIONS == {}
     finally:
         store.rollback()
     assert store.execute('SELECT sid FROM continuation_topics').fetchall() == []
@@ -1169,7 +1169,8 @@ def test_archive_projection_retries_when_topic_sources_change_during_capture(sto
 
 
 @pytest.mark.parametrize(
-    "write_mode", ["local", "local-during-records", "outside-write", "caller-transaction"],
+    "write_mode", ["local", "two-local", "local-during-records", "outside-write",
+                   "local-gap", "history-evicted", "caller-transaction"],
 )
 def test_archive_projection_retry_reuses_only_exact_local_topic_commit(store, monkeypatch, write_mode):
     from contextlib import closing
@@ -1180,7 +1181,9 @@ def test_archive_projection_retry_reuses_only_exact_local_topic_commit(store, mo
     filename = store.execute('PRAGMA database_list').fetchone()[2]
     monkeypatch.setattr(topics, '_ARCHIVE_TOPIC_CONNECTION', (None, store))
     monkeypatch.setattr(topics, '_ARCHIVE_TOPIC_SNAPSHOT', (None, None, None))
-    monkeypatch.setattr(topics, '_ARCHIVE_TOPIC_TRANSITION', (None, None, {}))
+    monkeypatch.setattr(topics, '_ARCHIVE_TOPIC_TRANSITIONS', {})
+    if write_mode == 'history-evicted':
+        monkeypatch.setattr(topics, '_ARCHIVE_TOPIC_COMMIT_LIMIT', 1)
     reads = []
     fetch = topics._archive_topic_records
 
@@ -1202,9 +1205,11 @@ def test_archive_projection_retry_reuses_only_exact_local_topic_commit(store, mo
                 topics.attach_topics([row('new', 'New subject')], conn=writer, names={})
                 if write_mode == 'caller-transaction':
                     writer.commit()
-                if write_mode == 'outside-write':
+                if write_mode in ('outside-write', 'local-gap'):
                     with store:
                         store.execute("INSERT INTO session_meta VALUES ('outside-child', ?)", (root,))
+                if write_mode in ('two-local', 'local-gap', 'history-evicted'):
+                    topics.attach_topics([row('second', 'Another subject')], conn=writer, names={})
             return 'Native title'
 
         monkeypatch.setattr(topics, '_archive_topic_records', record_read)
@@ -1221,7 +1226,7 @@ def test_archive_projection_retry_reuses_only_exact_local_topic_commit(store, mo
     assert version == topics._archive_read_version(store)
     assert 'new' not in reads[0][0]
     assert details['topics_retried']
-    if write_mode in ('outside-write', 'caller-transaction'):
+    if write_mode in ('outside-write', 'local-gap', 'history-evicted', 'caller-transaction'):
         assert len(reads) == 2
         assert 'topics_snapshot_advanced' not in details
         assert not guard_transitions
@@ -1229,6 +1234,8 @@ def test_archive_projection_retry_reuses_only_exact_local_topic_commit(store, mo
         assert len(reads) == 1
         assert details['topics_snapshot_advanced']
         assert guard_transitions[id(inputs[0])][0] is reads[0][0]
+        if write_mode == 'two-local':
+            assert guard_transitions[id(inputs[0])][1] == ('new', 'second')
     committed_during_records = write_mode == 'local-during-records'
     assert lookups == [root] * (1 if committed_during_records else 2)
     assert details.get('topics_skipped_stale_native_titles', False) == committed_during_records

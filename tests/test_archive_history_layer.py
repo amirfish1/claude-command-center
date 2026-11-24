@@ -167,19 +167,19 @@ def test_seven_day_basis_preserves_current_rows_order_and_token(tmp_path, monkey
     monkeypatch.setattr(continuation_topics, "archive_connection", lambda: None)
     first_version = ("topics-v1", "db", "epoch", 1, 0)
     next_version = ("topics-v1", "db", "epoch", 2, 0)
-    monkeypatch.setattr(continuation_topics, "_ARCHIVE_TOPIC_TRANSITION", (None, None, {}))
+    monkeypatch.setattr(continuation_topics, "_ARCHIVE_TOPIC_TRANSITIONS", {})
 
     pending_commit = False
 
     def publish_commit():
         nonlocal pending_commit
         if pending_commit:
-            monkeypatch.setattr(continuation_topics, "_ARCHIVE_TOPIC_TRANSITION",
-                                (first_version, next_version, {}))
+            continuation_topics._publish_archive_topic_transition((first_version, next_version, {}))
             pending_commit = False
 
     def topic_inputs(*args, **kwargs):
-        version = continuation_topics._ARCHIVE_TOPIC_TRANSITION[1] or first_version
+        superseded = continuation_topics.archive_cut_superseded(first_version)
+        version = next_version if superseded else first_version
         if commit_stage == "guards":
             publish_commit()
         return ({}, {}, {}), (), version
