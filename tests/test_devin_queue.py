@@ -1163,6 +1163,21 @@ class DevinListPerfTests(unittest.TestCase):
         rows = server._archive_overlay_devin_cli_sessions([{"id": "devincli-alpha-one"}])
         self.assertEqual([r["id"] for r in rows], ["devincli-beta-two"])
 
+    def test_devin_background_list_rechecks_helper_pids_and_falls_back_for_unchecked_rows(self):
+        server, devin_mod, _, _ = self._setup()
+        with mock.patch.object(devin_mod, "_devin_spawn_pid_by_session_id", return_value={}), \
+             mock.patch.object(devin_mod, "_devin_cli_background_lock_owners",
+                               return_value={"alpha-one": 1234}) as owners, \
+             mock.patch.object(devin_mod, "_devin_cli_pid_alive", return_value=False) as recheck, \
+             mock.patch.object(devin_mod, "_devin_cli_session_live", return_value=True) as local:
+            rows = _overlay_after_cold_build(server, devin_mod)
+        rows_by_id = {row["id"]: row for row in rows}
+        self.assertFalse(rows_by_id["devincli-alpha-one"]["is_live"])
+        self.assertTrue(rows_by_id["devincli-beta-two"]["is_live"])
+        owners.assert_called_once()
+        recheck.assert_called_once_with(1234)
+        local.assert_called_once_with("beta-two", reuse_lock_file=True)
+
     def test_devin_list_ttl_hit_does_not_wait_on_rebuild_lock(self):
         """A warm TTL hit must not queue behind a 30-60s Devin list rebuild.
 

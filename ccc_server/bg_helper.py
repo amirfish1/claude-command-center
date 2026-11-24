@@ -423,6 +423,16 @@ class _Child:
         from ccc_server.import_closure import compute_closure
         return {"ok": True, "hash": compute_closure(self.server._install_dir())["hash"]}
 
+    def devin_lock_owners(self, req):
+        from ccc_server import devin
+
+        raw_ids = req.get("raw_ids")
+        if (not isinstance(raw_ids, list) or len(raw_ids) > 2048
+                or any(not isinstance(sid, str) or not sid or "/" in sid
+                       or "\\" in sid or "\0" in sid for sid in raw_ids)):
+            return {"ok": False, "error": "invalid Devin lock IDs"}
+        return {"ok": True, "owners": devin._devin_cli_probe_lock_owners(raw_ids)}
+
     def runaway_scan(self, req):
         from ccc_server import background_work, runaway
         with background_work.slot():
@@ -453,6 +463,7 @@ class _Child:
                   "throughput_ticket_counts": self.throughput_ticket_counts,
                   "throughput_turn_stats": self.throughput_turn_stats,
                   "worker_closure": self.worker_closure,
+                  "devin_lock_owners": self.devin_lock_owners,
                   "productivity_snapshot": self.productivity_snapshot,
                   "runaway_scan": self.runaway_scan,
                   "ping": lambda r: {"ok": True}}.get(op)

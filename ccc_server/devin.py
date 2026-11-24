@@ -966,6 +966,16 @@ def _devin_cli_pid_alive(pid):
     return reaped == 0
 
 
+def _devin_cli_probe_lock_owners(raw_ids):
+    """Return potentially live lock owners without reaping dashboard children."""
+    owners = {}
+    for raw_id in raw_ids:
+        pid = _devin_cli_lock_pid(raw_id, reuse_lock_file=True)
+        if pid and _core._is_pid_alive(pid):
+            owners[raw_id] = pid
+    return owners
+
+
 # Every Devin row rebuild probes session liveness: lock-file read +
 # kill(0) + waitpid, ~15-20ms across two locks dirs. With ~100+ devin
 # sessions and sessions.db changing on every turn, that probe dominated
@@ -992,6 +1002,28 @@ def _devin_cli_session_live(raw_id, *, reuse_lock_file=False):
     if len(_DEVIN_CLI_LIVE_CACHE) > 2000:
         _DEVIN_CLI_LIVE_CACHE.clear()
     return live
+
+
+def _devin_cli_background_lock_owners(lock_ids):
+    """Move large expired display-only probe batches off the dashboard GIL."""
+    from ccc_server import bg_helper
+
+    if not 64 <= len(lock_ids) <= 2048 or not bg_helper.ready():
+        return {}
+    now = time.monotonic()
+    pending = [sid for sid in lock_ids if _DEVIN_CLI_LIVE_CACHE.get(sid, (0,))[0] <= now]
+    if len(pending) < 64:
+        return {}
+    reply = bg_helper.call("devin_lock_owners", timeout=1, raw_ids=pending)
+    owners = (reply or {}).get("owners")
+    if not isinstance(owners, dict):
+        return {}
+    checked = dict.fromkeys(pending, 0)
+    if any(sid not in checked or type(pid) is not int or pid <= 0
+           for sid, pid in owners.items()):
+        return {}
+    checked.update(owners)
+    return checked
 
 
 def _devin_cli_raw_id_for_pid(pid):
@@ -1155,13 +1187,13 @@ def _devin_cli_lock_set():
     return frozenset(ids)
 
 
-def _devin_cli_list_cache_key(repo_path, include_old, repo_only, limit):
+def _devin_cli_list_cache_key(repo_path, include_old, repo_only, limit, lock_ids):
     """Composite cache key for ``find_devin_cli_conversations``.
 
     Covers every input that can change the returned rows without touching the
     SQLite DB: the DB state itself, running-session lock files, and CCC-side
     lifecycle/name/verification/pin side-car files."""
-    parts = [_devin_cli_cache_key(), _devin_cli_lock_set()]
+    parts = [_devin_cli_cache_key(), lock_ids]
     for f in (
         _core.SESSION_NAMES_FILE,
         _core.ARCHIVED_CONVERSATIONS_FILE,
@@ -2124,7 +2156,7 @@ def _devin_cli_start_bg_rebuild(**kwargs):
 
     def _rebuild():
         try:
-            _find_devin_cli_conversations_locked(**kwargs)
+            _find_devin_cli_conversations_locked(**kwargs, background=True)
         except Exception:
             pass
         finally:
@@ -2369,6 +2401,8 @@ def _find_devin_cli_conversations_locked(
     repo_only=False,
     progress=None,
     limit=None,
+    *,
+    background=False,
 ):
     """Discover local Devin CLI sessions from the SQLite DB.
 
@@ -2401,7 +2435,8 @@ def _find_devin_cli_conversations_locked(
                 f"rows={len(rows)} repo_only={repo_only} cached-ttl",
             )
             return list(rows)
-    cache_key = _devin_cli_list_cache_key(repo_path, include_old, repo_only, limit)
+    lock_ids = _devin_cli_lock_set()
+    cache_key = _devin_cli_list_cache_key(repo_path, include_old, repo_only, limit, lock_ids)
     with _DEVIN_CLI_LIST_CACHE_LOCK:
         entry = _DEVIN_CLI_LIST_CACHE.get(params_key)
         if (
@@ -2480,6 +2515,7 @@ def _find_devin_cli_conversations_locked(
     try:
         spawn_by_sid = _devin_spawn_pid_by_session_id()
         qstart = time.perf_counter()
+        lock_owners = _devin_cli_background_lock_owners(lock_ids) if background else {}
         total_sessions_scanned = 0
         for con in cons:
           for row in _devin_cli_session_rows(con):
@@ -2524,8 +2560,11 @@ def _find_devin_cli_conversations_locked(
             first_message = ""
             display_name = ""
             spawn_info = spawn_by_sid.get(sid) or {}
-            is_live = (_devin_cli_session_live(raw_id, reuse_lock_file=True)
-                       or bool(spawn_info.get("alive")))
+            lock_pid = lock_owners.get(raw_id)
+            # The dashboard still checks and reaps its own exited CLI children.
+            lock_live = (_devin_cli_session_live(raw_id, reuse_lock_file=True)
+                         if lock_pid is None else bool(lock_pid and _devin_cli_pid_alive(lock_pid)))
+            is_live = lock_live or bool(spawn_info.get("alive"))
 
             # Resolve the session's folder the same way other CLI engines do:
             # honor a repo pin, walk up to the git root for the label, and split

@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 import server
-from ccc_server import bg_helper, session_fts, ship_graph
+from ccc_server import bg_helper, devin, session_fts, ship_graph
 from ccc_server import usage_stats
 
 
@@ -48,6 +48,29 @@ class _FakeServer:
     def _build_ux_fixes_health_payload_uncached(self):
         self.ux_builds += 1
         return {"ok": True, "projects": [], "count": self.ux_builds}
+
+
+def test_devin_lock_owner_batch_preserves_cached_and_unchecked_liveness(helper, monkeypatch, tmp_path):
+    primary = tmp_path / "primary"
+    secondary = tmp_path / "secondary"
+    primary.mkdir()
+    secondary.mkdir()
+    (primary / "live.lock").write_text(str(os.getpid()))
+    (primary / "stale.lock").write_text("999999999")
+    (secondary / "stale.lock").write_text(str(os.getpid()))
+    monkeypatch.setattr(devin, "_devin_cli_locks_dirs", lambda: [primary, secondary])
+    monkeypatch.setattr(devin, "_DEVIN_CLI_LIVE_CACHE", {"cached": (float("inf"), True)})
+    ids = {"live", "stale", "cached"} | {f"old-{i}" for i in range(64)}
+
+    checked = devin._devin_cli_background_lock_owners(ids)
+    assert checked["live"] == os.getpid()
+    assert checked["stale"] == checked["old-0"] == 0
+    assert "cached" not in checked and "unseen" not in checked
+    assert devin._DEVIN_CLI_LIVE_CACHE == {"cached": (float("inf"), True)}
+    assert bg_helper.call("devin_lock_owners", raw_ids=["../outside"]) is None
+
+    monkeypatch.setattr(bg_helper, "call", lambda *args, **kwargs: None)
+    assert devin._devin_cli_background_lock_owners(ids) == {}
 
 
 @pytest.fixture
