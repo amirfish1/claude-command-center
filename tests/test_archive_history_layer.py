@@ -91,8 +91,8 @@ def test_seven_day_compatibility_uses_the_refresh_encoding():
     assert server._archive_seven_day_compatible(basis, changed)
 
 
-@pytest.mark.parametrize("retain_persisted", [False, True])
-def test_refresh_publisher_receives_accepted_row_encoding(tmp_path, monkeypatch, retain_persisted):
+@pytest.mark.parametrize("handoff", ["transfer", "retained", "snapshot"])
+def test_refresh_publisher_receives_accepted_row_encoding(tmp_path, monkeypatch, handoff):
     import threading
     from types import SimpleNamespace
 
@@ -107,7 +107,7 @@ def test_refresh_publisher_receives_accepted_row_encoding(tmp_path, monkeypatch,
     generation = server._archive_serve_generation
     incoming = [{"session_id": "kept", "nested": {"z": 1, "a": 2}},
                 {"session_id": "changed", "modified": 2}]
-    if retain_persisted:
+    if handoff != "transfer":
         previous = [{"session_id": "kept", "nested": {"a": 2, "z": 1}},
                     {"session_id": "changed", "modified": 1}]
         assert server._archive_serve_cache_store(key, previous, generation, hot_selected=True)
@@ -128,15 +128,17 @@ def test_refresh_publisher_receives_accepted_row_encoding(tmp_path, monkeypatch,
 
     monkeypatch.setattr(server.subprocess, "run", publish)
     server._archive_history_start_publication(
-        refresh_source=refresh, refresh_snapshot=(accepted, result["transfer_rows"]), seven_day=True)
+        refresh_source=None if handoff == "snapshot" else refresh,
+        refresh_snapshot=(accepted, {} if handoff == "snapshot" else result["transfer_rows"]),
+        seven_day=True)
     # The publisher releases its lock only after cleaning up both handoffs.
     with server._ARCHIVE_HISTORY_PUBLISH_LOCK:
         assert len(observed) == 1
     selected, observed_key, rows = observed[0]
     assert observed_key == key
     assert rows == accepted
-    assert list(rows[0]["nested"]) == (["a", "z"] if retain_persisted else ["z", "a"])
-    assert (selected == f"{refresh}.sidebar") is not retain_persisted
+    assert list(rows[0]["nested"]) == (["z", "a"] if handoff == "transfer" else ["a", "z"])
+    assert (selected == f"{refresh}.sidebar") == (handoff == "transfer")
     assert list(tmp_path.iterdir()) == [refresh]
 
 
@@ -293,6 +295,22 @@ def test_seven_day_basis_preserves_current_rows_order_and_token(tmp_path, monkey
             response = connection.getresponse()
             assert response.status == 304
             assert response.read() == b""
+            if commit_stage == "guards":
+                publications = []
+                monkeypatch.setattr(server, "_archive_seven_day_compatible", lambda *args: False)
+                monkeypatch.setattr(server, "_archive_history_start_publication",
+                                    lambda **kwargs: publications.append(kwargs))
+                connection.request("GET", url, headers={"Accept-Encoding": "gzip"})
+                response = connection.getresponse()
+                assert response.status == 200
+                raw = response.read()
+                fallback = json.loads(gzip.decompress(raw) if response.getheader(
+                    "Content-Encoding") == "gzip" else raw)
+                assert "history_layer" not in fallback
+                assert fallback["count"] == len(expected["conversations"])
+                assert len(publications) == 1
+                assert publications[0]["seven_day"] is True
+                assert publications[0]["refresh_snapshot"][0] is updated
         finally:
             connection.close()
             httpd.shutdown()

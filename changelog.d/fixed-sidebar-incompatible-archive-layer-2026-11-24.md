@@ -1,0 +1,1 @@
+- Rebuild the seven-day conversation archive in the background when its compressed snapshot no longer matches the rows served by the dashboard.

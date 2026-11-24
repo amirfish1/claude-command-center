@@ -20033,6 +20033,7 @@ def _archive_seven_day_response(key, rows, cached, delta, encodings, phases, che
             compatible = _archive_seven_day_compatible(basis, delta["base"])
         if not compatible:
             phases["fallback"] = "incompatible_hot_rows"
+            phases["needs_basis"] = True
             return None
         for attempt in range(2):
             now = time.time()
@@ -20217,6 +20218,11 @@ def _archive_history_start_publication(*, rebase=None, refresh_source=None, refr
                 source = refresh_link
                 if refresh_snapshot is not None:
                     rows, transfer = refresh_snapshot
+                    if source is None:
+                        with _archive_serve_lock:
+                            current = _archive_serve_cache.get(_archive_response_cache_key())
+                            if current is None or current.get("rows") is not rows:
+                                return
                     transferred_ids = {id(row) for row in transfer.values()}
                     if any(id(row) not in transferred_ids for row in rows):
                         # An accepted refresh can retain equal persisted rows.
@@ -39719,6 +39725,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             }
             _status = None
             seven_day_needs_basis = False
+            seven_day_refresh_snapshot = None
             if (_delta is not None and seven_day_layer_requested
                     and _ARCHIVE_LIST_BODY_CACHE.get((
                         body_cache_key, window, bool(from_cache), (body_ver, _delta["ctx"]),
@@ -39742,6 +39749,10 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                         _payload_ms.append((time.perf_counter() - _pt0) * 1000.0)
                         _status = self._send_archive_list_representation(*layer)
                     seven_day_needs_basis = bool(scoped_phases.get("needs_basis"))
+                    if scoped_phases.get("fallback") == "incompatible_hot_rows":
+                        # The persisted rows can have a different encoding from
+                        # the accepted cut. Rebuild from the rows we actually serve.
+                        seven_day_refresh_snapshot = (_delta["base"], {})
             # CCC-201: why a client holding a token still got a full body.
             if not since:
                 _since_diag = "none"
@@ -39846,7 +39857,8 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             if history_needs_basis and _status in (200, "delta", 304):
                 _archive_history_start_publication()
             if seven_day_needs_basis and _status == 200:
-                _archive_history_start_publication(seven_day=True)
+                _archive_history_start_publication(
+                    seven_day=True, refresh_snapshot=seven_day_refresh_snapshot)
             record_diag("list_server", (_lt2 - _lt0) * 1000.0, {
                 "window": window,
                 "status": _status,
