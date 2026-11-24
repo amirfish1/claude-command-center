@@ -372,7 +372,7 @@ def _transcript_stats(root: Path):
 
 
 _LEDGER_LOCK = threading.Lock()
-_REFRESH_RUNNING = False
+_ACTIVE_LEDGER_SCANS = set()
 
 
 _JSON_REALS_EXACT = None
@@ -879,41 +879,53 @@ def _price(rates, i, cw, cr, o):
 
 
 def _refresh_ledger_sync(deadline_s=_SYNC_SCAN_BUDGET_S, root=None, ledger=None):
-    """Sync incremental scan within a time budget; spawn a bg pass for the rest."""
-    global _REFRESH_RUNNING
+    """Share the scan across ranges and keep ownership through backlog work."""
     root = Path(root) if root else _projects_root()
     ledger = Path(ledger) if ledger else _ledger_path()
     stats = {"scanned": 0, "remaining": 0, "skipped": 0}
-    if root.is_dir():
+    if not root.is_dir():
+        return stats
+
+    key = Path(os.path.realpath(ledger))
+    with _LEDGER_LOCK:
+        if key in _ACTIVE_LEDGER_SCANS:
+            # The response can read the committed ledger while it catches up.
+            return {**stats, "remaining": 1}
+        _ACTIVE_LEDGER_SCANS.add(key)
+
+    def release():
+        with _LEDGER_LOCK:
+            _ACTIVE_LEDGER_SCANS.remove(key)
+
+    def scan(deadline):
         try:
             conn = _connect_ledger(ledger)
             try:
-                deadline = time.monotonic() + deadline_s if deadline_s else None
-                stats = _scan_incremental(conn, root, deadline)
+                return _scan_incremental(conn, root, deadline)
             finally:
                 conn.close()
         except (sqlite3.Error, OSError):
-            pass
-    if stats["remaining"]:
-        with _LEDGER_LOCK:
-            running = _REFRESH_RUNNING
-            if not running:
-                _REFRESH_RUNNING = True
-        if not running:
-            def _bg():
-                global _REFRESH_RUNNING
-                try:
-                    conn2 = _connect_ledger(ledger)
-                    try:
-                        _scan_incremental(conn2, root, None)
-                    finally:
-                        conn2.close()
-                except (sqlite3.Error, OSError):
-                    pass
-                finally:
-                    _REFRESH_RUNNING = False
-            threading.Thread(target=_bg, daemon=True, name="ccc-savings-scan").start()
-    return stats
+            return stats
+
+    def finish_backlog():
+        try:
+            scan(None)
+        finally:
+            release()
+
+    handed_off = False
+    try:
+        deadline = time.monotonic() + deadline_s if deadline_s else None
+        stats = scan(deadline)
+        if stats["remaining"]:
+            threading.Thread(
+                target=finish_backlog, daemon=True, name="ccc-savings-scan",
+            ).start()
+            handed_off = True
+        return stats
+    finally:
+        if not handed_off:
+            release()
 
 
 def savings_payload(range_key="today", *, refresh=False, projects_root=None,
@@ -955,13 +967,24 @@ def savings_payload(range_key="today", *, refresh=False, projects_root=None,
     warming = bool(stats.get("remaining"))
 
     try:
-        conn = _connect_ledger(ledger)
-        has_data = _ledger_has_data(conn)
-        rows = _rollup(conn, str(since_day), str(until_day)) if has_data else []
-        if range_key == "all":
-            r = conn.execute("SELECT MIN(day) d FROM rollup").fetchone()
-            first_day = r["d"] if r and r["d"] else None
-        conn.close()
+        if warming:
+            # A scan can be writing backlog rows. Opening the ledger in
+            # read-only mode avoids waiting on the writer to initialize it.
+            conn = sqlite3.connect(
+                Path(os.path.realpath(ledger)).as_uri() + "?mode=ro",
+                uri=True, timeout=0.05,
+            )
+            conn.row_factory = sqlite3.Row
+        else:
+            conn = _connect_ledger(ledger)
+        try:
+            has_data = _ledger_has_data(conn)
+            rows = _rollup(conn, str(since_day), str(until_day)) if has_data else []
+            if range_key == "all":
+                r = conn.execute("SELECT MIN(day) d FROM rollup").fetchone()
+                first_day = r["d"] if r and r["d"] else None
+        finally:
+            conn.close()
     except (sqlite3.Error, OSError):
         rows = []
 
@@ -1098,10 +1121,8 @@ def handle_plan_post(data, *, payload_kwargs=None):
 
 def _reset_for_tests():
     """Clear module-level caches so a test starts from a clean slate."""
-    global _REFRESH_RUNNING
     with _PAYLOAD_LOCK:
         _PAYLOAD_CACHE.clear()
     with _ANALYTICS_LOCK:
         _ANALYTICS_CACHE["ts"] = 0.0
         _ANALYTICS_CACHE["data"] = {}
-    _REFRESH_RUNNING = False

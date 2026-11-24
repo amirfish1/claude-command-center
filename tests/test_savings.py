@@ -9,7 +9,9 @@ import json
 import os
 import sqlite3
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -74,6 +76,84 @@ def _payload(tmp_path, range_key="today", **kw):
     kw.setdefault("now", NOW)
     kw.setdefault("scan_budget_s", None)
     return savings.savings_payload(range_key, **kw)
+
+
+def test_concurrent_ranges_share_a_scan_through_backlog(tmp_path, monkeypatch):
+    root = tmp_path / "projects"
+    ledger = tmp_path / "savings.sqlite3"
+    _write_transcript(root, "p", "a.jsonl", [_assistant("m1", "claude-sonnet-4-6")])
+    started = threading.Event()
+    other_root = tmp_path / "other-projects"
+    other_root.mkdir()
+    run_foreground = threading.Event()
+    backlog_started = threading.Event()
+    run_backlog = threading.Event()
+    backlog_threads = []
+    real_scan = savings._scan_incremental
+
+    def slow_scan(conn, scan_root, deadline):
+        if scan_root == other_root:
+            return real_scan(conn, scan_root, deadline)
+        if deadline is not None:
+            started.set()
+            assert run_foreground.wait(5)
+            return real_scan(conn, scan_root, time.monotonic() - 1)
+        backlog_threads.append(threading.current_thread())
+        # The range reader must still respond while the scan owns the write lock.
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            backlog_started.set()
+            assert run_backlog.wait(5)
+        finally:
+            conn.rollback()
+        return real_scan(conn, scan_root)
+
+    monkeypatch.setattr(savings, "_scan_incremental", slow_scan)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        owner = pool.submit(_payload, tmp_path, scan_budget_s=2)
+        try:
+            assert started.wait(5)
+            follower = pool.submit(_payload, tmp_path, "week", scan_budget_s=2)
+            payload, status = follower.result(timeout=3)
+            assert status == 200 and payload["partial"]
+            run_foreground.set()
+            assert backlog_started.wait(5)
+            assert owner.result(timeout=3)[0]["partial"]
+            follower = pool.submit(_payload, tmp_path, "all", scan_budget_s=2)
+            payload, status = follower.result(timeout=3)
+            assert status == 200 and payload["partial"]
+            assert len(backlog_threads) == 1
+            other_ledger = tmp_path / "other.sqlite3"
+            assert savings._refresh_ledger_sync(2, other_root, other_ledger)["remaining"] == 0
+            assert other_ledger.is_file()
+        finally:
+            run_foreground.set()
+            run_backlog.set()
+            for thread in backlog_threads:
+                thread.join(timeout=5)
+                assert not thread.is_alive()
+
+    monkeypatch.setattr(savings, "_scan_incremental", real_scan)
+    payload, status = _payload(tmp_path, "all")
+    assert status == 200 and not payload["partial"]
+    assert payload["sessions"] == 1
+    with sqlite3.connect(ledger) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM backlog").fetchone()[0] == 0
+
+
+def test_savings_scan_releases_ledger_on_failure(tmp_path, monkeypatch):
+    root = tmp_path / "projects"
+    _write_transcript(root, "p", "a.jsonl", [_assistant("m1", "claude-sonnet-4-6")])
+    ledger = tmp_path / "savings.sqlite3"
+    real_scan = savings._scan_incremental
+
+    def broken_scan(*args):
+        raise sqlite3.OperationalError("test scan failure")
+
+    monkeypatch.setattr(savings, "_scan_incremental", broken_scan)
+    assert savings._refresh_ledger_sync(2, root, ledger)["scanned"] == 0
+    monkeypatch.setattr(savings, "_scan_incremental", real_scan)
+    assert savings._refresh_ledger_sync(None, root, ledger)["scanned"] == 1
 
 
 class TestScan:
