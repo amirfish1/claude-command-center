@@ -190,10 +190,11 @@ def test_sidebar_title_omission_falls_back_without_json_each(thread_db, monkeypa
 
 
 @pytest.mark.parametrize("all_known", [False, True])
-def test_sidebar_title_filter_only_binds_ranked_ids(thread_db, monkeypatch, all_known):
+@pytest.mark.parametrize("without_rowid", [False, True])
+def test_sidebar_title_filter_only_binds_ranked_ids(thread_db, monkeypatch, all_known, without_rowid):
     with sqlite3.connect(thread_db) as con:
         con.execute("PRAGMA journal_mode=WAL")
-        _schema(con)
+        _schema(con, "WITHOUT ROWID" if without_rowid else "")
         con.execute("ALTER TABLE threads ADD COLUMN title TEXT")
         con.executemany("INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, ?)", [
             ("known", 3, 3000, 0, 0, 0, "Known title"),
@@ -204,9 +205,9 @@ def test_sidebar_title_filter_only_binds_ranked_ids(thread_db, monkeypatch, all_
     title_reads = []
 
     def capture(con, sql, params, columns):
-        if " AS title" in sql:
-            title_reads.append((sql, params))
         rows = read(con, sql, params, columns)
+        if " AS title" in sql or "title FROM threads WHERE rowid IN" in sql:
+            title_reads.append((sql, params))
         if "NULL AS title" in sql and not all_known:
             with sqlite3.connect(thread_db) as writer:
                 writer.execute("UPDATE threads SET title = 'Later title' WHERE id = 'next'")
@@ -224,7 +225,25 @@ def test_sidebar_title_filter_only_binds_ranked_ids(thread_db, monkeypatch, all_
     assert len(title_reads) == (1 if all_known else 2)
     assert "NULL AS title" in title_reads[0][0]
     if not all_known:
-        assert title_reads[1][1] == ('["known"]', 2)
+        second_sql, params = title_reads[1]
+        if without_rowid:
+            assert params == ('["known"]', 2)
+        else:
+            assert "WHERE rowid IN" in second_sql
+            assert "ORDER BY" not in second_sql
+            assert params == (2,)
+
+
+def test_sidebar_title_lookup_preserves_duplicate_ids(thread_db):
+    with sqlite3.connect(thread_db) as con:
+        con.execute("CREATE TABLE threads (id TEXT, updated_at_ms INTEGER, title TEXT)")
+        con.executemany("INSERT INTO threads VALUES (?, ?, ?)", [
+            ("duplicate", 20, "First"),
+            ("duplicate", 10, "Second"),
+        ])
+    assert codex._codex_fetch_threads_in_home(
+        limit=2, columns=("id", "title"), omit_titles_for={"known", "absent", "another"},
+    ) == [{"id": "duplicate", "title": "First"}, {"id": "duplicate", "title": "Second"}]
 
 
 def test_null_guard_and_top_n_share_a_read_snapshot(thread_db, monkeypatch):

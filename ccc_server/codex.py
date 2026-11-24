@@ -9307,7 +9307,7 @@ def _codex_fetch_threads_in_home(
                     order = f"{primary} DESC, rowid ASC"
             deleted = _core._codex_deleted_thread_ids()
 
-            def read_rows(order_by, title_filter):
+            def read_rows(order_by, title_filter, *, include_rowid=False):
                 if exact_ids is not None:
                     # These rows fill a dictionary by ID. Avoid repeated opens,
                     # schema probes and time sorts for batches from one account.
@@ -9336,12 +9336,16 @@ def _codex_fetch_threads_in_home(
                         )
                         bindings = (json.dumps(list(title_filter)), *bindings)
                     fields = [title if field == "title" else field for field in selected]
+                result_fields = selected
+                if include_rowid:
+                    fields = [*fields, "rowid AS ccc_source_rowid"]
+                    result_fields = [*selected, "ccc_source_rowid"]
                 query = f"SELECT {', '.join(fields)} {from_threads} ORDER BY {order_by}"
                 if limit:
                     query += " LIMIT ?"
                 if columns is not None and batch:
-                    return [dict(zip(selected, row)) for row in _sqlite_fetch_rows(
-                        con, query, bindings, selected)]
+                    return [dict(zip(result_fields, row)) for row in _sqlite_fetch_rows(
+                        con, query, bindings, result_fields)]
                 return [dict(r) for r in con.execute(query, bindings).fetchall()]
 
             omit_titles = bool(limit and not where and omit_titles_for
@@ -9356,6 +9360,23 @@ def _codex_fetch_threads_in_home(
                     # Unusual WITHOUT ROWID stores still support the legacy query.
                     return read_rows(fallback_order, title_filter)
 
+            def read_titles_for_missing_rows():
+                # Keep the first ranked result. Fetch only the missing titles
+                # by rowid in the same snapshot, including when ids repeat.
+                rows = read_rows(order, (), include_rowid=True)
+                missing = {}
+                for row in rows:
+                    rowid = row.pop("ccc_source_rowid")
+                    if type(row["id"]) is not str or row["id"] not in omit_titles_for:
+                        missing[rowid] = row
+                if missing:
+                    marks = ",".join("?" for _ in missing)
+                    query = f"SELECT rowid AS ccc_source_rowid, title FROM threads WHERE rowid IN ({marks})"
+                    for rowid, title in _sqlite_fetch_rows(
+                            con, query, tuple(missing), ("ccc_source_rowid", "title")):
+                        missing[rowid]["title"] = title
+                return rows
+
             try:
                 if omit_titles and 0 < int(limit) < len(omit_titles_for):
                     # The archive may already know tens of thousands of IDs.
@@ -9363,11 +9384,24 @@ def _codex_fetch_threads_in_home(
                     # title filter. Any second read must use the same snapshot.
                     if not con.in_transaction:
                         con.execute("BEGIN")
-                    all_rows = read_with_order_fallback(())
-                    known = {row["id"] for row in all_rows
-                             if type(row["id"]) is str and row["id"] in omit_titles_for}
-                    if len(known) != len(all_rows):
-                        all_rows = read_with_order_fallback(known or None)
+                    all_rows = None
+                    # Stay below SQLite's legacy variable limit. A schema
+                    # that shadows rowid must keep the ranked title filter.
+                    if (exact_ids is None and int(limit) <= 512
+                            and not any(col.lower() == "rowid" for col in cols)):
+                        getlimit = getattr(con, "getlimit", None)
+                        if getlimit is None or int(limit) <= getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER):
+                            try:
+                                all_rows = read_titles_for_missing_rows()
+                            except sqlite3.OperationalError as exc:
+                                if "no such column: rowid" not in str(exc):
+                                    raise
+                    if all_rows is None:
+                        all_rows = read_with_order_fallback(())
+                        known = {row["id"] for row in all_rows
+                                 if type(row["id"]) is str and row["id"] in omit_titles_for}
+                        if len(known) != len(all_rows):
+                            all_rows = read_with_order_fallback(known or None)
                 else:
                     all_rows = read_with_order_fallback(omit_titles_for if omit_titles else None)
             except sqlite3.OperationalError as exc:
