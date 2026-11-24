@@ -120,3 +120,50 @@ def test_open_page_holding_the_saved_body_gets_304(srv, monkeypatch):
         httpd.shutdown()
         httpd.server_close()
         t.join(timeout=5)
+
+
+def test_scoped_boot_replays_the_verified_wire_body(srv, monkeypatch):
+    from ccc_server import list_encoding
+
+    key = srv._archive_list_body_key(srv._archive_response_cache_key(), True)
+    raw = b'{"conversations": [], "padding": "' + b"x" * 1024 + b'"}'
+    encoded = b"saved zstd representation"
+    monkeypatch.setattr(list_encoding, "zstd_list", lambda body: encoded if body == raw else None)
+    assert srv._archive_list_disk_save(key, "7d", raw, None, '"saved"')
+    retained = srv._archive_list_disk_path(key, "7d").with_suffix(".zst")
+    assert _wait(retained.exists)
+
+    monkeypatch.setattr(srv, "_archive_list_start_warm", lambda *args, **kwargs: False)
+    httpd = srv.http.server.ThreadingHTTPServer(("127.0.0.1", 0), srv.CommandCenterHandler)
+    worker = threading.Thread(target=httpd.serve_forever, daemon=True)
+    worker.start()
+    url = f"http://127.0.0.1:{httpd.server_address[1]}/api/conversations/list?window=7d&row_layouts=1"
+    try:
+        request = urllib.request.Request(url, headers={"Accept-Encoding": "zstd, gzip"})
+        with urllib.request.urlopen(request, timeout=5) as response:
+            assert response.headers["X-CCC-List-Body"] == "disk"
+            assert response.headers["Content-Encoding"] == "zstd"
+            assert response.headers["ETag"] == '"saved"'
+            assert response.read() == encoded
+
+        request = urllib.request.Request(url, headers={"Accept-Encoding": "zstd;q=0, gzip;q=0"})
+        with urllib.request.urlopen(request, timeout=5) as response:
+            assert response.headers.get("Content-Encoding") is None
+            assert response.read() == raw
+
+        request = urllib.request.Request(url, headers={"Accept-Encoding": "zstd", "If-None-Match": '"saved"'})
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(request, timeout=5)
+        assert exc.value.code == 304
+        assert exc.value.read() == b""
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        worker.join(timeout=5)
+
+    for damaged in (retained.read_bytes() + b"x", retained.read_bytes().replace(b'"saved"', b'"older"')):
+        retained.write_bytes(damaged)
+        body, _, etag, _, encoding = srv._archive_list_disk_load(key, "7d", accept_encoding="zstd")
+        assert body == raw
+        assert etag == '"saved"'
+        assert encoding is None

@@ -111,6 +111,11 @@ def gzip_list(raw):
     return _encoded_list(raw, "gzip")
 
 
+def zstd_list(raw):
+    """Share the encoded boot replay with the foreground list sender."""
+    return _encoded_list(raw, "zstd")
+
+
 def representation(raw, gzip_body, accept, *, encode_gzip=None, encodings=None):
     """Choose a supported representation, preserving gzip on optional failure."""
     if len(raw) >= 1024:

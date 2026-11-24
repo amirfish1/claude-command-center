@@ -18126,7 +18126,7 @@ def _archive_list_disk_save(cache_key, window, raw, gzip_body, etag_val, now=Non
 
     def _write():
         try:
-            from ccc_server.list_encoding import gzip_list
+            from ccc_server.list_encoding import gzip_list, zstd_list
 
             blob = gzip_body if gzip_body is not None else gzip_list(raw)
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -18134,6 +18134,15 @@ def _archive_list_disk_save(cache_key, window, raw, gzip_body, etag_val, now=Non
             with open(tmp, "wb") as fh:
                 fh.write(etag_val.encode() + b"\t" + _archive_list_body_token(raw).encode() + b"\n" + blob)
             os.replace(tmp, path)
+            if window == "7d" and cache_key.endswith(":layouts") and len(raw) >= _ARCHIVE_LIST_GZIP_MIN_BYTES:
+                encoded = zstd_list(raw)
+                if encoded:
+                    # The gzip file stays readable by older versions and
+                    # remains authoritative if either publication is missed.
+                    checksum = hashlib.sha256(encoded).hexdigest()
+                    tmp = path.with_suffix(f".{os.getpid()}.zst.tmp")
+                    tmp.write_bytes(f"{etag_val}\t{checksum}\n".encode() + encoded)
+                    os.replace(tmp, path.with_suffix(".zst"))
         except Exception:
             pass
 
@@ -18151,23 +18160,33 @@ def _archive_list_body_token(raw):
     return raw[start:end].decode("ascii", "replace") if end > start else ""
 
 
-def _archive_list_disk_load(cache_key, window, now=None):
-    """(raw, gzip, etag, delta_token) of the saved body, or None when absent
-    or too old."""
+def _archive_list_disk_load(cache_key, window, now=None, *, accept_encoding=""):
+    """Return (raw, compressed, etag, token, wire encoding) for boot replay."""
+    from ccc_server.list_encoding import accepted_list_encodings
+
     now = time.time() if now is None else now
     path = _archive_list_disk_path(cache_key, window)
     try:
-        if now - path.stat().st_mtime > _ARCHIVE_LIST_DISK_MAX_AGE_S:
-            return None
-        data = path.read_bytes()
-        head, blob = data.split(b"\n", 1)
-        etag_val, _, token = head.decode().partition("\t")
-        return gzip.decompress(blob), blob, etag_val, token
+        with path.open("rb") as stream:
+            if now - os.fstat(stream.fileno()).st_mtime > _ARCHIVE_LIST_DISK_MAX_AGE_S:
+                return None
+            etag_val, _, token = stream.readline().rstrip(b"\n").decode().partition("\t")
+            if (window == "7d" and cache_key.endswith(":layouts")
+                    and accepted_list_encodings(accept_encoding)[:1] == ("zstd",)):
+                try:
+                    header, encoded = path.with_suffix(".zst").read_bytes().split(b"\n", 1)
+                    checksum = hashlib.sha256(encoded).hexdigest()
+                    if encoded and header == f"{etag_val}\t{checksum}".encode():
+                        return None, encoded, etag_val, token, "zstd"
+                except (OSError, ValueError):
+                    pass
+            blob = stream.read()
+        return gzip.decompress(blob), blob, etag_val, token, None
     except Exception:
         return None
 
 
-def _archive_list_disk_candidate(cache_key, window, since, now=None):
+def _archive_list_disk_candidate(cache_key, window, since, accept_encoding="", *, now=None):
     """The saved body to serve for this request, or None (normal path).
 
     Bootstrap reads (no token) and pages left open across the restart (a
@@ -18180,7 +18199,7 @@ def _archive_list_disk_candidate(cache_key, window, since, now=None):
         return None
     if (cache_key, window) in _ARCHIVE_LIST_BUILT:
         return None
-    return _archive_list_disk_load(cache_key, window, now)
+    return _archive_list_disk_load(cache_key, window, now, accept_encoding=accept_encoding)
 
 
 def _archive_list_start_warm(slot, warm):
@@ -39461,7 +39480,8 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             initial = qs.get("initial", ["0"])[0] == "1"
             scoped_layouts = window == "7d" and qs.get("row_layouts") == ["1"]
             body_cache_key = _archive_list_body_key(list_cache_key, scoped_layouts)
-            _disk = None if initial else _archive_list_disk_candidate(body_cache_key, window, since)
+            _disk = None if initial else _archive_list_disk_candidate(
+                body_cache_key, window, since, self.headers.get("Accept-Encoding", ""))
             if (not initial and _disk is None and scoped_layouts
                     and (body_cache_key, window) not in _ARCHIVE_LIST_BUILT):
                 # The first boot after enabling layouts can reuse a legacy
@@ -39473,16 +39493,21 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     lambda: _archive_list_warm(cache_options, window, stale_ok,
                                                scoped_layouts=scoped_layouts, eager_gzip=not scoped_layouts),
                 )
-                if since and since == _disk[3]:
+                raw, saved_body, etag, token, encoding = _disk
+                disk_headers = (("X-CCC-List-Body", "disk"),)
+                if since and since == token:
                     # The open page already holds exactly the saved rows.
                     self.send_response(304)
                     self.send_header("ETag", '"d-' + since + '"')
                     self.send_header("X-CCC-List-Body", "disk")
                     self.end_headers()
                     _status = 304
+                elif encoding:
+                    body = None if self.headers.get("If-None-Match") == etag else saved_body
+                    _status = self._send_archive_list_representation(body, encoding, etag, disk_headers)
                 else:
                     _status = self._send_archive_list_body(
-                        *_disk[:3], extra_headers=(("X-CCC-List-Body", "disk"),))
+                        raw, saved_body, etag, extra_headers=disk_headers)
                 record_diag("list_server", (time.perf_counter() - _lt0) * 1000.0, {
                     "window": window, "status": _status, "disk": True,
                     "cpu_ms": round((time.thread_time() - _lc0) * 1000.0, 1),
