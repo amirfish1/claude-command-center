@@ -35011,9 +35011,9 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             event_cursor = (not app_shell and not app_embed and
                             not query.get("ccc_popout") and not query.get("popout") and
                             time.time() - _SERVER_START_TS > _ARCHIVE_LIST_DISK_BOOT_S)
-            self.send_html(_load_app_shell_html(selected_app) if app_shell else
-                           _load_index_html(app_embed=app_embed),
-                           dashboard_event_cursor=event_cursor)
+            html = _load_app_shell_html(selected_app) if app_shell else _load_index_html(app_embed=app_embed)
+            html = self._inject_runtime_globals(html)
+            self.send_html(html, dashboard_event_cursor=event_cursor)
         elif path == "/api/control-plane/status":
             self.send_json(_control_plane_request("health"))
         elif path == "/api/model-picker/picks":
@@ -49867,6 +49867,19 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         self._send_server_timing(cache="hit" if cached is not None else "miss")
         self.end_headers()
         self.wfile.write(body)
+
+    def _inject_runtime_globals(self, html):
+        # Cheap per-request </head> replace: the bound port is only known
+        # after listen(), so it can't be baked into the cached template.
+        try:
+            port = int(getattr(self.server, "server_port", 0) or 0)
+        except (TypeError, ValueError):
+            port = 0
+        return html.replace(
+            "</head>",
+            f"<script>window.__CCC_HTTP_PORT__={port};</script>\n</head>",
+            1,
+        )
 
     def send_html(self, content, *, dashboard_event_cursor=False):
         self._send_prepared_html(_prepare_html_response(

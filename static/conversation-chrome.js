@@ -788,16 +788,33 @@
   // (covers its tailnet name), or a private LAN address — can go in a plain
   // iframe: no X-Frame-Options to fight, native interactivity, real cookies,
   // no screenshot loop.
+  function _isLoopbackHost(host) {
+    return host === 'localhost' || host.endsWith('.localhost') || host === '::1' || host === '[::1]' || /^127\./.test(host);
+  }
+
   function _isSelfServedUrl(url) {
     try {
       const u = new URL(url, window.location.origin);
       const host = (u.hostname || '').toLowerCase();
       if (!host) return false;
       if (host === (window.location.hostname || '').toLowerCase()) return true;
-      if (host === 'localhost' || host.endsWith('.localhost') || host === '::1' || host === '[::1]') return true;
-      if (/^127\./.test(host)) return true;
+      if (_isLoopbackHost(host)) return true;
       return /^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(host);
     } catch (_) { return false; }
+  }
+
+  function _sameServerRelativeUrl(u) {
+    // "/path?q#h" when u is served by THIS CCC instance, else null. The
+    // dashboard is also reachable through a TLS proxy (tailnet): loopback
+    // URLs on the bound port are this same server, so rewriting them to
+    // relative keeps the iframe same-origin and dodges mixed-content blocks.
+    const host = (u.hostname || '').toLowerCase();
+    if (host !== (window.location.hostname || '').toLowerCase() && !_isLoopbackHost(host)) return null;
+    const locPort = window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
+    const uPort = u.port || (u.protocol === 'https:' ? '443' : '80');
+    const cccPort = String(window.__CCC_HTTP_PORT__ || '');
+    if (uPort === locPort || (cccPort && uPort === cccPort)) return u.pathname + u.search + u.hash;
+    return null;
   }
 
   function openWebPreviewInRail(url, opts) {
@@ -805,8 +822,18 @@
     // private LAN) and the remote-rendered browser for the rest — it renders
     // frame-blocked sites too. Final fallback is a new tab.
     const frameOpts = Object.assign({ kind: 'frame', title: (opts && opts.title) || url.replace(/^https?:\/\//i, ''), externalUrl: url }, opts || {});
-    if (_isSelfServedUrl(url)) {
-      openArtifactViewer(url, frameOpts);
+    let u = null;
+    try { u = new URL(url, window.location.origin); } catch (_) { u = null; }
+    const rel = u && _sameServerRelativeUrl(u);
+    if (rel) {
+      openArtifactViewer(rel, frameOpts);
+      return;
+    }
+    if (u && _isSelfServedUrl(url) && !(window.location.protocol === 'https:' && u.protocol === 'http:')) {
+      // Same-machine service on another port: frameable unless an https
+      // dashboard would hit a mixed-content block — the remote browser
+      // fetches it server-side instead.
+      openArtifactViewer(u.href, frameOpts);
       return;
     }
     openBrowserInStatusRail(url, opts).then((ok) => {
