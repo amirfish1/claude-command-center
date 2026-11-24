@@ -1138,9 +1138,10 @@ def test_pinned_topic_guards_refresh_with_the_snapshot_and_live_overlays():
     topics = MappingProxyType({"a": ("", "", "old", 1), "c": ("", "", "stable", 1)})
     live = {"b": False}
 
-    def read(records):
+    def read(records, transitions=None):
         return layer.read_inputs(source, {}, {}, (), overlay_maps=(records, live),
-                                 edges=(), pinned_overlays=(records,))
+                                 edges=(), pinned_overlays=(records,),
+                                 guard_transitions=transitions)
 
     first = read(topics)
     live["b"] = 0
@@ -1148,11 +1149,17 @@ def test_pinned_topic_guards_refresh_with_the_snapshot_and_live_overlays():
     assert first.overlays[0] is second.overlays[0]
     assert layer.candidates(first, second) == {"b"}
 
-    third = read(MappingProxyType({"a": ("", "", "new", 1), "c": ("", "", "stable", 1)}))
+    third_records = MappingProxyType(dict(topics, a=("", "", "new", 1)))
+    third = read(third_records, {id(third_records): (topics, ("a",))})
     assert layer.candidates(second, third) == {"a"}
     assert second.overlays[0]["c"] is third.overlays[0]["c"]
+    assert second.overlays[0]["a"] != third.overlays[0]["a"]
+    assert list(third.overlays[0].items()) == [
+        (sid, layer._guard_value(value)) for sid, value in third_records.items()]
 
-    fourth = read(MappingProxyType({"c": ("", "", "stable", True)}))
+    # Another cut skips this proof because its cached predecessor differs.
+    fourth_records = MappingProxyType({"c": ("", "", "stable", True)})
+    fourth = read(fourth_records, {id(fourth_records): (topics, ("c",))})
     assert layer.candidates(third, fourth) == {"a", "c"}
     assert fourth.overlays[0] == {"c": '["","","stable",true]'}
 

@@ -953,10 +953,14 @@ def test_archive_projection_advances_its_own_committed_topic_snapshot(store, mon
     assert 'new' not in inputs[0]
 
     phases = {}
+    guard_transitions = {}
     current, current_edges, current_version = topics.archive_projection_inputs(
-        store, max_rows=20, diagnostics=phases)
+        store, max_rows=20, diagnostics=phases, guard_transitions=guard_transitions)
     records, origins, _, persisted_edges = topics._archive_topic_records(store, 20)
     assert phases['topics_snapshot_advanced']
+    previous_records, changed = guard_transitions[id(current[0])]
+    assert previous_records is inputs[0]
+    assert changed == ('new',)
     assert list(current[0].items()) == list(records.items())
     assert current[1] == origins
     assert current[0]['new'] == ('', 'new', 'New topic', 0)
@@ -1202,7 +1206,9 @@ def test_archive_projection_retry_reuses_only_exact_local_topic_commit(store, mo
 
         monkeypatch.setattr(topics, '_native_title', native_title)
         details = {}
-        inputs, edges, version = topics.archive_projection_inputs(store, max_rows=20, diagnostics=details)
+        guard_transitions = {}
+        inputs, edges, version = topics.archive_projection_inputs(
+            store, max_rows=20, diagnostics=details, guard_transitions=guard_transitions)
 
     expected_records, expected_origins, _, expected_edges = fetch(store, 20)
     assert list(inputs[0].items()) == list(expected_records.items())
@@ -1214,9 +1220,11 @@ def test_archive_projection_retry_reuses_only_exact_local_topic_commit(store, mo
     if write_mode != 'local':
         assert len(reads) == 2
         assert 'topics_snapshot_advanced' not in details
+        assert not guard_transitions
     else:
         assert len(reads) == 1
         assert details['topics_snapshot_advanced']
+        assert guard_transitions[id(inputs[0])][0] is reads[0][0]
 
 
 def test_archive_projection_includes_peer_commit_before_snapshot_without_retry(store, monkeypatch):

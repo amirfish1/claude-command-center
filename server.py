@@ -19498,8 +19498,10 @@ def _archive_history_read_cut(key, cache_options, now, *, phases=None, check_cli
             if connection is None:
                 with _archive_history_timing(phases, "topic_connection"):
                     connection = continuation_topics.archive_connection()
+            guard_transitions = {}
             topics = continuation_topics.archive_projection_inputs(
-                connection, max_rows=archive_history_layer.MAX_ROWS, diagnostics=phases)
+                connection, max_rows=archive_history_layer.MAX_ROWS, diagnostics=phases,
+                guard_transitions=guard_transitions)
         if topics is None:
             yield None
             return
@@ -19531,6 +19533,7 @@ def _archive_history_read_cut(key, cache_options, now, *, phases=None, check_cli
                 inventory, hot, hot_tokens, extra, overlay_maps=overlays,
                 edges=(*parents.items(), *topic_edges), removed=removed,
                 pinned_overlays=(records, origins), pinned_hot=not removed,
+                guard_transitions=guard_transitions,
             )
         if inputs is None:
             yield None
@@ -19857,8 +19860,10 @@ def _archive_seven_day_cut(key, captured, rows, cached, reader, now, phases, del
         tokens = {sid: base_tokens[sid] if id(row) in base_objects else layer.hot_row_token(row)
                   for sid, row in by_sid.items()}
     with _archive_history_timing(phases, "topics"):
+        guard_transitions = {}
         topics = continuation_topics.archive_projection_inputs(
-            reader, max_rows=layer.MAX_ROWS, diagnostics=phases)
+            reader, max_rows=layer.MAX_ROWS, diagnostics=phases,
+            guard_transitions=guard_transitions)
     if topics is None:
         return None
     topic_inputs, topic_edges, version = topics
@@ -19875,7 +19880,8 @@ def _archive_seven_day_cut(key, captured, rows, cached, reader, now, phases, del
             (), by_sid, tokens, (), pinned_overlays=topic_inputs[:2],
             overlay_maps=(sidecars["names"], eligible_resumes, parents, sidecars["drivers"],
                           sidecars["ideas"], sidecars["overlays"], *topic_inputs),
-            edges=(*parents.items(), *topic_edges))
+            edges=(*parents.items(), *topic_edges),
+            guard_transitions=guard_transitions)
     if inputs is None:
         return None
 

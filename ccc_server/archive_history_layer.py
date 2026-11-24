@@ -425,11 +425,15 @@ def _canonical_inputs(inventory, removed):
     return guard
 
 
-def _pinned_overlay(values, previous, encoded):
+def _pinned_overlay(values, previous, encoded, transition=None):
     if values is previous:
         return encoded
     if previous is None:
         return {sid: _guard_value(value) for sid, value in values.items()}
+    if transition is not None and transition[0] is previous:
+        # A checked SQLite transition contains every modified or inserted row.
+        # Keep the previous guards intact for any in-flight projections.
+        return encoded | {sid: _guard_value(values[sid]) for sid in transition[1]}
     result = {}
     for sid, value in values.items():
         old = encoded.get(sid, "")
@@ -442,12 +446,12 @@ def _pinned_overlay(values, previous, encoded):
     return result
 
 
-def _overlay_guards(overlay_maps, pinned):
+def _overlay_guards(overlay_maps, pinned, transitions):
     """Reuse encoded guards for maps owned by one immutable read snapshot."""
     global _PINNED_OVERLAY_GUARDS
     previous, encoded = _PINNED_OVERLAY_GUARDS
     if len(pinned) != len(previous) or any(a is not b for a, b in zip(pinned, previous)):
-        encoded = tuple(_pinned_overlay(values, old, guard)
+        encoded = tuple(_pinned_overlay(values, old, guard, transitions.get(id(values)))
                         for values, old, guard in zip_longest(pinned, previous, encoded)
                         if values is not None)
         _PINNED_OVERLAY_GUARDS = pinned, encoded
@@ -500,7 +504,8 @@ def _membership_guards(canonical, hot, hot_tokens, pinned):
 
 
 def read_inputs(inventory, hot, hot_tokens, extra, *, overlay_maps, edges,
-                removed=frozenset(), pinned_overlays=(), pinned_hot=False):
+                removed=frozenset(), pinned_overlays=(), pinned_hot=False,
+                guard_transitions=None):
     """Read projection guards. A pinned hot cut must own an immutable token map."""
     canonical = _canonical_inputs(inventory, removed)
     if canonical is None:
@@ -522,7 +527,7 @@ def read_inputs(inventory, hot, hot_tokens, extra, *, overlay_maps, edges,
     if not sources or len(sources) > MAX_ROWS:
         return None
 
-    overlays = _overlay_guards(overlay_maps, pinned_overlays)
+    overlays = _overlay_guards(overlay_maps, pinned_overlays, guard_transitions or {})
     return Inputs(tuple(sources), sources, overlays, (*edges, *membership_edges, *row_edges(extra)))
 
 

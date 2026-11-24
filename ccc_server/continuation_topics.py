@@ -497,11 +497,16 @@ def _advance_archive_topic_snapshot(snapshot, previous, current):
         old = records.get(sid)
         if old is not None and (old[0] != '' or old[1] not in ('', sid)):
             return None
-    return MappingProxyType(records | updates), indexed, roots, edges
+    return (MappingProxyType(records | updates), indexed, roots, edges), tuple(updates)
 
 
-def archive_projection_inputs(conn, *, max_rows, max_native_roots=32, diagnostics=None):
-    """Read topic records and external titles needed to guard an archive layer."""
+def archive_projection_inputs(conn, *, max_rows, max_native_roots=32, diagnostics=None,
+                              guard_transitions=None):
+    """Read topic records and external titles needed to guard an archive layer.
+
+    The optional guard transitions belong to this read. A caller with the
+    predecessor's guards may carry them forward after a verified local commit.
+    """
     global _ARCHIVE_TOPIC_SNAPSHOT
 
     def unavailable(reason):
@@ -538,12 +543,16 @@ def archive_projection_inputs(conn, *, max_rows, max_native_roots=32, diagnostic
                 current = _archive_read_version(conn) if owner is conn else None
                 reused = owner is conn and current == version
             advanced = None
+            transition = None
             if not reused:
                 if owner is conn and snapshot is not None:
                     with timing("transition"):
                         advanced = _advance_archive_topic_snapshot(snapshot, version, current)
                 if advanced is not None:
-                    snapshot, version = advanced, current
+                    prior_records = snapshot[0]
+                    snapshot, changed = advanced
+                    version = current
+                    transition = prior_records, changed
                 else:
                     conn.execute("BEGIN")
                     try:
@@ -576,6 +585,8 @@ def archive_projection_inputs(conn, *, max_rows, max_native_roots=32, diagnostic
                 current = _archive_read_version(conn)
             if current == version:
                 _ARCHIVE_TOPIC_SNAPSHOT = conn, version, snapshot
+                if guard_transitions is not None and transition is not None:
+                    guard_transitions[id(by_sid)] = transition
                 if diagnostics is not None:
                     diagnostics["topics_snapshot_reused"] = reused
                     if advanced is not None:
