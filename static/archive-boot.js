@@ -347,12 +347,17 @@
   const save = (value, delta = null, packed = null) => {
     try { if (localStorage.getItem('ccc-conv-cache') === '0') return; } catch (_) { return; }
     if (value.url !== fullUrl || !Array.isArray(value.rows) || value.rows.length > maxRows) return;
-    pending = {value, delta, packed};
+    // A refresh can arrive before the idle write of the original wire body.
+    // Keep that body as the anchor of the queued patch.
+    const anchor = windowName === '7d' && pending?.packed instanceof ArrayBuffer
+      && !pending.delta && pending.value.delta && pending.value.delta === delta?.from
+      ? pending : null;
+    pending = {value, delta, packed, anchor};
     if (scheduled) return;
     scheduled = true;
     const run = async () => {
       scheduled = false;
-      const {value, delta, packed} = pending; pending = null;
+      const {value, delta, packed, anchor} = pending; pending = null;
       try {
         const db = await open();
         if (!db) return;
@@ -361,10 +366,10 @@
         const {rows, ...metadata} = value;
         const store = tx.objectStore('snapshot');
         const at = Date.now();
-        const markSaved = bytes => {
+        const markSaved = (bytes, saved = metadata) => {
           tx.oncomplete = () => {
             try {
-              const {etag, delta, order} = metadata;
+              const {etag, delta, order} = saved;
               const hint = windowName === 'all'
                 ? JSON.stringify({url:fullUrl, at, bytes, etag, delta, order})
                 : String(at);
@@ -372,12 +377,13 @@
             } catch (_) {}
           };
         };
-        const writeFull = () => {
+        const writeFull = (base = value, wire = packed) => {
+          const {rows, ...metadata} = base;
           // The All feed already negotiated shared row layouts. Preserve
           // that format when a coalesced or oversized delta needs its own base.
-          let encoded = packed instanceof ArrayBuffer ? packed : null;
+          let encoded = wire instanceof ArrayBuffer ? wire : null;
           if (!encoded) {
-            const layouts = packed || (windowName === 'all' ? packRows(rows) : null);
+            const layouts = wire || (windowName === 'all' ? packRows(rows) : null);
             if (layouts) encoded = new TextEncoder().encode(JSON.stringify(layouts)).buffer;
           }
           const rowsJson = encoded ? null : JSON.stringify(rows);
@@ -390,7 +396,7 @@
             : {rowsJson};
           store.put({...metadata, ...storage, bytes, at}, 'last');
           store.put({...metadata, bytes, at}, 'header');
-          markSaved(bytes);
+          markSaved(bytes, metadata);
         };
         if (!delta?.from || !value.delta || delta.changes.length > maxPatchRows) {
           writeFull();
@@ -398,6 +404,7 @@
         }
         // Compare and update within the same write transaction. If another
         // tab saved a different base, this delta cannot describe its rows.
+        if (anchor) writeFull(anchor.value, anchor.packed);
         const head = store.get('header');
         head.onsuccess = () => {
           const old = head.result;

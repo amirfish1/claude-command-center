@@ -641,6 +641,51 @@ async function seed(page,delta) {
   await waitForSnapshot(page, delta);
 }
 
+test('a seven-day delta queued before the first save retains the packed base', async () => {
+  const context = await browser.createBrowserContext(), page = await context.newPage();
+  try {
+    await page.goto(origin, {waitUntil:'load'});
+    await page.evaluate(wireBody => {
+      const snapshot = window.__cccArchiveSnapshot;
+      const order = 'b'.repeat(64);
+      const recent = {session_id:'recent', name:'שלום'};
+      const older = {session_id:'older'};
+      const renamed = {...recent, name:'updated'};
+      snapshot.save({url:snapshot.url, delta:'valid', order, rows:[recent, older]},
+        null, new TextEncoder().encode(wireBody).buffer);
+      snapshot.save({url:snapshot.url, delta:'valid-next', order, rows:[renamed, older]},
+        {from:'valid', ids:null, changes:[renamed]});
+      window.__cccArchiveSettled = true;
+      window.dispatchEvent(new Event('ccc:archive-settled'));
+    }, sevenDayPackedBody);
+    await waitForSnapshot(page, 'valid-next', 'header');
+    const packed = await page.evaluate(async () => {
+      const db = await new Promise(resolve => {
+        const request = indexedDB.open('ccc-archive-response', 1);
+        request.onsuccess = () => resolve(request.result);
+      });
+      try {
+        return await new Promise(resolve => {
+          const request = db.transaction('snapshot').objectStore('snapshot').get('last');
+          request.onsuccess = () => resolve(request.result.packedRows?.byteLength ?? null);
+        });
+      } finally { db.close(); }
+    });
+    assert.equal(packed, Buffer.byteLength(sevenDayPackedBody));
+    const conditional = page.waitForRequest(req => req.url().includes('since=valid-next'));
+    await page.reload({waitUntil:'load'});
+    await conditional;
+    assert.deepEqual(await page.evaluate(async () => {
+      const snapshot = window.__cccArchiveSnapshot;
+      const saved = await snapshot.read;
+      return {rows:saved?.rows, delta:saved?.delta, status:(await snapshot.fetch)?.status};
+    }), {
+      rows:[{session_id:'recent', name:'updated'}, {session_id:'older'}],
+      delta:'valid-next', status:304,
+    });
+  } finally { await context.close(); }
+});
+
 test('an intentionally unsent preview never starts a replacement request', async () => {
   const f=setup({snapshot:{url:fullUrl,rows},response:reply({conversations:rows})});
   f.state._archiveBootstrapUrl=fullUrl+'&initial=1';
