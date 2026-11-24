@@ -531,19 +531,21 @@ def _ledger_conn():
     return conn
 
 
-@pytest.mark.parametrize("exact", [None, True, False])
-def test_ledger_file_rows_match_the_ordinary_read_exactly(monkeypatch, exact):
-    """The file table is read in one step without rounding any mtime."""
+def test_ledger_file_rows_match_the_ordinary_read_exactly():
     conn = _ledger_conn()
-    plain = sorted(tuple(r) for r in conn.execute("SELECT path, mtime, size FROM files"))
-    monkeypatch.setattr(savings, "_JSON_REALS_EXACT", exact)
-    assert sorted(savings._ledger_file_rows(conn)) == plain
+    conn.executemany("INSERT INTO files VALUES (?,?,?)", [
+        ("/zero.jsonl", 0.0, 0),
+        ("/future.jsonl", 32503680000.000004, 23),
+        ("/past.jsonl", -1794636405.7928371, 45),
+        ("/fraction.jsonl", -1.0000000000000002, 67),
+    ])
+    plain = [tuple(row) for row in conn.execute("SELECT path, mtime, size FROM files")]
+    assert savings._ledger_file_rows(conn) == plain
 
 
-def test_ledger_file_rows_skip_batching_when_sqlite_rounds_reals(monkeypatch):
-    """A SQLite that rounds JSON reals would make every file look changed."""
-    def boom(*_a, **_k):
-        raise AssertionError("batched read used on a rounding SQLite")
-    monkeypatch.setattr(savings, "_JSON_REALS_EXACT", False)
-    monkeypatch.setattr(savings, "_sqlite_fetch_rows", boom)
-    assert len(savings._ledger_file_rows(_ledger_conn())) == 2
+@pytest.mark.parametrize("mtime", [0.125, -0.125, float(1 << 53)])
+def test_ledger_file_rows_fall_back_for_stamps_outside_packed_range(mtime):
+    conn = _ledger_conn()
+    conn.execute("INSERT INTO files VALUES (?,?,?)", ("/edge.jsonl", mtime, 42))
+    plain = [tuple(row) for row in conn.execute("SELECT path, mtime, size FROM files")]
+    assert savings._ledger_file_rows(conn) == plain

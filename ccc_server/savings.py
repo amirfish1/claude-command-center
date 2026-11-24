@@ -375,31 +375,26 @@ _LEDGER_LOCK = threading.Lock()
 _ACTIVE_LEDGER_SCANS = set()
 
 
-_JSON_REALS_EXACT = None
-_MTIME_PROBE = 1794636405.7928371
+_MTIME_FRACTION_SCALE = 1 << 52
 
 
 def _ledger_file_rows(conn):
-    """Every ``files`` row as ``(path, mtime, size)`` in one database step.
-
-    Reading the ledger a row at a time gives the interpreter up once per row;
-    beside a computing thread that turned a 0.03 s read of ~12,000 rows into
-    10 s or more, held on every savings refresh. The batched read goes through
-    SQLite's JSON, which older builds round to 15 digits: a rounded mtime
-    would never match the file again and every transcript would be re-priced
-    on each pass, so those builds keep the ordinary read.
-    """
-    global _JSON_REALS_EXACT
-    sql = "SELECT path, mtime, size FROM files"
-    if _JSON_REALS_EXACT is None:
-        try:
-            packed = conn.execute("SELECT json_array(?)", (_MTIME_PROBE,)).fetchone()[0]
-            _JSON_REALS_EXACT = json.loads(packed)[0] == _MTIME_PROBE
-        except (sqlite3.Error, ValueError, TypeError, IndexError):
-            _JSON_REALS_EXACT = False
-    if _JSON_REALS_EXACT:
-        return _sqlite_fetch_rows(conn, sql, (), ("path", "mtime", "size"))
-    return [tuple(r) for r in conn.execute(sql)]
+    """Read file stamps in a batch while preserving exact mtime comparisons."""
+    # The JSON batch reader preserves integers but SQLite's JSON can round
+    # floats. For these binary64 values the whole part fits exactly and the
+    # signed fractional part is an exact multiple of 2**-52.
+    scale = _MTIME_FRACTION_SCALE
+    packed = _sqlite_fetch_rows(conn, f"""
+        SELECT path, size,
+               CASE WHEN typeof(mtime) = 'real'
+                         AND (mtime = 0 OR (abs(mtime) >= 1 AND abs(mtime) < {1 << 53}))
+                    THEN CAST(mtime AS INTEGER) END AS whole,
+               CAST((mtime - CAST(mtime AS INTEGER)) * {scale} AS INTEGER) AS fraction
+        FROM files
+    """, (), ("path", "size", "whole", "fraction"))
+    if any(whole is None for _, _, whole, _ in packed):
+        return [tuple(row) for row in conn.execute("SELECT path, mtime, size FROM files")]
+    return [(path, whole + fraction / scale, size) for path, size, whole, fraction in packed]
 
 
 def _scan_incremental(conn, root: Path, deadline=None):
