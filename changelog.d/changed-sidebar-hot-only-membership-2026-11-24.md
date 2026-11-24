@@ -1,0 +1,1 @@
+- Skip redundant identity encoding when building a sidebar archive response from a hot-only selection.

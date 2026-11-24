@@ -464,6 +464,12 @@ def _membership_guards(canonical, hot, hot_tokens, pinned):
     if pinned and previous is canonical and tokens is hot_tokens:
         return guard
     canonical_sources, identities, canonical_edges = canonical
+    if not pinned and not canonical_sources:
+        # A scoped hot-only cut has no stored identities to verify.
+        if not hot_tokens.keys() >= hot.keys():
+            return None
+        return ({sid: ("hot", hot_tokens[sid]) for sid in hot},
+                tuple(row_edges(hot.values())))
     sources = canonical_sources.copy()
     hot_edges = []
     row_guards = {}

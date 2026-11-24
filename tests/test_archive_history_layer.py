@@ -307,6 +307,22 @@ def test_hot_replacement_requires_exact_identity_and_a_content_token():
     assert valid.sources["b"] == ("hot", "token")
 
 
+def test_hot_only_membership_keeps_order_edges_and_requires_tokens(monkeypatch):
+    def unexpected_identity(*args):
+        pytest.fail("A hot-only scope has no stored identity to compare")
+
+    monkeypatch.setattr(archive_store, "identity", unexpected_identity)
+    hot = {"b": {"session_id": "b", "parent_session_id": "a"},
+           "a": {"session_id": "a", "continuation_origin": "outside"}}
+    tokens = {"a": "token-a", "b": "token-b", "outside": "unused"}
+    inputs = layer.read_inputs((), hot, tokens, (), overlay_maps=(),
+                               edges=(("external", "a"),))
+    assert inputs.order == ("b", "a")
+    assert inputs.edges == (("external", "a"), ("b", "a"), ("a", "outside"))
+    assert inputs.sources == {"b": ("hot", "token-b"), "a": ("hot", "token-a")}
+    assert layer.read_inputs((), hot, {"a": "token-a"}, (), overlay_maps=(), edges=()) is None
+
+
 def test_pinned_membership_reuses_only_the_captured_cut(monkeypatch):
     source = tuple(inventory("older", "active"))
     hot = {"active": {"session_id": "active", "parent_session_id": "older"}}
