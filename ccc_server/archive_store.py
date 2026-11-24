@@ -1594,9 +1594,12 @@ def lookup(cache_file, key, sids, *, schema_version=None, include_ancestors=True
     try:
         con.execute('BEGIN')
         placeholders = ','.join('?' for _ in sids)
+        # The history covering index can otherwise scan the whole variant
+        # for both the requested IDs and each step of the ancestor walk.
         query = f"""WITH RECURSIVE selected(identity,sid,parent) AS (
-            SELECT identity,sid,parent FROM rows WHERE variant=? AND sid IN ({placeholders})
-            UNION SELECT r.identity,r.sid,r.parent FROM selected s CROSS JOIN rows r
+            SELECT identity,sid,parent FROM rows INDEXED BY rows_sid
+                  WHERE variant=? AND sid IN ({placeholders})
+            UNION SELECT r.identity,r.sid,r.parent FROM selected s CROSS JOIN rows r INDEXED BY rows_sid
                   WHERE r.variant=? AND r.sid=s.parent AND s.parent!=''
         ) SELECT r.body FROM selected s CROSS JOIN rows r
           WHERE r.variant=? AND r.identity=s.identity ORDER BY r.position"""

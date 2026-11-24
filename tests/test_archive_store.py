@@ -500,11 +500,31 @@ def test_ancestor_cycle_terminates_and_both_implementations_agree(tmp_path):
     assert store.load(target, hot=True, now=NOW)['entries']['base']['conversations'] == store.hot_rows(original['entries']['base']['conversations'], now=NOW)
 
 
-def test_new_pin_lookup_returns_only_target_and_ancestors(tmp_path):
+def test_new_pin_lookup_returns_only_target_and_ancestors(tmp_path, monkeypatch):
     target = tmp_path / 'archive.json'
-    store.save(target, data(), complete=True)
+    archive = data()
+    archive['entries']['base']['conversations'].extend(
+        {'session_id': f'unrelated-{i}', 'mtime': NOW - 20 * 86400}
+        for i in range(2048)
+    )
+    store.save(target, archive, complete=True)
+    connect = store._connect
+    progress_calls = 0
+
+    def observe_progress():
+        nonlocal progress_calls
+        progress_calls += 1
+        return 0
+
+    def observe(*args, **kwargs):
+        conn = connect(*args, **kwargs)
+        conn.set_progress_handler(observe_progress, 100)
+        return conn
+
+    monkeypatch.setattr(store, '_connect', observe)
     rows = store.lookup(target, 'base', ['recent'])
     assert [r['session_id'] for r in rows] == ['recent', 'parent']
+    assert progress_calls < 20
 
 
 def test_newer_row_epoch_cannot_be_overwritten_by_old_builder(tmp_path):
