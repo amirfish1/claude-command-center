@@ -77,6 +77,7 @@
   }
   let sequence=0, scheduled=false;
   const groups = new WeakMap();
+  const generatedNotes = new WeakSet();
   function mount() {
     scheduled=false;
     const controls=candidates();
@@ -87,7 +88,12 @@
       const group=(reader?document.getElementById('settingsModalFontSlot'):null)||control.closest(groupSelector);
       if(!group&&spec.scope==='one-off') {
         const id='settings-scope-chrome-'+spec.id;let note=document.getElementById(id);
-        if(!note){note=document.createElement('span');note.id=id;note.hidden=true;note.textContent=spec.title+'. Owner: '+spec.owner+'. '+spec.impact+' '+spec.restart;document.getElementById('settingsModal').append(note);}
+        if(!note){
+          note=document.createElement('span');note.id=id;note.hidden=true;
+          note.textContent=spec.title+'. Owner: '+spec.owner+'. '+spec.impact+' '+spec.restart;
+          generatedNotes.add(note);
+          document.getElementById('settingsModal').append(note);
+        }
         annotate(control,spec,note.id);continue;
       }
       if(!group)continue;
@@ -128,6 +134,7 @@
       const help=document.createElement('div');help.className='settings-scope-help';help.dataset.settingsScopeHelp='';help.hidden=true;
       const body=document.createElement('div');help.append(body);
       const wrapper=document.createElement('div');wrapper.className='settings-scope-container';wrapper.hidden=true;wrapper.append(help);
+      generatedNotes.add(wrapper);
       state={id:'settings-scope-'+(++sequence),help,body,wrapper,signature:null};groups.set(group,state);
     }
     return state;
@@ -155,7 +162,17 @@
     const inRoot=node=>!skip(node)&&!!node.closest(roots);
     const added=node=>!skip(node)&&!!(node.closest(roots)||node.querySelector(roots));
     for(const record of records) {
-      if(!targets.has(record.target)){targets.add(record.target);if(inRoot(record.target)){schedule();return;}}
+      if(!targets.has(record.target)){
+        if(inRoot(record.target)){
+          // Text and newly inserted guidance cannot change selector ownership.
+          // Element removals and attribute changes still need a fresh scan.
+          if(record.type==='childList' &&
+             Array.from(record.addedNodes).every(node=>node.nodeType!==1||generatedNotes.has(node)) &&
+             Array.from(record.removedNodes).every(node=>node.nodeType!==1))continue;
+          schedule();return;
+        }
+        targets.add(record.target);
+      }
       for(const node of record.addedNodes)if(added(node)){schedule();return;}
     }
   }).observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['class','id','data-section-id','data-context-preferences','data-role']});

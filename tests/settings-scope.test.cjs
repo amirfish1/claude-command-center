@@ -129,3 +129,40 @@ test('nested settings roots share a scan and mutation bursts share a frame',asyn
   assert.equal(result.outerScans,1);assert.equal(result.nestedScans,0);
   assert.equal(result.scope,'reader-view');assert.equal(result.description,true);
 });
+
+test('scope guidance and status text do not cause a second control scan', async t => {
+  const page = await open(t);
+  const result = await page.evaluate(async () => {
+    const frames = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    await frames();
+    const section = document.createElement('section');
+    section.dataset.contextPreferences = '';
+    const control = document.createElement('button');
+    control.dataset.theme = 'light';
+    const status = document.createElement('span');
+    section.append(control, status);
+    const query = section.querySelectorAll.bind(section);
+    let scans = 0;
+    section.querySelectorAll = selector => {
+      scans += 1;
+      return query(selector);
+    };
+    document.body.append(section);
+    await frames();
+    const initialScans = scans;
+    status.textContent = 'Ready';
+    await frames();
+    return {
+      initialScans,
+      scans,
+      scope: control.dataset.settingsScope,
+      description: !!document.getElementById(control.getAttribute('aria-describedby')),
+    };
+  });
+  assert.deepEqual(result, {
+    initialScans: 1,
+    scans: 1,
+    scope: 'browser-workspace',
+    description: true,
+  });
+});
