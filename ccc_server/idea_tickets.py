@@ -53,6 +53,7 @@ except ImportError:  # Windows: in-process lock only
 
 from ccc_server import core as _core
 from ccc_server import local_overrides as _local_overrides
+from ccc_server.archive_preview import ticket_activity
 from ccc_server.session_graph import codex_rollout_exec_meta
 
 FLAG = "idea_tickets"
@@ -340,8 +341,8 @@ def ticket_for_session(sid):
     }
 
 
-def idea_ticket_rows_map(*, data=None):
-    """sid -> row payload for every ticketed session; {} when the flag is off."""
+def idea_ticket_rows_map(*, data=None, moved_since=None):
+    """Project ticket rows, optionally limited to moves on or after a cutoff."""
     if not _enabled():
         return {}
     data = load_state() if data is None else data
@@ -350,6 +351,8 @@ def idea_ticket_rows_map(*, data=None):
         ref = entry.get("ref") if isinstance(entry, dict) else None
         ticket = data["tickets"].get(ref) if ref else None
         if not ticket:
+            continue
+        if moved_since is not None and ticket_activity(entry) < moved_since:
             continue
         out[sid] = {
             "ref": ref,
@@ -370,10 +373,11 @@ def idea_ticket_rows_map(*, data=None):
                                     "sync_error")}
     # UI spawns still waiting for their first reply: no ticket yet, but the
     # row belongs in Ideas now rather than in Other.
-    for sid in (data.get("pending") or {}):
-        if sid not in out:
-            out[sid] = {"ref": "", "queue": "IDEAS", "sessions": 1,
-                        "closed": False, "pending": True}
+    if moved_since is None or moved_since <= 0:
+        for sid in (data.get("pending") or {}):
+            if sid not in out:
+                out[sid] = {"ref": "", "queue": "IDEAS", "sessions": 1,
+                            "closed": False, "pending": True}
     return out
 
 

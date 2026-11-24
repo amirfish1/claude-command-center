@@ -26,6 +26,14 @@ _ORDERED_ROWS = """
 """
 
 
+def ticket_activity(ticket):
+    try:
+        moved_at = float((ticket or {}).get("moved_at") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return moved_at if math.isfinite(moved_at) and moved_at > 0 else 0
+
+
 def activity(row):
     """Sidebar activity includes ticket moves as well as transcript stamps."""
     newest = 0
@@ -43,13 +51,8 @@ def activity(row):
                 ts /= 1000
             if ts > newest:
                 newest = ts
-    try:
-        moved_at = float(((row or {}).get("idea_ticket") or {}).get("moved_at") or 0)
-        if math.isfinite(moved_at):
-            newest = max(newest, moved_at)
-    except (TypeError, ValueError):
-        pass
-    return newest
+    ticket = (row or {}).get("idea_ticket")
+    return max(newest, ticket_activity(ticket)) if ticket else newest
 
 
 def _sid(row):

@@ -106,6 +106,25 @@ class IdeaTicketsTest(unittest.TestCase):
         self.assertEqual(rows["s1"]["ready_to_close_reviewed_at"], 123)
         self.assertEqual(rows["s2"]["ready_to_close_reviewed_at"], 0)
 
+    def test_moved_rows_keep_only_eligible_ticket_sessions(self):
+        data = {
+            "sessions": {
+                "moved": {"ref": "IDEAS-1", "moved_at": "100"},
+                "old": {"ref": "IDEAS-1", "moved_at": 99},
+                "invalid": {"ref": "IDEAS-1", "moved_at": "unknown"},
+                "nonfinite": {"ref": "IDEAS-1", "moved_at": "inf"},
+                "missing": {"ref": "IDEAS-2", "moved_at": 101},
+            },
+            "tickets": {"IDEAS-1": {"queue": "IDEAS", "sessions": []}},
+            "pending": {"pending": {}},
+        }
+        all_rows = it.idea_ticket_rows_map(data=data)
+        self.assertEqual(it.idea_ticket_rows_map(data=data, moved_since=100),
+                         {"moved": all_rows["moved"]})
+        self.assertEqual(it.idea_ticket_rows_map(data=data, moved_since=0), all_rows)
+        self.flag = False
+        self.assertEqual(it.idea_ticket_rows_map(data=data, moved_since=100), {})
+
     def test_explicit_archive_is_distinct_from_ticket_completion(self):
         self._ui_session("s1")
         it.attach_or_file("s1", classify_fn=lambda text: "idea")

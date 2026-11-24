@@ -593,7 +593,9 @@ def test_server_keeps_only_hot_rows_but_all_history_is_available(tmp_path, monke
     monkeypatch.setattr(server, '_archive_refresh_load_blocked', lambda now: True)
     monkeypatch.setattr(server, '_overlay_conversation_lifecycle_flags', lambda rows, **kwargs: rows)
     monkeypatch.setattr(server, '_pinned_rank_map', lambda: {})
-    monkeypatch.setattr(server._idea_tickets, 'idea_ticket_rows_map', lambda: {})
+    ticket_state = {'sessions': {}, 'tickets': {'IDEAS-1': {'queue': 'IDEAS'}}}
+    monkeypatch.setattr(server._idea_tickets, '_enabled', lambda: True)
+    monkeypatch.setattr(server._idea_tickets, 'load_state', lambda: ticket_state)
     monkeypatch.setattr(server._session_graph, 'parent_snapshot', lambda: {})
     monkeypatch.setattr(server, '_archive_compute_rows', lambda *a, **kw: pytest.fail('synchronous build'))
     hot, _, _ = server._archive_serve_rows_versioned('base', {}, window='1d', defer_cold=True)
@@ -602,6 +604,11 @@ def test_server_keeps_only_hot_rows_but_all_history_is_available(tmp_path, monke
     full, _, _ = server._archive_serve_rows_versioned('base', {}, defer_cold=True)
     assert {r['session_id'] for r in full} == {'old', 'recent', 'parent', 'pinned'}
     assert len(server._archive_serve_cache['base']['rows']) == 3
+    # A recently moved ticket retrieves its cold session without a pin.
+    ticket_state['sessions']['old'] = {'ref': 'IDEAS-1', 'moved_at': time.time()}
+    moved, _, _ = server._archive_serve_rows_versioned('base', {}, window='1d', defer_cold=True)
+    assert {r['session_id'] for r in moved} == {'old', 'recent', 'parent', 'pinned'}
+    ticket_state['sessions'].clear()
     # A pin set after publication retrieves only that cold session.
     monkeypatch.setattr(server, '_pinned_rank_map', lambda: {'old': 0})
     monkeypatch.setattr(server, '_apply_pinned_conversation_fields',

@@ -27,7 +27,7 @@ def test_late_cold_parent_keeps_replay_and_delta_tracking(tmp_path, monkeypatch)
     parents = {'child': 'parent'}
     monkeypatch.setattr(server._session_graph, 'parent_snapshot', lambda: dict(parents))
     monkeypatch.setattr(server, '_pinned_rank_map', lambda: {})
-    monkeypatch.setattr(server._idea_tickets, 'idea_ticket_rows_map', lambda: {})
+    monkeypatch.setattr(server._idea_tickets, 'idea_ticket_rows_map', lambda **kwargs: {})
     monkeypatch.setattr(server, '_load_conversation_lifecycle_sets', lambda: (set(), set()))
     monkeypatch.setattr(server, '_codex_deleted_thread_ids', lambda: set())
     monkeypatch.setattr(server, '_apply_session_lane_overrides', lambda rows: None)

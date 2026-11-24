@@ -19222,7 +19222,7 @@ def _archive_list_window_allows_row(row, cutoff, idea_tickets_by_sid=None, *, ac
     if bool((row or {}).get("pinned")) or engine == "hermes" or activity(row) >= cutoff:
         return True
     ticket = (idea_tickets_by_sid or {}).get(_archive_row_sid(row))
-    return bool(ticket) and _archive_list_row_ts({"idea_ticket": ticket}) >= cutoff
+    return bool(ticket) and _archive_preview.ticket_activity(ticket) >= cutoff
 
 
 _PREVIEW_STATE_RE = re.compile(r"(?:<!--\s*)?<session-state>.*?(</session-state>\s*-->|</session-state>|$)", re.S)
@@ -21759,7 +21759,7 @@ _ARCHIVE_LIST_INITIAL_SELECTION_CACHE = ByteBudgetCache(8 * 1024 * 1024, 8)
 def _archive_list_selection_key(rows, window, parents, ideas, version):
     parent_key = frozenset((sid, parent) for sid, parent in parents.items()
                           if isinstance(sid, str) and isinstance(parent, str))
-    idea_key = frozenset((sid, _archive_list_row_ts({"idea_ticket": ticket}),
+    idea_key = frozenset((sid, _archive_preview.ticket_activity(ticket),
                          bool(ticket.get("explicitly_archived")))
                         for sid, ticket in ideas.items() if isinstance(sid, str))
     return version, window, len(rows), parent_key, idea_key
@@ -21804,7 +21804,7 @@ def _archive_list_initial_selection(rows, window, now, parents, ideas, version):
                 stamp = row_times[id(row)]
                 ticket = ideas.get(_archive_row_sid(row))
                 if ticket:
-                    stamp = max(stamp, _archive_list_row_ts({"idea_ticket": ticket}))
+                    stamp = max(stamp, _archive_preview.ticket_activity(ticket))
                 if stamp >= now - seconds:
                     expires = min(expires, stamp + seconds)
         positions = {id(row): i for i, row in enumerate(rows)}
@@ -23242,10 +23242,8 @@ def _archive_serve_bounded_rows(key, rows, window):
         # including parents learned after the stored row was published.
         present = {str(row.get("session_id") or row.get("id") or "") for row in rows}
         wanted = set(_pinned_rank_map()) - present
-        tickets = _idea_tickets.idea_ticket_rows_map()
         cutoff = _archive_list_window_cutoff(window)
-        wanted.update(sid for sid, ticket in tickets.items()
-                      if _archive_list_row_ts({"idea_ticket": ticket}) >= (cutoff or 0))
+        wanted.update(_idea_tickets.idea_ticket_rows_map(moved_since=cutoff or 0))
         parents = _session_graph.parent_snapshot()
         pending = list(present | wanted)
         visited = set(pending)
