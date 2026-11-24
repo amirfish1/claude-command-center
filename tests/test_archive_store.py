@@ -675,6 +675,56 @@ def test_contended_transaction_cannot_destroy_previous_snapshot(tmp_path):
     assert store.load(target) == data()
 
 
+@pytest.mark.parametrize("unlock_on_retry", [True, False])
+def test_startup_retries_busy_archive_store_without_migrating_legacy(
+        tmp_path, monkeypatch, unlock_on_retry):
+    import server
+
+    target = tmp_path / "archive.json"
+    durable = data(NOW)
+    durable.update(schema_version=server._ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
+                   build_id=server._ARCHIVE_RESPONSE_CACHE_BUILD_ID)
+    legacy = dict(durable, entries={"base": {
+        "cached_at": NOW - 1, "conversations": [{"session_id": "legacy", "mtime": NOW}],
+    }})
+    target.write_text(json.dumps(legacy))
+    store.save(target, durable, complete=True)
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", target)
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE", {})
+    monkeypatch.setattr(server, "note_archive_build", lambda _stamp: None)
+    monkeypatch.setattr(store, "backup_legacy", lambda _target: pytest.fail("busy store migration"))
+
+    connect = store._connect
+    attempts = []
+    with closing(sqlite3.connect(store.database_path(target))) as writer:
+        # In rollback-journal mode an exclusive lock blocks real readers.
+        assert writer.execute("PRAGMA journal_mode=DELETE").fetchone() == ("delete",)
+        writer.execute("BEGIN EXCLUSIVE")
+
+        def read_connection(*args, **kwargs):
+            attempts.append(1)
+            if unlock_on_retry and len(attempts) == 2:
+                writer.rollback()
+            con = connect(*args, **kwargs)
+            con.execute("PRAGMA busy_timeout=0")
+            return con
+
+        monkeypatch.setattr(store, "_connect", read_connection)
+        server._read_archive_response_cache_file()
+
+    assert len(attempts) == 2
+    cached = server._ARCHIVE_RESPONSE_CACHE["base"]
+    rows = cached["conversations"]
+    if unlock_on_retry:
+        assert cached["cached_at"] == NOW
+        assert isinstance(rows, store.HotRows)
+        assert rows.tokens.keys() == {id(row) for row in rows}
+        assert [row["session_id"] for row in rows] == ["old", "recent", "parent", "pinned"]
+    else:
+        assert cached["cached_at"] == 0
+        assert [row["session_id"] for row in rows] == ["legacy"]
+
+
 def test_legacy_import_finishing_before_publish_still_bounds_memory(tmp_path, monkeypatch):
     import time
     import server

@@ -17183,17 +17183,31 @@ def _read_archive_response_cache_file():
     from ccc_server import archive_store
     import sqlite3
     legacy_import_done = None
-    try:
-        data = archive_store.load(_ARCHIVE_RESPONSE_CACHE_FILE, hot=True, retain_hot_tokens=True)
-    except (OSError, ValueError, sqlite3.Error):
-        data = None
+    data = None
+    store_busy = False
+    for _ in range(2):
+        try:
+            data = archive_store.load(_ARCHIVE_RESPONSE_CACHE_FILE, hot=True, retain_hot_tokens=True)
+            store_busy = False
+            break
+        except sqlite3.OperationalError as exc:
+            code = getattr(exc, "sqlite_errorcode", 0)
+            store_busy = (code & 0xff) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+            if not store_busy:
+                break
+            # SQLite's own connection timeout bounds each attempt. Give a
+            # concurrent checkpoint a second chance before dropping the
+            # durable row proofs and using the legacy snapshot.
+        except (OSError, ValueError, sqlite3.Error):
+            store_busy = False
+            break
     if data is None:
         try:
             with _ARCHIVE_RESPONSE_CACHE_FILE.open("r") as f:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError, ValueError):
             return
-        if isinstance(data, dict) and isinstance(data.get("entries"), dict):
+        if not store_busy and isinstance(data, dict) and isinstance(data.get("entries"), dict):
             try:
                 count = sum(len(entry.get("conversations") or []) for entry in data["entries"].values()
                             if isinstance(entry, dict))
@@ -17231,7 +17245,9 @@ def _read_archive_response_cache_file():
         if not isinstance(entry.get("conversations"), list):
             continue
         keep[key] = {
-            "cached_at": float(entry.get("cached_at") or 0),
+            # A busy store can contain a newer generation than the JSON.
+            # Serve its saved rows now and let the normal refresh reconcile.
+            "cached_at": 0.0 if store_busy else float(entry.get("cached_at") or 0),
             "conversations": entry.get("conversations") or [],
             "signature": entry.get("signature") or None,
         }
