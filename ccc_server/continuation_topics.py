@@ -401,7 +401,7 @@ def archive_connection():
     return conn
 
 
-def _archive_topic_rows(conn, max_rows):
+def _archive_topic_columns(conn, max_rows):
     columns = ("sid", "origin", "root_sid", "topic_title", "user_named")
     query = "SELECT sid,origin,root_sid,topic_title,user_named FROM continuation_topics LIMIT ?"
     params = (max_rows + 1,)
@@ -418,19 +418,21 @@ def _archive_topic_rows(conn, max_rows):
     if count > max_rows:
         return None
     if not count:
-        return ()
+        return ((),) * len(columns)
     # Legacy scalars and embedded delimiters need the typed reader.
     if packed[0] is not None:
         values = [column.split("\0") for column in packed]
         if all(len(column) == count for column in values):
-            return zip(*values[:4], map(int, values[4]))
-    return _sqlite_fetch_rows(conn, query, params, columns)
+            sids, origins, roots, titles, named = values
+            return sids, origins, roots, titles, map(int, named)
+    rows = _sqlite_fetch_rows(conn, query, params, columns)
+    return tuple(zip(*rows)) if rows else ((),) * len(columns)
 
 
 def _archive_topic_records(conn, max_rows, *, timing=nullcontext):
     with timing("topic_rows"):
-        records = _archive_topic_rows(conn, max_rows)
-    if records is None:
+        columns = _archive_topic_columns(conn, max_rows)
+    if columns is None:
         return None
     with timing("indexed_origins"):
         # Two indexable ranges skip the wide rows with empty origins. Keep
@@ -446,10 +448,13 @@ def _archive_topic_records(conn, max_rows, *, timing=nullcontext):
     if len(indexed) > max_rows:
         return None
     with timing("build_edges"):
-        by_sid, linked_roots, edges = {}, set(), []
+        sids, origins, roots, titles, named = columns
+        # Assemble records from the packed columns and scan only the fields
+        # needed for ancestry. Keep edge order independent of map keys.
+        by_sid = dict(zip(sids, zip(origins, roots, titles, named)))
+        linked_roots, edges = set(), []
         is_native_id = _NATIVE_ID_RE.fullmatch
-        for sid, origin, root, title, named in records:
-            by_sid[sid] = (origin, root, title, named)
+        for sid, origin, root in zip(sids, origins, roots):
             if origin:
                 if origin != sid:
                     edges.append((sid, origin))

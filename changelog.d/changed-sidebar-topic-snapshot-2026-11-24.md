@@ -1,0 +1,1 @@
+- Reduced contention when the conversation sidebar rebuilds its continuation-topic snapshot.
