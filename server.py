@@ -19650,7 +19650,7 @@ def _archive_history_effect_ids(inputs, previous, sidecars):
 
 def _archive_history_project_cut(cut, previous, *, phases=None, check_client=None,
                                  persist_topics=True, max_rows=None,
-                                 bounded_metadata=None):
+                                 seven_day_source=None):
     """Project a complete basis or its conservative changed-row closure."""
     from ccc_server import archive_history_layer as layer
 
@@ -19743,13 +19743,21 @@ def _archive_history_project_cut(cut, previous, *, phases=None, check_client=Non
     for sid in list(activity):
         if now - activity[sid] >= _ROW_FLICKER_FRESH_WINDOW_S:
             del activity[sid]
+    if seven_day_source is None:
+        window, total_count = "all", len(inputs.order)
+        queue_health = _queue_health_stats(
+            None, now=now, working_snapshot=(len(working), dict.fromkeys(working, True)))
+    else:
+        # Seven-day lists report queue health over the complete source, just
+        # like ordinary lists. Only take that snapshot once projection succeeds.
+        window = "7d"
+        total_count = sum(isinstance(row, dict) for row in seven_day_source)
+        queue_health = _queue_health_stats(seven_day_source, now=now)
     metadata = {
-        "ok": True, "count": len(inputs.order), "total_count": len(inputs.order),
-        "window": "all", "fields": list(_ARCHIVE_LIST_FIELDS), "cached": bool(cached),
-        "queue_health": _queue_health_stats(None, now=now, working_snapshot=(len(working), working)),
+        "ok": True, "count": len(inputs.order), "total_count": total_count,
+        "window": window, "fields": list(_ARCHIVE_LIST_FIELDS), "cached": bool(cached),
+        "queue_health": queue_health,
     }
-    if bounded_metadata is not None:
-        metadata.update(bounded_metadata)
     inputs = layer.observed_inputs(
         inputs, rows, projected, previous=previous.inputs if previous is not None else None,
         changed=changed or ())
@@ -19955,11 +19963,6 @@ def _archive_seven_day_cut(key, captured, rows, cached, reader, now, phases, del
     return inputs, sidecars, read_rows, cached
 
 
-def _archive_seven_day_metadata(rows, now):
-    return {"window": "7d", "total_count": sum(isinstance(row, dict) for row in rows),
-            "queue_health": _queue_health_stats(rows, now=now)}
-
-
 def _archive_publish_seven_day_basis(key, captured, rows, reader):
     from ccc_server import archive_history_layer as layer
 
@@ -19968,7 +19971,7 @@ def _archive_publish_seven_day_basis(key, captured, rows, reader):
     if cut is None:
         return False
     result = _archive_history_project_cut(
-        cut, None, persist_topics=False, bounded_metadata=_archive_seven_day_metadata(rows, now))
+        cut, None, persist_topics=False, seven_day_source=rows)
     if result is None:
         return False
     current, projected, _ = result
@@ -20025,8 +20028,7 @@ def _archive_seven_day_response(key, rows, cached, delta, encodings, phases, che
             try:
                 result = _archive_history_project_cut(
                     cut, basis, phases=projection, check_client=check_client,
-                    max_rows=_ARCHIVE_HISTORY_COLD_REBASE_MAX_ROWS,
-                    bounded_metadata=_archive_seven_day_metadata(rows, now))
+                    max_rows=_ARCHIVE_HISTORY_COLD_REBASE_MAX_ROWS, seven_day_source=rows)
                 break
             except continuation_topics.StaleArchiveTopicCut:
                 if (attempt or _session_graph.projection_revision() != delta["graph_revision"]

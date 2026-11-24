@@ -196,10 +196,18 @@ def test_seven_day_basis_preserves_current_rows_order_and_token(tmp_path, monkey
             raise continuation_topics.StaleArchiveTopicCut()
 
     monkeypatch.setattr(continuation_topics, "attach_archive_topics", attach_archive_topics)
+    wait_reads = []
+
+    def queued_waits(*, now):
+        wait_reads.append(now)
+        return {"outside": {"items": 2, "wait_s": 20.0}}
+
+    monkeypatch.setattr(server, "queued_wait_snapshot", queued_waits)
     phases = {}
     body, encoding, etag = server._archive_seven_day_response(
         scope, updated, True, delta, ("gzip",), phases)
     assert len(projections) == 2
+    assert wait_reads == [now]
     assert "stale_topic_projection" in phases
     assert encoding == "gzip"
     assert etag == '"d-' + delta["token"] + '"'
@@ -216,6 +224,7 @@ def test_seven_day_basis_preserves_current_rows_order_and_token(tmp_path, monkey
     assert {key: patch[key] for key in ("count", "total_count", "queue_health")} == {
         key: expected[key] for key in ("count", "total_count", "queue_health")
     }
+    assert patch["queue_health"]["stale_queued_items"] == 2
     mismatched = dict(delta, topic_revision=3)
     assert server._archive_seven_day_response(scope, updated, True, mismatched, ("gzip",), {}) is None
 
@@ -1129,10 +1138,10 @@ def test_changed_cut_reuses_unchanged_effect_rows_and_adds_discovered_children(m
                                    overlay_maps=({},), edges=())
     inputs = layer.read_inputs(inventory("tracked", "changed", "untracked"), {}, {}, (),
                                overlay_maps=({"changed": True},), edges=())
-    tracked = {"session_id": "tracked", "display_name": "still valid"}
+    tracked = {"session_id": "tracked", "display_name": "still valid", "state": "working"}
     child = {"session_id": "changed", "parent_session_id": "tracked"}
     other = {"session_id": "untracked", "display_name": "other"}
-    previous = layer.View(old_inputs, frozenset(), {}, "old", {}, {"tracked": tracked})
+    previous = layer.View(old_inputs, frozenset({"tracked"}), {}, "old", {}, {"tracked": tracked})
     reads = []
 
     def read(wanted):
@@ -1140,17 +1149,23 @@ def test_changed_cut_reuses_unchanged_effect_rows_and_adds_discovered_children(m
         return [row for row in (tracked, child, other) if row["session_id"] in wanted]
 
     monkeypatch.setattr(server, "_archive_list_project_rows", lambda rows, **kw: rows)
-    monkeypatch.setattr(server, "_queue_health_stats", lambda *args, **kw: {})
+    monkeypatch.setattr(server, "queued_wait_snapshot", lambda *, now: {
+        "tracked": {"items": 1, "wait_s": 10.0},
+        "untracked": {"items": 2, "wait_s": 20.0},
+    })
     cut = (inputs, {"now": 100, "tickets": {"sessions": {"tracked": {"ref": "TEST-1"}},
                                            "pending": {}}}, read, True)
     assert server._archive_history_project_cut(cut, previous, max_rows=1) is None
     assert reads == [{"changed"}]
     reads.clear()
-    _, changed, effects = server._archive_history_project_cut(cut, previous)
+    current, changed, effects = server._archive_history_project_cut(cut, previous)
 
     assert reads == [{"changed"}, {"tracked", "changed"}]
     assert changed == [tracked, child]
     assert effects == [tracked, child]
+    assert current.metadata["queue_health"] == {
+        "unfinished_turns": 1, "queued_items": 3, "stale_queued_items": 2, "stale_queued_wait_s": 20.0,
+    }
 
     unrelated = layer.read_inputs(inventory("tracked", "changed", "untracked"), {}, {}, (),
                                   overlay_maps=({"untracked": True},), edges=())
