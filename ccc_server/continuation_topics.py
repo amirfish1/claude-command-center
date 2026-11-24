@@ -934,20 +934,27 @@ def _project_topics(batch, rows):
 
 def attach_archive_topics(rows, *, conn, names, inputs, version, check_client=None, persist=True):
     """Resolve a checked archive scope using the authoritative captured titles."""
+    global _ARCHIVE_TOPIC_TRANSITION
     batch = _Batch(conn, rows, names, check_client=check_client, archive_inputs=inputs)
     _project_topics(batch, rows)
     if check_client is not None:
         check_client()
     if not persist or not batch.pending:
         return
+    track_archive = not conn.in_transaction
     try:
         with _transaction(conn, wait=False):
             if _archive_read_version(conn) != version:
                 raise StaleArchiveTopicCut()
-            batch.flush()
+            transition = _flush_topics_with_archive_transition(batch, track_archive)
     except sqlite3.OperationalError as exc:
         if getattr(exc, 'sqlite_errorcode', None) != sqlite3.SQLITE_BUSY:
             raise
+    else:
+        # The next archive cut can reuse the records after this small commit.
+        # Caller-owned transactions are excluded because they may roll back.
+        if transition is not None:
+            _ARCHIVE_TOPIC_TRANSITION = transition
 
 
 def _try_attach_from_cache(rows, conn, names, diagnostics=None, *, rows_by_sid=None,

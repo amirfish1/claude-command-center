@@ -940,6 +940,46 @@ def test_archive_projection_cannot_persist_after_indexed_origin_changes(store):
     ).fetchone() == ('root', 'root')
 
 
+def test_archive_projection_advances_its_own_committed_topic_snapshot(store, monkeypatch):
+    store.execute('PRAGMA journal_mode=WAL')
+    monkeypatch.setattr(topics, '_ARCHIVE_TOPIC_SNAPSHOT', (None, None, None))
+    monkeypatch.setattr(topics, '_ARCHIVE_TOPIC_TRANSITION', (None, None, {}))
+    topics.record_continuation('root', 'child', title='Original topic', conn=store)
+    inputs, edges, version = topics.archive_projection_inputs(store, max_rows=20)
+
+    topics.attach_archive_topics([row('new', 'New topic')], conn=store, names={},
+                                inputs=inputs, version=version)
+    assert not store.in_transaction
+    assert 'new' not in inputs[0]
+
+    phases = {}
+    current, current_edges, current_version = topics.archive_projection_inputs(
+        store, max_rows=20, diagnostics=phases)
+    records, origins, _, persisted_edges = topics._archive_topic_records(store, 20)
+    assert phases['topics_snapshot_advanced']
+    assert list(current[0].items()) == list(records.items())
+    assert current[1] == origins
+    assert current[0]['new'] == ('', 'new', 'New topic', 0)
+    assert current_edges == persisted_edges == edges
+    assert current_version == topics._archive_read_version(store)
+
+
+def test_archive_projection_does_not_publish_a_caller_owned_write(store, monkeypatch):
+    store.execute('PRAGMA journal_mode=WAL')
+    topics._connection(store)
+    monkeypatch.setattr(topics, '_ARCHIVE_TOPIC_TRANSITION', (None, None, {}))
+    inputs, _, version = topics.archive_projection_inputs(store, max_rows=20)
+    store.execute('BEGIN IMMEDIATE')
+    try:
+        topics.attach_archive_topics([row('transient', 'Transient topic')], conn=store,
+                                    names={}, inputs=inputs, version=version)
+        assert store.in_transaction
+        assert topics._ARCHIVE_TOPIC_TRANSITION == (None, None, {})
+    finally:
+        store.rollback()
+    assert store.execute('SELECT sid FROM continuation_topics').fetchall() == []
+
+
 @pytest.mark.parametrize("title, named", [
     ('Normal "title"\n with unicode é', -9223372036854775808),
     ("Embedded\0separator", 1),
