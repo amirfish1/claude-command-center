@@ -19331,7 +19331,9 @@ def _archive_list_static_row(row, template, fields_by_shape, retain_template, *,
     # runs only for the rare container that nests another container.
     scalars, containers = _archive_list_row_template(
         row, template, _fields_by_shape=fields_by_shape, _retain=retain_template)
-    out = scalars if borrow_containers and template is None else dict(scalars)
+    # A cold retained template owns the scalar dictionary even before any
+    # other request hits the cache. Keep wire-only fields off that template.
+    out = scalars if borrow_containers and template is None and not retain_template else dict(scalars)
     for key in containers:
         v = row[key]
         if borrow_containers:
@@ -21803,7 +21805,8 @@ def _archive_list_full_selection(rows, window, now, parents, ideas, version, pha
     return selected
 
 
-def _archive_list_initial_payload(rows, *, window="all", now=None, cached=None, phases=None, selection_version=None):
+def _archive_list_initial_payload(rows, *, window="all", now=None, cached=None, phases=None,
+                                  selection_version=None, _wire_only=False):
     """Project recent rows first without changing the complete-list protocol."""
     wall, cpu = time.perf_counter(), time.thread_time()
     now = time.time() if now is None else now
@@ -21819,7 +21822,7 @@ def _archive_list_initial_payload(rows, *, window="all", now=None, cached=None, 
         phases["selection"] = {"hit": selection_hit, "wall_ms": round((time.perf_counter() - wall) * 1000, 1),
                                "cpu_ms": round((time.thread_time() - cpu) * 1000, 1)}
     payload = _archive_list_payload(rows, window=window, now=now, cached=cached,
-                                    _inputs=inputs, phases=phases)
+                                    _inputs=inputs, phases=phases, _borrow_containers=_wire_only)
     payload.update(complete=len(initial) == selected_count, selected_count=selected_count, initial=True)
     return payload
 
@@ -39639,7 +39642,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 _initial_phases = {}
                 _initial_payload = _archive_list_initial_payload(
                     rows, window=window, cached=from_cache, phases=_initial_phases,
-                    selection_version=selection_version)
+                    selection_version=selection_version, _wire_only=window == "7d")
                 _initial_payload_end = time.perf_counter()
                 self._send_archive_list_preview(_initial_payload)
                 record_diag("list_server", (time.perf_counter() - _lt0) * 1000.0, {

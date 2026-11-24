@@ -129,6 +129,27 @@ def test_packed_seven_day_wire_build_reads_nested_values_without_mutating_source
     assert rows == source_before
 
 
+def test_seven_day_wire_preview_keeps_owned_scalar_templates(inputs, monkeypatch):
+    cache = server.ByteBudgetCache(1 << 20, 8)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_ROW_TEMPLATES', cache)
+    rows = fixture_rows()
+    source_before = copy.deepcopy(rows)
+    options = {'window': '7d', 'now': 10000, 'cached': True}
+
+    wire = server._archive_list_initial_payload(rows, **options, _wire_only=True)
+    assert wire['conversations'][0]['session_state'] is rows[0]['session_state']
+    assert rows == source_before
+    _, scalars, containers = cache.get(('codex', 'archive'))
+    assert 'session_state' in containers
+    assert 'session_state' not in scalars
+    assert 'continuation_topic_title' not in scalars
+
+    ordinary = server._archive_list_initial_payload(rows, **options)
+    assert json.dumps(wire) == json.dumps(ordinary)
+    ordinary['conversations'][0]['session_state']['todos'][0]['text'] = 'caller change'
+    assert rows == source_before
+
+
 def test_packed_seven_day_wire_replay_keeps_effects_order_and_ticket_fallback(inputs):
     rows = fixture_rows()
     rows[0]['goal'] = {'objective': 'An archive field outside ticket automation'}
