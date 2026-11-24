@@ -784,10 +784,31 @@
     return true;
   }
 
+  // A URL "we serve" — loopback, the hostname this dashboard was reached on
+  // (covers its tailnet name), or a private LAN address — can go in a plain
+  // iframe: no X-Frame-Options to fight, native interactivity, real cookies,
+  // no screenshot loop.
+  function _isSelfServedUrl(url) {
+    try {
+      const u = new URL(url, window.location.origin);
+      const host = (u.hostname || '').toLowerCase();
+      if (!host) return false;
+      if (host === (window.location.hostname || '').toLowerCase()) return true;
+      if (host === 'localhost' || host.endsWith('.localhost') || host === '::1' || host === '[::1]') return true;
+      if (/^127\./.test(host)) return true;
+      return /^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(host);
+    } catch (_) { return false; }
+  }
+
   function openWebPreviewInRail(url, opts) {
-    // Prefer the remote-rendered browser (interactive, renders frame-blocked
-    // sites); fall back to a plain iframe, then a new tab.
+    // Prefer a plain iframe for self-served URLs (loopback / this host /
+    // private LAN) and the remote-rendered browser for the rest — it renders
+    // frame-blocked sites too. Final fallback is a new tab.
     const frameOpts = Object.assign({ kind: 'frame', title: (opts && opts.title) || url.replace(/^https?:\/\//i, ''), externalUrl: url }, opts || {});
+    if (_isSelfServedUrl(url)) {
+      openArtifactViewer(url, frameOpts);
+      return;
+    }
     openBrowserInStatusRail(url, opts).then((ok) => {
       if (ok) return;
       if (!_isFrameBlockedUrl(url)) openArtifactViewer(url, frameOpts);
