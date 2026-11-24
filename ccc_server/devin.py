@@ -2173,17 +2173,37 @@ def _devin_acp_row_tail(raw_id):
     return latest
 
 
+_DEVIN_ACP_REPLAY_SNAPSHOT = None
+
+
+def _devin_acp_replay_directory_version(directory):
+    stat = directory.stat()
+    return (directory, stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
 def _devin_acp_replay_names(limit):
-    """Read a bounded directory snapshot before a sidebar gap fill."""
+    """Reuse a bounded replay inventory while its directory is unchanged."""
+    global _DEVIN_ACP_REPLAY_SNAPSHOT
+    directory = _core._ACP_TRANSCRIPT_DIR / "devin"
     names = set()
     try:
-        with os.scandir(_core._ACP_TRANSCRIPT_DIR / "devin") as entries:
+        version = _devin_acp_replay_directory_version(directory)
+        snapshot = _DEVIN_ACP_REPLAY_SNAPSHOT
+        if snapshot is not None and snapshot[0] == version:
+            return snapshot[1] if len(snapshot[1]) <= limit else None
+        with os.scandir(directory) as entries:
             for entry in entries:
                 if len(names) >= limit:
                     return None
                 names.add(entry.name)
+        if _devin_acp_replay_directory_version(directory) != version:
+            # Fall back to individual checks if membership changed during
+            # enumeration. Existing replay contents are still checked per row.
+            return None
     except OSError:
         return None
+    names = frozenset(names)
+    _DEVIN_ACP_REPLAY_SNAPSHOT = version, names
     return names
 
 

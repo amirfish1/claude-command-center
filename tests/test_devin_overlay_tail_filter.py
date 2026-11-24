@@ -1,6 +1,7 @@
 """Sidebar gap filling must not inspect replay logs for known sessions."""
 
 import json
+import os
 
 import pytest
 
@@ -108,6 +109,34 @@ def test_replay_inventory_returns_no_partial_directory_results(monkeypatch, tmp_
 
     assert devin._devin_acp_replay_names(2) == {"first.jsonl", "second.jsonl"}
     assert devin._devin_acp_replay_names(1) is None
+
+
+def test_replay_inventory_reuses_unchanged_directory_and_detects_replacement(monkeypatch, tmp_path):
+    directory = tmp_path / "devin"
+    directory.mkdir()
+    (directory / "old.jsonl").touch()
+    monkeypatch.setattr(server, "_ACP_TRANSCRIPT_DIR", tmp_path)
+    scandir = os.scandir
+    scans = []
+
+    def count_scan(target):
+        scans.append(target)
+        return scandir(target)
+
+    monkeypatch.setattr(devin.os, "scandir", count_scan)
+    assert devin._devin_acp_replay_names(2) == {"old.jsonl"}
+    assert devin._devin_acp_replay_names(2) == {"old.jsonl"}
+    assert scans == [directory]
+
+    initial_times = directory.stat()
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+    (replacement / "new.jsonl").touch()
+    os.utime(replacement, ns=(initial_times.st_atime_ns, initial_times.st_mtime_ns))
+    directory.rename(tmp_path / "old-directory")
+    replacement.rename(directory)
+    assert devin._devin_acp_replay_names(2) == {"new.jsonl"}
+    assert scans == [directory, directory]
 
 
 @pytest.mark.parametrize("excluded", [None, set()])
