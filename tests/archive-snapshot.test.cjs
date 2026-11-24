@@ -204,7 +204,8 @@ test('same-document polls use the current base order and update it after a reord
     response:reply({conversations:rows, delta_token:'first', order_token:firstOrder})});
   await f.context.loadArchiveAll();
   const replies = [
-    reply({delta:true, since:'first', ids:['older','recent'], order_token:secondOrder,
+    reply({delta:true, since:'first', ids:[], order_token:secondOrder,
+      base_order:firstOrder, order_spans:[[1,1], [0,1]], count:2,
       conversations:[], delta_token:'second'}),
     reply({delta:true, since:'second', ids:[], same_order:true, order_token:secondOrder,
       count:2, conversations:[{session_id:'older', modified:42}], delta_token:'third'}),
@@ -215,16 +216,16 @@ test('same-document polls use the current base order and update it after a reord
     return replies.shift();
   };
   await f.context.loadArchiveAll();
-  assert.equal(f.reads[1].url, fullUrl + '&row_layouts=1&since=first&saved_order=' + firstOrder);
+  assert.equal(f.reads[1].url, fullUrl + '&row_layouts=1&order_spans=1&since=first&saved_order=' + firstOrder);
   const result = await f.context.loadArchiveAll();
-  assert.equal(f.reads[2].url, fullUrl + '&row_layouts=1&since=second&saved_order=' + secondOrder);
+  assert.equal(f.reads[2].url, fullUrl + '&row_layouts=1&order_spans=1&since=second&saved_order=' + secondOrder);
   assert.deepEqual(Array.from(result, row => row.session_id), ['older','recent']);
   assert.equal(result[0].modified, 42);
   assert.equal(f.savedDeltas[2].ids, null);
 
   f.state._archiveAllData.set(fullUrl, rows.slice());
   await f.context.loadArchiveAll();
-  assert.equal(f.reads[3].url, fullUrl + '&row_layouts=1&history_layer=1&wide_order_spans=1', 'a different row base cannot use the old delta token');
+  assert.equal(f.reads[3].url, fullUrl + '&row_layouts=1&order_spans=1&history_layer=1&wide_order_spans=1', 'a different row base cannot use the old delta token');
 });
 
 test('an All order delta reconstructs slices and survives the next saved-order poll', async () => {
@@ -717,26 +718,28 @@ test('a fresh profile prefetches a parsed full response while retaining its rece
   } finally {await context.close();}
 });
 
-test('All startup opts in to compact layouts and order for the complete response only', async () => {
-  const context = await browser.createBrowserContext(), page = await context.newPage();
-  try {
-    await page.evaluateOnNewDocument(() => localStorage.setItem('ccc-archive-window', 'all'));
-    await page.goto(origin, {waitUntil:'load'});
-    const urls = await page.evaluate(async () => [
-      (await window.__cccArchiveBootstrap.promise).url,
-      (await window.__cccArchiveSnapshot.fetch).url,
-    ]);
-    const [recent, complete] = urls.map(url => new URL(url).searchParams);
-    assert.equal(recent.get('window'),'all');
-    assert.equal(recent.get('initial'),'1');
-    assert.equal(recent.has('row_layouts'),false);
-    assert.equal(recent.has('order_spans'),false);
-    assert.equal(complete.get('window'),'all');
-    assert.equal(complete.get('row_layouts'),'1');
-    assert.equal(complete.get('order_spans'),'1');
-    assert.equal(complete.has('initial'),false);
-  } finally {await context.close();}
-});
+for (const archiveWindow of ['all', '7d']) {
+  test(`Archive startup opts in to compact layouts and order for the complete ${archiveWindow} response only`, async () => {
+    const context = await browser.createBrowserContext(), page = await context.newPage();
+    try {
+      await page.evaluateOnNewDocument(value => localStorage.setItem('ccc-archive-window', value), archiveWindow);
+      await page.goto(origin, {waitUntil:'load'});
+      const urls = await page.evaluate(async () => [
+        (await window.__cccArchiveBootstrap.promise).url,
+        (await window.__cccArchiveSnapshot.fetch).url,
+      ]);
+      const [recent, complete] = urls.map(url => new URL(url).searchParams);
+      assert.equal(recent.get('window'),archiveWindow);
+      assert.equal(recent.get('initial'),'1');
+      assert.equal(recent.has('row_layouts'),false);
+      assert.equal(recent.has('order_spans'),false);
+      assert.equal(complete.get('window'),archiveWindow);
+      assert.equal(complete.get('row_layouts'),'1');
+      assert.equal(complete.get('order_spans'),'1');
+      assert.equal(complete.has('initial'),false);
+    } finally {await context.close();}
+  });
+}
 
 test('failed fresh full prefetches preserve the ordinary recent response', async () => {
   for (const failure of ['http','json']) {

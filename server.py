@@ -18246,8 +18246,7 @@ def _archive_list_warm(cache_options, window, stale_ok, *, scoped_layouts=False,
             rows, delta, window=window, cached=from_cache, row_layouts=scoped_layouts,
             eager_gzip=eager_gzip, _wire_only=True)
         if delta is not None:
-            payload["order_token"] = _archive_list_order_token(
-                [_archive_row_sid(row) for row in payload["conversations"]])
+            payload["order_token"] = _archive_list_payload_order(payload, cache_key, window)
             payload["delta_token"] = delta["token"]
         return payload
 
@@ -18642,12 +18641,33 @@ def _archive_list_order_token(ids):
     return _list_replay.order_token(ids)
 
 
+_ARCHIVE_SEVEN_DAY_ORDERS = ByteBudgetCache(8 * 1024 * 1024, 16)
+
+
+def _archive_seven_day_remember_order(key, token, ids):
+    # A digest describes only the exact order already held by a client.
+    # Keep 7d orders separate so churn cannot evict the All history bases.
+    cache_key = (key, token)
+    if len(ids) <= 32768 and _ARCHIVE_SEVEN_DAY_ORDERS.get(cache_key) is None:
+        if len(set(ids)) == len(ids) and all(ids):
+            _ARCHIVE_SEVEN_DAY_ORDERS.put(
+                cache_key, tuple(ids), 512 + sum(64 + 4 * len(sid) for sid in ids))
+
+
+def _archive_list_payload_order(payload, key, window):
+    ids = [_archive_row_sid(row) for row in payload["conversations"]]
+    token = _archive_list_order_token(ids)
+    if window == "7d":
+        _archive_seven_day_remember_order(key, token, ids)
+    return token
+
+
 def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=None,
-                                saved_order="", check_client=None):
+                                saved_order="", order_spans=False, check_client=None):
     """Return changed rows and the order needed to merge them.
 
-    A saved reload can reuse its exact order when its digest matches. Other
-    callers receive the ordered ids. None requests a full response.
+    Saved reloads can reuse an exact order or apply spans to a known base.
+    Other callers receive the ordered ids. None requests a full response.
     """
     if _archive_list_delta_reject(state, since) is not None:
         return None
@@ -18711,6 +18731,14 @@ def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=
     }
     if same_order:
         payload["same_order"] = True
+    if window == "7d" and (key := state.get("source_key")) is not None:
+        if order_spans and saved_order and not same_order:
+            previous_ids = _ARCHIVE_SEVEN_DAY_ORDERS.get((key, saved_order))
+            if previous_ids is not None:
+                spans = _list_replay._order_spans(previous_ids, ids)
+                if spans is not None:
+                    payload.update(ids=[], base_order=saved_order, order_spans=spans)
+        _archive_seven_day_remember_order(key, order_token, ids)
     if cached is not None:
         payload["cached"] = bool(cached)
     return payload
@@ -18721,7 +18749,7 @@ _ARCHIVE_LIST_DELTA_FLIGHTS_LOCK = threading.Lock()
 
 
 def _archive_list_delta_body(state, since, rows, *, window, cached=None, share=True,
-                             diagnostics=None, saved_order="", check_client=None):
+                             diagnostics=None, saved_order="", order_spans=False, check_client=None):
     """Share encoding only with overlapping reads of the same delta snapshot.
 
     No result survives its build. Explicit fresh reads bypass the flight, and
@@ -18732,7 +18760,8 @@ def _archive_list_delta_body(state, since, rows, *, window, cached=None, share=T
         if check_reader is not None:
             check_reader()
         payload = _archive_list_delta_payload(state, since, rows, window=window, cached=cached,
-                                              saved_order=saved_order, check_client=check_reader)
+                                              saved_order=saved_order, order_spans=order_spans,
+                                              check_client=check_reader)
         if payload is None:
             return None
         if check_reader is not None:
@@ -18745,7 +18774,7 @@ def _archive_list_delta_body(state, since, rows, *, window, cached=None, share=T
 
     if not share:
         return build(check_client)
-    key = (state["token"], since, window, cached, saved_order)
+    key = (state["token"], since, window, cached, saved_order, order_spans)
     with _ARCHIVE_LIST_DELTA_FLIGHTS_LOCK:
         flight = _ARCHIVE_LIST_DELTA_FLIGHTS.get(key)
         owner = flight is None
@@ -20010,6 +20039,7 @@ def _archive_seven_day_response(key, rows, cached, delta, encodings, phases, che
         if check_client is not None:
             check_client()
         _archive_list_ticket_effects(effects, state=cut[1]["tickets"])
+        _archive_seven_day_remember_order(key, patch["order_token"], current.inputs.order)
         return body, encoding, '"d-' + delta["token"] + '"'
     except (OSError, sqlite3.Error, TypeError, ValueError,
             continuation_topics.UnavailableArchiveProjection) as exc:
@@ -39688,6 +39718,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                         _delta_body = _archive_list_delta_body(
                             _delta, since, rows, window=window, cached=from_cache,
                             share=stale_ok, diagnostics=_body_cache_diag, saved_order=saved_order,
+                            order_spans=qs.get("order_spans") == ["1"],
                             check_client=check_client if window != "all" else None,
                         )
                     except _ArchiveListClientDisconnected:
@@ -39746,8 +39777,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     if _check_client is not None:
                         _check_client()
                     if _delta is not None:
-                        payload["order_token"] = _archive_list_order_token(
-                            [_archive_row_sid(row) for row in payload["conversations"]])
+                        payload["order_token"] = _archive_list_payload_order(payload, list_cache_key, window)
                         payload["delta_token"] = _delta["token"]
                     return payload
                 finally:

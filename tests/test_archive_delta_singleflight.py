@@ -95,7 +95,7 @@ def test_overlap_cleanup_retry_and_no_retained_delta(monkeypatch, delta_flights,
     {'state': state('process.2.changed.overlay')},
     {'state': state('process.2.context.changed')},
     {'since': 'process.0.context.old'},
-    {'window': '1d'}, {'cached': False}, {'share': False},
+    {'window': '1d'}, {'cached': False}, {'share': False}, {'order_spans': True},
 ])
 def test_fresh_reads_and_distinct_snapshots_do_not_join(monkeypatch, delta_flights, different):
     entered, release = threading.Event(), threading.Event()

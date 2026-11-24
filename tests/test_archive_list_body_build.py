@@ -855,6 +855,42 @@ def test_delta_list_survives_overlay_rows_coming_and_going(monkeypatch):
     assert server._archive_list_delta_payload(state, token, dup, window='7d') is None
 
 
+def test_seven_day_delta_splices_a_known_order_after_one_row_leaves(monkeypatch):
+    server = importlib.import_module('server')
+    key = server._archive_response_cache_key()
+    monkeypatch.setattr(server, '_archive_serve_cache', {})
+    monkeypatch.setattr(server, '_ARCHIVE_SEVEN_DAY_ORDERS', server.ByteBudgetCache(1 << 20, 8))
+    now = time.time()
+    ids = [f'row-{i}' for i in range(64)]
+    old_rows = [_row(sid, sid, now) for sid in ids]
+    gen = server._archive_serve_generation
+    assert server._archive_serve_cache_store(key, old_rows, gen)
+    old_rows = server._archive_serve_cache[key]['rows']
+    previous = server._archive_list_delta_state(key, old_rows, '7d', True)
+    order = server._archive_list_payload_order({'conversations': old_rows}, key, '7d')
+
+    wanted = ids[:17] + ids[18:]
+    new_rows = [_row(sid, sid, now) for sid in wanted]
+    new_rows[0] = _row(wanted[0], 'Changed', now)
+    assert server._archive_serve_cache_store(key, new_rows, gen)
+    new_rows = server._archive_serve_cache[key]['rows']
+    current = server._archive_list_delta_state(key, new_rows, '7d', True)
+
+    def delta(saved_order=order, *, negotiate=True):
+        return server._archive_list_delta_payload(
+            current, previous['token'], new_rows, window='7d', now=now,
+            saved_order=saved_order, order_spans=negotiate)
+
+    compact = delta()
+    assert compact['ids'] == [] and compact['base_order'] == order
+    assert compact['order_spans'] == [[0, 17], [18, 46]]
+    assert [r['session_id'] for r in compact['conversations']] == [wanted[0]]
+    for fallback in (delta('f' * 64), delta(negotiate=False)):
+        assert fallback['ids'] == wanted and 'order_spans' not in fallback
+    server._ARCHIVE_SEVEN_DAY_ORDERS.clear()
+    assert delta()['ids'] == wanted
+
+
 def test_lifecycle_restamp_keeps_delta_tracking(monkeypatch):
     # Archive/trash/lane mutations rebuild the snapshot from sidecars; that
     # used to drop delta tracking, so every client got a full body.

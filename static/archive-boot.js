@@ -488,7 +488,7 @@
       if (windowName === 'all') {
         target += '&row_layouts=1&order_spans=1&history_layer=1' + wideOrderSpanQuery;
       } else if (windowName === '7d') {
-        target += '&row_layouts=1';
+        target += '&row_layouts=1&order_spans=1';
         if (!value?.delta) target += '&history_layer=1' + wideOrderSpanQuery;
       }
       const headers = value?.etag ? {'If-None-Match':value.etag} : {};

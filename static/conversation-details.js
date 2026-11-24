@@ -4956,7 +4956,7 @@
             if (requestUrl !== url) {
               _perfFetchUrl += '&history_layer=1' + (window.CCCArchiveWire?.wideOrderSpanQuery || '');
             } else if (!opts.initial && params.get('window') === '7d') {
-              _perfFetchUrl += '&row_layouts=1';
+              _perfFetchUrl += '&row_layouts=1&order_spans=1';
               if (!deltaToken) _perfFetchUrl += '&history_layer=1' + (window.CCCArchiveWire?.wideOrderSpanQuery || '');
             }
             if (deltaToken) _perfFetchUrl += '&since=' + encodeURIComponent(deltaToken);
