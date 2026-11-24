@@ -72,6 +72,44 @@ def test_overlay_checks_current_missing_tail_before_applying_recency(monkeypatch
     assert out[0]["session_state"] is None
 
 
+def test_large_overlay_reads_existing_replays_and_sees_new_files(monkeypatch, tmp_path):
+    directory = tmp_path / "devin"
+    directory.mkdir()
+    rows = [{"session_id": f"devincli-old-{n}", "modified": 1} for n in range(64)]
+    rows.append({"session_id": "devincli-replay?new", "modified": 1})
+    calls = []
+    original_tail = devin._devin_acp_row_tail
+
+    def tail(sid):
+        calls.append(sid)
+        return original_tail(sid)
+
+    monkeypatch.setattr(server, "_ACP_TRANSCRIPT_DIR", tmp_path)
+    monkeypatch.setattr(devin, "_find_devin_cli_db_conversations", lambda **kw: rows)
+    monkeypatch.setattr(devin, "_DEVIN_ACP_ROW_TAIL_CACHE", {})
+    monkeypatch.setattr(devin, "_devin_acp_row_tail", tail)
+    assert devin.find_devin_cli_conversations(stale_ok=True, exclude_session_ids=set()) == rows
+    assert calls == []
+
+    (directory / "replay_new.jsonl").write_text('{"type":"user","ts":2000}\n')
+    result = devin.find_devin_cli_conversations(stale_ok=True, exclude_session_ids=set())
+    assert calls == ["replay?new"]
+    assert result[:-1] == rows[:-1]
+    assert result[-1]["modified"] == 2000
+    assert rows[-1]["modified"] == 1
+
+
+def test_replay_inventory_returns_no_partial_directory_results(monkeypatch, tmp_path):
+    directory = tmp_path / "devin"
+    directory.mkdir()
+    (directory / "first.jsonl").touch()
+    (directory / "second.jsonl").touch()
+    monkeypatch.setattr(server, "_ACP_TRANSCRIPT_DIR", tmp_path)
+
+    assert devin._devin_acp_replay_names(2) == {"first.jsonl", "second.jsonl"}
+    assert devin._devin_acp_replay_names(1) is None
+
+
 @pytest.mark.parametrize("excluded", [None, set()])
 def test_default_discovery_keeps_all_current_tails(monkeypatch, excluded):
     rows = [{"session_id": "devincli-one", "modified": 1},

@@ -15,7 +15,7 @@ def test_sources_keep_precedence_and_do_not_mutate_the_archive(monkeypatch):
     monkeypatch.setattr(server, '_apply_session_lane_overrides', lambda rows: None)
 
     def source(candidates):
-        def overlay(rows, *, existing_ids=None):
+        def overlay(rows, *, existing_ids=None, process_reader=None):
             # A source that ignores the new argument still derives the same
             # membership from the current accumulated rows.
             expected = server._archive_overlay_existing_ids(rows)

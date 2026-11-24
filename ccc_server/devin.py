@@ -40,6 +40,7 @@ import urllib.request
 from pathlib import Path
 
 from ccc_server import core as _core
+from ccc_server.acp import _acp_transcript_name
 
 
 def _devin_session_state_prompt(text):
@@ -2172,16 +2173,38 @@ def _devin_acp_row_tail(raw_id):
     return latest
 
 
+def _devin_acp_replay_names(limit):
+    """Read a bounded directory snapshot before a sidebar gap fill."""
+    names = set()
+    try:
+        with os.scandir(_core._ACP_TRANSCRIPT_DIR / "devin") as entries:
+            for entry in entries:
+                if len(names) >= limit:
+                    return None
+                names.add(entry.name)
+    except OSError:
+        return None
+    return names
+
+
 def find_devin_cli_conversations(*args, exclude_session_ids=None, **kwargs):
     rows = _find_devin_cli_db_conversations(*args, **kwargs)
-    out = []
-    for row in rows:
+    replay_names = None
+    if exclude_session_ids is not None:
         # Gap fillers discard existing rows. Skip their replay I/O before it
         # can read changed logs or hand the GIL off once per cached session.
-        if (exclude_session_ids is not None
-                and str(row.get("session_id") or row.get("id") or "") in exclude_session_ids):
-            continue
-        tail = _devin_acp_row_tail(_devin_cli_raw_id(row.get("session_id")))
+        rows = [row for row in rows
+                if str(row.get("session_id") or row.get("id") or "") not in exclude_session_ids]
+        if len(rows) >= 64:
+            # An old CLI session often has no ACP replay at all. Browse the
+            # directory once per large gap fill, retaining direct checks if
+            # it costs more entries to scan than there are candidate rows.
+            replay_names = _devin_acp_replay_names(len(rows))
+    out = []
+    for row in rows:
+        raw_id = _devin_cli_raw_id(row.get("session_id"))
+        tail = (_devin_acp_row_tail(raw_id)
+                if replay_names is None or _acp_transcript_name(raw_id) in replay_names else None)
         if tail and tail["ts"] > _devin_epoch(row.get("modified")):
             row = dict(row)
             row.update(last_assistant_text=tail["text"], session_state=tail["session_state"],

@@ -232,9 +232,13 @@ def _acp_state_file(harness):
     return _core.COMMAND_CENTER_STATE_DIR / f"acp-{harness}-state.json"
 
 
-def _acp_transcript_path(harness, sid):
+def _acp_transcript_name(sid):
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(sid or ""))
-    return _core._ACP_TRANSCRIPT_DIR / harness / f"{safe}.jsonl"
+    return f"{safe}.jsonl"
+
+
+def _acp_transcript_path(harness, sid):
+    return _core._ACP_TRANSCRIPT_DIR / harness / _acp_transcript_name(sid)
 
 
 def _acp_transcript_first_prompt(harness, sid):
