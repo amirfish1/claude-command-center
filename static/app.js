@@ -56129,6 +56129,10 @@
   const measure = () => {
     if (measuring || (!query.matches && !body.classList.contains('mobile-home-scrollaway'))) return;
     measuring = true;
+    // leave() drops the folded header for a moment, and the layout reads below
+    // commit that state, so the quick search/+ buttons would vanish and fade
+    // back in on every remeasure (CCC-683). No transitions while rebuilding.
+    body.classList.add('mobile-home-measuring');
     try {
       const top = list.scrollTop;
       leave();
@@ -56157,7 +56161,11 @@
       // The spacer keeps every row at the same scrollTop in both layouts.
       list.scrollTop = top;
       applyShift();
-    } finally { measuring = false; }
+    } finally {
+      for (const quick of brand.querySelectorAll('.mobile-home-quick')) getComputedStyle(quick).opacity;
+      body.classList.remove('mobile-home-measuring');
+      measuring = false;
+    }
   };
   let measureFrame = 0;
   const remeasure = () => { if (!measureFrame) measureFrame = requestAnimationFrame(() => { measureFrame = 0; measure(); }); };

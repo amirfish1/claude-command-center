@@ -1,0 +1,1 @@
+- Phone session list: the search and + buttons in the folded header no longer blink and fade back in about once a second while the list is scrolled.

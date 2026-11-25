@@ -102,6 +102,22 @@ body {display:block;padding:0} .sidebar {width:100%;height:100dvh;max-width:none
       assert.ok(Math.abs(back.newPanel.top - top0.newPanel.top) < 0.5 && Math.abs(back.row.top - top0.row.top) < 0.5);
       // Quick actions work once folded; search brings the bands back.
       await scroll(400);
+      // CCC-683: a remeasure while folded (the CI line re-renders about once
+      // a second) must not make the quick buttons vanish and fade back in.
+      await page.evaluate(() => new Promise(r => setTimeout(r, 300)));  // the fold's own fade-in
+      const dips = await page.evaluate(() => new Promise(done => {
+        const quick = document.querySelector('.mobile-home-new');
+        let low = 0, n = 0;
+        const iv = setInterval(() => { window.dispatchEvent(new Event('resize')); if (++n >= 4) clearInterval(iv); }, 60);
+        const t0 = performance.now();
+        const tick = () => {
+          const style = getComputedStyle(quick);
+          if (style.display === 'none' || parseFloat(style.opacity) < 0.99) low++;
+          if (performance.now() - t0 < 600) requestAnimationFrame(tick); else done(low);
+        };
+        requestAnimationFrame(tick);
+      }));
+      assert.equal(dips, 0, 'folded quick buttons hold steady through a remeasure');
       await page.click('.mobile-home-new');
       assert.equal(await page.evaluate(() => window.newClicks), 1);
       await page.click('.mobile-home-search');

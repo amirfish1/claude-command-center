@@ -36389,6 +36389,9 @@ body.ccc-app-embed.conversation-popout .main > .toolbar {
 @media (max-width: 1200px) and (prefers-reduced-motion: reduce) {
   body.mobile-home-scrollaway .mobile-home-quick { transition: none; }
 }
+/* A remeasure rebuilds the pinned layout in one task; it must not replay the
+   quick buttons' fade (CCC-683). */
+body.mobile-home-measuring .mobile-home-quick { transition: none !important; }
 
 .simple-card-archive-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .simple-card-archive-btn:disabled { opacity: .45; cursor: wait; }
