@@ -4,7 +4,7 @@
   function createHost({ documentReady } = {}) {
     const state = {};
     const adapters = { state, helpers: state, documentReady, loadDetailsScript };
-    let detailsPromise;
+    let detailsPromise, wirePromise;
     for (const controller of [root.CCCConversationCore, root.CCCConversationPanes,
       root.CCCConversationControls, root.CCCConversationInteractions,
       root.CCCConversationServices, root.CCCConversationViews,
@@ -50,7 +50,27 @@
         window.open('/?ccc_settings=appearance', '_blank', 'noopener');
       },
     });
+    // Embedded panes skip archive-boot.js at startup (it blocks the parser),
+    // but the archive controller decodes list bodies with its wire helpers.
+    // In a frame or popout that script only defines them and returns.
+    function loadArchiveWire() {
+      if (root.CCCArchiveWire) return Promise.resolve();
+      if (!wirePromise) {
+        const dependency = document.querySelector('[data-ccc-conversation-details]');
+        const detailsSrc = dependency?.getAttribute('src') || '/static/conversation-details.js';
+        wirePromise = new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = detailsSrc.replace('conversation-details.js', 'archive-boot.js');
+          script.onload = () => root.CCCArchiveWire
+            ? resolve() : reject(new Error('Archive wire did not initialize'));
+          script.onerror = () => { script.remove(); reject(new Error('Archive wire could not load')); };
+          document.head.appendChild(script);
+        }).catch(error => { wirePromise = null; throw error; });
+      }
+      return wirePromise;
+    }
     async function loadDetailsScript() {
+      await loadArchiveWire();
       if (root.CCCConversationDetails) return;
       if (!detailsPromise) {
         const dependency = document.querySelector('[data-ccc-conversation-details]');

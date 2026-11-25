@@ -1,0 +1,1 @@
+- Embedded agent panes no longer fail when they load the session list on demand.
