@@ -57,6 +57,7 @@ _state = {
     "reload_ms": None,
     "warms": 0,
     "warm_ms": None,
+    "windows": {},         # {window: monotonic time of its last list read}
     "mutations": 0,
     "declined": 0,
     "served": 0,
@@ -79,7 +80,8 @@ def status():
     with _lock:
         return {key: _state[key] for key in (
             "loaded", "acp", "reloads", "reload_ms", "warms", "warm_ms", "mutations", "declined",
-            "served", "errors", "last_error")} | {"enabled": enabled()}
+            "served", "errors", "last_error")} | {"enabled": enabled(),
+                                                 "windows": sorted(_state["windows"])}
 
 
 # ------------------------------------------------------------------ child
@@ -261,12 +263,35 @@ def _reload(hydrate=True):
 # publication the first such read rebuilt it on the request path: 0.5-3 s,
 # the whole tail of the list_read gate while deltas stayed under 800 ms.
 WARM_WINDOWS = ("1d",)
+# Any other window a browser read from this child within this long is
+# prebuilt too (CCC-690): a 7d sidebar paid the same 0.6-1.5 s rebuild on
+# every page load after a publication (archive_load p95 2067 ms vs 1000 ms),
+# while unused windows (8h, all) should cost nothing.
+RECENT_WINDOW_S = 24 * 3600
+_OPTIONAL_WINDOWS = ("8h", "7d", "all")
+
+
+def note_window(window, now=None):
+    """Remember that a list read asked for ``window`` (raw query value)."""
+    window = str(window or "").strip().lower()
+    if window not in _OPTIONAL_WINDOWS:
+        return
+    with _lock:
+        _state["windows"][window] = time.monotonic() if now is None else now
+
+
+def warm_windows(now=None):
+    now = time.monotonic() if now is None else now
+    with _lock:
+        recent = [w for w in _OPTIONAL_WINDOWS
+                  if now - _state["windows"].get(w, float("-inf")) < RECENT_WINDOW_S]
+    return WARM_WINDOWS + tuple(recent)
 
 
 def _warm_bodies():
     srv = _state["server"]
     started = time.perf_counter()
-    for window in WARM_WINDOWS:
+    for window in warm_windows():
         try:
             srv._archive_list_warm({}, window, True)
         except Exception as exc:

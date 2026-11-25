@@ -1,0 +1,1 @@
+- Page loads with the 7d (or another non-default) sidebar window no longer rebuild the whole list on the request path after each archive update; the list reader now prebuilds every window a browser has used in the last day.

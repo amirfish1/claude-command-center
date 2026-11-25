@@ -33,7 +33,7 @@ class ListReaderOpsTest(unittest.TestCase):
         self.srv = _FakeSrv()
         list_reader._state.update(server=self.srv, loaded=True, acp=False, mutations=0,
                                   sidecars=None, stamps={}, reloading=False, checked=0.0,
-                                  warms=0, warm_ms=None, errors=0)
+                                  warms=0, warm_ms=None, errors=0, windows={})
 
     def tearDown(self):
         list_reader._state.clear()
@@ -75,6 +75,22 @@ class ListReaderOpsTest(unittest.TestCase):
         self.assertEqual(self.srv.calls, [("warm", {}, "1d", True, {})])
         self.assertFalse(list_reader._state["reloading"])
         self.assertEqual(list_reader.status()["warms"], 1)
+
+    def test_reload_warms_recently_read_windows(self):
+        # CCC-690: a 7d sidebar rebuilt its full body on every page load
+        # after a publication; windows read in the last day are prebuilt too.
+        list_reader._state["windows"] = {}
+        list_reader.note_window("7d", now=1000.0)
+        list_reader.note_window("bogus", now=1000.0)
+        list_reader.note_window("1d", now=1000.0)  # always warmed anyway
+        self.assertEqual(list_reader.warm_windows(now=1001.0), ("1d", "7d"))
+        self.assertEqual(list_reader.warm_windows(
+            now=1000.0 + list_reader.RECENT_WINDOW_S + 1), ("1d",))
+        list_reader._state["reloading"] = True
+        with mock.patch.object(list_reader, "_reload"), \
+                mock.patch.object(list_reader, "warm_windows", return_value=("1d", "7d")):
+            list_reader._reload_in_background()
+        self.assertEqual(self.srv.calls, [("warm", {}, "1d", True, {}), ("warm", {}, "7d", True, {})])
 
     def test_failed_reload_does_not_warm(self):
         list_reader._state["reloading"] = True

@@ -514,6 +514,8 @@ def _http_handler(server_mod):
                 return
             list_reader.sync()
             list_reader.note_served()
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            list_reader.note_window(query.get("window", [""])[0])
             self._ccc_list_cors = True
             base._do_GET(self)
 
