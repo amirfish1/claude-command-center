@@ -167,7 +167,10 @@
       try { _archiveBootstrapController.abort(); } catch (_) {}
     }, 45 * 1000);
     try {
-      return await (0, sharedState.backgroundApiFetch)(sharedState._archiveBootstrapUrl, { signal: _archiveBootstrapController.signal });
+      const _archiveBootstrapInit = { signal: _archiveBootstrapController.signal };
+      return await (window.__cccListFetch
+        ? window.__cccListFetch(sharedState._archiveBootstrapUrl, _archiveBootstrapInit, sharedState.backgroundApiFetch)
+        : (0, sharedState.backgroundApiFetch)(sharedState._archiveBootstrapUrl, _archiveBootstrapInit));
     } catch (_) {
       return null;
     } finally {

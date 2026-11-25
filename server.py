@@ -18868,9 +18868,18 @@ def _clear_archive_serve_cache():
     with _archive_serve_lock:
         _archive_serve_cache.clear()
         _archive_serve_generation += 1
+    # The conv_reader child serves list reads from its own copy (CCC-679).
+    _conv_reader.list_mutation("clear")
 
 
 def _restamp_archive_serve_cache_after_mutation(archived_set=None, trashed_set=None, mutated_sids=None):
+    _restamp_archive_serve_cache_local(archived_set, trashed_set, mutated_sids)
+    # The conv_reader child serves list reads from its own copy (CCC-679).
+    _conv_reader.list_mutation("restamp", archived=archived_set, trashed=trashed_set,
+                               sids=mutated_sids)
+
+
+def _restamp_archive_serve_cache_local(archived_set=None, trashed_set=None, mutated_sids=None):
     """Keep first paint correct after archive/trash/lane state changes.
 
     These mutations used to clear the warm serve cache outright. The next
@@ -35071,9 +35080,18 @@ def _prepare_html_response(content, accept):
 def _inject_runtime_globals(html, http_port):
     # The bound port is only known after listen(), so add it to the response
     # before encoding instead of baking it into the cached template.
+    # CCC-679: the conversation-reader port lets archive-boot.js send the
+    # page's first sidebar list reads there instead of the dashboard.
+    from ccc_server import list_reader
+    reader_port = None
+    if list_reader.enabled() and not _conv_reader.is_child():
+        status = _conv_reader.status()
+        if status.get("ready") and status.get("http_port"):
+            reader_port = int(status["http_port"])
     return html.replace(
         "</head>",
-        f"<script>window.__CCC_HTTP_PORT__={http_port};</script>\n</head>",
+        f"<script>window.__CCC_HTTP_PORT__={http_port};"
+        f"window.__CCC_LIST_READER_PORT__={json.dumps(reader_port)};</script>\n</head>",
         1,
     )
 
@@ -53425,7 +53443,7 @@ def main():
     _install_python_stack_dump_handler()
     # Conversation opens get their own process (and GIL) so background work
     # in this one cannot stall them (CCC-143). CCC_CONV_READER=0 disables.
-    _conv_reader.start(port)
+    _conv_reader.start(port, acp_state=lambda: _ACP_SESSION_STATE)
     # Phone access set up before the reader port existed: add its tailnet
     # entry too (best effort, off the startup path).
     threading.Thread(target=lambda: phone_access.ensure_reader_serve_if_enabled(port),

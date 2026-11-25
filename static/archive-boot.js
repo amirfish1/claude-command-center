@@ -127,6 +127,40 @@
     _decodeArchiveRowLayouts, _mergeArchiveListDelta, _decodeArchiveHistoryLayer, wideOrderSpanQuery,
   });
 
+  // CCC-679: sidebar list reads go to the conversation-reader process first.
+  // Its own GIL keeps them out of the dashboard's queue; a declined (503) or
+  // failed read is retried on the dashboard exactly as before. The server
+  // injects the port; the conversation-open probe can supply it later.
+  const nativeFetch = window.fetch.bind(window);
+  const listDirect = { downUntil: 0 };
+  function listDirectBase() {
+    if (Date.now() < listDirect.downUntil) return null;
+    try { if (localStorage.getItem('ccc-list-direct') === '0') return null; } catch (_) {}
+    if (window.__cccListDirectBase) return window.__cccListDirectBase;
+    const port = window.__CCC_LIST_READER_PORT__;
+    if (!port) return null;
+    const loc = window.location;
+    const base = (loc.protocol === 'https:' ? 'https://' : 'http://')
+      + loc.hostname.replace(/^([^\[].*:.*)$/, '[$1]') + ':' + port;
+    return base === loc.origin ? null : base;
+  }
+  window.__cccListFetch = function (url, init, viaDashboard) {
+    const dashboard = () => (viaDashboard || window.fetch)(url, init);
+    const base = typeof url === 'string' && url.startsWith('/api/conversations/list?') ? listDirectBase() : null;
+    if (!base) return dashboard();
+    const options = Object.assign({}, init || {}, { credentials: 'include', mode: 'cors' });
+    return nativeFetch(base + url, options).then(response => {
+      if (response.ok || response.status === 304) return response;
+      // 503: the reader is loading or declined this read; ask again soon.
+      listDirect.downUntil = Date.now() + (response.status === 503 ? 15000 : 60000);
+      return dashboard();
+    }, err => {
+      if (init && init.signal && init.signal.aborted) throw err;
+      listDirect.downUntil = Date.now() + 60000;
+      return dashboard();
+    });
+  };
+
   if (window.self !== window.top) return;
   const params = new URLSearchParams(location.search);
   const app = params.get('ccc_app');
@@ -152,7 +186,7 @@
     const start = recentStart = performance.now();
     if (snapshot) snapshot.recentStart = start;
     const headers = bootId && !savedHint ? {'X-CCC-Archive-Boot':bootId} : undefined;
-    window.fetch(url, {signal:controller.signal, headers}).then(response => {
+    window.__cccListFetch(url, {signal:controller.signal, headers}).then(response => {
       response._cccArchiveTiming = {start,headers:performance.now()};
       finishRecent(response);
     }).catch(() => finishRecent(null)).finally(() => clearTimeout(timeout));
@@ -501,7 +535,7 @@
       // Start from the committed hint while IndexedDB opens. A concurrent
       // save or cleared storage can invalidate it; stop the speculative read.
       if (earlyValidator) read.then(base => { if (!matchesBase(base)) controller.abort(); });
-      const response = await window.fetch(target, {signal:controller.signal, headers});
+      const response = await window.__cccListFetch(target, {signal:controller.signal, headers});
       response._cccArchiveTiming = {start,headers:performance.now()};
       if (response.ok && response.status !== 304) {
         // Drain the early response while the application initializes. Leaving

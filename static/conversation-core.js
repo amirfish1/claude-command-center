@@ -198,7 +198,13 @@
         const timer = ctl ? setTimeout(() => ctl.abort(), 4000) : null;
         return fetch(base + '/api/conv-reader/ping', { cache: 'no-store', credentials: 'include', mode: 'cors', signal: ctl ? ctl.signal : undefined })
           .then(r => (r.ok ? r.json() : null))
-          .then(j => { if (j && j.ok) { sharedState._convDirect.base = base; sharedState._convDirect.downUntil = 0; } })
+          .then(j => {
+            if (!(j && j.ok)) return;
+            sharedState._convDirect.base = base;
+            sharedState._convDirect.downUntil = 0;
+            // Sidebar list reads use the same reader (CCC-679).
+            if (j.list !== undefined) window.__cccListDirectBase = base;
+          })
           .finally(() => { if (timer) clearTimeout(timer); });
       })
       .catch(() => {})

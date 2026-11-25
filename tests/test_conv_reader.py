@@ -248,7 +248,8 @@ class DirectPortTest(unittest.TestCase):
 
     def test_only_opens_and_ping(self):
         self.assertEqual(self._get("/api/conv-reader/ping")[0].status, 200)
-        self.assertEqual(self._get("/api/conversations/list")[0].status, 404)
+        # The list read is served only once the list reader has loaded (CCC-679).
+        self.assertEqual(self._get("/api/conversations/list")[0].status, 503)
         self.assertEqual(self._get("/api/sessions")[0].status, 404)
         self.assertEqual(self._get("/api/conversations/abc", method="POST")[0].status, 405)
 

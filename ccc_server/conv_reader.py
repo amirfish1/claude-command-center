@@ -120,8 +120,11 @@ def ready():
 # ---------------------------------------------------------------- dashboard
 
 
-def start(dashboard_port=None):
-    """Spawn and supervise the reader child. Called once from server.main()."""
+def start(dashboard_port=None, acp_state=None):
+    """Spawn and supervise the reader child. Called once from server.main().
+
+    `acp_state` returns the dashboard's in-memory ACP session state; the
+    child needs a copy of it to serve sidebar list reads (CCC-679)."""
     if not enabled() or os.environ.get("CCC_CONV_READER_CHILD") == "1":
         return None
     with _lock:
@@ -130,7 +133,54 @@ def start(dashboard_port=None):
     thread = threading.Thread(target=_supervise, name="conv-reader-supervisor",
                               daemon=True)
     thread.start()
+    from ccc_server import list_reader
+    if acp_state is not None and list_reader.enabled():
+        threading.Thread(target=_publish_acp, args=(acp_state,),
+                         name="conv-reader-acp", daemon=True).start()
     return thread
+
+
+ACP_PUBLISH_INTERVAL_S = 1.0
+
+
+def _publish_acp(acp_state):
+    """Keep the child's copy of the ACP session state current. The child
+    declines list reads until the first copy lands. A few scalar fields per
+    attached session; compared before sending, so idle ticks cost a dict walk."""
+    from ccc_server import list_reader
+    sent = (None, None)
+    while True:
+        time.sleep(ACP_PUBLISH_INTERVAL_S)
+        with _lock:
+            proc = _state.get("proc")
+            pid = proc.pid if proc is not None and _state["ready"] else None
+        if pid is None:
+            sent = (None, None)
+            continue
+        try:
+            snapshot = list_reader.acp_snapshot(acp_state())
+            signature = list_reader.acp_signature(snapshot)
+        except Exception:
+            continue
+        if sent == (pid, signature):
+            continue
+        if call("list_acp", timeout=2.0, state=snapshot) is not None:
+            sent = (pid, signature)
+
+
+def list_mutation(kind, archived=None, trashed=None, sids=None):
+    """Forward a serve-cache clear or restamp to the child before the
+    mutation's request answers, so the next list read the child serves
+    already reflects it. The child also watches the sidecars as a fallback."""
+    from ccc_server import list_reader
+    if is_child() or not list_reader.enabled() or not ready():
+        return False
+
+    def as_list(value):
+        return sorted(str(v) for v in value) if value is not None else None
+
+    return call("list_mutation", timeout=1.0, kind=kind, archived=as_list(archived),
+                trashed=as_list(trashed), sids=as_list(sids)) is not None
 
 
 def _spawn(path):
@@ -299,6 +349,10 @@ def _handle(conn, server_mod):
         conn.settimeout(READ_TIMEOUT_S)
         reader = conn.makefile("rb")
         req = json.loads(reader.readline() or b"{}")
+        if str(req.get("op") or "").startswith("list_"):
+            from ccc_server import list_reader
+            conn.sendall(json.dumps(list_reader.handle_op(req)).encode() + b"\n")
+            return
         if req.get("op") and req.get("op") != "app_page":
             conn.sendall(json.dumps(_handle_op(req)).encode() + b"\n")
             return
@@ -356,6 +410,9 @@ def _handle_op(req):
 
 
 _OPEN_PATH = re.compile(r"^/api/conversations/(?!all$|list$|order$)[^/]+$")
+LIST_PATH = "/api/conversations/list"
+# Response headers the sidebar reads from a cross-origin list response.
+_LIST_EXPOSE = "Server-Timing, ETag, X-CCC-List-Body"
 _http = {"server": None, "active": 0}
 _http_lock = threading.Lock()
 
@@ -365,14 +422,24 @@ def _http_handler(server_mod):
     base = server_mod.CommandCenterHandler
 
     class ReaderHandler(base):
-        def _cors_headers(self):
+        _ccc_list_cors = False
+
+        def _cors_headers(self, expose="Server-Timing"):
             origin = (self.headers.get("Origin") or "").strip()
             if origin and self._check_same_origin():
                 self.send_header("Access-Control-Allow-Origin", origin)
                 self.send_header("Access-Control-Allow-Credentials", "true")
-                self.send_header("Access-Control-Expose-Headers", "Server-Timing")
+                self.send_header("Access-Control-Expose-Headers", expose)
                 self.send_header("Timing-Allow-Origin", origin)
                 self.send_header("Vary", "Origin")
+
+        def end_headers(self):
+            # List responses are written by the dashboard's own senders;
+            # add the CORS headers they lack just before the blank line.
+            if self._ccc_list_cors:
+                self._ccc_list_cors = False
+                self._cors_headers(_LIST_EXPOSE)
+            return super().end_headers()
 
         def _reply(self, status, body, encoding=None, cache=None):
             self.send_response(status)
@@ -407,7 +474,12 @@ def _http_handler(server_mod):
             if self._phone_pin_blocked(path):
                 return
             if path == "/api/conv-reader/ping":
-                self._reply(200, json.dumps({"ok": True, "pid": os.getpid()}).encode())
+                from ccc_server import list_reader
+                self._reply(200, json.dumps({"ok": True, "pid": os.getpid(),
+                                             "list": list_reader.ready()}).encode())
+                return
+            if path == LIST_PATH:
+                self._direct_list()
                 return
             if not _OPEN_PATH.match(path):
                 self._reply(404, b'{"error": "not found"}')
@@ -433,10 +505,44 @@ def _http_handler(server_mod):
             self._reply(200, out["body"], encoding=out.get("encoding"),
                         cache=f"direct-{cache}" if cache else "direct")
 
+        def _direct_list(self):
+            """The dashboard's own list branch, on this process's GIL."""
+            from ccc_server import list_reader
+            if not (list_reader.enabled() and list_reader.ready()):
+                list_reader.note_served(declined=True)
+                self._reply(503, b'{"error": "declined"}')
+                return
+            list_reader.sync()
+            list_reader.note_served()
+            self._ccc_list_cors = True
+            base._do_GET(self)
+
+        def do_OPTIONS(self):
+            # CORS preflight for list reads: they carry If-None-Match and
+            # X-CCC-* request headers, which opens never send.
+            path = urllib.parse.urlparse(self.path).path.rstrip("/")
+            origin = (self.headers.get("Origin") or "").strip()
+            if path != LIST_PATH or not origin or not self._check_same_origin():
+                self._refuse()
+                return
+            requested = self.headers.get("Access-Control-Request-Headers", "")
+            allowed = ", ".join(h for h in (part.strip() for part in requested.split(","))
+                                if re.fullmatch(r"[A-Za-z0-9-]{1,64}", h))
+            self.send_response(204)
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Access-Control-Allow-Credentials", "true")
+            self.send_header("Access-Control-Allow-Methods", "GET")
+            if allowed:
+                self.send_header("Access-Control-Allow-Headers", allowed)
+            self.send_header("Access-Control-Max-Age", "600")
+            self.send_header("Vary", "Origin")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
         def _refuse(self):
             self._reply(405, b'{"error": "method not allowed"}')
 
-        do_POST = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = _refuse
+        do_POST = do_PUT = do_PATCH = do_DELETE = _refuse
 
     return ReaderHandler
 
@@ -535,6 +641,9 @@ def serve(path, parent_pid, port=None, dashboard_port=None):
     from ccc_server import memory_release
     memory_release.start()
     import server as server_mod  # noqa: E402  (heavy; child only)
+    from ccc_server import list_reader
+    if list_reader.enabled():
+        list_reader.setup(server_mod)
     # The first compact sender header would otherwise index the journals inside
     # someone's open; the previous child still answers while this runs.
     try:

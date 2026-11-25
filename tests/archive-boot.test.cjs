@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const {functions} = require('./conversation-source.cjs');
-const archiveLoader = functions(['_decodeArchiveRowLayouts', 'loadArchiveAll']);
+const archiveLoader = functions(['_decodeArchiveRowLayouts', '_perfListDirect', 'loadArchiveAll']);
 const boot = fs.readFileSync(require.resolve('../static/archive-boot.js'), 'utf8');
 const defaults = fs.readFileSync(require.resolve('../static/conversation-defaults.js'), 'utf8');
 
@@ -106,4 +106,29 @@ test('overlapped history fetches immediately but parses only after initial paint
   assert.equal((await loading)[0].id, 'one');
   assert.equal(parses, 1);
   assert.equal(state._archiveAllInflight.size, 0);
+});
+test('list reads go to the reader port first and fall back to the dashboard (CCC-679)',async()=>{
+  const run=start({search:'?ccc_app=demo'});
+  const {window}=run; const dash=[];
+  window.location={protocol:'http:',hostname:'127.0.0.1',origin:'http://127.0.0.1:8091'};
+  const via=url=>{dash.push(url);return Promise.resolve({ok:true,status:200,via:'dash'});};
+  // No port injected: the dashboard serves it.
+  await window.__cccListFetch('/api/conversations/list?window=7d',{},via);
+  assert.deepEqual(dash,['/api/conversations/list?window=7d']);
+  assert.equal(run.reads.length,0);
+  window.__CCC_LIST_READER_PORT__=18091;
+  await window.__cccListFetch('/api/conversations/list?window=7d',{},via);
+  assert.equal(run.reads.at(-1).url,'http://127.0.0.1:18091/api/conversations/list?window=7d');
+  assert.equal(run.reads.at(-1).init.credentials,'include');
+  assert.equal(dash.length,1);
+  // Other URLs never go direct.
+  await window.__cccListFetch('/api/sessions',{},via);
+  assert.equal(dash.at(-1),'/api/sessions');
+  // A decline (503) is retried on the dashboard and parks direct reads.
+  run.response.ok=false; run.response.status=503;
+  const res=await window.__cccListFetch('/api/conversations/list?window=8h',{},via);
+  assert.equal(res.via,'dash');
+  const before=run.reads.length;
+  await window.__cccListFetch('/api/conversations/list?window=8h',{},via);
+  assert.equal(run.reads.length,before,'parked after a decline');
 });

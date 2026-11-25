@@ -4813,6 +4813,11 @@
     arm();
   }
 
+  // CCC-679: true when the conversation-reader process served this read.
+  function _perfListDirect(fetchedUrl) {
+    try { return new URL(fetchedUrl, window.location.href).origin !== window.location.origin; } catch (_) { return false; }
+  }
+
   async function loadArchiveAll(opts = {}) {
     const params = new URLSearchParams();
     params.set('window', opts.window || _archiveWindow());
@@ -4886,6 +4891,7 @@
               server_cpu_ms: _perfServer ? _perfServer.cpu : null,
               longtask_ms: _perfLongTaskMs(_perfT0, _perfEnd),
               rt: _perfHdrAt ? _convResourceTiming(_perfFetchUrl, _perfT0) : null,
+              direct: _perfListDirect(_perfFetchUrl),
             },
           });
         }
@@ -4964,7 +4970,11 @@
             if (requestedOrder) {
               _perfFetchUrl += '&saved_order=' + requestedOrder;
             }
-            r = await backgroundApiFetch(_perfFetchUrl, init);
+            r = await (window.__cccListFetch
+              ? window.__cccListFetch(_perfFetchUrl, init, backgroundApiFetch)
+              : backgroundApiFetch(_perfFetchUrl, init));
+            // A reader-served response has the reader's absolute URL.
+            if (r && r.url) _perfFetchUrl = r.url;
           }
           if (controller.signal.aborted) throw controller.signal.reason;
         } finally {
@@ -5037,7 +5047,9 @@
           if (window.__cccArchiveSnapshot?.url === url) window.__cccArchiveSnapshot.onResync?.();
           sharedState._archiveAllDelta.delete(url);
           sharedState._archiveAllEtag.delete(url);
-          const r2 = await backgroundApiFetch(requestUrl, { signal: controller.signal });
+          const r2 = await (window.__cccListFetch
+            ? window.__cccListFetch(requestUrl, { signal: controller.signal }, backgroundApiFetch)
+            : backgroundApiFetch(requestUrl, { signal: controller.signal }));
           if (!r2.ok) {
             _perfListLog(0, r2.status, 'err');
             return null;

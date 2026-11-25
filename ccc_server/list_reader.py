@@ -1,0 +1,361 @@
+"""Serve GET /api/conversations/list from the conv_reader child (CCC-679).
+
+Late in a dashboard's uptime, sidebar list reads waited on the dashboard's
+GIL: server wall time ~1 s against ~300 ms of CPU, while conversation opens
+served by the conv_reader child (CCC-143) stayed at 50-450 ms in the same
+windows. This module lets that child answer list reads on its direct port
+with the dashboard's own handler code, so the read only competes with the
+child's light load.
+
+The child never builds the archive. It serves the snapshot the dashboard
+publishes to the archive store (``archive_store``):
+
+* Freshness: before each list read (at most once a second) it reads the
+  store's ``variants.cached_at``. A newer stamp reloads the hot rows in a
+  background thread and publishes them through the dashboard's own
+  ``_archive_serve_cache_store``. That diffs against the previous snapshot,
+  so delta tokens and the prebuilt body cache keep working across reloads.
+* Mutations: the dashboard forwards every serve-cache clear and restamp
+  (archive, trash, lanes, idea tickets, new transcripts) over the private
+  socket before its mutation request answers. As a safety net, the child
+  also restamps when a lifecycle or lane sidecar changes on disk.
+* ACP sessions live only in the dashboard's memory. The dashboard pushes a
+  scalar copy of its ACP session state whenever it changes. Until the first
+  push lands (about a second after the child's socket appears), the child
+  uses the dashboard's saved ACP registry files, which list the sessions
+  that were attached when last saved.
+* Start-up: the first store load finishes before the child binds the shared
+  direct port, so a new child never takes connections it can only decline.
+* Side effects: background refreshes, list-body warmers, disk-body saves,
+  history-layer publication and every archive-store write are disabled in
+  the child. Two processes never write the same files.
+
+A declined read answers 503; the browser then reads from the dashboard
+exactly as before. ``CCC_LIST_READER=0`` turns the child path off.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+import threading
+import time
+
+SYNC_INTERVAL_S = 1.0
+
+_lock = threading.Lock()
+_state = {
+    "server": None,
+    "loaded": False,       # first store load published
+    "acp": False,          # first ACP push received
+    "stamps": None,        # {variant key: cached_at} last published
+    "checked": 0.0,
+    "reloading": False,
+    "sidecars": None,
+    "reloads": 0,
+    "reload_ms": None,
+    "mutations": 0,
+    "declined": 0,
+    "served": 0,
+    "errors": 0,
+    "last_error": None,
+}
+
+
+def enabled():
+    return (os.environ.get("CCC_LIST_READER", "1").strip().lower()
+            not in ("0", "false", "no", "off"))
+
+
+def ready():
+    with _lock:
+        return bool(_state["loaded"] and _state["acp"])
+
+
+def status():
+    with _lock:
+        return {key: _state[key] for key in (
+            "loaded", "acp", "reloads", "reload_ms", "mutations", "declined",
+            "served", "errors", "last_error")} | {"enabled": enabled()}
+
+
+# ------------------------------------------------------------------ child
+
+
+def setup(server_mod):
+    """Make the imported dashboard module safe to serve list reads from.
+
+    Called once in the child after ``import server``. Each patch replaces a
+    module global, which the list code looks up at call time."""
+    from ccc_server import archive_store
+
+    with _lock:
+        _state["server"] = server_mod
+    # No detached rebuilds: rows come from the dashboard's publications.
+    server_mod._archive_refresh_slot_available = lambda key, now: False
+    # No list-body warmers, disk-body saves or history-layer publication.
+    server_mod._archive_list_start_warm = lambda slot, warm: False
+    server_mod._archive_list_disk_save = lambda *a, **k: False
+    server_mod._archive_history_start_publication = lambda *a, **k: None
+    server_mod._save_archive_response_cache = lambda *a, **k: False
+    # Belt and braces: the child must never write the archive store.
+    original_connect = archive_store._connect
+
+    def read_only_connect(cache_file, *, write=False, shared_reader=False):
+        if write:
+            raise sqlite3.OperationalError("conv reader opens the archive store read-only")
+        return original_connect(cache_file, shared_reader=shared_reader)
+
+    archive_store._connect = read_only_connect
+    original_diag = server_mod.record_diag
+
+    def record_diag(kind, ms, detail=None):
+        if kind == "list_server" and isinstance(detail, dict):
+            detail = dict(detail, reader=True)
+        return original_diag(kind, ms, detail)
+
+    server_mod.record_diag = record_diag
+    try:
+        _provisional_acp(server_mod)
+    except Exception as exc:
+        _note_error(exc)
+    # Synchronous: serve() binds the direct port only after this returns.
+    # Unhydrated, like the dashboard's own cold serve; hydration (seconds on
+    # cold file caches) follows in the background.
+    try:
+        _reload(hydrate=False)
+    except Exception as exc:
+        _note_error(exc)
+        return
+    with _lock:
+        _state["reloading"] = True
+    threading.Thread(target=_reload_in_background, name="list-reader-hydrate", daemon=True).start()
+
+
+def _provisional_acp(srv):
+    """The dashboard's saved ACP registry, until its first live push."""
+    sessions = {}
+    for harness in list(getattr(srv, "_ACP_HARNESSES", {}) or {}):
+        try:
+            with open(srv._acp_state_file(harness), encoding="utf-8") as fh:
+                saved = (json.load(fh) or {}).get("sessions") or {}
+        except (OSError, ValueError, AttributeError):
+            continue
+        attached = {str(sid): dict(st, attached=True) for sid, st in saved.items() if isinstance(st, dict)}
+        if attached:
+            sessions[harness] = attached
+    with _lock:
+        if _state["acp"]:
+            return
+        srv._ACP_SESSION_STATE.clear()
+        srv._ACP_SESSION_STATE.update(sessions)
+        _state["acp"] = "provisional"
+
+
+def _note_error(exc):
+    with _lock:
+        _state["errors"] += 1
+        _state["last_error"] = repr(exc)[:300]
+    print(f"  [list-reader] {exc!r}", flush=True)
+
+
+def _store_stamps(srv):
+    """{variant key: cached_at} straight from the store, or None."""
+    from ccc_server import archive_store
+
+    path = archive_store.database_path(srv._ARCHIVE_RESPONSE_CACHE_FILE)
+    if not path.exists():
+        return None
+    con = archive_store._connect(srv._ARCHIVE_RESPONSE_CACHE_FILE)
+    try:
+        return {str(key): float(stamp) for key, stamp in
+                con.execute("SELECT key, cached_at FROM variants")}
+    finally:
+        con.close()
+
+
+def _sidecar_stamp(srv):
+    stamps = []
+    for name in ("ARCHIVED_CONVERSATIONS_FILE", "TRASHED_CONVERSATIONS_FILE",
+                 "SESSION_LANE_OVERRIDES_FILE"):
+        path = getattr(srv, name, None)
+        try:
+            st = os.stat(path) if path is not None else None
+            stamps.append((st.st_mtime_ns, st.st_size) if st else None)
+        except OSError:
+            stamps.append(None)
+    return tuple(stamps)
+
+
+def _reload(hydrate=True):
+    """Load the store's hot rows and publish them like a dashboard refresh.
+
+    The store keeps hot rows as persisted, before the per-serve overlays
+    (spawn origin, live registry state, question/sidecar defaults). The
+    dashboard re-layers those in ``_rehydrate_archive_cached_rows`` on every
+    refresh, so the child must too or its bodies drift from the dashboard's.
+    ``hydrate=False`` is the startup fast path, mirroring the dashboard's own
+    cold serve; a hydrated reload follows immediately in the background.
+    """
+    srv = _state["server"]
+    from ccc_server import archive_snapshot, archive_store
+    from ccc_server.archive_store import HotRows
+
+    started = time.perf_counter()
+    sidecars = _sidecar_stamp(srv)
+    data = archive_store.load(srv._ARCHIVE_RESPONSE_CACHE_FILE, hot=True, retain_hot_tokens=True)
+    if not data:
+        raise RuntimeError("archive store has no snapshot")
+    data = archive_snapshot.upgrade_driver_metadata(
+        data, srv._ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION, srv._ARCHIVE_RESPONSE_CACHE_BUILD_ID)
+    if (data.get("schema_version") != srv._ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION
+            or data.get("build_id") != srv._ARCHIVE_RESPONSE_CACHE_BUILD_ID):
+        # A newer dashboard build owns the store; this child is about to be
+        # replaced. Keep declining rather than serve another schema.
+        raise RuntimeError("archive store schema differs from this build")
+    keep = {}
+    for key, entry in (data.get("entries") or {}).items():
+        if isinstance(key, str) and isinstance(entry, dict) and isinstance(entry.get("conversations"), list):
+            keep[key] = {"cached_at": float(entry.get("cached_at") or 0),
+                         "conversations": entry["conversations"],
+                         "signature": entry.get("signature") or None}
+    if not keep:
+        raise RuntimeError("archive store has no entries")
+    with srv._ARCHIVE_RESPONSE_CACHE_LOCK:
+        srv._ARCHIVE_RESPONSE_CACHE.update(keep)
+    srv._ARCHIVE_RESPONSE_CACHE_LOADED = True
+    base_key = srv._archive_response_cache_key()
+    for key, entry in keep.items():
+        with srv._archive_serve_lock:
+            known = key in srv._archive_serve_cache
+            generation = srv._archive_serve_generation
+        if not known and key != base_key:
+            continue  # its first read takes the ordinary cold path
+        source = entry["conversations"]
+        if isinstance(source, HotRows):
+            rows = srv._overlay_conversation_lifecycle_flags(list(source), copy_on_change=True)
+            tokens = source.tokens
+        else:
+            rows = srv._overlay_conversation_lifecycle_flags([dict(r) for r in source if isinstance(r, dict)])
+            tokens = None
+        if hydrate:
+            rows = srv._rehydrate_archive_cached_rows(rows, preselected=True)
+            tokens = None  # proofs only fit the exact persisted row objects
+        partial = str(entry.get("signature") or "").startswith("partial:")
+        srv._archive_serve_cache_store(key, rows, generation, ts=entry["cached_at"],
+                                       partial=partial, persisted_tokens=tokens)
+    with _lock:
+        _state["stamps"] = {key: entry["cached_at"] for key, entry in keep.items()}
+        _state["sidecars"] = sidecars
+        _state["loaded"] = True
+        _state["reloads"] += 1
+        _state["reload_ms"] = round((time.perf_counter() - started) * 1000.0, 1)
+
+
+def _reload_in_background():
+    try:
+        _reload()
+    except Exception as exc:
+        _note_error(exc)
+    finally:
+        with _lock:
+            _state["reloading"] = False
+
+
+def sync(now=None):
+    """Pick up a new dashboard publication or sidecar change. Cheap: one
+    SQLite query and three stats, at most once a second."""
+    srv = _state["server"]
+    if srv is None:
+        return
+    now = time.monotonic() if now is None else now
+    with _lock:
+        if not _state["loaded"] or _state["reloading"] or now - _state["checked"] < SYNC_INTERVAL_S:
+            return
+        _state["checked"] = now
+        known_stamps, known_sidecars = _state["stamps"], _state["sidecars"]
+    try:
+        stamps = _store_stamps(srv)
+    except (OSError, sqlite3.Error) as exc:
+        _note_error(exc)
+        return
+    if stamps and any(stamp > (known_stamps or {}).get(key, 0.0) for key, stamp in stamps.items()):
+        with _lock:
+            if _state["reloading"]:
+                return
+            _state["reloading"] = True
+        threading.Thread(target=_reload_in_background, name="list-reader-reload", daemon=True).start()
+        return
+    sidecars = _sidecar_stamp(srv)
+    if sidecars != known_sidecars:
+        # A mutation forward was missed (child busy or restarting): restamp
+        # every row from the sidecars, as the dashboard did.
+        srv._restamp_archive_serve_cache_after_mutation()
+        with _lock:
+            _state["sidecars"] = sidecars
+
+
+def handle_op(req):
+    """Socket ops from the dashboard (see conv_reader.call)."""
+    srv = _state["server"]
+    if srv is None:
+        return {"ok": False}
+    op = req.get("op")
+    if op == "list_mutation":
+        if req.get("kind") == "clear":
+            srv._clear_archive_serve_cache()
+        else:
+            def as_set(value):
+                return {str(v) for v in value} if isinstance(value, list) else None
+            srv._restamp_archive_serve_cache_after_mutation(
+                archived_set=as_set(req.get("archived")),
+                trashed_set=as_set(req.get("trashed")),
+                mutated_sids=as_set(req.get("sids")),
+            )
+        with _lock:
+            _state["mutations"] += 1
+            # The mutation's own sidecar write must not trigger a second,
+            # full restamp on the next sync.
+            _state["sidecars"] = _sidecar_stamp(srv)
+        return {"ok": True}
+    if op == "list_acp":
+        state = req.get("state")
+        if not isinstance(state, dict):
+            return {"ok": False}
+        sessions = {str(h): {str(sid): dict(st) for sid, st in (by_sid or {}).items() if isinstance(st, dict)}
+                    for h, by_sid in state.items() if isinstance(by_sid, dict)}
+        with _lock:
+            srv._ACP_SESSION_STATE.clear()
+            srv._ACP_SESSION_STATE.update(sessions)
+            _state["acp"] = True
+        return {"ok": True}
+    if op == "list_status":
+        return {"ok": True, "status": status()}
+    return {"ok": False}
+
+
+def note_served(declined=False):
+    with _lock:
+        _state["declined" if declined else "served"] += 1
+
+
+# -------------------------------------------------------------- dashboard
+
+
+def acp_snapshot(acp_state):
+    """Scalar copy of the dashboard's ACP session state for the child."""
+    out = {}
+    for harness, sessions in list((acp_state or {}).items()):
+        copied = {}
+        for sid, st in list((sessions or {}).items()):
+            if isinstance(st, dict) and st.get("attached"):
+                copied[str(sid)] = {k: v for k, v in list(st.items())
+                                    if isinstance(v, (str, int, float, bool)) or v is None}
+        if copied:
+            out[str(harness)] = copied
+    return out
+
+
+def acp_signature(snapshot):
+    return json.dumps(snapshot, sort_keys=True, default=str)
