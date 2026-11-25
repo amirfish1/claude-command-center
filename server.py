@@ -35088,12 +35088,16 @@ def _inject_runtime_globals(html, http_port):
         status = _conv_reader.status()
         if status.get("ready") and status.get("http_port"):
             reader_port = int(status["http_port"])
-    return html.replace(
-        "</head>",
-        f"<script>window.__CCC_HTTP_PORT__={http_port};"
-        f"window.__CCC_LIST_READER_PORT__={json.dumps(reader_port)};</script>\n</head>",
-        1,
-    )
+    script = (f"<script>window.__CCC_HTTP_PORT__={http_port};"
+              f"window.__CCC_LIST_READER_PORT__={json.dumps(reader_port)};</script>")
+    # CCC-678: put the globals first in <head>. archive-boot.js runs as the
+    # head's second script and starts the page's first list read at once; a
+    # port added before </head> arrived too late, so that read always went
+    # to the dashboard.
+    match = re.search(r"<head\b[^>]*>", html, re.IGNORECASE)
+    if match:
+        return html[:match.end()] + "\n" + script + html[match.end():]
+    return html.replace("</head>", script + "\n</head>", 1)
 
 
 def _app_page_response(path, query, accept, *, asset_hints=False, http_port=None):

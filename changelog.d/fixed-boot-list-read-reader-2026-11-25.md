@@ -1,0 +1,1 @@
+- The sidebar's first list read on page load now goes to the conversation-reader process too, instead of waiting behind a busy dashboard.
