@@ -692,6 +692,9 @@ def _alert_rows(events):
     for event in events:
         if event.get("kind") in _NO_SELF_FILE_KINDS:
             continue
+        # Scripted-browser probes never file or extend a perf ticket (CCC-668).
+        if event.get("automated"):
+            continue
         if event.get("warmup"):
             if event.get("kind") != "archive_load":
                 continue

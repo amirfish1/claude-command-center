@@ -131,6 +131,15 @@ class TestRecordEvent(PerfEventsTestBase):
         self.assertNotIn("automated", rows[1])
         self.assertEqual(pe._exclusion_reason(rows[0]), "automated")
 
+    def test_automated_breaches_never_file(self):
+        rows = [{"kind": "archive_load", "ms": 20000, "threshold_ms": 5000, "breach": True,
+                 "warmup": False, "load1": 1, "ncpu": 4, "up_s": 60, "automated": True}] * 3
+        self.assertIsNone(pe.evaluate_breach_pattern(rows))
+        human = [dict(r) for r in rows]
+        for r in human:
+            r.pop("automated")
+        self.assertEqual(pe.evaluate_breach_pattern(human)["kind"], "archive_load")
+
     def test_archive_load_warm_no_breach(self):
         with mock.patch.object(pe, "archive_is_warm", return_value=True):
             result = pe.record_event("archive_load", 500, conv_id="c1", boot_id="b1")
