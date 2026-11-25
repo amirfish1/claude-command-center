@@ -37,6 +37,8 @@ _ARCHIVE_TOPIC_TRANSITIONS = {}
 _ARCHIVE_TOPIC_TRANSITION_LIMIT = 32
 _ARCHIVE_TOPIC_COMMIT_LIMIT = 8
 _TOPIC_INSERT_HISTORY = 'continuation_topic_cache_inserts'
+_TOPIC_CUT_WITNESS = 'continuation_topic_cache_witness'
+_TOPIC_CUT_TRIGGER = 'ccc_topic_cache_state_witness'
 _NATIVE_TITLE_STATE = {'data': None, 'generation': 0}
 _SCOPED_TOPIC_SPLIT_MIN = 2000
 _SCOPED_TOPIC_ORIGIN_LIMIT = 4096
@@ -67,10 +69,11 @@ def _install_topic_tracking(conn):
     state = conn.execute(
         "SELECT (SELECT count(*) FROM sqlite_master WHERE type='trigger' "
         f"AND name IN ({marks})), "
-        "EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)",
-        (*names, _TOPIC_INSERT_HISTORY),
+        "EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name=?), "
+        "EXISTS (SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?)",
+        (*names, _TOPIC_INSERT_HISTORY, _TOPIC_CUT_TRIGGER),
     ).fetchone()
-    if state == (len(names), 1):
+    if state == (len(names), 1, 1):
         return
     if conn.in_transaction:
         return
@@ -81,6 +84,14 @@ def _install_topic_tracking(conn):
         conn.execute('CREATE TABLE IF NOT EXISTS continuation_topic_cache_state '
                      '(id INTEGER PRIMARY KEY, revision INTEGER NOT NULL)')
         conn.execute('INSERT OR IGNORE INTO continuation_topic_cache_state VALUES (1, 0)')
+        # A checkpoint can change the file signature without changing this
+        # cut. A revision number alone can repeat after restoring a backup.
+        conn.execute(f'CREATE TABLE IF NOT EXISTS {_TOPIC_CUT_WITNESS} '
+                     '(id INTEGER PRIMARY KEY, nonce BLOB NOT NULL)')
+        conn.execute(f'INSERT OR IGNORE INTO {_TOPIC_CUT_WITNESS} VALUES (1, randomblob(16))')
+        conn.execute(f'CREATE TRIGGER IF NOT EXISTS {_TOPIC_CUT_TRIGGER} '
+                     'AFTER UPDATE OF revision ON continuation_topic_cache_state BEGIN '
+                     f'UPDATE {_TOPIC_CUT_WITNESS} SET nonce=randomblob(16) WHERE id=1; END')
         # The slot table and trigger upgrade commit together. Existing
         # processes still see the original revision counter and trigger names.
         if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
@@ -409,8 +420,29 @@ def _archive_read_version(conn, *, pinned=False):
     if token is not None and token[0] == "topics-v1":
         # The revision is scoped to tracked topic data. The archive captures
         # external titles separately and compares inside and outside a write.
-        return token[:5]
+        try:
+            witness = conn.execute(
+                f'SELECT nonce FROM {_TOPIC_CUT_WITNESS} WHERE id=1 '
+                'AND (SELECT revision FROM continuation_topic_cache_state WHERE id=1)=? '
+                'AND (SELECT schema_version FROM pragma_schema_version)=? '
+                "AND EXISTS (SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?)",
+                (token[3], token[4], _TOPIC_CUT_TRIGGER),
+            ).fetchone()
+        except sqlite3.Error:
+            witness = None
+        return (*token[:5], witness[0] if witness else None)
     return conn.total_changes, conn.execute("PRAGMA data_version").fetchone()[0]
+
+
+def _same_archive_cut_after_checkpoint(previous, current):
+    if (previous[0] != 'topics-v1' or current[0] != 'topics-v1'
+            or previous[1] != current[1] or previous[3:] != current[3:]):
+        return False
+    before_file, after_file = previous[2], current[2]
+    nonce = current[5]
+    return (isinstance(before_file, tuple) and isinstance(after_file, tuple)
+            and before_file[0] == after_file[0]
+            and isinstance(nonce, bytes) and len(nonce) == 16)
 
 
 def archive_connection():
@@ -647,6 +679,14 @@ def archive_projection_inputs(conn, *, max_rows, max_native_roots=32, diagnostic
             with timing("revision"):
                 current = _archive_read_version(conn) if owner is conn else None
                 reused = owner is conn and current == version
+                if (not reused and owner is conn and snapshot is not None
+                        and _same_archive_cut_after_checkpoint(version, current)):
+                    # Refresh the file signature for future exact history
+                    # proofs. The records and their derived guards stay pinned.
+                    version = current
+                    reused = True
+                    if diagnostics is not None:
+                        diagnostics["topics_snapshot_checkpoint_reused"] = True
             advanced = None
             transition = None
             if not reused:

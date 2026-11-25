@@ -71,6 +71,61 @@ def test_startup_scoped_basis_warms_the_foreground_topic_reader(store, monkeypat
     assert refreshed[0]['old'] != guards[0]['old']
 
 
+@pytest.mark.parametrize("change", ["unrelated", "rolled_back", "title", "repeated_revision", "legacy"])
+def test_archive_topic_cut_across_a_checkpoint(store, monkeypatch, change):
+    from contextlib import closing
+
+    store.execute('PRAGMA journal_mode=WAL')
+    store.execute('CREATE TABLE unrelated_activity (stamp TEXT)')
+    topics._connection(store)
+    with store:
+        store.execute("INSERT INTO continuation_topics VALUES ('root', '', 'root', 'Old', 0)")
+        if change == 'legacy':
+            store.execute('DROP TRIGGER ccc_topic_cache_state_witness')
+    store.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+    monkeypatch.setattr(topics, '_ARCHIVE_TOPIC_SNAPSHOT', (None, None, None))
+    inputs, edges, before = topics.archive_projection_inputs(store, max_rows=20)
+    if change == 'legacy':
+        assert before[5] is None
+    else:
+        assert len(before[5]) == 16
+    filename = store.execute('PRAGMA database_list').fetchone()[2]
+
+    with closing(sqlite3.connect(filename)) as peer:
+        peer.execute('PRAGMA wal_autocheckpoint=0')
+        if change == 'rolled_back':
+            peer.execute("UPDATE continuation_topics SET topic_title='Discarded'")
+            peer.rollback()
+        with peer:
+            peer.execute("INSERT INTO unrelated_activity VALUES ('new')")
+            if change in ('title', 'repeated_revision'):
+                peer.execute("UPDATE continuation_topics SET topic_title='New'")
+            if change == 'repeated_revision':
+                peer.execute('UPDATE continuation_topic_cache_state SET revision=?', (before[3],))
+        assert peer.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone() == (0, 0, 0)
+
+    diagnostics = {}
+    refreshed, new_edges, after = topics.archive_projection_inputs(
+        store, max_rows=20, diagnostics=diagnostics)
+    assert before[2] != after[2]
+    assert before[2][0] == after[2][0]
+    assert before[4] == after[4]
+    assert (before[3] == after[3]) == (change != 'title')
+    if change in ('title', 'repeated_revision'):
+        assert before[5] != after[5]
+        assert not diagnostics['topics_snapshot_reused']
+        assert refreshed[0]['root'][2] == 'New'
+    elif change == 'legacy':
+        assert after[5] is None
+        assert not diagnostics['topics_snapshot_reused']
+        assert refreshed[0] == inputs[0]
+    else:
+        assert diagnostics['topics_snapshot_checkpoint_reused']
+        assert before[5] == after[5]
+        assert refreshed[0] is inputs[0]
+        assert new_edges is edges
+
+
 def test_named_root_projection_preserves_explicit_and_indexed_origins(store):
     topics.attach_topics([row('root', 'Project'), row('explicit', 'Old explicit'),
                           row('indexed', 'Old indexed')], wait_for_writer=True, names={})
