@@ -32174,23 +32174,7 @@
     const vv = window.visualViewport;
     let _vvRaf = 0;
     const _cccNativeShell = /CCC-iOS/.test(navigator.userAgent);
-    if (_cccNativeShell) {
-      const kb = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Keyboard;
-      if (kb && kb.setAccessoryBarVisible) kb.setAccessoryBarVisible({ isVisible: false });
-      // WKWebView's visualViewport doesn't shrink for the keyboard, so the
-      // vv-driven path below can't lift the composer. The plugin reports the
-      // keyboard's final height at animation start — set --app-vh once there
-      // instead of re-laying out on every resize tick.
-      if (kb && kb.addListener) {
-        kb.addListener('keyboardWillShow', (info) => {
-          const kh = (info && info.keyboardHeight) || 0;
-          document.documentElement.style.setProperty('--app-vh', (window.innerHeight - kh) + 'px');
-        });
-        kb.addListener('keyboardWillHide', () => {
-          document.documentElement.style.setProperty('--app-vh', vv.height + 'px');
-        });
-      }
-    }
+    let nativeKeyboardHeight = 0;
     // iOS Safari can report a bogus/stale visualViewport.height on the very
     // first read (e.g. mid-way through the address-bar collapse animation on
     // cold load) — small enough to make `body { height: var(--app-vh) }`
@@ -32207,6 +32191,7 @@
     const syncVisualViewport = () => {
       _vvRaf = 0;
       const h = vv.height;
+      const layoutHeight = document.documentElement.clientHeight || window.innerHeight;
       const editing = document.activeElement?.matches('textarea, input, [contenteditable="true"]');
       // A real phone keyboard can leave less than half the layout viewport.
       // Only reject that reading during an unfocused cold start.
@@ -32215,15 +32200,37 @@
       // visual viewport while a field is focused; lift the shell above it so
       // the composer's send button can't be hit as ✓.
       // The native iOS shell hides that bar (see ios-app/), so no lift there.
-      const kbOpen = window.innerHeight - h > 150;
-      document.documentElement.style.setProperty('--app-vh', (kbOpen && !_cccNativeShell ? h - 56 : h) + 'px');
-      document.documentElement.style.setProperty('--app-vv-top', vv.offsetTop + 'px');
+      // Safari can shrink innerHeight along with visualViewport.height
+      // while the document's layout viewport still includes the keyboard.
+      const kbOpen = layoutHeight - h * vv.scale > 150;
+      const usableHeight = nativeKeyboardHeight
+        ? Math.min(h, layoutHeight - nativeKeyboardHeight - vv.offsetTop)
+        : (kbOpen && !_cccNativeShell ? h - 56 / vv.scale : h);
+      const root = document.documentElement;
+      root.classList.toggle('ccc-software-keyboard-open', !!nativeKeyboardHeight || kbOpen);
+      root.style.setProperty('--app-vh', Math.max(1, usableHeight) + 'px');
+      root.style.setProperty('--app-vv-top', vv.offsetTop + 'px');
       _autosizeConvInput();
     };
     const queueVisualViewportSync = () => {
       if (_vvRaf) return;
       _vvRaf = requestAnimationFrame(syncVisualViewport);
     };
+    if (_cccNativeShell) {
+      const keyboard = window.Capacitor?.Plugins?.Keyboard;
+      keyboard?.setAccessoryBarVisible?.({ isVisible: false });
+      // With resize: none, WKWebView can report its full height during
+      // resize and scroll events even while the keyboard covers it. Keep
+      // the native bottom limit active in every viewport sync until hide.
+      keyboard?.addListener?.('keyboardWillShow', ({ keyboardHeight }) => {
+        nativeKeyboardHeight = keyboardHeight || 0;
+        queueVisualViewportSync();
+      });
+      keyboard?.addListener?.('keyboardWillHide', () => {
+        nativeKeyboardHeight = 0;
+        queueVisualViewportSync();
+      });
+    }
     vv.addEventListener('resize', queueVisualViewportSync);
     vv.addEventListener('scroll', queueVisualViewportSync);
     window.addEventListener('pageshow', queueVisualViewportSync);

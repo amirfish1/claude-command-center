@@ -13,6 +13,8 @@ const fixture = `
     const view = getConvView();
     view.closest('.conv-pane').classList.remove('has-new-session-context');
     view.closest('.conv-pane').querySelector('.conv-input-bar').classList.add('visible');
+    renderConversationGoalStrip('p1', { goal:'Check keyboard layout', source:'claude' });
+    window.__mobileReaderExpand = setComposerExpanded;
     view.innerHTML = Array.from({length:12}, (_, i) =>
       '<div class="event user_text"><div class="user-msg">Check the mobile conversation layout.</div></div>' +
       '<div class="event assistant"><div class="assistant-text"><p>The conversation should use the full phone width. Navigation stays available through Back, and the controls leave room to read.</p></div></div>').join('');
@@ -121,9 +123,14 @@ const fixture = `
         // Simulate a phone keyboard leaving less than half the layout viewport.
         await page.evaluate(() => {
           const input = document.getElementById('convInput');
+          window.__mobileReaderExpand(true);
           input.focus(); input.value = Array.from({length:12}, (_, i) => 'Draft line ' + i).join('\n');
           input.dispatchEvent(new Event('input', {bubbles:true}));
           input.setSelectionRange(input.value.length, input.value.length);
+          // Safari can report equal innerHeight and visualViewport.height
+          // even though documentElement.clientHeight is still full-height.
+          window.__innerHeightDescriptor = Object.getOwnPropertyDescriptor(window, 'innerHeight');
+          Object.defineProperty(window, 'innerHeight', {value:360, configurable:true});
           Object.assign(visualViewport, {height:360, offsetTop:24});
           visualViewport.dispatchEvent(new Event('resize'));
         });
@@ -131,24 +138,32 @@ const fixture = `
         const keyboard = await page.evaluate(() => {
           const input = document.getElementById('convInput'), bar = document.getElementById('convInputBar');
           const rect = el => el.getBoundingClientRect().toJSON();
+          const button = document.getElementById('convSendBtn');
+          const send = button.getBoundingClientRect();
           return {main:rect(document.querySelector('.main')),
-            input:rect(input), bar:rect(bar), send:rect(document.getElementById('convSendBtn')),
+            input:rect(input), bar:rect(bar), send:send.toJSON(),
+            goal:rect(document.querySelector('.conv-goal-strip')),
+            hittable:button.contains(document.elementFromPoint(send.x + send.width / 2, send.y + send.height / 2)),
             scrolling:input.scrollHeight > input.clientHeight};
         });
         assert.equal(keyboard.main.top, 24);
         assert.ok(keyboard.input.height > 20, 'draft keeps usable height');
         assert.ok(keyboard.input.bottom <= 328, 'draft above keyboard accessory bar');
         assert.ok(keyboard.send.bottom <= 328, 'Submit above keyboard');
+        assert.ok(keyboard.goal.height > 0 && keyboard.goal.bottom <= keyboard.input.top, 'goal stays visible above the draft');
+        assert.ok(keyboard.hittable, 'Submit receives taps');
         assert.ok(keyboard.scrolling, 'long drafts scroll inside the composer');
         const controlsBottom = await page.evaluate(() => Math.max(...[...document.querySelectorAll('#conversationsView + .conv-transcript-nav > :is(.conv-scroll-end-btn,.conv-scroll-next-btn,.conv-scroll-last-btn,.conv-scroll-segment-btn)')].map(el => el.getBoundingClientRect().bottom)));
         assert.ok(controlsBottom <= keyboard.bar.top, 'jump controls stay above the growing composer');
         if (width === 390) await page.screenshot({path:'/tmp/ccc-mobile-keyboard-after.png'});
         await page.evaluate(() => {
           document.activeElement.blur();
+          Object.defineProperty(window, 'innerHeight', window.__innerHeightDescriptor);
           Object.assign(visualViewport, {height:900, offsetTop:0});
           visualViewport.dispatchEvent(new Event('resize'));
         });
         await page.waitForFunction(() => document.documentElement.style.getPropertyValue('--app-vh') === '900px');
+        assert.ok(await page.$eval('#convInput', el => el.getBoundingClientRect().height) > keyboard.input.height, 'expanded draft regains space after dismissal');
         await page.click('#mobileBackBtn');
         assert.equal(await page.evaluate(() => document.body.classList.contains('mobile-show-main')), false, 'Back returns to list');
         assert.equal(await page.$eval('.ccc-side-nav', el => getComputedStyle(el).display), 'none', 'home has no desktop rail');
@@ -275,6 +290,56 @@ const fixture = `
       }
       console.log('PASS width ' + width);
     }
+    await page.setViewport({width:390, height:900, isMobile:true, hasTouch:true});
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, 'userAgent', {value:navigator.userAgent + ' CCC-iOS'});
+      const listeners = new Map();
+      window.Capacitor = {Plugins:{Keyboard:{
+        setAccessoryBarVisible: () => Promise.resolve(),
+        addListener: (event, listener) => listeners.set(event, listener),
+      }}};
+      window.__keyboardEvent = (event, data) => listeners.get(event)(data);
+    });
+    await page.goto(base + '/', {waitUntil:'domcontentloaded'});
+    await page.waitForFunction(() => typeof window.__mobileReaderTest === 'function');
+    await page.evaluate(() => window.__mobileReaderTest());
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.main')).transform === 'matrix(1, 0, 0, 1, 0, 0)');
+    await page.evaluate(() => {
+      const input = document.getElementById('convInput');
+      input.focus();
+      input.value = Array.from({length:12}, (_, i) => 'Draft line ' + i).join('\n');
+      input.dispatchEvent(new Event('input', {bubbles:true}));
+      window.__keyboardEvent('keyboardWillShow', {keyboardHeight:540});
+      // WKWebView with resize:none can still report its full visual height.
+      // A final scroll event must not undo the keyboard's bottom limit.
+      Object.assign(visualViewport, {offsetTop:12});
+      visualViewport.dispatchEvent(new Event('scroll'));
+    });
+    await page.waitForFunction(() => document.documentElement.style.getPropertyValue('--app-vv-top') === '12px');
+    const native = await page.evaluate(() => {
+      const button = document.getElementById('convSendBtn');
+      const send = button.getBoundingClientRect();
+      const goal = document.querySelector('.conv-goal-strip');
+      return {
+        sendBottom:send.bottom,
+        goalBottom:goal.getBoundingClientRect().bottom,
+        hittable:button.contains(document.elementFromPoint(send.x + send.width / 2, send.y + send.height / 2)),
+      };
+    });
+    assert.ok(native.goalBottom > 12, 'goal stays visible');
+    assert.ok(native.sendBottom <= 360, 'Submit stays above the native keyboard');
+    assert.ok(native.hittable, 'Submit receives taps');
+    await page.evaluate(() => {
+      document.activeElement.blur();
+      window.__keyboardEvent('keyboardWillHide');
+      Object.assign(visualViewport, {offsetTop:0});
+      visualViewport.dispatchEvent(new Event('scroll'));
+    });
+    await page.waitForFunction(() => {
+      const style = document.documentElement.style;
+      return style.getPropertyValue('--app-vh') === '900px' && style.getPropertyValue('--app-vv-top') === '0px';
+    });
+    assert.equal(await page.$eval('.main', el => el.getBoundingClientRect().bottom), 900, 'native reader fills the restored viewport');
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
