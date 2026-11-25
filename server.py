@@ -19470,6 +19470,21 @@ _ARCHIVE_HISTORY_HOT_SNAPSHOT_BYTES = 16 << 20
 _ARCHIVE_HISTORY_PROCESS_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ccc-archive-processes")
 
 
+def _archive_prefetch_antigravity_processes(stack):
+    read_processes = find_live_antigravity_processes
+    probe = _ARCHIVE_HISTORY_PROCESS_POOL.submit(read_processes)
+    stack.callback(probe.cancel)
+
+    def read():
+        # A queued probe cannot shorten this request. Keep the existing
+        # synchronous path when the shared executor has not started ours.
+        if probe.cancel():
+            return read_processes()
+        return probe.result()
+
+    return read
+
+
 def _archive_history_hot_snapshot(key, captured=None, *, tokens_only=False):
     """Pin the published hot tokens and, when needed, a copy of their rows."""
     from ccc_server.archive_history_layer import hot_row_token
@@ -19560,9 +19575,7 @@ def _archive_history_read_cut(key, cache_options, now, *, phases=None, check_cli
         # round trip. Its caller holds the history lock across this cut.
         antigravity_processes = None
         if topic_reader is None:
-            probe = _ARCHIVE_HISTORY_PROCESS_POOL.submit(find_live_antigravity_processes)
-            stack.callback(probe.cancel)
-            antigravity_processes = probe.result
+            antigravity_processes = _archive_prefetch_antigravity_processes(stack)
         with _archive_history_timing(phases, "inventory"):
             cut = stack.enter_context(archive_store.sidebar_history_cut(
                 _ARCHIVE_RESPONSE_CACHE_FILE, key, schema_version=_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
@@ -21077,20 +21090,30 @@ def _archive_list_source_rows_read(cache_options, *, force_refresh=False, phases
             packed_options["history_phases"] = phases.setdefault("history", {})
     if check_client is not None:
         packed_options["check_client"] = check_client
-    rows, from_cache, _snap_ver = _archive_serve_rows_versioned(
-        key,
-        cache_options,
-        copy_rows=False,
-        force_refresh=force_refresh,
-        window=window,
-        defer_cold=True,
-        reuse_sidebar_history=window == "all" and not force_refresh and not any(cache_options.values()),
-        **packed_options,
-    )
-    if check_client is not None:
-        check_client()
-    _phase("serve_ms")
-    rows, extra = _archive_list_source_overlays(rows, _archive_overlay_existing_ids(rows), _phase)
+    default_stale_read = not force_refresh and not any(cache_options.values())
+    with contextlib.ExitStack() as stack:
+        overlay_options = {}
+        if window == "7d" and default_stale_read:
+            # The process table is independent of the archive cut. Open logs
+            # and overlay exclusions are still read in their usual order.
+            overlay_options["antigravity_processes"] = _archive_prefetch_antigravity_processes(stack)
+            if phases is not None:
+                phases["antigravity_probe_started"] = True
+        rows, from_cache, _snap_ver = _archive_serve_rows_versioned(
+            key,
+            cache_options,
+            copy_rows=False,
+            force_refresh=force_refresh,
+            window=window,
+            defer_cold=True,
+            reuse_sidebar_history=window == "all" and default_stale_read,
+            **packed_options,
+        )
+        if check_client is not None:
+            check_client()
+        _phase("serve_ms")
+        rows, extra = _archive_list_source_overlays(
+            rows, _archive_overlay_existing_ids(rows), _phase, **overlay_options)
     body_ver = _archive_list_body_ver(key, rows, extra)
     _phase("ver_ms")
     return rows, from_cache, body_ver

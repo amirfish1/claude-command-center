@@ -1,5 +1,8 @@
 """Terminal AGY sessions reach the sidebar while its archive is stale."""
+import contextlib
+from concurrent.futures import ThreadPoolExecutor
 import json
+import threading
 
 import pytest
 
@@ -92,6 +95,64 @@ def test_source_includes_terminal_overlay_in_body_version(terminal, monkeypatch)
     assert base == [{'session_id': 'stored'}]
     assert captured == rows[1:]
     assert cached and version == 8
+
+
+@pytest.mark.parametrize('window, force_refresh, options, prefetched', [
+    ('7d', False, {}, True),
+    ('7d', True, {}, False),
+    ('7d', False, {'include_prs': True}, False),
+    ('1d', False, {}, False),
+])
+def test_process_probe_overlaps_only_default_seven_day_cut(
+        terminal, monkeypatch, window, force_refresh, options, prefetched):
+    processes = server.find_live_antigravity_processes()
+    probed = threading.Event()
+    calls = []
+
+    def probe():
+        calls.append(None)
+        probed.set()
+        return processes
+
+    def snapshot(*args, **kwargs):
+        if prefetched:
+            assert probed.wait(timeout=5)
+        else:
+            assert not probed.is_set()
+        return [], True, 7
+
+    monkeypatch.setattr(server, 'find_live_antigravity_processes', probe)
+    monkeypatch.setattr(server, '_archive_serve_rows_versioned', snapshot)
+    for name in ('codex', 'acp', 'devin_cli', 'wt_worker', 'claude_registry'):
+        monkeypatch.setattr(server, f'_archive_overlay_{name}_sessions', lambda *a, **kw: [])
+    monkeypatch.setattr(server, '_apply_session_lane_overrides', lambda rows: None)
+    phases = {}
+    rows, cached, _ = server._archive_list_source_rows_read(
+        options, window=window, force_refresh=force_refresh, phases=phases)
+    assert cached
+    assert [row['session_id'] for row in rows] == [SID]
+    assert len(calls) == 1
+    assert bool(phases.get('antigravity_probe_started')) == prefetched
+
+
+def test_pending_process_probe_falls_back_to_inline_read(monkeypatch):
+    release = threading.Event()
+    calls = []
+
+    def probe():
+        calls.append(threading.get_ident())
+        return []
+
+    monkeypatch.setattr(server, 'find_live_antigravity_processes', probe)
+    with ThreadPoolExecutor(max_workers=1) as pool, contextlib.ExitStack() as stack:
+        monkeypatch.setattr(server, '_ARCHIVE_HISTORY_PROCESS_POOL', pool)
+        pool.submit(release.wait, 5)
+        try:
+            read = server._archive_prefetch_antigravity_processes(stack)
+            assert read() == []
+        finally:
+            release.set()
+    assert calls == [threading.get_ident()]
 
 
 def test_native_launch_requires_parent_receipt_at_the_invoke_result_step(tmp_path, monkeypatch):
