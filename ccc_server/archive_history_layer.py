@@ -186,7 +186,7 @@ def make_basis(inputs, working, activity, payload, *, effect_rows=None, rebased=
     # Publication runs out of process and each frame can serve many cold
     # reads. Spend more compression work once on large, reusable frames.
     zstd_frame = None
-    if len(raw) >= (8 << 20):
+    if len(raw) >= (4 << 20):
         zstd_frame = list_encoding._zstd(raw, level=6)
     if zstd_frame is None:
         zstd_frame = list_encoding._zstd(raw)

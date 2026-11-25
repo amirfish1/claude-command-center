@@ -716,7 +716,7 @@ def test_large_published_basis_spends_more_compression_than_a_delta(monkeypatch)
 
     monkeypatch.setattr(layer.list_encoding, "_zstd", encode)
     inputs = layer.read_inputs(inventory("a"), {}, {}, (), overlay_maps=(), edges=())
-    row = {"session_id": "a", "title": "a" * (8 << 20)}
+    row = {"session_id": "a", "title": "a" * (4 << 20)}
     assert layer.make_basis(inputs, (), {}, {"conversations": [row]}).frames["zstd"] == b"frame"
     assert layer.delta_representation({"conversations": [row]}, "zstd") == b"frame"
     assert levels == [6, 3]
