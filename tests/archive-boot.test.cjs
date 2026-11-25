@@ -133,32 +133,53 @@ test('list reads go to the reader port first and fall back to the dashboard (CCC
   assert.equal(run.reads.length,before,'parked after a decline');
 });
 
-test('a wedged or stalled reader connection falls back to the dashboard (CCC-681)',async()=>{
-  const run=start({search:'?ccc_app=demo'});
-  const {window,timers}=run; const dash=[];
-  window.location={protocol:'https:',hostname:'box.example',origin:'https://box.example'};
-  window.__CCC_LIST_READER_PORT__=18091;
-  const via=url=>{dash.push(url);return Promise.resolve({ok:true,status:200,via:'dash'});};
+test('a silent reader falls back; a busy live reader keeps its read (CCC-681)',async()=>{
   const tick=()=>new Promise(setImmediate);
-  // 1. No headers: the headers bound aborts the direct read; the dashboard serves it.
-  window.__fetchImpl=(url,init)=>new Promise((_,reject)=>init.signal.addEventListener('abort',()=>reject(Error('aborted'))));
-  let res=window.__cccListFetch('/api/conversations/list?window=7d',{},via);
-  await tick(); timers.at(-1)();
+  const setup=()=>{
+    const run=start({search:'?ccc_app=demo'});
+    run.window.location={protocol:'https:',hostname:'box.example',origin:'https://box.example'};
+    run.window.__CCC_LIST_READER_PORT__=18091;
+    run.dash=[];
+    run.via=url=>{run.dash.push(url);return Promise.resolve({ok:true,status:200,via:'dash'});};
+    run.fire=async()=>{await tick();await tick();run.timers.at(-1)();await tick();await tick();};
+    return run;
+  };
+  const hang=init=>new Promise((_,reject)=>init.signal.addEventListener('abort',()=>reject(Error('aborted'))));
+  const isPing=url=>url.endsWith('/api/conv-reader/ping');
+  // Wedged connection: no headers and no ping answer -> dashboard.
+  let run=setup();
+  run.window.__fetchImpl=(url,init)=>hang(init);
+  let res=run.window.__cccListFetch('/api/conversations/list?window=7d',{},run.via);
+  await run.fire();          // patience elapsed: ping sent
+  await run.fire();          // ping timed out: direct aborted
   assert.equal((await res).via,'dash');
-  assert.equal(dash.length,1);
+  assert.ok(run.reads.some(r=>isPing(r.url)));
   // Parked: the next read goes straight to the dashboard.
-  await window.__cccListFetch('/api/conversations/list?window=7d',{},via);
-  assert.equal(dash.length,2);
-})
+  await run.window.__cccListFetch('/api/conversations/list?window=7d',{},run.via);
+  assert.equal(run.dash.length,2);
+  // Busy but alive (cold build): the ping answers, the read is kept.
+  run=setup(); let release;
+  run.window.__fetchImpl=(url,init)=>isPing(url)?Promise.resolve({ok:true,status:200})
+    :new Promise(resolve=>{release=resolve;});
+  res=run.window.__cccListFetch('/api/conversations/list?window=7d',{},run.via);
+  await run.fire();
+  await run.fire();
+  release({ok:true,status:304});
+  assert.equal((await res).status,304);
+  assert.equal(run.dash.length,0,'a live reader never moves its build to the dashboard');
+});
 test('direct body stall falls back; healthy direct body keeps url and header time (CCC-681)',async()=>{
   const tick=()=>new Promise(setImmediate);
   const setup=()=>{
     const run=start({search:'?ccc_app=demo'});
     run.window.location={protocol:'https:',hostname:'box.example',origin:'https://box.example'};
     run.window.__CCC_LIST_READER_PORT__=18091;
+    run.fire=async()=>{await tick();await tick();run.timers.at(-1)();await tick();await tick();};
     return run;
   };
   const streamed=(chunks,hang)=>(url,init)=>{
+    if(url.endsWith('/api/conv-reader/ping'))
+      return new Promise((_,reject)=>init.signal.addEventListener('abort',()=>reject(Error('aborted'))));
     const body=new ReadableStream({async pull(c){
       if(chunks.length){c.enqueue(new TextEncoder().encode(chunks.shift()));return;}
       if(hang) return new Promise((_,reject)=>init.signal.addEventListener('abort',()=>{c.error(Error('aborted'));reject(Error('aborted'));}));
@@ -168,12 +189,13 @@ test('direct body stall falls back; healthy direct body keeps url and header tim
     Object.defineProperty(r,'url',{value:url});
     return Promise.resolve(r);
   };
-  // Stalled body after headers: falls back.
-  let run=setup(); const dash=[];
+  const dash=[];
   const via=url=>{dash.push(url);return Promise.resolve({ok:true,status:200,via:'dash'});};
+  // Stalled body after headers, silent reader: falls back.
+  let run=setup();
   run.window.__fetchImpl=streamed(['{"conv'],true);
   let res=run.window.__cccListFetch('/api/conversations/list?window=7d',{},via);
-  await tick(); await tick(); run.timers.at(-1)();
+  await run.fire(); await run.fire();
   assert.equal((await res).via,'dash');
   // Healthy body: buffered copy keeps the reader URL, ETag and header time.
   run=setup();

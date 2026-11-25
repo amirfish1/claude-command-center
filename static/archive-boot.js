@@ -150,18 +150,33 @@
   // CCC-681: the reader port is a second origin with its own connection.
   // Through the tailnet proxy that connection can wedge while the
   // dashboard's stays healthy; a direct read then waited out the caller's
-  // whole 45 s abort (no headers) or trickled a 330 KB body for 24 s. Bound
-  // the direct attempt and retry on the dashboard when it misses a bound.
-  const DIRECT_HEADERS_MS = 4000, DIRECT_STALL_MS = 4000, DIRECT_BODY_MS = 10000;
-  async function readDirectBody(response, arm) {
+  // whole 45 s abort (no headers) or trickled a 330 KB body for 24 s. A
+  // cold reader build can also legitimately take several seconds, and that
+  // work must stay off the dashboard. So a read that makes no progress for
+  // DIRECT_PATIENCE_MS pings the reader on the same origin: a live reader
+  // keeps the read (up to DIRECT_MAX_WAIT_MS), a silent one falls back.
+  const DIRECT_PATIENCE_MS = 2000, DIRECT_PING_MS = 1500, DIRECT_MAX_WAIT_MS = 20000;
+  async function directAlive(base) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), DIRECT_PING_MS);
+    try {
+      const response = await nativeFetch(base + '/api/conv-reader/ping', {
+        signal: controller.signal, credentials: 'include', mode: 'cors', cache: 'no-store'});
+      return !!response.ok;
+    } catch (_) {
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  async function readDirectBody(response, progress) {
     const reader = response.body.getReader();
     const chunks = [];
     let size = 0;
-    const deadline = performance.now() + DIRECT_BODY_MS;
     for (;;) {
-      arm(Math.max(0, Math.min(DIRECT_STALL_MS, deadline - performance.now())));
       const {done, value} = await reader.read();
       if (done) break;
+      progress();
       chunks.push(value);
       size += value.byteLength;
     }
@@ -181,13 +196,26 @@
       if (outer.aborted) attempt.abort(outer.reason);
       else outer.addEventListener('abort', relay, {once: true});
     }
-    let timer;
-    const arm = ms => { clearTimeout(timer); timer = setTimeout(() => attempt.abort(), ms); };
+    // Progress watchdog: headers or a body chunk reset it.
+    let timer, settled = false, lastProgress = performance.now();
+    const watch = () => {
+      clearTimeout(timer);
+      if (settled) return;
+      timer = setTimeout(async () => {
+        if (settled) return;
+        const waited = performance.now() - lastProgress;
+        const alive = waited < DIRECT_MAX_WAIT_MS && await directAlive(base);
+        if (settled) return;
+        if (alive) watch();
+        else attempt.abort();
+      }, DIRECT_PATIENCE_MS);
+    };
+    const progress = () => { lastProgress = performance.now(); watch(); };
     const options = Object.assign({}, init || {}, { signal: attempt.signal, credentials: 'include', mode: 'cors' });
     return (async () => {
       let retryMs;
       try {
-        arm(DIRECT_HEADERS_MS);
+        watch();
         const response = await nativeFetch(base + url, options);
         if (response.ok || response.status === 304) {
           const headersAt = performance.now();
@@ -195,7 +223,8 @@
             response._cccHeadersAt = headersAt;
             return response;
           }
-          const bytes = await readDirectBody(response, arm);
+          progress();
+          const bytes = await readDirectBody(response, progress);
           const copy = new Response(bytes, {status: response.status,
             statusText: response.statusText, headers: response.headers});
           // Callers read the reader's absolute URL to tell direct reads apart.
@@ -210,6 +239,7 @@
         if (outer && outer.aborted) throw err;
         retryMs = 60000;
       } finally {
+        settled = true;
         clearTimeout(timer);
         if (outer) outer.removeEventListener('abort', relay);
       }
