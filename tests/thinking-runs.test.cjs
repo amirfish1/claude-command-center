@@ -8,7 +8,7 @@ const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
 const css = fs.readFileSync(require.resolve('../static/app.css'), 'utf8');
 const marker = '\n})();\n\n/* === Hero: Fleet Pulse === */';
 assert.ok(app.includes(marker));
-const exposed = app.replace(marker, '\nwindow.thinkingTest={renderConversationEvents,activePaneId,getConvViewForPane,_syncThinkingRuns,_prependConversationEvents};' + marker);
+const exposed = app.replace(marker, '\nwindow.thinkingTest={renderConversationEvents,activePaneId,getConvViewForPane,_syncThinkingRuns,_prependConversationEvents,startLiveStatusPolling};' + marker);
 
 test('real renderers replace consecutive thoughts in a steady slot, then preserve activity boundaries', async () => {
   const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
@@ -271,6 +271,51 @@ test('real renderers replace consecutive thoughts in a steady slot, then preserv
           await page.screenshot({path:process.env.CCC_THINKING_SCREENSHOTS + '/compact-activity-' + width + '-' + merged + '.png'});
         }
       }
+    }
+    await page.evaluate(() => window.thinkingTest.startLiveStatusPolling());
+    for (const merged of [false, true, 'codex']) {
+      await page.evaluate(merged => {
+        const h = window.thinkingTest;
+        const paneId = h.activePaneId();
+        const view = h.getConvViewForPane(paneId);
+        const pane = view.closest('.conv-pane');
+        pane.classList.toggle('is-webui-session', !!merged);
+        pane.classList.toggle('is-codex-session', merged === 'codex');
+        view.replaceChildren();
+        let line = 1000000;
+        const now = Date.now();
+        const render = (type, blocks, age) => {
+          h.renderConversationEvents([{
+            type, line: ++line, blocks, ts: new Date(now - age * 1000).toISOString()
+          }], paneId, { initialLoad: true });
+        };
+        render('assistant', [{ kind: 'text', text: 'Checking the report before starting the release.' }], 30);
+        render('assistant', [{ kind: 'tool_use', name: 'Bash', id: 'first', detail: 'Read the report' }], 5);
+        window.activityTimerTest = { view, render };
+      }, merged);
+      const readTimers = () => page.evaluate(() => {
+        const { view } = window.activityTimerTest;
+        return [...view.querySelectorAll('.activity-run-timer')].filter(timer => timer.checkVisibility()).map(timer => {
+          const rect = timer.getBoundingClientRect();
+          return { seconds: parseInt(timer.textContent, 10), fits: rect.left >= 0 && rect.right <= innerWidth };
+        });
+      });
+      assert.deepEqual(await readTimers(), [{ seconds: 30, fits: true }, { seconds: 5, fits: true }]);
+      await page.waitForFunction(() => {
+        const timers = window.activityTimerTest.view.querySelectorAll('.activity-run-timer');
+        return parseInt(timers[0].textContent, 10) > 30 && parseInt(timers[1].textContent, 10) > 5;
+      }, { timeout: 5000 });
+      await page.evaluate(() => {
+        window.activityTimerTest.render('assistant',
+          [{ kind: 'tool_use', name: 'Bash', id: 'second', detail: 'Check release settings' }], -1);
+      });
+      if (process.env.CCC_THINKING_SCREENSHOTS && !merged) {
+        await page.screenshot({path:process.env.CCC_THINKING_SCREENSHOTS + '/activity-timers-390.png'});
+      }
+      const [note, tool] = await readTimers();
+      assert.ok(note.seconds > 30 && note.fits && tool.seconds < 5 && tool.fits);
+      await page.evaluate(() => window.activityTimerTest.render('result', [], 0));
+      assert.deepEqual(await readTimers(), []);
     }
   } finally { await browser.close(); }
 });

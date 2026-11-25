@@ -3745,6 +3745,7 @@
     }), 2000);
     sharedState.liveStatusRenderTicker = setInterval(_gated('liveToolStrip', () => {
       updateLiveToolStrip();
+      for (const view of conversationScrollViews()) (0, sharedState.refreshActivityTimers)(view);
       // Codex sessions never get sidecar_status==='active' (that branch is
       // claude-only), so updateLiveToolStrip renders nothing for them — the
       // open view's only live signal is the codex Working/Idle/Stuck badge.
@@ -18833,6 +18834,7 @@
     }
     const newBlocks = _kimiTurnCoveredBlocks(turn, blockEls);
     for (const el of [...adoptedBlocks.filter(el => el.parentNode), ...newBlocks]) {
+      if (marker.dataset.tsEpoch) el.dataset.tsEpoch = marker.dataset.tsEpoch;
       const group = el.closest('.kimi-tool-group');
       if (group) el.dataset.kimiCollapsed = group.classList.contains('collapsed') ? '1' : '0';
       turn.insertBefore(el, anchor);

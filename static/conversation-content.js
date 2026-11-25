@@ -1860,6 +1860,20 @@
     return !!view.querySelector('.event.result[data-jsonl-line][data-turn-id="' + esc + '"]');
   }
 
+  function refreshActivityTimers(view) {
+    const timers = view._activityTimers;
+    if (!timers?.[0]?.isConnected) return;
+    const now = Date.now();
+    for (const timer of timers) {
+      if (timer.hidden) continue;
+      const seconds = Math.max(0, Math.floor((now - Number(timer.dataset.since)) / 1000));
+      const text = seconds < 60 ? seconds + 's'
+        : seconds < 3600 ? Math.floor(seconds / 60) + 'm ' + (seconds % 60) + 's'
+          : Math.floor(seconds / 3600) + 'h ' + (Math.floor(seconds / 60) % 60) + 'm';
+      if (timer.textContent !== text) timer.textContent = text;
+    }
+  }
+
   // Keep the transcript sources in place for reconciliation, paging and tool
   // result routing. Only their collapsed presentation is replaced by a slot.
   // One turn reads as one "Working" block: narration that is followed by more
@@ -1871,6 +1885,7 @@
     const sources = new Set(view.querySelectorAll('.activity-run-source'));
     let members = [];
     let pendingText = [];
+    let tailActivity = null;
     const flush = () => {
       if (!members.length) return;
       const first = members[0];
@@ -1880,8 +1895,10 @@
         slot.className = 'activity-run';
         slot.innerHTML = '<div class="activity-run-header"><button type="button" class="activity-run-toggle" aria-expanded="false">Working</button>'
           + '<span class="activity-run-orchestration"></span></div>'
-          + '<div class="activity-run-note" dir="auto"></div>'
-          + '<div class="activity-run-preview" dir="auto"></div>';
+          + '<div class="activity-run-message"><div class="activity-run-note" dir="auto"></div>'
+          + '<span class="activity-run-timer" role="timer" aria-label="Time since status update" hidden></span></div>'
+          + '<div class="activity-run-message"><div class="activity-run-preview" dir="auto"></div>'
+          + '<span class="activity-run-timer" role="timer" aria-label="Time since tool update" hidden></span></div>';
         slot.querySelector('button').addEventListener('click', () => {
           const open = slot.classList.toggle('is-expanded');
           slot.querySelector('button').setAttribute('aria-expanded', String(open));
@@ -1943,6 +1960,7 @@
       const text = toolActivity.length ? (detail?.textContent || latest.textContent || '').trim() : '';
       const value = (failed ? 'Failed: ' : '') + (text ? text.replace(/[.…]+$/u, '') + '...' : '');
       if (preview.textContent !== value) preview.textContent = value;
+      tailActivity = { slot, note: noteText ? lastNote : null, tool: text ? lastCall || latest : null };
       slot.classList.toggle('has-error', failed);
       const title = failed ? 'Tool failed — show activity history' : 'Show activity history';
       if (slot.querySelector('button').title !== title) slot.querySelector('button').title = title;
@@ -1989,10 +2007,27 @@
       if (event.matches('.event.assistant, .kimi-turn') && !event.classList.contains('ccc-video-cleared')) {
         for (const child of Array.from(event.children)) visit(child);
       } else visit(event);
+      if (event.matches('.event.user_text, .event.result')) tailActivity = null;
     }
     flush();
     for (const source of sources) source.classList.remove('activity-run-source', 'activity-run-open');
     for (const slot of stale) slot.remove();
+
+    const timers = tailActivity ? tailActivity.slot.querySelectorAll('.activity-run-timer') : [];
+    // Only the latest Working block in the unfinished turn has ticking ages.
+    if (view._activityTimers?.[0] !== timers[0]) {
+      for (const timer of view._activityTimers || []) timer.hidden = true;
+    }
+    view._activityTimers = timers;
+    if (tailActivity) {
+      [tailActivity.note, tailActivity.tool].forEach((source, index) => {
+        const timer = timers[index];
+        const epoch = source?.closest('[data-ts-epoch]')?.dataset.tsEpoch;
+        timer.hidden = !(Number(epoch) > 0);
+        if (!timer.hidden && timer.dataset.since !== epoch) timer.dataset.since = epoch;
+      });
+      refreshActivityTimers(view);
+    }
   }
 
   function _syncThinkingRuns(view) {
@@ -2229,6 +2264,7 @@
       _findMatchingProvisionalNode,
       _confirmedResultForTurn,
       _syncThinkingRuns,
+      refreshActivityTimers,
       _ccOrchResultLabels,
       _ccOrchLabels,
       DEBUG_MODE_STORAGE_KEY,
