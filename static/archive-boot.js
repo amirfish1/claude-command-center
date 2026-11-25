@@ -131,7 +131,10 @@
   // Its own GIL keeps them out of the dashboard's queue; a declined (503) or
   // failed read is retried on the dashboard exactly as before. The server
   // injects the port; the conversation-open probe can supply it later.
-  const nativeFetch = window.fetch.bind(window);
+  // Keep the browser's own fetch from boot; later wrappers add dashboard-only
+  // behavior. Hosts without fetch at boot (tests, embeds) resolve it late.
+  const bootFetch = typeof window.fetch === 'function' ? window.fetch.bind(window) : null;
+  const nativeFetch = (...args) => (bootFetch || window.fetch)(...args);
   const listDirect = { downUntil: 0 };
   function listDirectBase() {
     if (Date.now() < listDirect.downUntil) return null;
@@ -144,21 +147,75 @@
       + loc.hostname.replace(/^([^\[].*:.*)$/, '[$1]') + ':' + port;
     return base === loc.origin ? null : base;
   }
+  // CCC-681: the reader port is a second origin with its own connection.
+  // Through the tailnet proxy that connection can wedge while the
+  // dashboard's stays healthy; a direct read then waited out the caller's
+  // whole 45 s abort (no headers) or trickled a 330 KB body for 24 s. Bound
+  // the direct attempt and retry on the dashboard when it misses a bound.
+  const DIRECT_HEADERS_MS = 4000, DIRECT_STALL_MS = 4000, DIRECT_BODY_MS = 10000;
+  async function readDirectBody(response, arm) {
+    const reader = response.body.getReader();
+    const chunks = [];
+    let size = 0;
+    const deadline = performance.now() + DIRECT_BODY_MS;
+    for (;;) {
+      arm(Math.max(0, Math.min(DIRECT_STALL_MS, deadline - performance.now())));
+      const {done, value} = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      size += value.byteLength;
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    return bytes;
+  }
   window.__cccListFetch = function (url, init, viaDashboard) {
     const dashboard = () => (viaDashboard || window.fetch)(url, init);
     const base = typeof url === 'string' && url.startsWith('/api/conversations/list?') ? listDirectBase() : null;
     if (!base) return dashboard();
-    const options = Object.assign({}, init || {}, { credentials: 'include', mode: 'cors' });
-    return nativeFetch(base + url, options).then(response => {
-      if (response.ok || response.status === 304) return response;
-      // 503: the reader is loading or declined this read; ask again soon.
-      listDirect.downUntil = Date.now() + (response.status === 503 ? 15000 : 60000);
+    const outer = init && init.signal;
+    const attempt = new AbortController();
+    const relay = () => attempt.abort(outer.reason);
+    if (outer) {
+      if (outer.aborted) attempt.abort(outer.reason);
+      else outer.addEventListener('abort', relay, {once: true});
+    }
+    let timer;
+    const arm = ms => { clearTimeout(timer); timer = setTimeout(() => attempt.abort(), ms); };
+    const options = Object.assign({}, init || {}, { signal: attempt.signal, credentials: 'include', mode: 'cors' });
+    return (async () => {
+      let retryMs;
+      try {
+        arm(DIRECT_HEADERS_MS);
+        const response = await nativeFetch(base + url, options);
+        if (response.ok || response.status === 304) {
+          const headersAt = performance.now();
+          if (response.status === 304 || !response.body) {
+            response._cccHeadersAt = headersAt;
+            return response;
+          }
+          const bytes = await readDirectBody(response, arm);
+          const copy = new Response(bytes, {status: response.status,
+            statusText: response.statusText, headers: response.headers});
+          // Callers read the reader's absolute URL to tell direct reads apart.
+          Object.defineProperty(copy, 'url', {value: response.url});
+          copy._cccHeadersAt = headersAt;
+          return copy;
+        }
+        try { response.body?.cancel(); } catch (_) {}
+        // 503: the reader is loading or declined this read; ask again soon.
+        retryMs = response.status === 503 ? 15000 : 60000;
+      } catch (err) {
+        if (outer && outer.aborted) throw err;
+        retryMs = 60000;
+      } finally {
+        clearTimeout(timer);
+        if (outer) outer.removeEventListener('abort', relay);
+      }
+      listDirect.downUntil = Date.now() + retryMs;
       return dashboard();
-    }, err => {
-      if (init && init.signal && init.signal.aborted) throw err;
-      listDirect.downUntil = Date.now() + 60000;
-      return dashboard();
-    });
+    })();
   };
 
   if (window.self !== window.top) return;
@@ -187,7 +244,7 @@
     if (snapshot) snapshot.recentStart = start;
     const headers = bootId && !savedHint ? {'X-CCC-Archive-Boot':bootId} : undefined;
     window.__cccListFetch(url, {signal:controller.signal, headers}).then(response => {
-      response._cccArchiveTiming = {start,headers:performance.now()};
+      response._cccArchiveTiming = {start,headers:response._cccHeadersAt ?? performance.now()};
       finishRecent(response);
     }).catch(() => finishRecent(null)).finally(() => clearTimeout(timeout));
   };
@@ -536,7 +593,7 @@
       // save or cleared storage can invalidate it; stop the speculative read.
       if (earlyValidator) read.then(base => { if (!matchesBase(base)) controller.abort(); });
       const response = await window.__cccListFetch(target, {signal:controller.signal, headers});
-      response._cccArchiveTiming = {start,headers:performance.now()};
+      response._cccArchiveTiming = {start,headers:response._cccHeadersAt ?? performance.now()};
       if (response.ok && response.status !== 304) {
         // Drain the early response while the application initializes. Leaving
         // it unread behind the preview paint can stall a large full reply.

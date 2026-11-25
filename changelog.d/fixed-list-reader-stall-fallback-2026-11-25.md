@@ -1,0 +1,1 @@
+- The sidebar no longer hangs for up to 45 seconds when the separate list-reader connection stalls; it falls back to the dashboard after a few seconds.

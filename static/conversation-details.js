@@ -4987,7 +4987,9 @@
           _perfT0 = Math.min(_perfT0, earlyTiming.start);
         }
         _perfHdrAt = earlyTiming && Number.isFinite(earlyTiming.headers)
-          ? earlyTiming.headers : performance.now();
+          ? earlyTiming.headers
+          // A bounded direct read buffers its body; keep ttfb at its headers.
+          : (Number.isFinite(r._cccHeadersAt) ? r._cccHeadersAt : performance.now());
         try {
           const st = r.headers.get('Server-Timing') || '';
           const m = st.match(/(?:^|,)\s*list;dur=([0-9.]+)/), c = st.match(/listcpu;dur=([0-9.]+)/);
