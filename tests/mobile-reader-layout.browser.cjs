@@ -120,6 +120,19 @@ const fixture = `
             return getComputedStyle(ci).display !== 'none' && getComputedStyle(ci.firstElementChild).display !== 'none';
           }, outcome), false, outcome + ' CI stays on Home, not in a session');
         }
+        if (width === 375) {
+          await page.evaluate(() => {
+            document.body.classList.add('status-pos-right');
+            document.querySelector('.conv-pane').classList.add('has-status-rail');
+            const toolbar = document.querySelector('.conv-presentation-toolbar');
+            toolbar.classList.add('is-reader-only');
+            toolbar.classList.remove('has-header-audio');
+            toolbar.hidden = false;
+            toolbar.querySelector('.conv-reader-audio').hidden = false;
+            document.getElementById('convLastWritten').textContent = 'Last written: just now';
+          });
+          await page.waitForFunction(() => document.querySelector('.conv-pane').classList.contains('reader-scrollaway'));
+        }
         // Simulate a phone keyboard leaving less than half the layout viewport.
         await page.evaluate(() => {
           const input = document.getElementById('convInput');
@@ -140,10 +153,15 @@ const fixture = `
           const rect = el => el.getBoundingClientRect().toJSON();
           const button = document.getElementById('convSendBtn');
           const send = button.getBoundingClientRect();
+          const more = document.getElementById('convActionsBtn');
+          const moreBox = more.getBoundingClientRect();
+          const hittable = (element, box) => element.contains(document.elementFromPoint(
+            box.x + box.width / 2, box.y + box.height / 2));
           return {main:rect(document.querySelector('.main')),
             input:rect(input), bar:rect(bar), send:send.toJSON(),
             goal:rect(document.querySelector('.conv-goal-strip')),
-            hittable:button.contains(document.elementFromPoint(send.x + send.width / 2, send.y + send.height / 2)),
+            hittable:hittable(button, send),
+            moreHittable:hittable(more, moreBox), moreBottom:moreBox.bottom,
             scrolling:input.scrollHeight > input.clientHeight};
         });
         assert.equal(keyboard.main.top, 24);
@@ -153,6 +171,10 @@ const fixture = `
         assert.ok(keyboard.goal.height > 0 && keyboard.goal.bottom <= keyboard.input.top, 'goal stays visible above the draft');
         assert.ok(keyboard.hittable, 'Submit receives taps');
         assert.ok(keyboard.scrolling, 'long drafts scroll inside the composer');
+        if (width === 375) {
+          assert.ok(keyboard.moreBottom <= 328 && keyboard.moreHittable, 'More actions stays above the accessory bar and receives taps');
+          assert.equal(await page.$eval('.conv-presentation-toolbar', el => getComputedStyle(el).visibility), 'hidden');
+        }
         const controlsBottom = await page.evaluate(() => Math.max(...[...document.querySelectorAll('#conversationsView + .conv-transcript-nav > :is(.conv-scroll-end-btn,.conv-scroll-next-btn,.conv-scroll-last-btn,.conv-scroll-segment-btn)')].map(el => el.getBoundingClientRect().bottom)));
         assert.ok(controlsBottom <= keyboard.bar.top, 'jump controls stay above the growing composer');
         if (width === 390) await page.screenshot({path:'/tmp/ccc-mobile-keyboard-after.png'});
@@ -164,6 +186,9 @@ const fixture = `
         });
         await page.waitForFunction(() => document.documentElement.style.getPropertyValue('--app-vh') === '900px');
         assert.ok(await page.$eval('#convInput', el => el.getBoundingClientRect().height) > keyboard.input.height, 'expanded draft regains space after dismissal');
+        if (width === 375) {
+          assert.equal(await page.$eval('.conv-presentation-toolbar', el => getComputedStyle(el).visibility), 'visible');
+        }
         await page.click('#mobileBackBtn');
         assert.equal(await page.evaluate(() => document.body.classList.contains('mobile-show-main')), false, 'Back returns to list');
         assert.equal(await page.$eval('.ccc-side-nav', el => getComputedStyle(el).display), 'none', 'home has no desktop rail');

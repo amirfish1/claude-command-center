@@ -36633,6 +36633,15 @@ body.ccc-app-embed.conversation-popout .main > .toolbar {
   background: color-mix(in srgb, var(--surface) 72%, var(--bg));
 }
 .conv-pane.reader-scrollaway > .conversations-view { padding-top: var(--ctb-h, 0px); scroll-padding-top: var(--ctb-h, 0px); }
+/* While typing, the overlay's padding can force a minimum transcript height
+   that pushes the draft and its actions past the clipped mobile viewport. */
+.ccc-software-keyboard-open .conv-pane.reader-scrollaway:has(> .conv-input-bar:focus-within) > .conv-presentation-toolbar {
+  visibility: hidden;
+}
+.ccc-software-keyboard-open .conv-pane.reader-scrollaway:has(> .conv-input-bar:focus-within) > .conversations-view {
+  padding-top: 0;
+  scroll-padding-top: 0;
+}
 /* Model panel. "Change" opens one floating panel above the composer strip, so
    opening it never moves the Routine/Deep row or the selection line. Each
    ranked model is a row carrying the allowance that ranked it. */
