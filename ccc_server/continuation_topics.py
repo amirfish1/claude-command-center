@@ -792,7 +792,9 @@ class _Batch:
         self.archive_inputs = archive_inputs
         if archive_inputs is not None:
             records, origins, _, _ = archive_inputs
-            self.records = dict(records)
+            # Copy the captured dict directly instead of rebuilding it from
+            # the read-only proxy one key at a time.
+            self.records = records.copy()
             self.indexed_origins = origins
             return
         if reuse_cached:
