@@ -30,8 +30,9 @@ GATES = (
 
 
 def _excluded(row):
-    """Warmup or saturated-host samples; post-warmup boot samples count."""
-    return perf_gate._steady_reason(row) in ('warmup', 'automated', 'load')
+    """Warmup, fully hidden-tab or saturated-host samples; post-warmup
+    boot samples count."""
+    return perf_gate._steady_reason(row) in ('warmup', 'automated', 'hidden', 'load')
 
 
 def check(events, repo, commit):

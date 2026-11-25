@@ -131,6 +131,12 @@ class TestRecordEvent(PerfEventsTestBase):
         self.assertNotIn("automated", rows[1])
         self.assertEqual(pe._exclusion_reason(rows[0]), "automated")
 
+    def test_fully_hidden_read_is_not_a_zero_ms_sample(self):
+        row = {"kind": "list_read", "ms": 0, "detail": {"wall_ms": 900, "hidden_ms": 900}}
+        self.assertEqual(pe._exclusion_reason(row), "hidden")
+        self.assertEqual(pe._alert_rows([row]), [])
+        self.assertEqual(pe._exclusion_reason(dict(row, ms=5)), "")
+
     def test_automated_breaches_never_file(self):
         rows = [{"kind": "archive_load", "ms": 20000, "threshold_ms": 5000, "breach": True,
                  "warmup": False, "load1": 1, "ncpu": 4, "up_s": 60, "automated": True}] * 3

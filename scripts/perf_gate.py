@@ -42,12 +42,25 @@ _UTC_EVENT_PREFIX = re.compile(
 )
 
 
+def _fully_hidden(row):
+    """A read that ran entirely while the tab was hidden: the client
+    subtracts hidden time, so it reports 0 ms. Nobody waited on it; counted
+    as a 0 ms sample it diluted the list_read p95 (CCC-689: 213 of 329)."""
+    try:
+        detail = row.get("detail") if isinstance(row.get("detail"), dict) else {}
+        return float(row.get("ms") or 0) <= 0 and float(detail.get("hidden_ms") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _steady_reason(row):
     """Why a sample is not steady-state ('' when it counts)."""
     if row.get("warmup"):
         return "warmup"
     if row.get("automated"):
         return "automated"
+    if _fully_hidden(row):
+        return "hidden"
     try:
         load1, ncpu = row.get("load1"), row.get("ncpu")
         if load1 is not None and ncpu is not None and float(load1) > float(ncpu):

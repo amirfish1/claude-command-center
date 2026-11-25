@@ -695,6 +695,8 @@ def _alert_rows(events):
         # Scripted-browser probes never file or extend a perf ticket (CCC-668).
         if event.get("automated"):
             continue
+        if _fully_hidden(event):
+            continue
         if event.get("warmup"):
             if event.get("kind") != "archive_load":
                 continue
@@ -705,6 +707,16 @@ def _alert_rows(events):
     return rows
 
 
+def _fully_hidden(row):
+    """A read that ran entirely in a hidden tab reports 0 ms (hidden time is
+    subtracted). It is not a fast sample: nobody waited (CCC-689)."""
+    try:
+        detail = row.get("detail") if isinstance(row.get("detail"), dict) else {}
+        return float(row.get("ms") or 0) <= 0 and float(detail.get("hidden_ms") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _exclusion_reason(row):
     """Why a row is left out of the filed p95, or '' when it counts.
     Rows predating the load/up_s fields count (fail toward filing)."""
@@ -712,6 +724,8 @@ def _exclusion_reason(row):
         return "warmup"
     if row.get("automated"):
         return "automated"
+    if _fully_hidden(row):
+        return "hidden"
     try:
         load1, ncpu = row.get("load1"), row.get("ncpu")
         if load1 is not None and ncpu is not None and float(load1) > float(ncpu):

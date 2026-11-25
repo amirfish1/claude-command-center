@@ -72,3 +72,19 @@ def test_warmup_and_saturated_samples_stay_excluded(tmp_path):
 def test_scripted_browser_probes_are_not_user_samples(tmp_path):
     probes = _events(tmp_path, [('list_read', 5000, 50)], up_s=600, automated=True)
     assert check.check(probes, tmp_path, '')['evidence']['gates'][0]['samples'] == 0
+
+
+def test_fully_hidden_reads_do_not_dilute_the_p95(tmp_path):
+    # A read that ran entirely in a hidden tab reports 0 ms; 213 of 329
+    # samples were these and pulled a 2314 ms visible p95 to 1087 (CCC-689).
+    rows = [{'kind': 'list_read', 'ts': datetime.now(timezone.utc).isoformat(), 'ms': ms,
+             'warmup': False, 'load1': 1, 'ncpu': 4, 'up_s': 3600,
+             'detail': {'status': 200, 'wall_ms': wall, 'hidden_ms': wall - ms}}
+            for ms, wall, count in ((2000, 2000, 50), (0, 900, 1000)) for _ in range(count)]
+    target = tmp_path / 'events.jsonl'
+    target.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+    gate = check.check(target, tmp_path, '')['evidence']['gates'][0]
+    assert gate['samples'] == 50 and gate['status'] == 'fail'
+    assert check.perf_gate._steady_reason(rows[-1]) == 'hidden'
+    # A partly hidden read still counts its visible time.
+    assert check.perf_gate._steady_reason(dict(rows[-1], ms=10)) == ''
