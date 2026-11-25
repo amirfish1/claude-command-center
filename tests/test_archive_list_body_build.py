@@ -1037,6 +1037,21 @@ def test_read_during_reader_warm_gets_previous_body_until_a_mutation(monkeypatch
     assert builds == ['v1', 'v2', 'v3', 'v4']
 
 
+def test_previous_body_still_served_minutes_after_it_was_built(monkeypatch, tmp_path):
+    # Live CCC-691 check: reloads come every few minutes, so a 120 s cap on
+    # the build time rejected every fallback.
+    server = importlib.import_module('server')
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_DISK_DIR', tmp_path)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_CACHE', server.ByteBudgetCache(1 << 20, 8))
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_LATEST', {})
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_STALE_OK', lambda: True)
+    server._archive_list_body_get_or_build('key', '7d', True, lambda: {'conversations': []}, 1)
+    slot = ('key', '7d', True)
+    built = server._ARCHIVE_LIST_LATEST[slot][1]
+    assert server._archive_list_stale_body(slot, now=built + 600) is not None
+    assert server._archive_list_stale_body(slot, now=built + 2 * 3600) is None
+
+
 def test_dashboard_never_serves_a_previous_body(monkeypatch, tmp_path):
     server = importlib.import_module('server')
     monkeypatch.setattr(server, '_ARCHIVE_LIST_DISK_DIR', tmp_path)

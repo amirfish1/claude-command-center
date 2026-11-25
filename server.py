@@ -18053,7 +18053,10 @@ _ARCHIVE_LIST_BODY_BUILD_LOCKS = {}  # body key -> Lock; single-flight body buil
 # this process, so the next poll catches up with a small delta. Any archive,
 # trash or lane mutation voids these bodies, so a hidden row never comes back.
 _ARCHIVE_LIST_STALE_OK = None      # callable() -> bool, set by the list reader
-_ARCHIVE_LIST_STALE_MAX_S = 120.0
+# A body stays current until a newer version replaces it, often minutes
+# after it was built, so its age is not how stale it is; the rebuild it
+# stands in for bounds that. This cap only guards a stuck hook.
+_ARCHIVE_LIST_STALE_MAX_S = 3600.0
 _ARCHIVE_LIST_LATEST = {}          # (key, window, from_cache) -> (mut_gen, ts, raw, gzip, etag)
 _ARCHIVE_LIST_MUT_GEN = 0
 
