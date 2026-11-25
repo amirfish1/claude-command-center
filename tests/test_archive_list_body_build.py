@@ -1009,7 +1009,8 @@ def test_read_during_reader_warm_gets_previous_body_until_a_mutation(monkeypatch
     monkeypatch.setattr(server, '_ARCHIVE_LIST_LATEST', {})
     monkeypatch.setattr(server._conv_reader, 'list_mutation', lambda *a, **k: None)
     warming = [False]
-    monkeypatch.setattr(server, '_ARCHIVE_LIST_STALE_OK', lambda: warming[0])
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_STALE_OK',
+                        lambda reason, slot: reason == 'rebuilding' and warming[0])
     builds = []
 
     def payload(tag):
@@ -1044,7 +1045,7 @@ def test_previous_body_still_served_minutes_after_it_was_built(monkeypatch, tmp_
     monkeypatch.setattr(server, '_ARCHIVE_LIST_DISK_DIR', tmp_path)
     monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_CACHE', server.ByteBudgetCache(1 << 20, 8))
     monkeypatch.setattr(server, '_ARCHIVE_LIST_LATEST', {})
-    monkeypatch.setattr(server, '_ARCHIVE_LIST_STALE_OK', lambda: True)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_STALE_OK', lambda reason, slot: True)
     server._archive_list_body_get_or_build('key', '7d', True, lambda: {'conversations': []}, 1)
     slot = ('key', '7d', True)
     built = server._ARCHIVE_LIST_LATEST[slot][1]
@@ -1065,3 +1066,39 @@ def test_dashboard_never_serves_a_previous_body(monkeypatch, tmp_path):
             diagnostics=detail, allow_stale=True)
         assert detail['reason'] == 'version-miss'
     assert server._ARCHIVE_LIST_LATEST == {}
+
+
+def test_overlay_only_change_serves_previous_body(monkeypatch, tmp_path):
+    # Live CCC-691 check: 20 of 437 page loads rebuilt the body because only
+    # the live-session overlay hash moved. Deltas resend overlay rows whole,
+    # so the previous body's token catches up on the next poll.
+    server = importlib.import_module('server')
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_DISK_DIR', tmp_path)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_CACHE', server.ByteBudgetCache(1 << 20, 8))
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_LATEST', {})
+    asked = []
+
+    def hook(reason, slot):
+        asked.append((reason, slot[1]))
+        return reason == 'overlay'
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_STALE_OK', hook)
+
+    def read(snap_ver, tag, base):
+        detail = {}
+        raw, _, _ = server._archive_list_body_get_or_build(
+            'key', '1d', True, lambda: {'conversations': [{'session_id': tag}]}, snap_ver,
+            diagnostics=detail, allow_stale=True, stale_base=base)
+        return json.loads(raw)['conversations'][0]['session_id'], detail['reason']
+
+    ctx = 'ctx1'
+    assert server._archive_list_stale_base((5, 'ovl-a'), {'ctx': ctx}) == (5, ctx)
+    assert server._archive_list_stale_base(5, {'ctx': ctx}) == (5, ctx)
+    assert server._archive_list_stale_base((5, 'ovl-a'), None) is None
+    assert read(((5, 'ovl-a'), ctx), 'a', (5, ctx)) == ('a', 'version-miss')
+    assert read(((5, 'ovl-b'), ctx), 'b', (5, ctx)) == ('a', 'stale-overlay')
+    assert asked[-1] == ('overlay', '1d')
+    # A new snapshot or projection context is not an overlay-only change.
+    assert read(((6, 'ovl-b'), ctx), 'c', (6, ctx)) == ('c', 'version-miss')
+    assert read(((6, 'ovl-b'), 'ctx2'), 'd', (6, 'ctx2')) == ('d', 'version-miss')
+    # No delta token: never served stale for an overlay change.
+    assert read((6, 'ovl-c'), 'e', None) == ('e', 'version-miss')

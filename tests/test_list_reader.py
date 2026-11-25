@@ -117,6 +117,31 @@ class ListReaderOpsTest(unittest.TestCase):
         self.assertEqual(seen, [True])
         self.assertFalse(list_reader.rebuilding())
 
+    def test_stale_ok_overlay_only_for_prebuilt_bodies_and_starts_a_warm(self):
+        list_reader._state["windows"] = {}
+        with mock.patch.object(list_reader.threading, "Thread") as thread:
+            self.assertTrue(list_reader.stale_ok("overlay", ("k", "1d", True)))
+            self.assertFalse(list_reader.stale_ok("overlay", ("k", "7d", True)))
+            list_reader.note_window("7d", layouts=True)
+            self.assertFalse(list_reader.stale_ok("overlay", ("k", "7d", True)))
+            # Second call while the first warm is claimed coalesces.
+            self.assertTrue(list_reader.stale_ok("overlay", ("k:layouts", "7d", True)))
+        self.assertEqual(thread.call_count, 1)
+        self.assertTrue(list_reader._state["warm_again"])
+        # The claimed warm counts as rebuilding.
+        self.assertTrue(list_reader.stale_ok("rebuilding", ("k", "1d", True)))
+
+    def test_layouts_7d_read_warms_the_layouts_body(self):
+        # CCC-691: the browser's 7d read asks for row layouts, a separate body
+        # from the plain 7d one CCC-690 warmed.
+        list_reader._state["windows"] = {}
+        list_reader.note_window("7d", now=1000.0, layouts=True)
+        self.assertEqual(list_reader.warm_windows(now=1001.0), ("1d", list_reader.LAYOUTS))
+        list_reader.note_window("7d", layouts=True)
+        list_reader._warm_bodies()
+        self.assertEqual(self.srv.calls, [("warm", {}, "1d", True, {}),
+                                          ("warm", {}, "7d", True, {"scoped_layouts": True})])
+
     def test_unknown_op_and_bad_acp(self):
         self.assertEqual(list_reader.handle_op({"op": "list_nope"}), {"ok": False})
         self.assertEqual(list_reader.handle_op({"op": "list_acp", "state": []}), {"ok": False})

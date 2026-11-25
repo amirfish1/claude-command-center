@@ -111,9 +111,10 @@ def setup(server_mod):
     server_mod._archive_list_disk_save = lambda *a, **k: False
     server_mod._archive_history_start_publication = lambda *a, **k: None
     server_mod._save_archive_response_cache = lambda *a, **k: False
-    # While a reload or warm is rebuilding bodies, a page load gets the
-    # previous body instead of waiting on the same build (CCC-691).
-    server_mod._ARCHIVE_LIST_STALE_OK = rebuilding
+    # While a reload or warm is rebuilding bodies, or only the live-session
+    # rows changed, a page load gets the previous body instead of waiting on
+    # a rebuild (CCC-691).
+    server_mod._ARCHIVE_LIST_STALE_OK = stale_ok
     # Belt and braces: the child must never write the archive store.
     original_connect = archive_store._connect
 
@@ -280,13 +281,18 @@ WARM_WINDOWS = ("1d",)
 # while unused windows (8h, all) should cost nothing.
 RECENT_WINDOW_S = 24 * 3600
 _OPTIONAL_WINDOWS = ("8h", "7d", "all")
+# The browser's 7d read asks for row layouts, a separate body (CCC-691): the
+# plain 7d warm never served a real page load.
+LAYOUTS = "7d+layouts"
 
 
-def note_window(window, now=None):
+def note_window(window, now=None, *, layouts=False):
     """Remember that a list read asked for ``window`` (raw query value)."""
     window = str(window or "").strip().lower()
     if window not in _OPTIONAL_WINDOWS:
         return
+    if layouts and window == "7d":
+        window = LAYOUTS
     with _lock:
         _state["windows"][window] = time.monotonic() if now is None else now
 
@@ -294,7 +300,7 @@ def note_window(window, now=None):
 def warm_windows(now=None):
     now = time.monotonic() if now is None else now
     with _lock:
-        recent = [w for w in _OPTIONAL_WINDOWS
+        recent = [w for w in _OPTIONAL_WINDOWS + (LAYOUTS,)
                   if now - _state["windows"].get(w, float("-inf")) < RECENT_WINDOW_S]
     return WARM_WINDOWS + tuple(recent)
 
@@ -345,9 +351,12 @@ def _warm_bodies():
 
 def _warm_bodies_inner(srv):
     started = time.perf_counter()
-    for window in warm_windows():
+    for name in warm_windows():
         try:
-            srv._archive_list_warm({}, window, True)
+            if name == LAYOUTS:
+                srv._archive_list_warm({}, "7d", True, scoped_layouts=True)
+            else:
+                srv._archive_list_warm({}, name, True)
         except Exception as exc:
             _note_error(exc)
     with _lock:
@@ -418,6 +427,23 @@ def _reload_in_background():
 def rebuilding():
     """True while a reload or warm is rebuilding the prebuilt bodies."""
     return bool(_state["reloading"] or _state["warming"])
+
+
+def stale_ok(reason, slot):
+    """May a page load get the previous body for `slot` (key, window, cached)?
+
+    "rebuilding": only while a reload or warm is under way. "overlay": the
+    body differs only in its live-session rows; allowed for bodies the warm
+    prebuilds, and that warm is started here so the next read hits."""
+    if reason == "rebuilding":
+        return rebuilding()
+    key, window = slot[0], slot[1]
+    name = LAYOUTS if window == "7d" and str(key).endswith(":layouts") else window
+    if reason == "overlay" and name in warm_windows():
+        if _claim_warm():
+            threading.Thread(target=_warm_until_settled, name="list-reader-warm", daemon=True).start()
+        return True
+    return False
 
 
 def sync(now=None):

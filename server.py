@@ -18052,12 +18052,16 @@ _ARCHIVE_LIST_BODY_BUILD_LOCKS = {}  # body key -> Lock; single-flight body buil
 # body built earlier for its (key, window) instead; its delta token is from
 # this process, so the next poll catches up with a small delta. Any archive,
 # trash or lane mutation voids these bodies, so a hidden row never comes back.
-_ARCHIVE_LIST_STALE_OK = None      # callable() -> bool, set by the list reader
+# The same holds when only the appended live-session (overlay) rows changed:
+# deltas resend overlay rows whole with the full id order, so an older body's
+# token is answered exactly. Those changes come every few seconds while a
+# session works, and each one rebuilt the full body on a page load.
+_ARCHIVE_LIST_STALE_OK = None      # callable(reason, slot) -> bool, set by the list reader
 # A body stays current until a newer version replaces it, often minutes
 # after it was built, so its age is not how stale it is; the rebuild it
 # stands in for bounds that. This cap only guards a stuck hook.
 _ARCHIVE_LIST_STALE_MAX_S = 3600.0
-_ARCHIVE_LIST_LATEST = {}          # (key, window, from_cache) -> (mut_gen, ts, raw, gzip, etag)
+_ARCHIVE_LIST_LATEST = {}          # (key, window, from_cache) -> (mut_gen, ts, base, raw, gzip, etag)
 _ARCHIVE_LIST_MUT_GEN = 0
 
 
@@ -18069,25 +18073,37 @@ def _archive_list_void_latest():
         _ARCHIVE_LIST_LATEST.clear()
 
 
-def _archive_list_stale_body(slot, now=None):
+def _archive_list_stale_base(body_ver, delta):
+    """What a body depends on apart from its overlay rows: the snapshot
+    version and the delta context. None when the body has no delta token."""
+    if delta is None or not body_ver:
+        return None
+    return (body_ver[0] if isinstance(body_ver, tuple) else body_ver, delta["ctx"])
+
+
+def _archive_list_stale_body(slot, stale_base=None, now=None):
+    """(reason, (raw, gzip, etag)) for a previous body usable now, or None."""
     hook = _ARCHIVE_LIST_STALE_OK
     if hook is None:
-        return None
-    try:
-        if not hook():
-            return None
-    except Exception:
         return None
     now = time.time() if now is None else now
     with _ARCHIVE_LIST_BODY_LOCK:
         entry = _ARCHIVE_LIST_LATEST.get(slot)
         if entry is None or entry[0] != _ARCHIVE_LIST_MUT_GEN or now - entry[1] > _ARCHIVE_LIST_STALE_MAX_S:
             return None
-        return entry[2:]
+    try:
+        if hook("rebuilding", slot):
+            return "stale-while-warming", entry[3:]
+        if stale_base is not None and entry[2] == stale_base and hook("overlay", slot):
+            return "stale-overlay", entry[3:]
+    except Exception:
+        pass
+    return None
 
 
 def _archive_list_body_get_or_build(cache_key, window, from_cache, build_payload, snap_ver,
-                                    diagnostics=None, *, eager_gzip=True, allow_stale=False):
+                                    diagnostics=None, *, eager_gzip=True, allow_stale=False,
+                                    stale_base=None):
     """(raw, gzip, etag) for a /list body: replayed from the body cache when
     the version matches, else built once per key (single-flight)."""
     # The version is part of the key (not just the equality check) so two
@@ -18118,11 +18134,11 @@ def _archive_list_body_get_or_build(cache_key, window, from_cache, build_payload
     if snap_ver:
         raw, gzip_body, etag_val = _cached_body()
         if raw is None and allow_stale:
-            stale = _archive_list_stale_body(slot)
+            stale = _archive_list_stale_body(slot, stale_base)
             if stale is not None:
                 if diagnostics is not None:
-                    diagnostics.update(hit=True, reason="stale-while-warming")
-                return stale
+                    diagnostics.update(hit=True, reason=stale[0])
+                return stale[1]
         if raw is None:
             # CCC-142: single-flight per body key. Tabs polling the same
             # window after a snapshot change each built the same ~11MB
@@ -18156,7 +18172,7 @@ def _archive_list_body_get_or_build(cache_key, window, from_cache, build_payload
                         "etag": etag_val,
                     }, len(raw) + len(gzip_body or b""))
                     if _ARCHIVE_LIST_STALE_OK is not None:
-                        _ARCHIVE_LIST_LATEST[slot] = (_ARCHIVE_LIST_MUT_GEN, time.time(),
+                        _ARCHIVE_LIST_LATEST[slot] = (_ARCHIVE_LIST_MUT_GEN, time.time(), stale_base,
                                                       raw, gzip_body, etag_val)
                 _ARCHIVE_LIST_BUILT.add((cache_key, window))
                 _archive_list_disk_save(cache_key, window, raw, gzip_body, etag_val)
@@ -18334,7 +18350,8 @@ def _archive_list_warm(cache_options, window, stale_ok, *, scoped_layouts=False,
 
     _archive_list_body_get_or_build(
         _archive_list_body_key(cache_key, scoped_layouts), window, from_cache, _payload,
-        (body_ver, delta["ctx"]) if delta is not None else body_ver, eager_gzip=eager_gzip)
+        (body_ver, delta["ctx"]) if delta is not None else body_ver, eager_gzip=eager_gzip,
+        stale_base=_archive_list_stale_base(body_ver, delta))
 
 
 try:
@@ -40151,6 +40168,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     row_layouts=qs.get("row_layouts", ["0"])[0] == "1",
                     order_spans=qs.get("order_spans", ["0"])[0] == "1",
                     check_client=_check_client, eager_gzip=eager_gzip,
+                    stale_base=_archive_list_stale_base(body_ver, _delta),
                 )
             if (_packed_history_projection is not None and _status == 200
                     and _body_cache_diag.get("history") == "full"):
@@ -50852,7 +50870,8 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
 
     def _send_archive_list_json(self, cache_key, window, from_cache, build_payload, snap_ver,
                                 diagnostics=None, *, since="", saved_order="", row_layouts=False,
-                                order_spans=False, check_client=None, eager_gzip=True):
+                                order_spans=False, check_client=None, eager_gzip=True,
+                                stale_base=None):
         """send_json for /api/conversations/list: same etag/304/gzip
         semantics, but the serialized body + sha1 etag are built
         once per (cache key, window, snapshot version) and replayed for every
@@ -50904,7 +50923,8 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         try:
             raw, gzip_body, etag_val = _archive_list_body_get_or_build(
                 cache_key, window, from_cache, build_payload, snap_ver,
-                diagnostics=diagnostics, eager_gzip=eager_gzip, allow_stale=True)
+                diagnostics=diagnostics, eager_gzip=eager_gzip, allow_stale=True,
+                stale_base=stale_base)
         except _ArchiveListClientDisconnected:
             return "abandoned"
         return self._send_archive_list_body(raw, gzip_body, etag_val)
