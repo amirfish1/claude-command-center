@@ -36,6 +36,7 @@ _ARCHIVE_TOPIC_CONNECTION = (None, None)
 _ARCHIVE_TOPIC_TRANSITIONS = {}
 _ARCHIVE_TOPIC_TRANSITION_LIMIT = 32
 _ARCHIVE_TOPIC_COMMIT_LIMIT = 8
+_TOPIC_INSERT_HISTORY = 'continuation_topic_cache_inserts'
 _NATIVE_TITLE_STATE = {'data': None, 'generation': 0}
 _SCOPED_TOPIC_SPLIT_MIN = 2000
 _SCOPED_TOPIC_ORIGIN_LIMIT = 4096
@@ -63,8 +64,13 @@ def _install_topic_tracking(conn):
     names = [f'ccc_topic_cache_{table}_{event}' for table in _TRACKED_TABLES
              for event in ('insert', 'update', 'delete')]
     marks = ','.join('?' for _ in names)
-    if conn.execute(f'SELECT count(*) FROM sqlite_master WHERE type=\'trigger\' '
-                    f'AND name IN ({marks})', names).fetchone()[0] == len(names):
+    state = conn.execute(
+        "SELECT (SELECT count(*) FROM sqlite_master WHERE type='trigger' "
+        f"AND name IN ({marks})), "
+        "EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)",
+        (*names, _TOPIC_INSERT_HISTORY),
+    ).fetchone()
+    if state == (len(names), 1):
         return
     if conn.in_transaction:
         return
@@ -75,6 +81,13 @@ def _install_topic_tracking(conn):
         conn.execute('CREATE TABLE IF NOT EXISTS continuation_topic_cache_state '
                      '(id INTEGER PRIMARY KEY, revision INTEGER NOT NULL)')
         conn.execute('INSERT OR IGNORE INTO continuation_topic_cache_state VALUES (1, 0)')
+        # The slot table and trigger upgrade commit together. Existing
+        # processes still see the original revision counter and trigger names.
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                        (_TOPIC_INSERT_HISTORY,)).fetchone() is None:
+            conn.execute(f'CREATE TABLE {_TOPIC_INSERT_HISTORY} '
+                         '(slot INTEGER PRIMARY KEY, revision INTEGER NOT NULL, sid TEXT NOT NULL)')
+            conn.execute('DROP TRIGGER IF EXISTS ccc_topic_cache_continuation_topics_insert')
         for table, columns in _TRACKED_TABLES.items():
             for event in ('insert', 'update', 'delete'):
                 when = ''
@@ -84,10 +97,21 @@ def _install_topic_tracking(conn):
                 elif table == 'session_meta':
                     alias = 'NEW' if event == 'insert' else 'OLD'
                     when = f" WHEN coalesce({alias}.continuation_origin, '') != ''"
+                history = ''
+                if table == 'continuation_topics' and event == 'insert':
+                    history = (
+                        f'INSERT INTO {_TOPIC_INSERT_HISTORY} '
+                        f'SELECT revision % {_ARCHIVE_TOPIC_TRANSITION_LIMIT}, revision, NEW.sid '
+                        'FROM continuation_topic_cache_state WHERE id=1 '
+                        "AND typeof(NEW.sid)='text' AND NEW.sid!='' AND NEW.origin='' "
+                        "AND NEW.root_sid=NEW.sid AND typeof(NEW.topic_title)='text' "
+                        "AND typeof(NEW.user_named)='integer' "
+                        'ON CONFLICT(slot) DO UPDATE SET revision=excluded.revision,sid=excluded.sid; '
+                    )
                 conn.execute(f'CREATE TRIGGER IF NOT EXISTS ccc_topic_cache_{table}_{event} '
                              f'AFTER {event.upper()} ON {table}{when} BEGIN '
                              'UPDATE continuation_topic_cache_state SET revision=revision+1 '
-                             'WHERE id=1; END')
+                             f'WHERE id=1; {history}END')
         conn.commit()
     except sqlite3.OperationalError:
         conn.rollback()
@@ -544,6 +568,43 @@ def _advance_archive_topic_snapshot(snapshot, previous, current):
     return (MappingProxyType(records | updates), indexed, roots, edges), tuple(updates)
 
 
+def _read_archive_topic_inserts(conn, snapshot, previous, current):
+    # Compare exact revisions on the same pinned reader. Any other kind
+    # of write leaves a gap because it may change roots or ancestry.
+    if (previous[0] != 'topics-v1' or previous[:3] != current[:3]
+            or previous[4] != current[4]):
+        return None
+    gap = current[3] - previous[3]
+    if not 0 < gap <= _ARCHIVE_TOPIC_TRANSITION_LIMIT:
+        return None
+    try:
+        inserts = conn.execute(
+            f'SELECT t.rowid,t.sid,t.origin,t.root_sid,t.topic_title,t.user_named '
+            f'FROM {_TOPIC_INSERT_HISTORY} AS h JOIN continuation_topics AS t ON t.sid=h.sid COLLATE BINARY '
+            'WHERE h.revision>? AND h.revision<=? ORDER BY t.rowid',
+            (previous[3], current[3]),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        # An older, read-only, or nonstandard database can lack the ring.
+        return None
+    records, indexed, roots, edges = snapshot
+    if len(inserts) != gap or None in records or any(item[1] in records for item in inserts):
+        return None
+    # Require an appended suffix in actual table order. This rules out
+    # replacements and explicitly inserted rowids mixed with older rows.
+    suffix_size = conn.execute(
+        'SELECT count(*) FROM (SELECT rowid FROM continuation_topics WHERE rowid>=? LIMIT ?)',
+        (inserts[0][0], gap + 1),
+    ).fetchone()[0]
+    if suffix_size != gap:
+        return None
+    updates = {sid: (origin, root, title, named)
+               for _, sid, origin, root, title, named in inserts}
+    if len(updates) != gap:
+        return None
+    return (MappingProxyType(records | updates), indexed, roots, edges), tuple(updates)
+
+
 def archive_projection_inputs(conn, *, max_rows, max_native_roots=32, diagnostics=None,
                               guard_transitions=None):
     """Read topic records and external titles needed to guard an archive layer.
@@ -603,14 +664,26 @@ def archive_projection_inputs(conn, *, max_rows, max_native_roots=32, diagnostic
                         # The revision SELECT establishes the same SQLite
                         # snapshot that supplies records.
                         with timing("revision"):
-                            version = _archive_read_version(conn, pinned=True)
-                        with timing("records"):
+                            pinned_version = _archive_read_version(conn, pinned=True)
+                        if owner is conn and snapshot is not None and pinned_version[0] == 'topics-v1':
+                            with timing("stored_transition"):
+                                advanced = _read_archive_topic_inserts(
+                                    conn, snapshot, version, pinned_version)
+                        version = pinned_version
+                        if advanced is None:
+                            with timing("records"):
+                                if diagnostics is not None:
+                                    diagnostics["topics_records_tid"] = threading.get_native_id()
+                                snapshot = _archive_topic_records(
+                                    conn, max_rows,
+                                    timing=functools.partial(timing, group="topics_records_phases"),
+                                )
+                        else:
+                            prior_records = snapshot[0]
+                            snapshot, changed = advanced
+                            transition = prior_records, changed
                             if diagnostics is not None:
-                                diagnostics["topics_records_tid"] = threading.get_native_id()
-                            snapshot = _archive_topic_records(
-                                conn, max_rows,
-                                timing=functools.partial(timing, group="topics_records_phases"),
-                            )
+                                diagnostics["topics_snapshot_stored_transition"] = True
                     finally:
                         conn.rollback()
                     owner = conn

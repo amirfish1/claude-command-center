@@ -252,7 +252,8 @@ def test_metadata_cache_is_scanned_at_most_once_per_batch(store, monkeypatch):
     # fixed set of trigger names from SQLite's small schema catalog.
     assert all(' WHERE sid=' in query or ' WHERE sid IN (' in query
                or 'FROM wanted w LEFT JOIN continuation_topics t ON t.sid=w.sid' in query
-               or query.startswith("SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name IN (")
+               or query.startswith("SELECT (SELECT count(*) FROM sqlite_master WHERE type='trigger' ")
+               or query.startswith("SELECT 1 FROM sqlite_master WHERE type='table' AND name=")
                or query.startswith("SELECT revision, (SELECT count(*) FROM sqlite_master WHERE type='trigger' ")
                for query in selects)
     for query in selects:
@@ -1172,7 +1173,7 @@ def test_archive_projection_retries_when_topic_sources_change_during_capture(sto
     "write_mode", ["local", "two-local", "local-during-records", "outside-write",
                    "local-gap", "history-evicted", "caller-transaction"],
 )
-def test_archive_projection_retry_reuses_only_exact_local_topic_commit(store, monkeypatch, write_mode):
+def test_archive_projection_retry_reuses_only_complete_topic_commits(store, monkeypatch, write_mode):
     from contextlib import closing
 
     store.execute('PRAGMA journal_mode=WAL')
@@ -1226,7 +1227,7 @@ def test_archive_projection_retry_reuses_only_exact_local_topic_commit(store, mo
     assert version == topics._archive_read_version(store)
     assert 'new' not in reads[0][0]
     assert details['topics_retried']
-    if write_mode in ('outside-write', 'local-gap', 'history-evicted', 'caller-transaction'):
+    if write_mode in ('outside-write', 'local-gap'):
         assert len(reads) == 2
         assert 'topics_snapshot_advanced' not in details
         assert not guard_transitions
@@ -1234,11 +1235,90 @@ def test_archive_projection_retry_reuses_only_exact_local_topic_commit(store, mo
         assert len(reads) == 1
         assert details['topics_snapshot_advanced']
         assert guard_transitions[id(inputs[0])][0] is reads[0][0]
-        if write_mode == 'two-local':
+        if write_mode in ('two-local', 'history-evicted'):
             assert guard_transitions[id(inputs[0])][1] == ('new', 'second')
+        assert details.get('topics_snapshot_stored_transition', False) == (
+            write_mode in ('history-evicted', 'caller-transaction'))
     committed_during_records = write_mode == 'local-during-records'
     assert lookups == [root] * (1 if committed_during_records else 2)
     assert details.get('topics_skipped_stale_native_titles', False) == committed_during_records
+
+
+@pytest.mark.parametrize("change", ["appended", "inserted_in_middle", "replaced", "linked", "mixed", "overflow"])
+def test_archive_projection_reuses_only_complete_peer_insert_history(store, monkeypatch, change):
+    from contextlib import closing
+
+    store.execute('PRAGMA journal_mode=WAL')
+    topics._connection(store)
+    with store:
+        store.execute("INSERT INTO continuation_topics VALUES ('old', '', 'old', 'Old', 0)")
+    monkeypatch.setattr(topics, '_ARCHIVE_TOPIC_SNAPSHOT', (None, None, None))
+    monkeypatch.setattr(topics, '_ARCHIVE_TOPIC_TRANSITIONS', {})
+    first, first_edges, _ = topics.archive_projection_inputs(store, max_rows=100)
+    filename = store.execute('PRAGMA database_list').fetchone()[2]
+
+    with closing(sqlite3.connect(filename)) as peer, peer:
+        if change == "inserted_in_middle":
+            peer.execute("INSERT INTO continuation_topics VALUES ('nested', '', 'nested', 'Middle', 0)")
+            peer.execute("UPDATE continuation_topics SET rowid=0 WHERE sid='nested'")
+        elif change == "replaced":
+            peer.execute("INSERT OR REPLACE INTO continuation_topics VALUES ('old', '', 'old', 'New', 0)")
+        elif change == "linked":
+            peer.execute("INSERT INTO continuation_topics VALUES ('new', 'old', 'old', 'Old', 0)")
+        else:
+            total = topics._ARCHIVE_TOPIC_TRANSITION_LIMIT + 1 if change == "overflow" else 2
+            # Ring slot conflicts must remain local to the trigger for every
+            # outer conflict policy, including a writer running an older build.
+            peer.executemany("INSERT OR ABORT INTO continuation_topics VALUES (?, '', ?, 'New', 0)",
+                             [(f'new-{i}', f'new-{i}') for i in range(total)])
+            if change == "mixed":
+                peer.execute("INSERT INTO session_meta VALUES ('child', 'old')")
+
+    details, transitions = {}, {}
+    result, edges, version = topics.archive_projection_inputs(
+        store, max_rows=100, diagnostics=details, guard_transitions=transitions)
+    expected, expected_origins, _, expected_edges = topics._archive_topic_records(store, 100)
+    assert list(result[0].items()) == list(expected.items())
+    assert result[1] == expected_origins
+    assert edges == expected_edges
+    assert version == topics._archive_read_version(store)
+    if change == "appended":
+        assert details['topics_snapshot_stored_transition']
+        assert edges is first_edges
+        assert transitions[id(result[0])][0] is first[0]
+        assert transitions[id(result[0])][1] == ('new-0', 'new-1')
+        assert list(first[0]) == ['old']
+    else:
+        assert 'topics_snapshot_stored_transition' not in details
+        assert not transitions
+
+
+def test_topic_insert_history_upgrades_the_legacy_revision_trigger(store):
+    topics._connection(store)
+    with store:
+        store.execute('DROP TRIGGER ccc_topic_cache_continuation_topics_insert')
+        store.execute('DROP TABLE continuation_topic_cache_inserts')
+        store.execute("""CREATE TRIGGER ccc_topic_cache_continuation_topics_insert
+            AFTER INSERT ON continuation_topics BEGIN
+                UPDATE continuation_topic_cache_state SET revision=revision+1 WHERE id=1;
+            END""")
+        store.execute("INSERT INTO continuation_topics VALUES ('old', '', 'old', 'Old', 0)")
+    current_revision = store.execute('SELECT revision FROM continuation_topic_cache_state').fetchone()[0]
+
+    topics._install_topic_tracking(store)
+
+    with store:
+        store.execute("INSERT INTO continuation_topics VALUES ('new', '', 'new', 'New', 0)")
+    assert store.execute('SELECT revision FROM continuation_topic_cache_state').fetchone() == (current_revision + 1,)
+    assert store.execute('SELECT revision,sid FROM continuation_topic_cache_inserts').fetchall() == [
+        (current_revision + 1, 'new'),
+    ]
+    store.execute("INSERT INTO continuation_topics VALUES ('rollback', '', 'rollback', 'Old', 0)")
+    store.rollback()
+    assert store.execute('SELECT revision FROM continuation_topic_cache_state').fetchone() == (current_revision + 1,)
+    assert store.execute('SELECT revision,sid FROM continuation_topic_cache_inserts').fetchall() == [
+        (current_revision + 1, 'new'),
+    ]
 
 
 def test_archive_projection_includes_peer_commit_before_snapshot_without_retry(store, monkeypatch):
