@@ -19,11 +19,8 @@ def unfrozen():
     gc.unfreeze()
 
 
-GROWN = server._GC_FULL_PASS_GROWTH_BYTES
-
-
-def _state(last_full=0.0, baseline=1000):
-    return {"last_full": last_full, "baseline_rss": baseline, "due_since": None}
+def _state(last_full=0.0):
+    return {"last_full": last_full, "due_since": None}
 
 
 def _aged_cycle():
@@ -41,13 +38,14 @@ def _aged_cycle():
 
 
 @pytest.fixture
-def rss(monkeypatch):
-    value = {"now": 1000}
-    monkeypatch.setattr(server, "_process_rss_bytes", lambda: value["now"])
+def requests(monkeypatch):
+    """No request is in flight unless a test says so."""
+    value = {"inflight": False}
+    monkeypatch.setattr(server, "_gc_requests_in_flight", lambda: value["inflight"])
     return value
 
 
-def test_tick_takes_the_heap_out_of_later_passes(rss):
+def test_tick_takes_the_heap_out_of_later_passes(requests):
     gc.unfreeze()
     state = _state()
     server._gc_freeze_tick(10.0, state)
@@ -55,7 +53,7 @@ def test_tick_takes_the_heap_out_of_later_passes(rss):
     assert gc.get_freeze_count() > 0
 
 
-def test_frozen_objects_are_still_freed_by_refcount(rss):
+def test_frozen_objects_are_still_freed_by_refcount(requests):
     node = Node()
     ref = weakref.ref(node)
     server._gc_freeze_tick(10.0, _state())
@@ -63,14 +61,14 @@ def test_frozen_objects_are_still_freed_by_refcount(rss):
     assert ref() is None
 
 
-def test_tick_reclaims_cycles_that_died_before_the_freeze(rss):
+def test_tick_reclaims_cycles_that_died_before_the_freeze(requests):
     """CCC-685: freezing them left them for the multi-second full pass."""
     ref = _aged_cycle()
     server._gc_freeze_tick(10.0, _state())
     assert ref() is None
 
 
-def test_young_tick_does_not_walk_the_frozen_heap(rss):
+def test_young_tick_does_not_walk_the_frozen_heap(requests):
     passes = []
     gc.callbacks.append(lambda phase, info: passes.append(server._gc_pass_tag["pass"])
                         if phase == "start" else None)
@@ -93,45 +91,63 @@ def _frozen_cycle():
     return ref
 
 
-def test_no_full_pass_on_a_timer_while_memory_is_flat(rss):
+def test_no_full_pass_before_the_backstop(requests):
+    """CCC-687: an RSS-growth trigger ran a 2.0-2.5s pass ~30 min after every
+    boot to reclaim ~250 objects; the growth was cache fill."""
     ref = _frozen_cycle()
     state = _state()
-    rss["now"] = 1000 + GROWN - 1
-    server._gc_freeze_tick(server._GC_FULL_PASS_MAX_S - 1, state)
+    for now in (1800.0, 3600.0, server._GC_FULL_PASS_MAX_S - 1):
+        server._gc_freeze_tick(now, state)
     assert ref() is not None
     assert state["last_full"] == 0.0
+    assert not hasattr(server, "_GC_FULL_PASS_GROWTH_BYTES")
 
 
-def test_growth_triggers_a_full_pass_after_the_minimum_interval(rss):
-    ref = _frozen_cycle()
-    state = _state()
-    rss["now"] = 1000 + GROWN
-    server._gc_freeze_tick(server._GC_FULL_PASS_MIN_S - 1, state)
-    assert ref() is not None, "never more often than the minimum interval"
-    now = server._GC_FULL_PASS_MIN_S
-    server._gc_freeze_tick(now, state)
-    assert ref() is None
-    assert state == {"last_full": now, "baseline_rss": 1000 + GROWN, "due_since": None}
-    assert gc.get_freeze_count() > 0
-
-
-def test_backstop_runs_a_full_pass_without_growth(rss):
+def test_backstop_runs_a_full_pass(requests):
     ref = _frozen_cycle()
     state = _state()
     server._gc_freeze_tick(server._GC_FULL_PASS_MAX_S, state)
     assert ref() is None
-    assert state["last_full"] == server._GC_FULL_PASS_MAX_S
+    assert state == {"last_full": server._GC_FULL_PASS_MAX_S, "due_since": None}
+    assert gc.get_freeze_count() > 0
 
 
-def test_unmeasurable_memory_keeps_the_old_cadence(rss):
+def test_backstop_waits_for_a_tick_with_no_request_in_flight(requests):
     ref = _frozen_cycle()
-    rss["now"] = None
-    state = _state(baseline=None)
-    server._gc_freeze_tick(server._GC_FULL_PASS_MIN_S, state)
+    state = _state()
+    deadline = server._GC_FULL_PASS_MAX_S
+    requests["inflight"] = True
+    server._gc_freeze_tick(deadline, state)
+    server._gc_freeze_tick(deadline + 15, state)
+    assert ref() is not None
+    assert state["due_since"] == deadline
+    requests["inflight"] = False
+    server._gc_freeze_tick(deadline + 30, state)
+    assert ref() is None
+    assert state["last_full"] == deadline + 30
+
+
+def test_busy_server_cannot_postpone_the_backstop_past_the_quiet_wait(requests):
+    ref = _frozen_cycle()
+    state = _state()
+    deadline = server._GC_FULL_PASS_MAX_S
+    end = deadline + server._GC_FULL_PASS_QUIET_WAIT_S
+    requests["inflight"] = True
+    server._gc_freeze_tick(deadline, state)
+    server._gc_freeze_tick(end - 1, state)
+    assert ref() is not None
+    server._gc_freeze_tick(end, state)
     assert ref() is None
 
 
-def test_full_pass_is_tagged_with_its_reason(rss):
+def test_in_flight_check_reads_the_request_registry(monkeypatch):
+    monkeypatch.setattr(server, "_INFLIGHT_REQUESTS", {})
+    assert server._gc_requests_in_flight() is False
+    monkeypatch.setattr(server, "_INFLIGHT_REQUESTS", {1: "/api/sessions"})
+    assert server._gc_requests_in_flight() is True
+
+
+def test_full_pass_is_tagged_with_its_reason(requests):
     seen = []
     gc.callbacks.append(lambda phase, info: seen.append(dict(server._gc_pass_tag))
                         if phase == "start" else None)
@@ -142,7 +158,7 @@ def test_full_pass_is_tagged_with_its_reason(rss):
     assert seen == [{"pass": "full", "reason": "backstop"}]
 
 
-def test_pending_restart_keeps_sweep_due_until_it_is_cancelled(monkeypatch, rss):
+def test_pending_restart_keeps_sweep_due_until_it_is_cancelled(monkeypatch, requests):
     due = True
     monkeypatch.setattr(server, "_gc_dashboard_restart_due", lambda: due)
     ref = _frozen_cycle()
@@ -159,7 +175,7 @@ def test_pending_restart_keeps_sweep_due_until_it_is_cancelled(monkeypatch, rss)
     assert state["last_full"] == deadline + 15
 
 
-def test_restart_cannot_postpone_cycle_reclamation_past_grace(monkeypatch, rss):
+def test_restart_cannot_postpone_cycle_reclamation_past_grace(monkeypatch, requests):
     monkeypatch.setattr(server, "_gc_dashboard_restart_due", lambda: True)
     ref = _frozen_cycle()
     state = _state()
@@ -172,10 +188,6 @@ def test_restart_cannot_postpone_cycle_reclamation_past_grace(monkeypatch, rss):
     server._gc_freeze_tick(end, state)
     assert ref() is None
     assert state["last_full"] == end
-
-
-def test_process_rss_is_readable_here():
-    assert server._process_rss_bytes() > 0
 
 
 def test_restart_hint_is_for_an_imminent_replacement_of_this_boot(tmp_path, monkeypatch):
