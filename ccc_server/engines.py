@@ -44,6 +44,7 @@ from ccc_server import antigravity_stream as _antigravity_stream
 from ccc_server import core as _core
 from ccc_server.log_parse import _conv_meta_lineage
 from ccc_server import session_driver as _driver
+from ccc_server import spawn_phases as _spawn_phases
 from ccc_server.paths import _is_pid_alive as _paths_is_pid_alive
 from ccc_server import free_runtime as _free_runtime
 from ccc_server import domestic_providers as _domestic_providers
@@ -6908,10 +6909,12 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         # Only sent when non-empty: an older worker without the kwarg rejects
         # it (loudly) rather than every spawn paying one compat retry.
         route_args["runtime"] = runtime
+    _spawn_phases.mark(_spawn_phases.ENGINE_SUBMIT)
     routed, dropped = _route_claude_call_with_kwarg_fallback(
         "spawn", route_args, idempotency_key=_core._take_control_plane_action_id(),
         required_keys=("runtime",) if runtime else (),
     )
+    _spawn_phases.mark("engine_returned")
     if routed is not None:
         if isinstance(routed, dict) and routed.get("code") == "engine_kwarg_unsupported":
             # The worker predates the runtime kwarg — refusing is the only

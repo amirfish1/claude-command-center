@@ -146,6 +146,7 @@ from ccc_server import wt_review as _wt_review
 from ccc_server import today_stars as _today_stars
 from ccc_server import media_preview as _media_preview
 from ccc_server import cpu_accounting as _cpu_accounting
+from ccc_server import spawn_phases as _spawn_phases
 from ccc_server import conv_reader as _conv_reader
 from ccc_server import swr_cache as _swr
 from ccc_server import memory_release as _memory_release
@@ -1200,6 +1201,22 @@ def _dump_python_stacks(
         except (OSError, ValueError):
             pass
     return out
+
+
+def _spawn_presubmit_stall(*, last_step, waited_s, submitted):
+    """A spawn request is still short of its engine submit (CCC-680).
+
+    Runs on the watchdog thread while the request waits, so the samples
+    show what the handler thread is blocked on right now.
+    """
+    _log_activity(
+        "spawn", "PRESUBMIT_SLOW",
+        f"waited={waited_s:.1f}s last_step={last_step} stacks=python-stacks.log",
+    )
+    _dump_python_stacks(
+        reason=f"spawn pre-submit wait {waited_s:.1f}s after {last_step}",
+        samples=4, interval_s=0.5, cancelled=submitted, source_lines=False,
+    )
 
 
 def _http_python_stack_samples(conn, samples, interval_s):
@@ -45044,6 +45061,11 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 _log_activity("jobs", "ADD", f"host={result['host']} repo={result['repo']} sid={result['session_id']}")
             self.send_json(result, status)
         elif path == "/api/sessions/spawn":
+            # CCC-680: time each step up to the engine submit; a request
+            # still unsubmitted after 3 s logs its step and samples stacks.
+            _spawn_phases.begin(
+                getattr(self, "_ccc_req_t0", None), on_stall=_spawn_presubmit_stall,
+            )
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
             try:
@@ -45271,6 +45293,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             # This endpoint's own HTTP access log is suppressed for everything
             # but 404s (see log_message), so without this line a rejected spawn
             # is otherwise completely unrecoverable after the fact.
+            _spawn_phases.mark("validated")
             _log_activity(
                 "spawn", "REQUEST",
                 f"engine={engine_raw!r} name={name!r} cwd={cwd_input or '-'} "
@@ -45435,10 +45458,18 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     goal_text = name or (prompt.splitlines()[0][:200] if prompt else "")
                     shipped_info = None
                     try:
-                        if not _shipped_check.is_queue_worker_spawn(prompt):
+                        # CCC-680: the check costs ~1.5 s (it usually runs
+                        # to its cap) and sat on every composer click's
+                        # critical path. A person typing in the composer is
+                        # waiting on the result and is not a ticket lane
+                        # re-filing shipped work, so only scripted/agent
+                        # spawns pay for it.
+                        if (spawned_via != "ui"
+                                and not _shipped_check.is_queue_worker_spawn(prompt)):
                             shipped_info = _shipped_check.check_shipped_for_spawn(goal_text)
                     except Exception:
                         shipped_info = None
+                    _spawn_phases.mark("shipped_check")
                     if shipped_info:
                         _log_activity(
                             "spawn", "SHIPPED_WARNING",
@@ -45463,6 +45494,12 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                         engine, model, confirm_blocked_model
                     ) + prompt
                     spawn_cwd = str(cwd_resolved) if cwd_resolved else None
+                    _spawn_phases.mark("dispatch")
+                    if engine != "claude":
+                        # Only Claude marks its own submit (inside
+                        # spawn_session); other engines' launch time is
+                        # engine work, not pre-submit waiting.
+                        _spawn_phases.mark(_spawn_phases.ENGINE_SUBMIT)
                     _set_control_plane_action_id(payload.get("idempotency_key"))
                     _set_spawn_request_meta(
                         task_key=task_key,
@@ -45733,6 +45770,15 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     # after a transient error. Default (field absent) stays
                     # opted out (CCC-863 zombie-process incident).
                     _apply_spawn_auto_resume_opt_in(payload, result)
+                    if result.get("ok") and result.get("session_id"):
+                        try:
+                            if _spawn_phases.record_timeline(
+                                result.get("session_id"),
+                                _spawn_timeline_get, _spawn_timeline_mark,
+                            ):
+                                _spawn_timeline_save()
+                        except Exception:
+                            pass
                     if result.get("ok"):
                         _log_activity(
                             "spawn", "SPAWN",
@@ -51034,6 +51080,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             raise
         finally:
             _inflight_end(self)
+            _spawn_phases.end()
             # A reused connection resets its handler clock after the idle
             # request-line wait; use that same clock for logs and accounting.
             _t0 = self._ccc_req_t0

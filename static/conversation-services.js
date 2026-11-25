@@ -2090,6 +2090,11 @@
     const $autoCompactInput = document.getElementById('convSendAutoCompactK');
     const autoCompactK = $autoCompactInput ? parseInt($autoCompactInput.value, 10) : NaN;
     const engine = launchSelection.engine;
+    // CCC-680: free the connection for the launch before any await below.
+    // On a slow phone link, in-flight list/stream reads queued ahead of the
+    // POST and held a click 12-21 s before the server saw it.
+    if (engine === 'claude') (0, sharedState.abortBackgroundApiReadsForSpawn)();
+    const spawnPhaseAt = {};
     if (engine === 'codex' && newSessionLaunchStillCurrent(launchContext)) {
       const view = (0, sharedState.getConvViewForPane)(spawnPaneId);
       if (view) {
@@ -2104,6 +2109,7 @@
       }
     }
     await settleRepoGuessBeforeSend();
+    spawnPhaseAt.repo_guess_settled = Date.now();
     const spawnCwd = (typeof sharedState.getSpawnCwd === 'function') ? (0, sharedState.getSpawnCwd)() : '';
     const autoPickedCwd = (sharedState.repoGuessAuto && !sharedState.repoGuessUserPicked && sharedState.repoGuessAuto.path === spawnCwd) ? spawnCwd : '';
     const launchCwd = spawnCwd || (0, sharedState.popoutRepoPath)();
@@ -2121,7 +2127,15 @@
     }
     // Catch a missing folder BEFORE spawning: the draft is still in the box
     // and nothing has been launched, so offering to create it is clean.
-    if (!knownRepo && await spawnCwdIsMissing(launchCwd)) {
+    // Bounded like the repo guess: an unanswered check must not hold the
+    // launch. The server still validates the folder and a missing one comes
+    // back as "invalid cwd", which offers the same Create & start below.
+    const cwdMissing = !knownRepo && await Promise.race([
+      spawnCwdIsMissing(launchCwd),
+      new Promise(resolve => setTimeout(() => resolve(false), 800)),
+    ]);
+    spawnPhaseAt.cwd_checked = Date.now();
+    if (cwdMissing) {
       (0, sharedState.forgetMissingSpawnCwd)(launchCwd);
       offerCreateMissingSpawnCwd(launchCwd, body);
       return;
@@ -2196,6 +2210,7 @@
       }
       const pendingCard = sharedState.pendingSpawns.get(tempPid);
       if (pendingCard) Object.assign(pendingCard, { spawn_endpoint: endpoint, spawn_body: spawnBody });
+      spawnPhaseAt.request_sent = Date.now();
       const res = await fetch(endpoint, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         priority: 'high',
@@ -2214,6 +2229,12 @@
         if (data.prewarm_fallback) showClaudePrewarmFallbackRecovery();
         if (data.session_id) {
           spawnStatsBegin(data.session_id, spawnAskedAt);
+          // Click -> POST steps, so a slow launch shows whether the wait was
+          // in the page (repo guess, folder check) or between request_sent
+          // and the server's server_request_received (network/proxy).
+          for (const [phase, at] of Object.entries(spawnPhaseAt)) {
+            (0, sharedState.spawnStatsMark)(data.session_id, phase, at);
+          }
           (0, sharedState.spawnStatsMark)(data.session_id, 'response_received');
         }
         const placeholder = (0, sharedState.adoptPendingSpawnPid)(tempPid, data.spawn_id || data.pid, data.log, data.session_id);

@@ -1,0 +1,1 @@
+- New sessions started from the composer reach Claude about 1.5 s sooner: the "already shipped?" check no longer runs for sessions a person starts, and the page frees its connection for the launch before checking the repo or folder. Each launch now records how long every step before it took, and logs a stack sample when one waits more than 3 s.
