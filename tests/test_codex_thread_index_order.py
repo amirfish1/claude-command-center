@@ -216,6 +216,29 @@ def test_overlay_rank_keeps_known_ids_and_reloads_their_details_if_needed(thread
     ]
 
 
+def test_overlay_rank_skips_inactive_details_without_losing_rank_or_fallback_time(thread_db):
+    with sqlite3.connect(thread_db) as con:
+        _schema(con)
+        con.execute("ALTER TABLE threads ADD COLUMN title TEXT")
+        con.executemany("INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, ?)", [
+            ("known", 10, 10000, 0, 0, 0, "Known"),
+            ("boundary", 5, 5000, 0, 0, 0, "At cutoff"),
+            ("inactive", 4, 4000, 50, 50000, 0, "Old update"),
+            ("created", 0, 0, 6, 6000, 0, "Created only"),
+        ])
+    options = dict(
+        limit=4, columns=("id", "updated_at", "updated_at_ms", "created_at", "created_at_ms", "title"),
+        omit_titles_for={"known", "unranked-a", "unranked-b", "unranked-c", "unranked-d"},
+        rank_only_for_known=True,
+    )
+    fetch = codex._codex_fetch_threads_in_home
+    rows = fetch(**options, min_detail_activity=5)
+    assert [row["id"] for row in rows] == ["known", "boundary", "inactive", "created"]
+    assert [row.get("title") for row in rows] == [None, "At cutoff", None, "Created only"]
+    assert fetch(**options, min_detail_activity=5) == rows
+    assert fetch(**options, min_detail_activity=4)[2]["title"] == "Old update"
+
+
 @pytest.mark.parametrize("all_known", [False, True])
 @pytest.mark.parametrize("without_rowid", [False, True])
 def test_sidebar_title_filter_only_binds_ranked_ids(thread_db, monkeypatch, all_known, without_rowid):

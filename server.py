@@ -21194,22 +21194,26 @@ def _archive_overlay_codex_sessions(rows, now=None, *, existing_ids=None):
     transcripts or ask an engine about each row on this polling path.
     """
     existing = _archive_overlay_existing_ids(rows) if existing_ids is None else existing_ids
+    now = time.time() if now is None else now
+    cutoff = now - 86400
     columns = ("id", "title", "cwd", "model", "reasoning_effort",
                "created_at", "created_at_ms", "updated_at", "updated_at_ms", "archived")
     try:
+        # Use an hourly cache key for detail hydration. The visible cutoff
+        # below stays exact and rank/merge still sees older candidate IDs.
         candidates = _codex_fetch_threads(limit=200, columns=columns, omit_titles_for=existing,
-                                         rank_only_for_known=True)
+                                         rank_only_for_known=True,
+                                         min_detail_activity=int(cutoff // 3600) * 3600)
     except Exception:
         return []
     missing = [r for r in candidates if r.get("id") not in existing and not r.get("archived")]
     if not missing:
         return []
-    now = time.time() if now is None else now
     archived, trashed = _load_conversation_lifecycle_sets()
     eligible = []
     for row in missing:
         stamp = _codex_ts_seconds(row, "updated") or _codex_ts_seconds(row, "created")
-        if row["id"] not in archived and row["id"] not in trashed and stamp and stamp >= now - 86400:
+        if row["id"] not in archived and row["id"] not in trashed and stamp and stamp >= cutoff:
             eligible.append(row)
     missing = eligible
     if not missing:
@@ -21224,7 +21228,7 @@ def _archive_overlay_codex_sessions(rows, now=None, *, existing_ids=None):
     for row in missing:
         sid = row["id"]
         stamp = _codex_ts_seconds(row, "updated") or _codex_ts_seconds(row, "created")
-        if sid in archived or sid in trashed or not stamp or stamp < now - 86400:
+        if sid in archived or sid in trashed or not stamp or stamp < cutoff:
             continue
         cwd = str(row.get("cwd") or "")
         spawn = spawns.get(sid) or {}

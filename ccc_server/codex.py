@@ -9201,7 +9201,7 @@ def _codex_db_signature(db):
 
 def _codex_fetch_threads(where="", params=(), limit=None, columns=None, *,
                          omit_titles_for=None, batch=True, exact_ids=None,
-                         rank_only_for_known=False):
+                         rank_only_for_known=False, min_detail_activity=None):
     from ccc_server.codex_accounts import homes
     bases = [_core._codex_home()] if os.environ.get("CCC_CODEX_ACCOUNT_KEY") else homes()
     rows = {}
@@ -9209,7 +9209,7 @@ def _codex_fetch_threads(where="", params=(), limit=None, columns=None, *,
         for row in _codex_fetch_threads_in_home(
             where, params, limit, columns, None if home == _core._codex_home() else home,
             omit_titles_for=omit_titles_for, batch=batch, exact_ids=exact_ids,
-            rank_only_for_known=rank_only_for_known,
+            rank_only_for_known=rank_only_for_known, min_detail_activity=min_detail_activity,
         ):
             rows.setdefault(row["id"], row)
     if exact_ids is not None:
@@ -9220,7 +9220,7 @@ def _codex_fetch_threads(where="", params=(), limit=None, columns=None, *,
 
 def _codex_fetch_threads_in_home(
     where="", params=(), limit=None, columns=None, home=None, *, omit_titles_for=None,
-    batch=True, exact_ids=None, rank_only_for_known=False,
+    batch=True, exact_ids=None, rank_only_for_known=False, min_detail_activity=None,
 ):
     """Read rows from Codex's local thread index without creating files.
 
@@ -9230,7 +9230,7 @@ def _codex_fetch_threads_in_home(
     Narrow projections avoid reading prompt/source payloads on liveness paths.
     The bounded sidebar projection can leave out titles for already-loaded IDs.
     Overlay callers that discard known threads after merging accounts can also
-    request only their identity and update order.
+    request only their identity and timestamps for known or inactive rows.
     Exact-ID projections read unordered rows from one snapshot per account.
     """
     columns = tuple(columns) if columns is not None else None
@@ -9240,7 +9240,7 @@ def _codex_fetch_threads_in_home(
     for db in (_codex_state_db_candidates() if home is None else _codex_state_db_candidates(home)):
         sig = _codex_db_signature(db)
         cache_key = (str(db), where, params, limit, columns, bool(omit_titles_for),
-                     exact_ids, rank_only_for_known)
+                     exact_ids, rank_only_for_known, min_detail_activity)
         if sig is not None:
             with _CODEX_THREADS_CACHE_LOCK:
                 hit = _CODEX_THREADS_CACHE.get(cache_key)
@@ -9368,6 +9368,8 @@ def _codex_fetch_threads_in_home(
                 rank_keys = selected
                 if rank_only_for_known:
                     order_fields = ("id", "updated_at", "updated_at_ms")
+                    if min_detail_activity is not None:
+                        order_fields += ("created_at", "created_at_ms")
                     detail_fields = [field for field in selected if field not in order_fields]
                     rank_keys = [field for field in selected if field in order_fields]
                 fields = ["NULL AS title" if field == "title" else field for field in rank_keys]
@@ -9382,8 +9384,13 @@ def _codex_fetch_threads_in_home(
                 missing = {}
                 for row in rows:
                     rowid = row.pop("ccc_source_rowid")
-                    if type(row["id"]) is not str or row["id"] not in omit_titles_for:
-                        missing[rowid] = row
+                    if type(row["id"]) is str and row["id"] in omit_titles_for:
+                        continue
+                    if rank_only_for_known and min_detail_activity is not None:
+                        stamp = _codex_ts_seconds(row, "updated") or _codex_ts_seconds(row, "created")
+                        if not (stamp and stamp >= min_detail_activity):
+                            continue
+                    missing[rowid] = row
                 if missing:
                     marks = ",".join("?" for _ in missing)
                     query = (f"SELECT rowid AS ccc_source_rowid, {', '.join(detail_fields)} "

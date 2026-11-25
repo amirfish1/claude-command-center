@@ -17,7 +17,7 @@ def test_indexed_threads_fill_stale_sidebar_without_transcript_or_engine_io(tmp_
         {"id": "new-thread", "title": "Review changes", "updated_at": 100000, "model": "test-model"},
         {"id": "trashed", "updated_at": 100000},
         {"id": "archived", "updated_at": 100000, "archived": 1},
-        {"id": "old", "updated_at": 1},
+        {"id": "old", "updated_at": 12000},
     ])
     monkeypatch.setattr(server, "_codex_fetch_threads", fetch)
     forbidden = mock.Mock(side_effect=AssertionError("No per-thread I/O in sidebar overlay"))
@@ -32,6 +32,7 @@ def test_indexed_threads_fill_stale_sidebar_without_transcript_or_engine_io(tmp_
     assert fetch.call_args.kwargs["limit"] == 200
     assert "first_user_message" not in fetch.call_args.kwargs["columns"]
     assert fetch.call_args.kwargs["omit_titles_for"] == {"known"}
+    assert fetch.call_args.kwargs["min_detail_activity"] == 10800
     forbidden.assert_not_called()
     spawn_lookup.assert_called_once_with(engine="codex", session_ids={"new-thread"})
 
