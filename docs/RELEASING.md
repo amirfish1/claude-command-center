@@ -37,11 +37,17 @@ commit. An old backfill is inserted behind newer versions, preserving the latest
 update and download target. Failed uploads or pushes remain retryable. A
 completed retry makes no new release or version bump.
 
-The source test gate runs in a temporary checkout of the current commit, so
-parallel edits cannot change source underneath imported Python functions.
-If the branch advances or the working tree becomes dirty during testing,
-the release stops before changing versions or tags; retry after work lands.
-The explicit `--allow-dirty` escape hatch tests the working tree in place.
+The scheduled source-only release selects a commit before counting changelog
+entries. It tests that commit and tags its version bump in a detached worktree.
+If main advances during testing, the job merges the release metadata into
+the new tip and pushes main and the tag atomically. The tag excludes later
+commits, and their changelog entries stay queued for the next release. A merge
+conflict or a competing release aborts before either ref is published.
+
+Manual cuts and scheduled cuts that build a DMG test in a temporary checkout
+and stop before changing versions or tags if the caller's branch advances
+or becomes dirty. The explicit `--allow-dirty` escape hatch tests the working
+tree in place.
 
 ## 0. Ship WatchTower first
 

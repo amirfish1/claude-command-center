@@ -40,6 +40,7 @@ DRY_RUN=0
 SKIP_DMG=0
 SKIP_BREW=0
 ALLOW_DIRTY=0
+SOURCE_COMMIT=""
 RELEASE_SITE="${CCC_RELEASE_SITE:-https://ccc.amirfish.ai}"
 BREW_TAP="${CCC_BREW_TAP:-$HOME/Apps/homebrew-tap}"
 if [ -z "${CCC_BREW_TAP:-}" ] && [ ! -d "$BREW_TAP" ] && [ -d "$HOME/Apps/homebrew-ccc" ]; then
@@ -54,6 +55,7 @@ while [ "$#" -gt 0 ]; do
     --skip-dmg) SKIP_DMG=1; shift ;;
     --skip-brew) SKIP_BREW=1; shift ;;
     --allow-dirty) ALLOW_DIRTY=1; shift ;;
+    --source-commit) SOURCE_COMMIT="${2:?missing source commit}"; shift 2 ;;
     --release-site=*) RELEASE_SITE="${1#*=}"; shift ;;
     --release-site) RELEASE_SITE="${2:-}"; shift 2 ;;
     --notes-file=*) NOTES_FILE="${1#*=}"; shift ;;
@@ -70,6 +72,14 @@ if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
 fi
 
 GREEN=$'\033[32m'; YEL=$'\033[33m'; RED=$'\033[31m'; NC=$'\033[0m'
+if [ -n "$SOURCE_COMMIT" ] && {
+  [[ ! "$SOURCE_COMMIT" =~ ^[a-f0-9]{40}$ ]] ||
+    [ "$SKIP_DMG" != 1 ] || [ "$ALLOW_DIRTY" != 0 ] || [ "$DRY_RUN" != 0 ];
+}; then
+  echo "A pinned source release requires a full commit SHA, --skip-dmg, and a clean, live cut." >&2
+  exit 2
+fi
+
 step() { echo "${GREEN}==> $*${NC}"; }
 warn() { echo "${YEL}!  $*${NC}"; }
 # In-place sed that works with both BSD (macOS) and GNU sed.
@@ -128,15 +138,40 @@ git rev-parse "v${VERSION}" >/dev/null 2>&1 && { echo "${RED}tag v${VERSION} alr
 # Fast-forward if we're simply behind; refuse if histories diverged.
 step "     syncing with origin/main"
 git fetch --quiet origin main || { echo "${RED}git fetch origin main failed${NC}" >&2; exit 1; }
-BEHIND=$(git rev-list --count HEAD..origin/main)
-if [ "$BEHIND" != 0 ]; then
-  if [ "$DRY_RUN" = 1 ]; then
-    warn "local main is ${BEHIND} commit(s) behind origin/main; the real run will git pull --ff-only first"
-  elif ! git pull --ff-only --quiet origin main; then
-    echo "${RED}local main is behind origin/main and cannot fast-forward; rebase first${NC}" >&2
+if [ -n "$SOURCE_COMMIT" ]; then
+  if ! git merge-base --is-ancestor "$SOURCE_COMMIT" FETCH_HEAD; then
+    echo "Pinned release source is not on origin/main: $SOURCE_COMMIT" >&2
     exit 1
-  else
-    echo "   fast-forwarded ${BEHIND} commit(s) from origin/main"
+  fi
+  PREV_TAG="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$SOURCE_COMMIT" 2>/dev/null || true)"
+  case "$NOTES_FILE" in
+    ""|/*) ;;
+    *) NOTES_FILE="$REPO_ROOT/$NOTES_FILE" ;;
+  esac
+  SHARED_REPO="$REPO_ROOT"
+  RELEASE_WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/ccc-release-cut.XXXXXX")"
+  cleanup_release_worktree() {
+    cd "$SHARED_REPO"
+    if [ -f "$RELEASE_WORKDIR/source/.git" ]; then
+      git worktree remove --force "$RELEASE_WORKDIR/source"
+    fi
+    rmdir "$RELEASE_WORKDIR"
+  }
+  trap cleanup_release_worktree EXIT
+  REPO_ROOT="$RELEASE_WORKDIR/source"
+  git worktree add --quiet --detach "$REPO_ROOT" "$SOURCE_COMMIT"
+  cd "$REPO_ROOT"
+else
+  BEHIND=$(git rev-list --count HEAD..origin/main)
+  if [ "$BEHIND" != 0 ]; then
+    if [ "$DRY_RUN" = 1 ]; then
+      warn "local main is ${BEHIND} commit(s) behind origin/main; the real run will git pull --ff-only first"
+    elif ! git pull --ff-only --quiet origin main; then
+      echo "${RED}local main is behind origin/main and cannot fast-forward; rebase first${NC}" >&2
+      exit 1
+    else
+      echo "   fast-forwarded ${BEHIND} commit(s) from origin/main"
+    fi
   fi
 fi
 command -v gh >/dev/null || { echo "${RED}gh not found${NC}" >&2; exit 1; }
@@ -216,19 +251,53 @@ fi
 step "4/9  Commit, tag, push main + tag"
 run "git add CHANGELOG.md pyproject.toml server.py $PLUGIN_MANIFEST changelog.d docs/index.html"
 run "git commit --only CHANGELOG.md pyproject.toml server.py $PLUGIN_MANIFEST changelog.d docs/index.html -m 'chore(release): v${VERSION}'"
-run "git tag -a v${VERSION} -m 'v${VERSION}'"
-run "git push origin main"
-run "git push origin v${VERSION}"
+if [ -n "$SOURCE_COMMIT" ]; then
+  RELEASE_COMMIT="$(git rev-parse HEAD)"
+  # Creating only the tag object leaves the shared tag namespace untouched.
+  RELEASE_TAG="refs/tags/v${VERSION}"
+  TAG_OBJECT="$(printf 'object %s\ntype commit\ntag v%s\ntagger %s\n\nv%s\n' \
+    "$RELEASE_COMMIT" "$VERSION" "$(git var GIT_COMMITTER_IDENT)" "$VERSION" | git mktag)"
+  LAST_MAIN=""
+  PUSHED=0
+  for attempt in 1 2 3; do
+    git fetch --quiet origin main
+    UPSTREAM="$(git rev-parse FETCH_HEAD)"
+    [ "$UPSTREAM" != "$LAST_MAIN" ] || break
+    if ! git merge-base --is-ancestor "$SOURCE_COMMIT" "$UPSTREAM" ||
+      [ -n "$(git tag --list 'v[0-9]*' --merged "$UPSTREAM" --no-merged "$SOURCE_COMMIT")" ]; then
+      echo "Origin main left the tested release lineage or already advanced to another release." >&2
+      exit 1
+    fi
+    git checkout --quiet --detach "$UPSTREAM"
+    # Main receives the release metadata. The tag contains the tested source
+    # plus that metadata, excluding later untested code and changelog entries.
+    git merge --ff --no-edit "$RELEASE_COMMIT"
+    if git push --atomic origin HEAD:refs/heads/main "$TAG_OBJECT:$RELEASE_TAG"; then
+      PUSHED=1
+      break
+    fi
+    LAST_MAIN="$UPSTREAM"
+  done
+  if [ "$PUSHED" = 0 ]; then
+    echo "Failed to publish pinned release v${VERSION} and main atomically." >&2
+    exit 1
+  fi
+  git checkout --quiet --detach "$RELEASE_COMMIT"
+else
+  run "git tag -a v${VERSION} -m 'v${VERSION}'"
+  run "git push origin main"
+  run "git push origin v${VERSION}"
+fi
 
 # ── 5. GitHub release ───────────────────────────────────────────────────────
 step "5/9  Create GitHub release"
 if [ -n "$NOTES_FILE" ] && [ -f "$NOTES_FILE" ]; then
-  run "gh release create v${VERSION} --title 'v${VERSION}' --notes-file '${NOTES_FILE}'"
+  run "gh release create v${VERSION} --verify-tag --title 'v${VERSION}' --notes-file '${NOTES_FILE}'"
 else
   warn "no --notes-file given; using the [${VERSION}] CHANGELOG section as notes"
   if [ "$DRY_RUN" = 0 ]; then
-    awk "/^## \[${VERSION}\]/{f=1;next} /^## \[/{f=0} f" CHANGELOG.md > /tmp/ccc-relnotes.md
-    gh release create "v${VERSION}" --title "v${VERSION}" --notes-file /tmp/ccc-relnotes.md
+    awk "/^## \[${VERSION}\]/{f=1;next} /^## \[/{f=0} f" CHANGELOG.md |
+      gh release create "v${VERSION}" --verify-tag --title "v${VERSION}" --notes-file -
   fi
 fi
 

@@ -129,12 +129,13 @@ done
 
 git pull --ff-only --quiet origin main 2>/dev/null || waive "cannot fast-forward $REPO_ROOT"
 
-entries="$(ls changelog.d 2>/dev/null | grep -Ev '^README' | grep -E '\.md$' || true)"
+source_commit="$(git rev-parse HEAD)" || exit 1
+entries="$(git ls-tree --name-only "$source_commit:changelog.d" 2>/dev/null | grep -Ev '^README' | grep -E '\.md$' || true)"
 n="$(printf '%s' "$entries" | grep -c . || true)"
 [ "$n" -ge "$MIN" ] || waive "only $n changelog entries (need $MIN)"
 printf '%s\n' "$entries" | grep -Eq '^(added|fixed)-' || waive "no added-/fixed- entries among $n"
 
-tag="$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)"
+tag="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$source_commit" 2>/dev/null || true)"
 if [ -n "$tag" ]; then
   age=$(( $(date +%s) - $(git log -1 --format=%ct "$tag") ))
   [ "$age" -ge 86400 ] || waive "last release $tag is only $((age/3600))h old"
@@ -149,7 +150,11 @@ say "ENOUGH: $n entries since $tag; cutting v$NEXT (dry-run=$DRY)"
 if [ "$DRY" = 1 ]; then
   ./scripts/cut-release.sh "$NEXT" $CUT_FLAGS --dry-run >>"$LOG" 2>&1; rc=$?
 else
-  ./scripts/cut-release.sh "$NEXT" $CUT_FLAGS >>"$LOG" 2>&1; rc=$?
+  source_args=()
+  for flag in $CUT_FLAGS; do
+    [ "$flag" != --skip-dmg ] || source_args=(--source-commit "$source_commit")
+  done
+  ./scripts/cut-release.sh "$NEXT" $CUT_FLAGS ${source_args[@]+"${source_args[@]}"} >>"$LOG" 2>&1; rc=$?
 fi
 if [ "$rc" = 0 ]; then say "$([ "$DRY" = 1 ] && echo DRY-RUN-OK || echo RELEASED): v$NEXT"; else say "FAILED: cut-release exit $rc (see $LOG)"; fi
 [ "$rc" = 0 ] || exit 1
