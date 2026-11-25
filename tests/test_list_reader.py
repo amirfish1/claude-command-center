@@ -105,6 +105,18 @@ class ListReaderOpsTest(unittest.TestCase):
         self.assertEqual(kinds, ["reload", "warm"])
         self.assertTrue(all(span[2] is not None for span in list_reader._state["busy"]))
 
+    def test_rebuilding_has_no_gap_between_reload_and_warm(self):
+        # CCC-691: stale bodies are served only while rebuilding() is true;
+        # the warm must be claimed before "reloading" clears.
+        seen = []
+        list_reader._state["reloading"] = True
+        with mock.patch.object(list_reader, "_reload"), \
+                mock.patch.object(list_reader, "_warm_bodies",
+                                  side_effect=lambda: seen.append(list_reader.rebuilding())):
+            list_reader._reload_in_background()
+        self.assertEqual(seen, [True])
+        self.assertFalse(list_reader.rebuilding())
+
     def test_unknown_op_and_bad_acp(self):
         self.assertEqual(list_reader.handle_op({"op": "list_nope"}), {"ok": False})
         self.assertEqual(list_reader.handle_op({"op": "list_acp", "state": []}), {"ok": False})

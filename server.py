@@ -18046,9 +18046,45 @@ _ARCHIVE_LIST_BODY_CACHE = ByteBudgetCache(  # body key -> {"ver", "raw", "gzip"
 _ARCHIVE_LIST_BODY_LOCK = threading.Lock()
 _ARCHIVE_LIST_BODY_BUILD_LOCKS = {}  # body key -> Lock; single-flight body builds
 
+# CCC-691: the list reader child prebuilds bodies in the background after each
+# publication. A page load that raced that warm waited 0.7-3 s for the same
+# build. While the hook says a warm is under way, such a read gets the newest
+# body built earlier for its (key, window) instead; its delta token is from
+# this process, so the next poll catches up with a small delta. Any archive,
+# trash or lane mutation voids these bodies, so a hidden row never comes back.
+_ARCHIVE_LIST_STALE_OK = None      # callable() -> bool, set by the list reader
+_ARCHIVE_LIST_STALE_MAX_S = 120.0
+_ARCHIVE_LIST_LATEST = {}          # (key, window, from_cache) -> (mut_gen, ts, raw, gzip, etag)
+_ARCHIVE_LIST_MUT_GEN = 0
+
+
+def _archive_list_void_latest():
+    """A mutation changed what the list must show: drop the stale fallbacks."""
+    global _ARCHIVE_LIST_MUT_GEN
+    with _ARCHIVE_LIST_BODY_LOCK:
+        _ARCHIVE_LIST_MUT_GEN += 1
+        _ARCHIVE_LIST_LATEST.clear()
+
+
+def _archive_list_stale_body(slot, now=None):
+    hook = _ARCHIVE_LIST_STALE_OK
+    if hook is None:
+        return None
+    try:
+        if not hook():
+            return None
+    except Exception:
+        return None
+    now = time.time() if now is None else now
+    with _ARCHIVE_LIST_BODY_LOCK:
+        entry = _ARCHIVE_LIST_LATEST.get(slot)
+        if entry is None or entry[0] != _ARCHIVE_LIST_MUT_GEN or now - entry[1] > _ARCHIVE_LIST_STALE_MAX_S:
+            return None
+        return entry[2:]
+
 
 def _archive_list_body_get_or_build(cache_key, window, from_cache, build_payload, snap_ver,
-                                    diagnostics=None, *, eager_gzip=True):
+                                    diagnostics=None, *, eager_gzip=True, allow_stale=False):
     """(raw, gzip, etag) for a /list body: replayed from the body cache when
     the version matches, else built once per key (single-flight)."""
     # The version is part of the key (not just the equality check) so two
@@ -18075,8 +18111,15 @@ def _archive_list_body_get_or_build(cache_key, window, from_cache, build_payload
         return None, None, None
 
     build_lock = None
+    slot = (cache_key, window, bool(from_cache))
     if snap_ver:
         raw, gzip_body, etag_val = _cached_body()
+        if raw is None and allow_stale:
+            stale = _archive_list_stale_body(slot)
+            if stale is not None:
+                if diagnostics is not None:
+                    diagnostics.update(hit=True, reason="stale-while-warming")
+                return stale
         if raw is None:
             # CCC-142: single-flight per body key. Tabs polling the same
             # window after a snapshot change each built the same ~11MB
@@ -18109,6 +18152,9 @@ def _archive_list_body_get_or_build(cache_key, window, from_cache, build_payload
                         "gzip": gzip_body,
                         "etag": etag_val,
                     }, len(raw) + len(gzip_body or b""))
+                    if _ARCHIVE_LIST_STALE_OK is not None:
+                        _ARCHIVE_LIST_LATEST[slot] = (_ARCHIVE_LIST_MUT_GEN, time.time(),
+                                                      raw, gzip_body, etag_val)
                 _ARCHIVE_LIST_BUILT.add((cache_key, window))
                 _archive_list_disk_save(cache_key, window, raw, gzip_body, etag_val)
     finally:
@@ -18885,11 +18931,13 @@ def _clear_archive_serve_cache():
     with _archive_serve_lock:
         _archive_serve_cache.clear()
         _archive_serve_generation += 1
+    _archive_list_void_latest()
     # The conv_reader child serves list reads from its own copy (CCC-679).
     _conv_reader.list_mutation("clear")
 
 
 def _restamp_archive_serve_cache_after_mutation(archived_set=None, trashed_set=None, mutated_sids=None):
+    _archive_list_void_latest()
     _restamp_archive_serve_cache_local(archived_set, trashed_set, mutated_sids)
     # The conv_reader child serves list reads from its own copy (CCC-679).
     _conv_reader.list_mutation("restamp", archived=archived_set, trashed=trashed_set,
@@ -50853,7 +50901,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         try:
             raw, gzip_body, etag_val = _archive_list_body_get_or_build(
                 cache_key, window, from_cache, build_payload, snap_ver,
-                diagnostics=diagnostics, eager_gzip=eager_gzip)
+                diagnostics=diagnostics, eager_gzip=eager_gzip, allow_stale=True)
         except _ArchiveListClientDisconnected:
             return "abandoned"
         return self._send_archive_list_body(raw, gzip_body, etag_val)

@@ -111,6 +111,9 @@ def setup(server_mod):
     server_mod._archive_list_disk_save = lambda *a, **k: False
     server_mod._archive_history_start_publication = lambda *a, **k: None
     server_mod._save_archive_response_cache = lambda *a, **k: False
+    # While a reload or warm is rebuilding bodies, a page load gets the
+    # previous body instead of waiting on the same build (CCC-691).
+    server_mod._ARCHIVE_LIST_STALE_OK = rebuilding
     # Belt and braces: the child must never write the archive store.
     original_connect = archive_store._connect
 
@@ -400,12 +403,21 @@ def _reload_in_background():
     except Exception as exc:
         _note_error(exc)
         return
+    else:
+        # Claimed before "reloading" clears, so rebuilding() has no gap
+        # between the reload publishing rows and the warm building bodies.
+        warm = _claim_warm()
     finally:
         _busy_end(span)
         with _lock:
             _state["reloading"] = False
-    if _claim_warm():
+    if warm:
         _warm_until_settled()
+
+
+def rebuilding():
+    """True while a reload or warm is rebuilding the prebuilt bodies."""
+    return bool(_state["reloading"] or _state["warming"])
 
 
 def sync(now=None):

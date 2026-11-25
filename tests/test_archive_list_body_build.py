@@ -998,3 +998,55 @@ def test_delta_context_compares_serialized_numeric_types(monkeypatch):
     assert server._archive_delta_ctx_changed_sids('before', 'after') == {
         'a', 'b', 'c', 'd', 'session_a', 'session_b', 'session_c', 'session_d',
     }
+
+
+def test_read_during_reader_warm_gets_previous_body_until_a_mutation(monkeypatch, tmp_path):
+    # CCC-691: a page load racing the list reader's background warm waited for
+    # the same build; it now gets the previous body, unless a mutation voided it.
+    server = importlib.import_module('server')
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_DISK_DIR', tmp_path)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_CACHE', server.ByteBudgetCache(1 << 20, 8))
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_LATEST', {})
+    monkeypatch.setattr(server._conv_reader, 'list_mutation', lambda *a, **k: None)
+    warming = [False]
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_STALE_OK', lambda: warming[0])
+    builds = []
+
+    def payload(tag):
+        def build():
+            builds.append(tag)
+            return {'conversations': [{'session_id': tag}]}
+        return build
+
+    def read(version, tag, allow_stale=True):
+        detail = {}
+        raw, _, _ = server._archive_list_body_get_or_build(
+            'key', '1d', True, payload(tag), version, diagnostics=detail, allow_stale=allow_stale)
+        return json.loads(raw)['conversations'][0]['session_id'], detail['reason']
+
+    assert read(1, 'v1') == ('v1', 'version-miss')
+    warming[0] = True
+    assert read(2, 'v2') == ('v1', 'stale-while-warming')
+    assert read(2, 'v2', allow_stale=False) == ('v2', 'version-miss')  # the warm itself
+    assert read(2, 'v2') == ('v2', 'hit')
+    assert read(3, 'v3') == ('v2', 'stale-while-warming')
+    server._restamp_archive_serve_cache_after_mutation(mutated_sids={'v2'})
+    assert read(3, 'v3') == ('v3', 'version-miss')
+    warming[0] = False
+    assert read(4, 'v4') == ('v4', 'version-miss')
+    assert builds == ['v1', 'v2', 'v3', 'v4']
+
+
+def test_dashboard_never_serves_a_previous_body(monkeypatch, tmp_path):
+    server = importlib.import_module('server')
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_DISK_DIR', tmp_path)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_CACHE', server.ByteBudgetCache(1 << 20, 8))
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_LATEST', {})
+    assert server._ARCHIVE_LIST_STALE_OK is None
+    for version in (1, 2):
+        detail = {}
+        server._archive_list_body_get_or_build(
+            'key', '1d', True, lambda: {'conversations': []}, version,
+            diagnostics=detail, allow_stale=True)
+        assert detail['reason'] == 'version-miss'
+    assert server._ARCHIVE_LIST_LATEST == {}
