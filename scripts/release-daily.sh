@@ -79,13 +79,26 @@ python3 "$REPO_ROOT/scripts/release_backfill.py" pending ${backfill_args[@]+"${b
 
 STREAK_FILE="$LOG_DIR/waive-streak"
 WARNINGS=""
-# Housekeeping the gate does not block on goes to the REPO-FIXER queue (deduped
-# per repo per day) instead of stopping the release.
+# Housekeeping goes to REPO-FIXER without stopping the release. Keep an
+# unchanged warning on its existing ticket for as long as that ticket is open.
 file_repofixer() {  # $1=kind $2=repo $3=details
-  [ "$DRY" = 1 ] && { say "[dry-run] would file REPO-FIXER ticket: $1 in $(basename "$2")"; return 0; }
+  local repo_name key fingerprint
+  local ticket_args=()
+  repo_name="$(basename "$2")"
+  [ "$DRY" = 1 ] && { say "[dry-run] would track REPO-FIXER ticket: $1 in $repo_name"; return 0; }
   command -v wt >/dev/null 2>&1 || return 0
-  wt add -q REPO-FIXER --no-dispatch --title "release gate: $1 in $(basename "$2")" --note "$3" \
-    --dedupe-key "release-gate-$1-$(basename "$2")-$(date +%Y-%m-%d)" >/dev/null 2>&1 || true
+  key="release-gate-$1-$repo_name"
+  if [ "$1" = "stale worktrees/branches" ]; then
+    fingerprint="$(printf '%s' "$3" | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
+    key="$key-$fingerprint"
+    if wt ls -q REPO-FIXER --client-id "$key" --status all --limit 0 --json 2>/dev/null |
+      python3 -c 'import json, sys; sys.exit(not any(ticket["status"] != "closed" for ticket in json.load(sys.stdin)))' 2>/dev/null; then
+      return 0
+    fi
+    ticket_args+=(--client-id "$key")
+  fi
+  wt add -q REPO-FIXER --no-dispatch --title "release gate: $1 in $repo_name" --note "$3" \
+    --dedupe-key "$key-$(date +%Y-%m-%d)" ${ticket_args[@]+"${ticket_args[@]}"} >/dev/null 2>&1 || true
 }
 # Blocks on real risk (uncommitted work, unpushed main). Warnings only file a ticket.
 check_repo() {
@@ -131,7 +144,7 @@ IFS=. read -r MA MI PA <<< "$prev"
 if printf '%s\n' "$entries" | grep -q '^added-'; then NEXT="$MA.$((MI+1)).0"; else NEXT="$MA.$MI.$((PA+1))"; fi
 
 rm -f "$STREAK_FILE"
-[ -z "$WARNINGS" ] || say "proceeding despite housekeeping warnings (REPO-FIXER ticket filed):\n$WARNINGS"
+[ -z "$WARNINGS" ] || say "proceeding despite housekeeping warnings:\n$WARNINGS"
 say "ENOUGH: $n entries since $tag; cutting v$NEXT (dry-run=$DRY)"
 if [ "$DRY" = 1 ]; then
   ./scripts/cut-release.sh "$NEXT" $CUT_FLAGS --dry-run >>"$LOG" 2>&1; rc=$?

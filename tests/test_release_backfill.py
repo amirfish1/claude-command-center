@@ -323,6 +323,77 @@ def test_daily_pending_runs_even_when_release_is_waived(transport, monkeypatch):
     assert any(c[0] == "ssh" for c in read_calls(calls))
 
 
+def test_daily_reuses_active_housekeeping_ticket(transport, monkeypatch):
+    directory, _, calls = transport
+    repo = directory / "daily"
+    (repo / "scripts").mkdir(parents=True)
+    for name in ("release-daily.sh", "release_backfill.py"):
+        shutil.copy2(ROOT / "scripts" / name, repo / "scripts" / name)
+    executable(repo / "scripts/repo-clean-check.sh", '''\
+        #!/bin/sh
+        [ "$1" = "$FAKE_WARN_REPO" ] || exit 0
+        printf 'WARN %s: open worktree(s): %s\\n' "$1" "$FAKE_WORKTREE"
+    ''')
+    executable(directory / "bin/wt", '''\
+        #!/usr/bin/env python3
+        import json, os, sys
+        args = sys.argv[1:]
+        with open(os.environ["FAKE_CALLS"], "a") as calls:
+            calls.write(json.dumps(args) + "\\n")
+        if args[0] == "ls":
+            client = args[args.index("--client-id") + 1]
+            if client != os.environ.get("FAKE_CLIENT_ID"):
+                print("[]")
+            else:
+                print(json.dumps([{"status": os.environ["FAKE_TICKET_STATUS"]}]))
+    ''')
+    executable(directory / "bin/date", '''\
+        #!/bin/sh
+        case "$1" in
+            +%Y-%m-%d) printf '%s\\n' "$FAKE_DAY" ;;
+            *) exec /bin/date "$@" ;;
+        esac
+    ''')
+    monkeypatch.setenv("CCC_RELEASE_LOG_DIR", str(directory))
+    monkeypatch.setenv("CCC_RELEASE_REPOS", str(directory / "sibling"))
+    monkeypatch.setenv("CCC_RELEASE_MODE_FILE", str(directory / "mode"))
+    monkeypatch.setenv("HOME", str(directory / "home"))
+    monkeypatch.setenv("TMPDIR", str(directory))
+    monkeypatch.setenv("FAKE_DAY", "2026-01-01")
+    monkeypatch.setenv("FAKE_WARN_REPO", str(repo))
+    monkeypatch.setenv("FAKE_WT", str(directory / "bin/wt"))
+    monkeypatch.setenv("FAKE_WORKTREE", "/tmp/first")
+
+    def run(*args):
+        result = subprocess.run(
+            ["bash", "-c", 'wt() { "$FAKE_WT" "$@"; }; export -f wt; exec bash "$@"',
+             "bash", str(repo / "scripts/release-daily.sh"), *args],
+            text=True, capture_output=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "cannot fast-forward" in result.stdout
+        return [call for call in read_calls(calls) if call[0] == "add"]
+
+    assert run("--dry-run") == []
+    assert not calls.exists()
+    [first] = run()
+    client = first[first.index("--client-id") + 1]
+    monkeypatch.setenv("FAKE_CLIENT_ID", client)
+    monkeypatch.setenv("FAKE_TICKET_STATUS", "open")
+    monkeypatch.setenv("FAKE_DAY", "2026-01-02")
+    assert run() == [first]
+
+    monkeypatch.setenv("FAKE_WORKTREE", "/tmp/second")
+    _, changed = run()
+    assert changed[changed.index("--client-id") + 1] != client
+
+    monkeypatch.setenv("FAKE_WORKTREE", "/tmp/first")
+    monkeypatch.setenv("FAKE_TICKET_STATUS", "closed")
+    _, _, recurring = run()
+    assert recurring[recurring.index("--client-id") + 1] == client
+    assert recurring[recurring.index("--dedupe-key") + 1] != first[first.index("--dedupe-key") + 1]
+
+
 def test_trigger_correlates_receipt_and_does_not_kill_signing(transport, monkeypatch):
     directory, _, calls = transport
     home = directory / "home"
