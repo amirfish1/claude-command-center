@@ -371,6 +371,46 @@ def test_coalesced_stream_writes_wait_for_every_command_uuid(
     assert server_mod._headless_turn_in_progress(entry) is False
 
 
+def test_cancelled_command_uuid_is_terminal_not_pending(
+    server_mod, tmp_path, monkeypatch
+):
+    """A queued-then-cancelled input command resolves the pending set.
+
+    Claude cancels a FIFO user message that was queued behind a turn when the
+    turn ends/errors before consuming it (observed lifecycle:
+    queued -> started -> cancelled, never completed). Only "completed" cleared
+    the pending set, so the command owed an ack forever and
+    `_headless_turn_in_progress` held every later queued send until the 600s
+    TTL silently dropped it — the session looked like it refused all input.
+    """
+    _sid, entry, _transcript, log = _stage(
+        server_mod, tmp_path, [_event("a")], 4
+    )
+    cancelled_uuid = "aaaaaaaa-1111-4111-8111-111111111111"
+    entry["input_command_uuids"] = [cancelled_uuid]
+    log.write_text(
+        _result_lines(4)
+        + json.dumps({
+            "type": "command_lifecycle",
+            "command_uuid": cancelled_uuid, "state": "queued",
+        }) + "\n"
+        + json.dumps({
+            "type": "command_lifecycle",
+            "command_uuid": cancelled_uuid, "state": "started",
+        }) + "\n"
+    )
+    assert server_mod._headless_turn_in_progress(entry) is True
+    assert server_mod._pending_input_command_uuids(entry) == [cancelled_uuid]
+
+    with log.open("a") as fh:
+        fh.write(json.dumps({
+            "type": "command_lifecycle",
+            "command_uuid": cancelled_uuid, "state": "cancelled",
+        }) + "\n")
+    assert server_mod._pending_input_command_uuids(entry) == []
+    assert server_mod._headless_turn_in_progress(entry) is False
+
+
 def test_ask_waits_for_its_own_command_result_when_prior_turn_finishes(
     server_mod, tmp_path, monkeypatch
 ):

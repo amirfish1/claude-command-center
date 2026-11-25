@@ -8615,15 +8615,22 @@ def _pending_input_command_uuids(entry):
     try:
         with open(log, "rb") as fh:
             for raw in fh:
-                if b'"command_lifecycle"' not in raw or b'"completed"' not in raw:
+                if b'"command_lifecycle"' not in raw or (
+                    b'"completed"' not in raw and b'"cancelled"' not in raw
+                ):
                     continue
                 try:
                     event = json.loads(raw)
                 except (json.JSONDecodeError, ValueError):
                     continue
+                # "cancelled" is terminal too: a user message queued behind a
+                # turn is cancelled (queued -> started -> cancelled, never
+                # completed) when that turn ends or errors before consuming
+                # it. Keeping it pending held every later queued inject
+                # forever (headless_turn until the 600s TTL dropped the text).
                 if (
                     event.get("type") == "command_lifecycle"
-                    and event.get("state") == "completed"
+                    and event.get("state") in ("completed", "cancelled")
                 ):
                     pending.discard(str(event.get("command_uuid") or ""))
     except OSError:
