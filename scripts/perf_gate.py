@@ -28,6 +28,7 @@ import argparse
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -36,6 +37,9 @@ from pathlib import Path
 DEFAULT_EVENTS = Path.home() / ".claude" / "command-center" / "perf-events.jsonl"
 # Same steady-state rule as ccc_server/perf_events._exclusion_reason (CCC-168).
 BOOT_EXCLUDE_S = int(os.environ.get("CCC_PERF_BOOT_EXCLUDE_S", "1800"))
+_UTC_EVENT_PREFIX = re.compile(
+    rb'^\{"ts": "(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d{6})?Z", "kind": '
+)
 
 
 def _steady_reason(row):
@@ -74,21 +78,29 @@ def _git(repo, *args):
 
 
 def _read_rows(path, since, kind=None):
-    """Rows at or after ``since`` (optionally only ``kind``).
+    return _read_rows_for_kinds(path, since, (kind,) if kind else ())
 
-    Streams the whole file with a cheap substring prefilter: the log is
-    dominated by other kinds, so a fixed tail window silently covered only a
-    few hours and the gate reported "0 samples" (CCC-144).
-    """
-    needle = '"kind": "%s"' % kind if kind else None
+
+def _read_rows_for_kinds(path, since, kinds):
+    """Read all recent matching rows, even across out-of-order appends."""
+    kind_pattern = (re.compile(b"|".join(
+        re.escape(f'"kind": "{kind}"'.encode("utf-8")) for kind in kinds
+    )) if kinds else None)
+    # The writer puts a UTC timestamp first. Reject older whole seconds before
+    # decoding JSON. Rows in the boundary second or in other layouts still get
+    # the full timestamp comparison. A fixed tail would miss samples (CCC-144).
+    cutoff_second = since.astimezone(timezone.utc).isoformat(timespec="seconds")[:19].encode("ascii")
     rows = []
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
+        with open(path, "rb") as f:
             for line in f:
-                if needle and needle not in line:
+                prefix = _UTC_EVENT_PREFIX.match(line)
+                if prefix and prefix[1] < cutoff_second:
+                    continue
+                if kind_pattern and not kind_pattern.search(line):
                     continue
                 try:
-                    row = json.loads(line)
+                    row = json.loads(line.decode("utf-8", errors="replace"))
                 except ValueError:
                     continue
                 ts = _parse_ts(row.get("ts")) if isinstance(row, dict) else None

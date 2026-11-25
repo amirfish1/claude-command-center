@@ -142,3 +142,23 @@ def test_rows_beyond_a_tail_window_are_still_counted(tmp_path):
     f.write_text("\n".join(lines) + "\n")
     rows = mod._read_rows(str(f), __import__("datetime").datetime(2020, 1, 1, tzinfo=__import__("datetime").timezone.utc), "tts_start")
     assert len(rows) == 1
+
+
+def test_multi_kind_window_keeps_boundary_and_out_of_order_rows(tmp_path):
+    since = datetime(2026, 1, 2, 9, 0, 0, 500000, tzinfo=timezone.utc)
+    events = tmp_path / "events.jsonl"
+    rows = [
+        {"ts": "2026-01-02T09:00:02Z", "kind": "live_build", "ms": 1},
+        {"ts": "2026-01-02T08:59:59Z", "kind": "list_read", "ms": 2},
+        {"ts": "2026-01-02T09:00:00.499999Z", "kind": "list_read", "ms": 3},
+        {"ts": "2026-01-02T09:00:00.500000Z", "kind": "list_read", "ms": 4},
+        {"ts": "2026-01-02T08:00:01-01:00", "kind": "archive_load", "ms": 5},
+        {"kind": "list_read", "ts": "2026-01-02T09:00:01Z", "ms": 6},
+        {"ts": "2026-01-02T09:00:01Z", "kind": "conv_open", "ms": 7},
+    ]
+    events.write_text("\n".join(map(json.dumps, rows)) + "\n")
+
+    selected = perf_gate._read_rows_for_kinds(
+        events, since, ("live_build", "list_read", "archive_load"))
+
+    assert [row["ms"] for row in selected] == [1, 4, 5, 6]

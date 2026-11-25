@@ -22,18 +22,23 @@ GATES = (
 def check(events, repo, commit):
     since = datetime.now(timezone.utc) - timedelta(hours=24)
     deployed = perf_gate._Deployed(repo, commit)
+    values_by_kind = {kind: [] for kind, _, _ in GATES}
+    for row in perf_gate._read_rows_for_kinds(events, since, values_by_kind):
+        kind = row.get('kind')
+        if kind not in values_by_kind or perf_gate._steady_reason(row):
+            continue
+        if kind == 'list_read' and str((row.get('detail') or {}).get('status')) == '304':
+            continue
+        if deployed(row):
+            values_by_kind[kind].append(float(row.get('ms') or 0))
+
     gates = []
     for kind, budget, minimum in GATES:
-        rows = perf_gate._read_rows(events, since, kind)
-        rows = [row for row in rows if row.get('kind') == kind
-                and (kind != 'list_read'
-                     or str((row.get('detail') or {}).get('status')) != '304')
-                and deployed(row) and not perf_gate._steady_reason(row)]
-        values = [float(row.get('ms') or 0) for row in rows]
+        values = values_by_kind[kind]
         p95 = perf_gate._percentile(values, 95) if values else None
-        status = ('pending' if len(rows) < minimum
+        status = ('pending' if len(values) < minimum
                   else 'pass' if p95 <= budget else 'fail')
-        gates.append({'kind': kind, 'status': status, 'samples': len(rows),
+        gates.append({'kind': kind, 'status': status, 'samples': len(values),
                       'minimum': minimum, 'p95_ms': p95, 'budget_ms': budget})
     statuses = {gate['status'] for gate in gates}
     status = 'fail' if 'fail' in statuses else 'pending' if 'pending' in statuses else 'pass'
