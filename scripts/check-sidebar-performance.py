@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
 """Report the three original sidebar performance gates for permanent checks.
 
-Uses the same telemetry filters and deployment proof as perf_gate.py. Missing
-post-deployment samples stay pending; they never become a successful check.
+Uses perf_gate.py's deployment proof and its warmup and host-load filters.
+Missing post-deployment samples stay pending; they never become a successful
+check.
+
+Unlike perf_gate --steady-state, samples from 5 minutes to 30 minutes after a
+dashboard boot count here (CCC-600). `ccc restart` merges requests into
+at most one restart per 30 minutes (RESTART_DEBOUNCE_S), and a busy host
+always has one pending. That left the 30-minute boot exclusion with ~6
+steady minutes per day, so the gate stayed pending at zero samples while
+users loaded the sidebar on warming servers. The server's own warmup flag
+(first 5 minutes, CCC_PERF_WARMUP_S) still excludes the cold replay itself.
 """
 import argparse
 from datetime import datetime, timedelta, timezone
@@ -19,13 +28,18 @@ GATES = (
 )
 
 
+def _excluded(row):
+    """Warmup or saturated-host samples; post-warmup boot samples count."""
+    return perf_gate._steady_reason(row) in ('warmup', 'load')
+
+
 def check(events, repo, commit):
     since = datetime.now(timezone.utc) - timedelta(hours=24)
     deployed = perf_gate._Deployed(repo, commit)
     values_by_kind = {kind: [] for kind, _, _ in GATES}
     for row in perf_gate._read_rows_for_kinds(events, since, values_by_kind):
         kind = row.get('kind')
-        if kind not in values_by_kind or perf_gate._steady_reason(row):
+        if kind not in values_by_kind or _excluded(row):
             continue
         if kind == 'list_read' and str((row.get('detail') or {}).get('status')) == '304':
             continue

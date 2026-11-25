@@ -16,11 +16,11 @@ finally:
     sys.path.remove(str(scripts))
 
 
-def _events(tmp_path, timings):
+def _events(tmp_path, timings, up_s=3600, warmup=False, load1=1):
     rows = []
     for kind, ms, count in timings:
         rows.extend({'kind': kind, 'ts': datetime.now(timezone.utc).isoformat(),
-                     'ms': ms, 'warmup': False, 'load1': 1, 'ncpu': 4, 'up_s': 3600,
+                     'ms': ms, 'warmup': warmup, 'load1': load1, 'ncpu': 4, 'up_s': up_s,
                      'detail': {'status': 304 if kind == 'list_read' and ms == 0 else 200}}
                     for _ in range(count))
     target = tmp_path / 'events.jsonl'
@@ -50,3 +50,19 @@ def test_all_three_gates_and_deployment_proof_are_required(tmp_path):
     # the requested commit is unavailable; fixtures cannot claim adoption.
     result = check.check(target, tmp_path, 'missing-build')
     assert result['status'] == 'pending' and not result['real_data']
+
+
+def test_post_warmup_boot_samples_count(tmp_path):
+    # Restarts are merged to one per 30 minutes, so the gate must see
+    # samples between warmup and the 30-minute steady mark (CCC-600).
+    target = _events(tmp_path, [('list_read', 1001, 50)], up_s=600)
+    result = check.check(target, tmp_path, '')
+    assert result['status'] == 'fail'
+    assert result['evidence']['gates'][0]['samples'] == 50
+
+
+def test_warmup_and_saturated_samples_stay_excluded(tmp_path):
+    warm = _events(tmp_path, [('list_read', 5000, 50)], up_s=60, warmup=True)
+    assert check.check(warm, tmp_path, '')['evidence']['gates'][0]['samples'] == 0
+    busy = _events(tmp_path, [('list_read', 5000, 50)], up_s=600, load1=9)
+    assert check.check(busy, tmp_path, '')['evidence']['gates'][0]['samples'] == 0
