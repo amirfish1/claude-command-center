@@ -33,7 +33,8 @@ class ListReaderOpsTest(unittest.TestCase):
         self.srv = _FakeSrv()
         list_reader._state.update(server=self.srv, loaded=True, acp=False, mutations=0,
                                   sidecars=None, stamps={}, reloading=False, checked=0.0,
-                                  warms=0, warm_ms=None, errors=0, windows={})
+                                  warms=0, warm_ms=None, errors=0, windows={},
+                                  warming=False, warm_again=False, busy=[])
 
     def tearDown(self):
         list_reader._state.clear()
@@ -47,11 +48,62 @@ class ListReaderOpsTest(unittest.TestCase):
         self.assertEqual(self.srv._ACP_SESSION_STATE, {"claude": {"s1": {"attached": True}}})
 
     def test_mutation_forwards_sets(self):
-        list_reader.handle_op({"op": "list_mutation", "kind": "restamp",
-                               "archived": ["a"], "trashed": None, "sids": ["a", "b"]})
-        list_reader.handle_op({"op": "list_mutation", "kind": "clear"})
+        with mock.patch.object(list_reader, "_warm_after_mutation") as warm:
+            list_reader.handle_op({"op": "list_mutation", "kind": "restamp",
+                                   "archived": ["a"], "trashed": None, "sids": ["a", "b"]})
+            list_reader.handle_op({"op": "list_mutation", "kind": "clear"})
         self.assertEqual(self.srv.calls, [("restamp", {"a"}, None, {"a", "b"}), ("clear",)])
         self.assertEqual(list_reader.status()["mutations"], 2)
+        self.assertEqual(warm.call_count, 2)
+
+    def test_mutation_rewarms_discarded_bodies(self):
+        # CCC-691: a restamp drops the prebuilt bodies; without a rewarm the
+        # next page load rebuilt the full body on the request path.
+        list_reader._state["windows"] = {}
+        list_reader.handle_op({"op": "list_mutation", "kind": "restamp", "sids": ["a"]})
+        for thread in threading.enumerate():
+            if thread.name == "list-reader-warm":
+                thread.join(5)
+        self.assertEqual(self.srv.calls, [("restamp", None, None, {"a"}),
+                                          ("warm", {}, "1d", True, {})])
+        self.assertFalse(list_reader._state["warming"])
+
+    def test_mutation_during_reload_leaves_warm_to_reload(self):
+        list_reader._state["reloading"] = True
+        with mock.patch.object(list_reader.threading, "Thread") as thread:
+            list_reader._warm_after_mutation()
+        thread.assert_not_called()
+
+    def test_mutations_during_warm_coalesce_into_one_more_pass(self):
+        list_reader._state["windows"] = {}
+        self.assertTrue(list_reader._claim_warm())
+        with mock.patch.object(list_reader.threading, "Thread") as thread:
+            list_reader._warm_after_mutation()
+            list_reader._warm_after_mutation()
+        thread.assert_not_called()
+        list_reader._warm_until_settled()
+        self.assertEqual([c[0] for c in self.srv.calls], ["warm", "warm"])
+        self.assertFalse(list_reader._state["warming"])
+        self.assertFalse(list_reader._state["warm_again"])
+
+    def test_busy_overlap_attributes_reload_and_warm(self):
+        list_reader._state["busy"] = [["reload", 100.0, 101.0], ["warm", 101.0, None],
+                                      ["warm", 50.0, 51.0]]
+        # A 1.5 s request from 100.0 to 101.5: all of the reload, half the warm.
+        self.assertEqual(list_reader.busy_overlap(1500, now=101.5),
+                         {"busy_reload_ms": 1000.0, "busy_warm_ms": 500.0})
+        # Later, only the still-running warm counts; finished spans do not.
+        self.assertEqual(list_reader.busy_overlap(100, now=200.0), {"busy_warm_ms": 100.0})
+        list_reader._state["busy"][1][2] = 102.0
+        self.assertEqual(list_reader.busy_overlap(100, now=200.0), {})
+
+    def test_reload_records_busy_span(self):
+        list_reader._state["reloading"] = True
+        with mock.patch.object(list_reader, "_reload"):
+            list_reader._reload_in_background()
+        kinds = [span[0] for span in list_reader._state["busy"]]
+        self.assertEqual(kinds, ["reload", "warm"])
+        self.assertTrue(all(span[2] is not None for span in list_reader._state["busy"]))
 
     def test_unknown_op_and_bad_acp(self):
         self.assertEqual(list_reader.handle_op({"op": "list_nope"}), {"ok": False})
@@ -104,9 +156,11 @@ class ListReaderOpsTest(unittest.TestCase):
         list_reader._state["stamps"] = {"k": 10.0}
         list_reader._state["sidecars"] = ("stale",)
         with mock.patch.object(list_reader, "_store_stamps", return_value={"k": 10.0}):
-            list_reader.sync(now=100.0)
-            list_reader.sync(now=100.5)  # throttled
+            with mock.patch.object(list_reader, "_warm_after_mutation") as warm:
+                list_reader.sync(now=100.0)
+                list_reader.sync(now=100.5)  # throttled
         self.assertEqual(self.srv.calls, [("restamp", None, None, None)])
+        warm.assert_called_once_with()
 
     def test_acp_snapshot_keeps_attached_scalars(self):
         snap = list_reader.acp_snapshot({"claude": {

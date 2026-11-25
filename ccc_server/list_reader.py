@@ -57,6 +57,9 @@ _state = {
     "reload_ms": None,
     "warms": 0,
     "warm_ms": None,
+    "warming": False,      # a body warm is running
+    "warm_again": False,   # a mutation landed during it: warm once more
+    "busy": [],            # recent [kind, start, end|None] reload/warm spans
     "windows": {},         # {window: monotonic time of its last list read}
     "mutations": 0,
     "declined": 0,
@@ -98,6 +101,11 @@ def setup(server_mod):
         _state["server"] = server_mod
     # No detached rebuilds: rows come from the dashboard's publications.
     server_mod._archive_refresh_slot_available = lambda key, now: False
+    # Ticket titles come from the dashboard's published WatchTower snapshot,
+    # as in the other detached archive processes. Otherwise every reload whose
+    # 30 s ticket memo had expired ran a fresh `wt list` (13 s) inside the
+    # reload, which held each publication back by ~20 s (CCC-691).
+    server_mod._WT_DISPLAY_SNAPSHOT_ONLY = True
     # No list-body warmers, disk-body saves or history-layer publication.
     server_mod._archive_list_start_warm = lambda slot, warm: False
     server_mod._archive_list_disk_save = lambda *a, **k: False
@@ -116,7 +124,7 @@ def setup(server_mod):
 
     def record_diag(kind, ms, detail=None):
         if kind == "list_server" and isinstance(detail, dict):
-            detail = dict(detail, reader=True)
+            detail = dict(detail, reader=True, **busy_overlap(ms))
         return original_diag(kind, ms, detail)
 
     server_mod.record_diag = record_diag
@@ -288,8 +296,51 @@ def warm_windows(now=None):
     return WARM_WINDOWS + tuple(recent)
 
 
+# Reload/warm spans kept for busy_overlap(); a few minutes of history.
+_BUSY_KEEP = 32
+
+
+def _busy_begin(kind):
+    span = [kind, time.monotonic(), None]
+    with _lock:
+        busy = _state["busy"]
+        busy.append(span)
+        del busy[:-_BUSY_KEEP]
+    return span
+
+
+def _busy_end(span):
+    with _lock:
+        span[2] = time.monotonic()
+
+
+def busy_overlap(ms, now=None):
+    """How long a request that just took ``ms`` overlapped this child's own
+    reload or body warm, for the list_server diagnostic (CCC-691). Lets slow
+    reads be told apart from contention with background work."""
+    now = time.monotonic() if now is None else now
+    start = now - max(float(ms or 0), 0.0) / 1000.0
+    out = {}
+    with _lock:
+        spans = [tuple(span) for span in _state["busy"]]
+    for kind, begin, end in spans:
+        overlap = min(now if end is None else end, now) - max(begin, start)
+        if overlap > 0:
+            key = f"busy_{kind}_ms"
+            out[key] = round(out.get(key, 0.0) + overlap * 1000.0, 1)
+    return out
+
+
 def _warm_bodies():
     srv = _state["server"]
+    span = _busy_begin("warm")
+    try:
+        _warm_bodies_inner(srv)
+    finally:
+        _busy_end(span)
+
+
+def _warm_bodies_inner(srv):
     started = time.perf_counter()
     for window in warm_windows():
         try:
@@ -301,16 +352,60 @@ def _warm_bodies():
         _state["warm_ms"] = round((time.perf_counter() - started) * 1000.0, 1)
 
 
+def _claim_warm():
+    """True when the caller should run the warm; otherwise the running warm
+    is asked to go round once more, so bursts of mutations coalesce."""
+    with _lock:
+        if _state["warming"]:
+            _state["warm_again"] = True
+            return False
+        _state["warming"] = True
+        _state["warm_again"] = False
+        return True
+
+
+def _warm_until_settled():
+    try:
+        while True:
+            _warm_bodies()
+            with _lock:
+                if not _state["warm_again"]:
+                    return
+                _state["warm_again"] = False
+    finally:
+        with _lock:
+            _state["warming"] = False
+            _state["warm_again"] = False
+
+
+def _warm_after_mutation():
+    """Prebuild the bodies a restamp just discarded (CCC-691).
+
+    A restamp (archive, trash, lane, new transcript) drops every prebuilt
+    body, and the child never refreshes on its own, so the next page load
+    rebuilt the full 1d/7d body on the request path: reader full-read misses
+    took p50 0.8-1.1 s against 0.1 s for hits, and restamps outnumbered
+    publications. A reload in flight warms when it finishes."""
+    with _lock:
+        if _state["reloading"]:
+            return
+    if _claim_warm():
+        threading.Thread(target=_warm_until_settled, name="list-reader-warm", daemon=True).start()
+
+
 def _reload_in_background():
+    span = _busy_begin("reload")
     try:
         _reload()
     except Exception as exc:
         _note_error(exc)
         return
     finally:
+        _busy_end(span)
         with _lock:
             _state["reloading"] = False
-    _warm_bodies()
+    if _claim_warm():
+        _warm_until_settled()
 
 
 def sync(now=None):
@@ -344,6 +439,7 @@ def sync(now=None):
         srv._restamp_archive_serve_cache_after_mutation()
         with _lock:
             _state["sidecars"] = sidecars
+        _warm_after_mutation()
 
 
 def handle_op(req):
@@ -368,6 +464,7 @@ def handle_op(req):
             # The mutation's own sidecar write must not trigger a second,
             # full restamp on the next sync.
             _state["sidecars"] = _sidecar_stamp(srv)
+        _warm_after_mutation()
         return {"ok": True}
     if op == "list_acp":
         state = req.get("state")
