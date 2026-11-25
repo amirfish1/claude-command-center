@@ -43,6 +43,10 @@ If main advances during testing, the job merges the release metadata into
 the new tip and pushes main and the tag atomically. The tag excludes later
 commits, and their changelog entries stay queued for the next release. A merge
 conflict or a competing release aborts before either ref is published.
+After CCC ships, the job cuts a WatchTower patch release pinned the same way:
+it fetches WatchTower's `origin/main` and passes that SHA as
+`--source-commit`, so commits made in the shared WatchTower clone during the
+CCC run neither enter that tag nor block its push.
 
 Manual cuts and scheduled cuts that build a DMG test in a temporary checkout
 and stop before changing versions or tags if the caller's branch advances

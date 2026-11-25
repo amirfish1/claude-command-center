@@ -185,3 +185,65 @@ def test_daily_source_release_publishes_only_the_tested_candidate(tmp_path, conc
     assert git("--git-dir", str(remote), "show", "main:changelog.d/added-later.md") == "Later change."
     assert "Tested change." in notes.read_text()
     assert "Later change." not in notes.read_text()
+
+
+def test_daily_pins_the_sibling_release_to_its_origin_revision(tmp_path):
+    """A sibling clone gains unpushed local work during the CCC cut (OPS-1030);
+    the sibling release must be pinned to what its origin holds, not to HEAD."""
+    repo, sibling = tmp_path / "ccc", tmp_path / "sibling"
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env.update(
+        GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+        GIT_AUTHOR_NAME="Release Fixture", GIT_AUTHOR_EMAIL="release@example.invalid",
+        GIT_COMMITTER_NAME="Release Fixture", GIT_COMMITTER_EMAIL="release@example.invalid",
+        CCC_RELEASE_MIN_ENTRIES="1", CCC_RELEASE_CUT_FLAGS="--skip-dmg --skip-brew",
+        CCC_RELEASE_REPOS=str(sibling),
+        CCC_RELEASE_MODE_FILE=str(tmp_path / "missing-mode"),
+        CCC_RELEASE_LOG_DIR=str(tmp_path / "logs"), TMPDIR=str(tmp_path),
+    )
+
+    def git(*args, cwd):
+        return subprocess.run(["git", *args], cwd=cwd, env=env, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    def script(path, body):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("#!/usr/bin/env bash\n" + body)
+        path.chmod(0o755)
+
+    def publish(clone, *paths):
+        git("init", "-qb", "main", cwd=clone)
+        git("add", *paths, cwd=clone)
+        git("commit", "-qm", "initial", cwd=clone)
+        git("init", "--bare", "-qb", "main", str(clone) + ".git", cwd=tmp_path)
+        git("remote", "add", "origin", str(clone) + ".git", cwd=clone)
+        git("push", "-qu", "origin", "main", cwd=clone)
+
+    for name in ("release-daily.sh", "release_backfill.py"):
+        (repo / "scripts").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / "scripts" / name, repo / "scripts" / name)
+    script(repo / "scripts/repo-clean-check.sh", "exit 0\n")
+    # The CCC cut succeeds while a session commits locally in the sibling clone.
+    script(repo / "scripts/cut-release.sh",
+           f'printf later > "{sibling}/later.txt"\n'
+           f'git -C "{sibling}" add later.txt && git -C "{sibling}" commit -qm later\n')
+    (repo / "changelog.d").mkdir()
+    (repo / "changelog.d/added-change.md").write_text("Change.\n")
+    publish(repo, "scripts", "changelog.d")
+
+    script(sibling / "scripts/cut-release.sh", f'printf "%s" "$*" > "{tmp_path}/sibling-args"\n')
+    publish(sibling, "scripts")
+    git("tag", "-a", "v0.0.1", "-m", "v0.0.1", cwd=sibling)
+    (sibling / "landed.txt").write_text("landed\n")
+    git("add", "landed.txt", cwd=sibling)
+    git("commit", "-qm", "landed", cwd=sibling)
+    git("push", "-q", "origin", "main", cwd=sibling)
+    landed = git("rev-parse", "HEAD", cwd=sibling)
+
+    result = subprocess.run(["bash", "scripts/release-daily.sh"], cwd=repo, env=env,
+                            capture_output=True, text=True, check=False)
+
+    log = "\n".join(f.read_text() for f in (tmp_path / "logs").glob("*.log"))
+    assert result.returncode == 0, result.stdout + result.stderr + log
+    assert git("rev-parse", "HEAD", cwd=sibling) != landed, "fixture must add local work"
+    assert (tmp_path / "sibling-args").read_text() == f"patch --source-commit {landed}"
