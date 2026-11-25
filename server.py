@@ -21525,19 +21525,21 @@ def _archive_list_body_ver(key, rows, extra):
             return 0
         base = sc.get("rows") or []
         ver = sc.get("ver", 0)
-        if rows is base:
-            return ver
-        if len(rows) < len(base) + len(extra or []):
-            return 0
-        if any(a is not b for a, b in zip(rows, base)):
-            return 0
-        appended = rows[len(base):]
-        if not appended:
-            return ver
-        sig = hashlib.sha1(
-            json.dumps(appended, sort_keys=True, separators=(",", ":"), default=str).encode()
-        ).hexdigest()
-        return (ver, sig)
+    # A refresh publishes replacement rows. The captured list and version
+    # still identify this response while other requests use the cache.
+    if rows is base:
+        return ver
+    if len(rows) < len(base) + len(extra or []):
+        return 0
+    if any(a is not b for a, b in zip(rows, base)):
+        return 0
+    appended = rows[len(base):]
+    if not appended:
+        return ver
+    sig = hashlib.sha1(
+        json.dumps(appended, sort_keys=True, separators=(",", ":"), default=str).encode()
+    ).hexdigest()
+    return (ver, sig)
 
 
 # A Devin CLI row missing from the snapshot is overlaid only while it is

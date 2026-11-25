@@ -1,4 +1,6 @@
 """Cold topic context must retain list replay and incremental delivery."""
+from concurrent.futures import ThreadPoolExecutor
+import threading
 import time
 
 import server
@@ -76,6 +78,40 @@ def test_copied_or_reordered_snapshot_rows_cannot_replay(monkeypatch):
     base = server._archive_serve_cache['base']['rows']
     assert server._archive_list_body_ver('base', [dict(r) for r in base], []) == 0
     assert server._archive_list_body_ver('base', list(reversed(base)), []) == 0
+
+
+def test_hashing_captured_archive_rows_does_not_block_refresh(monkeypatch):
+    base = [{'session_id': 'base'}]
+    overlay = {'session_id': 'overlay'}
+    rows = [*base, overlay]
+    cache = {'scope': {'rows': base, 'ver': 1}}
+    monkeypatch.setattr(server, '_archive_serve_cache', cache)
+    expected = server._archive_list_body_ver('scope', rows, [overlay])
+    dumps = server.json.dumps
+    hashing = threading.Event()
+    resume = threading.Event()
+
+    def pause_overlay_encoding(value, *args, **kwargs):
+        if isinstance(value, list) and len(value) == 1 and value[0] is overlay:
+            hashing.set()
+            assert resume.wait(timeout=5)
+        return dumps(value, *args, **kwargs)
+
+    monkeypatch.setattr(server.json, 'dumps', pause_overlay_encoding)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        result = pool.submit(server._archive_list_body_ver, 'scope', rows, [overlay])
+        try:
+            assert hashing.wait(timeout=5)
+            assert server._archive_serve_lock.acquire(timeout=2)
+            try:
+                cache['scope'] = {'rows': [{'session_id': 'base', 'modified': 10}], 'ver': 2}
+            finally:
+                server._archive_serve_lock.release()
+        finally:
+            resume.set()
+        assert result.result(timeout=5) == expected
+    assert server._archive_list_body_ver('scope', rows, [overlay]) == 0
+    assert server._archive_list_body_ver('scope', cache['scope']['rows'], []) == 2
 
 
 def test_full_and_delta_use_the_ticket_context_captured_for_the_token(monkeypatch):
