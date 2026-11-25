@@ -152,3 +152,46 @@ def test_disconnected_follower_releases_abandoned_source_owner(monkeypatch, flig
     assert calls == ['read']
     assert flights == {}
     assert server._archive_list_source_rows_cached({}, check_client=lambda: None) == ([], True, 1)
+
+
+@pytest.fixture
+def preview_sources(monkeypatch):
+    sources = {}
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_PREVIEW_SOURCES', sources)
+    return sources
+
+
+def test_preview_source_can_only_be_taken_once_during_the_preview(preview_sources):
+    cut = ([{'session_id': 'example'}], True, 'current-version')
+    with server._archive_list_preview_source('navigation', cut):
+        assert server._take_archive_list_preview_source('other-navigation') is None
+        assert server._take_archive_list_preview_source('navigation') is cut
+        assert server._take_archive_list_preview_source('navigation') is None
+    assert not preview_sources
+
+
+def test_preview_sources_expire_and_are_removed_on_response_failure(monkeypatch, preview_sources):
+    now = 10
+    monkeypatch.setattr(server.time, 'monotonic', lambda: now)
+    cut = ([], True, 'current-version')
+    with server._archive_list_preview_source('navigation', cut):
+        now += 1
+        assert server._take_archive_list_preview_source('navigation') is None
+
+    with pytest.raises(RuntimeError, match='response failed'):
+        with server._archive_list_preview_source('other-navigation', cut):
+            raise RuntimeError('response failed')
+    assert not preview_sources
+    assert server._take_archive_list_preview_source('other-navigation') is None
+
+
+def test_preview_source_rejects_unversioned_input_and_limits_retention(monkeypatch, preview_sources):
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_PREVIEW_SOURCE_LIMIT', 1)
+    cut = ([], True, 'current-version')
+    with server._archive_list_preview_source('unversioned', ([], True, None)):
+        assert not preview_sources
+    with server._archive_list_preview_source('first', cut):
+        with server._archive_list_preview_source('second', cut):
+            assert server._take_archive_list_preview_source('second') is None
+            assert server._take_archive_list_preview_source('first') is cut
+    assert not preview_sources

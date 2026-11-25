@@ -20890,6 +20890,43 @@ def _archive_list_rows_cached(cache_options, *, window="all", now=None):
 
 _ARCHIVE_LIST_SOURCE_FLIGHTS = {}
 _ARCHIVE_LIST_SOURCE_FLIGHTS_LOCK = threading.Lock()
+
+
+# A navigation can start its full read after the initial source flight ended
+# but while the preview is still projecting the same seven-day cut.
+_ARCHIVE_LIST_PREVIEW_SOURCES = {}
+_ARCHIVE_LIST_PREVIEW_SOURCE_LIMIT = 16
+_ARCHIVE_LIST_PREVIEW_SOURCE_MAX_AGE = 0.250
+
+
+@contextlib.contextmanager
+def _archive_list_preview_source(boot_id, source):
+    if not boot_id or not source[2]:
+        yield
+        return
+    entry = (time.monotonic(), source)
+    with _ARCHIVE_LIST_SOURCE_FLIGHTS_LOCK:
+        if (boot_id not in _ARCHIVE_LIST_PREVIEW_SOURCES
+                and len(_ARCHIVE_LIST_PREVIEW_SOURCES) < _ARCHIVE_LIST_PREVIEW_SOURCE_LIMIT):
+            _ARCHIVE_LIST_PREVIEW_SOURCES[boot_id] = entry
+    try:
+        yield
+    finally:
+        with _ARCHIVE_LIST_SOURCE_FLIGHTS_LOCK:
+            if _ARCHIVE_LIST_PREVIEW_SOURCES.get(boot_id) is entry:
+                del _ARCHIVE_LIST_PREVIEW_SOURCES[boot_id]
+
+
+def _take_archive_list_preview_source(boot_id):
+    if not boot_id:
+        return None
+    with _ARCHIVE_LIST_SOURCE_FLIGHTS_LOCK:
+        entry = _ARCHIVE_LIST_PREVIEW_SOURCES.pop(boot_id, None)
+    if entry is None or time.monotonic() - entry[0] > _ARCHIVE_LIST_PREVIEW_SOURCE_MAX_AGE:
+        return None
+    return entry[1]
+
+
 _ARCHIVE_LIST_HISTORY_FLIGHTS = {}
 _ARCHIVE_LIST_HISTORY_FLIGHTS_LOCK = threading.Lock()
 
@@ -39632,6 +39669,14 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 saved_order = ""
             initial = qs.get("initial", ["0"])[0] == "1"
             scoped_layouts = window == "7d" and qs.get("row_layouts") == ["1"]
+            cold_seven_day = window == "7d" and not since and stale_ok and not any(cache_options.values())
+            seven_day_layer_requested = (cold_seven_day and scoped_layouts
+                                         and qs.get("history_layer") == ["1"])
+            boot_id = None
+            if cold_seven_day and (initial or seven_day_layer_requested):
+                candidate = self.headers.get("X-CCC-Archive-Boot", "")
+                if re.fullmatch(r"[a-f0-9]{32}", candidate):
+                    boot_id = candidate
             body_cache_key = _archive_list_body_key(list_cache_key, scoped_layouts)
             _disk = None if initial else _archive_list_disk_candidate(
                 body_cache_key, window, since, self.headers.get("Accept-Encoding", ""))
@@ -39740,8 +39785,12 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 # The canonical SQLite fallback can also stop between batches.
                 source_options["check_client"] = check_client
             try:
-                rows, from_cache, body_ver = _archive_list_source_rows_cached(
-                    cache_options, **source_options)
+                source = None if initial else _take_archive_list_preview_source(boot_id)
+                if source is None:
+                    source = _archive_list_source_rows_cached(cache_options, **source_options)
+                else:
+                    _src_phases["preview_source_reused"] = True
+                rows, from_cache, body_ver = source
                 if window != "all" and check_client is not None:
                     # The source is shared. An abandoned bounded request can
                     # stop before computing its own delta or projecting rows.
@@ -39760,11 +39809,12 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 # describe this intentionally partial response.
                 _initial_source_end = time.perf_counter()
                 _initial_phases = {}
-                _initial_payload = _archive_list_initial_payload(
-                    rows, window=window, cached=from_cache, phases=_initial_phases,
-                    selection_version=selection_version, _wire_only=window == "7d")
-                _initial_payload_end = time.perf_counter()
-                self._send_archive_list_preview(_initial_payload)
+                with _archive_list_preview_source(boot_id, source):
+                    _initial_payload = _archive_list_initial_payload(
+                        rows, window=window, cached=from_cache, phases=_initial_phases,
+                        selection_version=selection_version, _wire_only=window == "7d")
+                    _initial_payload_end = time.perf_counter()
+                    self._send_archive_list_preview(_initial_payload)
                 record_diag("list_server", (time.perf_counter() - _lt0) * 1000.0, {
                     "window": window, "initial": True, "status": 200,
                     "rows_src": len(rows or []),
@@ -39780,9 +39830,6 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             _payload_phases = {}
             _body_cache_diag = {}
             _delta_cpu0 = time.thread_time()
-            seven_day_layer_requested = (scoped_layouts and not since and stale_ok
-                                         and not any(cache_options.values())
-                                         and qs.get("history_layer") == ["1"])
             saved_seven_day_requested = scoped_layouts and stale_ok and bool(since and saved_order)
             # CCC-142: ?since=<delta_token> asks for only the rows that changed
             # after the client's last body. Anything the token can't vouch for

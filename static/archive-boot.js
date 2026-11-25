@@ -139,6 +139,7 @@
   } catch (_) {}
   const url = '/api/conversations/list?window=' + windowName + '&stale_ok=1&initial=1';
   const hintKey = 'ccc-archive-response-at:' + windowName;
+  const bootId = windowName === '7d' ? window.crypto?.randomUUID?.().replaceAll('-', '') : null;
   let started = false, skipped = false, finishRecent, recentController, recentStart, recentTimer;
   let snapshot, baseAvailable = false;
   const promise = new Promise(resolve => { finishRecent = resolve; });
@@ -150,7 +151,8 @@
     const timeout = setTimeout(() => controller.abort(), 45000);
     const start = recentStart = performance.now();
     if (snapshot) snapshot.recentStart = start;
-    window.fetch(url, {signal:controller.signal}).then(response => {
+    const headers = bootId && !savedHint ? {'X-CCC-Archive-Boot':bootId} : undefined;
+    window.fetch(url, {signal:controller.signal, headers}).then(response => {
       response._cccArchiveTiming = {start,headers:performance.now()};
       finishRecent(response);
     }).catch(() => finishRecent(null)).finally(() => clearTimeout(timeout));
@@ -493,6 +495,7 @@
       }
       const headers = value?.etag ? {'If-None-Match':value.etag} : {};
       headers['X-CCC-Abort-On-Disconnect'] = '1';
+      if (bootId && !savedHint && !value) headers['X-CCC-Archive-Boot'] = bootId;
       const matchesBase = base => base && base.etag === value.etag && base.delta === value.delta
         && base.at === value.at && (!savedOrder || base.order === savedOrder);
       // Start from the committed hint while IndexedDB opens. A concurrent

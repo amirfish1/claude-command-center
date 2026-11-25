@@ -719,8 +719,14 @@ test('a fresh profile prefetches a parsed full response while retaining its rece
 });
 
 for (const archiveWindow of ['all', '7d']) {
-  test(`Archive startup opts in to compact layouts and order for the complete ${archiveWindow} response only`, async () => {
+  test(`Archive startup negotiates full layouts and scopes the preview handoff to cold seven-day reads (${archiveWindow})`, async () => {
     const context = await browser.createBrowserContext(), page = await context.newPage();
+    const bootIds = [];
+    page.on('request', request => {
+      if (new URL(request.url()).pathname === '/api/conversations/list') {
+        bootIds.push(request.headers()['x-ccc-archive-boot']);
+      }
+    });
     try {
       await page.evaluateOnNewDocument(value => localStorage.setItem('ccc-archive-window', value), archiveWindow);
       await page.goto(origin, {waitUntil:'load'});
@@ -737,6 +743,13 @@ for (const archiveWindow of ['all', '7d']) {
       assert.equal(complete.get('row_layouts'),'1');
       assert.equal(complete.get('order_spans'),'1');
       assert.equal(complete.has('initial'),false);
+      assert.equal(bootIds.length, 2);
+      if (archiveWindow === '7d') {
+        assert.match(bootIds[0], /^[0-9a-f]{32}$/);
+        assert.equal(bootIds[1], bootIds[0]);
+      } else {
+        assert.deepEqual(bootIds, [undefined, undefined]);
+      }
     } finally {await context.close();}
   });
 }

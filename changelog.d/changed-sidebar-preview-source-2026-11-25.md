@@ -1,0 +1,1 @@
+- Share the recent preview’s source snapshot with the matching seven-day sidebar load to avoid scanning live overlays twice.
