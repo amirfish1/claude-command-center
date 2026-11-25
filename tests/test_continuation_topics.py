@@ -34,6 +34,14 @@ def test_startup_scoped_basis_warms_the_foreground_topic_reader(store, monkeypat
     monkeypatch.setattr(server, '_archive_history_artifact', lambda target: (0, 0))
     monkeypatch.setattr(server, '_archive_seven_day_load_basis', lambda *args: object())
     monkeypatch.setattr(archive_history_layer, '_PINNED_OVERLAY_GUARDS', ((), ()))
+    ticket_state = {
+        'sessions': {'old': {'ref': 'TEST-1'}},
+        'tickets': {'TEST-1': {'sessions': ['old']}},
+        'pending': {},
+    }
+    monkeypatch.setattr(server._idea_tickets, '_enabled', lambda: True)
+    monkeypatch.setattr(server._idea_tickets, 'load_state', lambda: ticket_state)
+    monkeypatch.setattr(server, '_ARCHIVE_DELTA_TICKET_JSON', None)
     prepare_guards = archive_history_layer.prepare_pinned_overlay_guards
 
     def prepare_outside_reader_lock(*args):
@@ -48,10 +56,13 @@ def test_startup_scoped_basis_warms_the_foreground_topic_reader(store, monkeypat
         server._archive_history_warm_scoped_basis()
     assert topics._ARCHIVE_TOPIC_SNAPSHOT == (None, None, None)
     assert archive_history_layer._PINNED_OVERLAY_GUARDS == ((), ())
+    assert server._ARCHIVE_DELTA_TICKET_JSON is None
     assert not events
 
     server._archive_history_warm_scoped_basis()
     assert events[0][2]['topics_ready'] is True
+    assert 'ticket_encoding' in events[0][2]
+    assert server._ARCHIVE_DELTA_TICKET_JSON[0] is ticket_state
     details = {}
     inputs, edges, _ = topics.archive_projection_inputs(store, max_rows=20, diagnostics=details)
     assert details['topics_snapshot_reused'] is True

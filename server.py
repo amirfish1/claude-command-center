@@ -18454,6 +18454,21 @@ def _archive_serve_cache_store(key, rows, generation, ts=None, *, transfer_rows=
 # Delta tokens are only meaningful within one process: versions restart at 0.
 _ARCHIVE_DELTA_NONCE = os.urandom(4).hex()
 _ARCHIVE_DELTA_JSON = json.JSONEncoder(sort_keys=True, separators=(",", ":"), default=str)
+_ARCHIVE_DELTA_TICKET_JSON = None
+
+
+def _archive_delta_ticket_json(state, ideas):
+    """Reuse the digest input for the current read-only ticket snapshot."""
+    global _ARCHIVE_DELTA_TICKET_JSON
+    entry = _ARCHIVE_DELTA_TICKET_JSON
+    if state is not None and ideas and entry is not None and state is entry[0]:
+        return entry[1]
+    encoded = _ARCHIVE_DELTA_JSON.encode(ideas)
+    # Ticket and lineage changes publish a new state object. Retain just one
+    # bounded encoding, with a strong reference to prevent identity reuse.
+    if state is not None and _ARCHIVE_DELTA_TICKET_JSON is entry:
+        _ARCHIVE_DELTA_TICKET_JSON = (state, encoded) if ideas and len(encoded) <= 512 * 1024 else None
+    return encoded
 
 
 def _archive_row_sid(row):
@@ -18534,7 +18549,8 @@ def _archive_list_delta_state(key, rows, window, from_cache, *, capture_tickets=
     # Join the shared pieces of the original JSON arrays around the idea
     # snapshot, preserving the exact bytes consumed by each digest.
     encode = _ARCHIVE_DELTA_JSON.encode
-    resumes_json, ideas_json, overlays_json = map(encode, (resumes, ideas, row_overlays))
+    resumes_json, overlays_json = map(encode, (resumes, row_overlays))
+    ideas_json = _archive_delta_ticket_json(ticket_state, ideas)
     start = (encode([key, window, graph_revision])[:-1] + "," + resumes_json).encode()
     end = ("," + overlays_json + "," + encode(topic_revision) + "]").encode()
     response_hash = hashlib.sha1(start)
@@ -20359,6 +20375,15 @@ def _archive_history_warm_scoped_basis():
             # and later cuts still check the exact map identity or values.
             with _archive_history_timing(diagnostics, "topic_guards"):
                 archive_history_layer.prepare_pinned_overlay_guards(inputs[:2])
+        if _idea_tickets._enabled():
+            # Warm the digest outside the topic reader lock. If ticket state
+            # changes, the foreground capture encodes the new snapshot.
+            with _archive_history_timing(diagnostics, "ticket_encoding"):
+                try:
+                    tickets = _idea_tickets.load_state()
+                    _archive_delta_ticket_json(tickets, _idea_tickets.idea_ticket_rows_map(data=tickets))
+                except Exception:
+                    pass
         record_diag("archive_rebuild", (time.perf_counter() - started) * 1000.0, diagnostics)
 
 

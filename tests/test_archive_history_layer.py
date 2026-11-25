@@ -324,6 +324,7 @@ def test_seven_day_reuses_ticket_projection_only_for_the_same_snapshot(monkeypat
     enabled = [True]
     monkeypatch.setattr(server._idea_tickets, "_enabled", lambda: enabled[0])
     monkeypatch.setattr(server._idea_tickets, "load_state", lambda: tickets[0])
+    monkeypatch.setattr(server, "_ARCHIVE_DELTA_TICKET_JSON", None)
     monkeypatch.setattr(server, "_load_usage_limit_resumes", dict)
     monkeypatch.setattr(server, "_load_session_name_overrides", dict)
     monkeypatch.setattr(server, "_archive_list_row_overlays", lambda names=None: {})
@@ -337,15 +338,28 @@ def test_seven_day_reuses_ticket_projection_only_for_the_same_snapshot(monkeypat
     original = server._capture_archive_history_sidecars(100, delta=delta)
     assert original["ideas"] is delta["ideas"]
     assert original["ideas"]["example"]["closed"] is False
+    initial_encoding = server._ARCHIVE_DELTA_TICKET_JSON
+    polled = server._archive_list_delta_state(key, base, "7d", True)
+    assert polled["token"] == delta["token"]
+    assert polled["ideas"] == delta["ideas"] and polled["ideas"] is not delta["ideas"]
+    assert polled["ticket_state"] is None
+    assert server._archive_list_delta_state(key, base, "7d", True, capture_tickets=True)["token"] == delta["token"]
+    assert server._ARCHIVE_DELTA_TICKET_JSON is initial_encoding
 
     tickets[0] = dict(tickets[0], tickets={"EX-1": dict(tickets[0]["tickets"]["EX-1"], closed=True)})
     changed = server._capture_archive_history_sidecars(100, delta=delta)
     assert changed["tickets"] is tickets[0]
     assert changed["ideas"]["example"]["closed"] is True
     assert delta["ideas"]["example"]["closed"] is False
+    updated = server._archive_list_delta_state(key, base, "7d", True, capture_tickets=True)
+    assert updated["token"] != delta["token"]
+    assert server._ARCHIVE_DELTA_TICKET_JSON[0] is tickets[0]
 
     enabled[0] = False
     assert server._capture_archive_history_sidecars(100, delta=delta)["ideas"] == {}
+    disabled = server._archive_list_delta_state(key, base, "7d", True)
+    assert disabled["ideas"] == {}
+    assert disabled["token"] != updated["token"]
 
 
 def test_effect_scope_keeps_ticket_members_pending_and_lineage():
