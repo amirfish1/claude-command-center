@@ -841,6 +841,36 @@ def cmd_ask(args):
     return 0
 
 
+def _print_ticket_hits(tickets):
+    tty = sys.stdout.isatty()
+    width = shutil.get_terminal_size((100, 20)).columns if tty else 100
+    bold = (lambda t: f"\033[1m{t}\033[0m") if tty else (lambda t: t)
+    dim = (lambda t: f"\033[2m{t}\033[0m") if tty else (lambda t: t)
+
+    def _fit(t, room):
+        t = " ".join(str(t or "").split())
+        return t if len(t) <= room else t[: max(room - 1, 0)].rstrip() + "…"
+
+    print(bold("Tickets"))
+    for t in tickets:
+        tag = f"[{t.get('node_name')}] " if t.get("local") is False else ""
+        head = f"  {t.get('ref', '?'):<14}"
+        print(head + bold(_fit(tag + (t.get("title") or "(untitled)"), width - len(head))))
+        pad = " " * len(head)
+        meta = "  ·  ".join(x for x in (t.get("status"), t.get("date"),
+                                        "cached" if t.get("stale") else "") if x)
+        print(pad + dim(meta))
+        text = t.get("summary") or t.get("snippet")
+        if text:
+            print(pad + _fit(text, width - len(pad)))
+        for s in (t.get("sessions") or [])[:3]:
+            label = {"closed": "closed by", "worked": "worked by"}.get(s.get("role"), "touched by")
+            sid = str(s.get("session_id") or "")[:8]
+            print(pad + dim(_fit(f"{label} {sid}  {s.get('title') or ''}", width - len(pad))))
+        print()
+    print(bold("Sessions"))
+
+
 def cmd_recall(args):
     base = _resolve_server(args.server)
     if not base:
@@ -867,6 +897,9 @@ def cmd_recall(args):
         print(json.dumps(payload, indent=2))
         return 0
     results = payload.get("results") or []
+    tickets = payload.get("tickets") or []
+    if tickets:
+        _print_ticket_hits(tickets)
     if not results:
         if payload.get("indexing"):
             print(f"(indexing: true — no sessions found yet for {text!r}, still warming up)")

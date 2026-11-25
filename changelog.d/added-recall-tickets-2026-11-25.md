@@ -1,0 +1,1 @@
+- `ccc recall` now searches WatchTower ticket text (filing, comments, questions, answers and close summary) on every paired machine, and lists the sessions that closed or worked each matching ticket.

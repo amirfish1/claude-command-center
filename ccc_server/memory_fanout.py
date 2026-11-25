@@ -394,6 +394,25 @@ def merge_recall(node_lists: list[list[dict]], limit: int) -> list[dict]:
     return [m[2] for m in merged[:limit]]
 
 
+def merge_tickets(local: dict, node: dict, entries: list, cap: int = 8) -> list[dict]:
+    """Ticket hits from every machine, each tagged with its machine. Ticket
+    numbers are per machine, so the same ref on two machines is two tickets."""
+    lists = [[{**t, "node_name": node["name"], "local": True}
+              for t in local.get("tickets") or []]]
+    for e in entries:
+        if e.get("status") != OK and not e.get("stale"):
+            continue
+        res = e.get("result") or {}
+        lists.append([{**t, "node_name": e["name"], "local": False,
+                       **({"stale": True} if e.get("stale") else {})}
+                      for t in res.get("tickets") or []])
+    out, i = [], 0
+    while len(out) < cap and any(i < len(l) for l in lists):
+        out.extend(l[i] for l in lists if i < len(l))  # interleave: each machine's best first
+        i += 1
+    return out[:cap]
+
+
 def recall_all(query: str, limit: int, local_recall) -> dict:
     """scope=all recall. `local_recall(query, limit)` is memory_api's local
     recall, passed in so this module never imports memory_api (no cycle)."""
@@ -408,6 +427,9 @@ def recall_all(query: str, limit: int, local_recall) -> dict:
                                local=False, stale=e.get("stale", False)))
     out = dict(local)
     out["results"] = merge_recall(lists, limit)
+    tickets = merge_tickets(local, node, entries)
+    if tickets:
+        out["tickets"] = tickets
     out["indexing"] = bool(local.get("indexing")) or any(
         (e.get("result") or {}).get("indexing") for e in entries if e["status"] == OK)
     out.update(_envelope(node, local_ms, local, entries))

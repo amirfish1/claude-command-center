@@ -194,7 +194,28 @@ def recall_in_process(query: str, limit: int = 20) -> dict:
         row.pop("_ts", None)
         row.update(leases.get(row["session_id"], {}))
     indexing = _sfts.is_indexing() or _sg.is_indexing()
-    return {"query": query, "results": results, "indexing": indexing}
+    out = {"query": query, "results": results, "indexing": indexing}
+    tickets = _ticket_hits(query, min(limit, 5))
+    if tickets:
+        out["tickets"] = tickets
+    return out
+
+
+def _ticket_hits(query: str, limit: int) -> list[dict]:
+    """WatchTower tickets matching `query`, each naming the sessions that
+    worked it (titled when this machine has them). Additive field; never
+    fails the recall."""
+    try:
+        from ccc_server import ticket_fts as _tfts
+        tickets = _tfts.search(query, limit=limit)
+        sids = list(dict.fromkeys(s["session_id"] for t in tickets for s in t["sessions"]))
+        titles = _sdoc_rows(sids) if sids else {}
+        for t in tickets:
+            for s in t["sessions"]:
+                s["title"] = (titles.get(s["session_id"]) or {}).get("title", "")
+        return tickets
+    except Exception:
+        return []
 
 
 def shipped(topic: str, scope: str = "local") -> dict:
