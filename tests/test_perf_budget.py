@@ -4128,6 +4128,28 @@ def test_hermes_conv_open_does_not_scan_whole_sessions_table(monkeypatch, tmp_pa
     assert lineage and lineage[0]["lineage_session_ids"] == [parent, child]
 
 
+def _window_fork_recorder():
+    """(record, preexisting) for counting forks in a measured window.
+
+    Spies on ``subprocess`` are process-global, so a daemon thread leaked by
+    an earlier test (e.g. a background ``wt find`` on live tickets) would
+    land in the count and fail the gate on a loaded host (CCC-676). Forks
+    from threads that already existed when the window opened -- other than
+    the test thread itself -- are not the code under test. Forks from the
+    test thread or from threads started inside the window still count, so a
+    regression that moves forking onto a new worker thread is still caught.
+    """
+    me = threading.get_ident()
+    preexisting = {t.ident for t in threading.enumerate()} - {me}
+    calls = []
+
+    def record(args):
+        if threading.get_ident() not in preexisting:
+            calls.append(args)
+
+    return calls, record
+
+
 def _isolate_hermes_search_channel(monkeypatch):
     """Session search also ranks hits from Hermes' own messages_fts, read from
     the host's real ~/.hermes/state.db. Tests that count results must not see
@@ -4646,22 +4668,33 @@ def test_memory_recall_warm_call_spawns_no_subprocesses(tmp_path, monkeypatch):
     cold = memory_api.recall("confetti animation", limit=10)
     assert cold["results"], "expected at least one hit to enrich"
 
-    subprocess_calls = []
+    # Pin the warm window inside the sync TTL. On a loaded host the cold call
+    # can finish >5s after it stamped _last_sync_ts, so the "warm" calls would
+    # legitimately re-sync (CCC-676). The TTL value isn't what this test
+    # measures; the warm path's fork count is. That includes the separately
+    # loaded session_fts copy ship_graph re-ranks with.
+    monkeypatch.setattr(ship_graph, "_SYNC_TTL", 3600.0)
+    monkeypatch.setattr(session_fts, "_SYNC_TTL", 3600.0)
+    base_globals = getattr(ship_graph._get_base_search_sessions(), "__globals__", {})
+    if "_SYNC_TTL" in base_globals:
+        monkeypatch.setitem(base_globals, "_SYNC_TTL", 3600.0)
+
+    subprocess_calls, record = _window_fork_recorder()
     real_run = subprocess.run
     real_popen = subprocess.Popen
 
     def spy_run(*args, **kwargs):
-        subprocess_calls.append(args)
+        record(args)
         return real_run(*args, **kwargs)
 
     def spy_popen(*args, **kwargs):
-        subprocess_calls.append(args)
+        record(args)
         return real_popen(*args, **kwargs)
 
     monkeypatch.setattr(subprocess, "run", spy_run)
     monkeypatch.setattr(subprocess, "Popen", spy_popen)
 
-    # Warm repeat calls (well within the 5s sync TTL) must not spawn anything,
+    # Warm repeat calls (within the sync TTL) must not spawn anything,
     # and must keep returning the same enriched result.
     for _ in range(5):
         warm = memory_api.recall("confetti animation", limit=10)
@@ -5996,11 +6029,11 @@ def test_share_export_reads_one_session_and_forks_git_once(monkeypatch):
     from ccc_server import share_run
 
     share_run._identity_cache.clear()
-    forks = []
+    forks, record = _window_fork_recorder()
     real_run = subprocess.run
 
     def counting_run(*args, **kwargs):
-        forks.append(args)
+        record(args)
         return real_run(*args, **kwargs)
 
     def forbidden(*_args, **_kwargs):
