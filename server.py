@@ -19644,6 +19644,7 @@ def _archive_history_read_cut(key, cache_options, now, *, phases=None, check_cli
                 edges=(*parents.items(), *topic_edges), removed=removed,
                 pinned_overlays=(records, origins), pinned_hot=not removed,
                 guard_transitions=guard_transitions,
+                ticket_overlay=(sidecars["tickets"], sidecars["ideas"]),
             )
         if inputs is None:
             yield None
@@ -20002,7 +20003,8 @@ def _archive_seven_day_cut(key, captured, rows, cached, reader, now, phases, del
             overlay_maps=(sidecars["names"], eligible_resumes, parents, sidecars["drivers"],
                           sidecars["ideas"], sidecars["overlays"], *topic_inputs),
             edges=(*parents.items(), *topic_edges),
-            guard_transitions=guard_transitions)
+            guard_transitions=guard_transitions,
+            ticket_overlay=(sidecars["tickets"], sidecars["ideas"]))
     if inputs is None:
         return None
 
@@ -20389,12 +20391,13 @@ def _archive_history_warm_scoped_basis():
             with _archive_history_timing(diagnostics, "topic_guards"):
                 archive_history_layer.prepare_pinned_overlay_guards(inputs[:2])
         if _idea_tickets._enabled():
-            # Warm the digest outside the topic reader lock. If ticket state
-            # changes, the foreground capture encodes the new snapshot.
+            # Warm both ticket encodings outside the topic reader lock.
             with _archive_history_timing(diagnostics, "ticket_encoding"):
                 try:
                     tickets = _idea_tickets.load_state()
-                    _archive_delta_ticket_json(tickets, _idea_tickets.idea_ticket_rows_map(data=tickets))
+                    ideas = _idea_tickets.idea_ticket_rows_map(data=tickets)
+                    _archive_delta_ticket_json(tickets, ideas)
+                    archive_history_layer.prepare_ticket_guards(tickets, ideas)
                 except Exception:
                     pass
         record_diag("archive_rebuild", (time.perf_counter() - started) * 1000.0, diagnostics)

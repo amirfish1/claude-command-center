@@ -34,6 +34,7 @@ def test_startup_scoped_basis_warms_the_foreground_topic_reader(store, monkeypat
     monkeypatch.setattr(server, '_archive_history_artifact', lambda target: (0, 0))
     monkeypatch.setattr(server, '_archive_seven_day_load_basis', lambda *args: object())
     monkeypatch.setattr(archive_history_layer, '_PINNED_OVERLAY_GUARDS', ((), ()))
+    monkeypatch.setattr(archive_history_layer, '_TICKET_GUARDS', None)
     ticket_state = {
         'sessions': {'old': {'ref': 'TEST-1'}},
         'tickets': {'TEST-1': {'sessions': ['old']}},
@@ -43,12 +44,18 @@ def test_startup_scoped_basis_warms_the_foreground_topic_reader(store, monkeypat
     monkeypatch.setattr(server._idea_tickets, 'load_state', lambda: ticket_state)
     monkeypatch.setattr(server, '_ARCHIVE_DELTA_TICKET_JSON', None)
     prepare_guards = archive_history_layer.prepare_pinned_overlay_guards
+    prepare_ticket_guards = archive_history_layer.prepare_ticket_guards
 
     def prepare_outside_reader_lock(*args):
         assert not server._ARCHIVE_HISTORY_LOCK.locked()
         return prepare_guards(*args)
 
+    def prepare_tickets_outside_reader_lock(*args):
+        assert not server._ARCHIVE_HISTORY_LOCK.locked()
+        return prepare_ticket_guards(*args)
+
     monkeypatch.setattr(archive_history_layer, 'prepare_pinned_overlay_guards', prepare_outside_reader_lock)
+    monkeypatch.setattr(archive_history_layer, 'prepare_ticket_guards', prepare_tickets_outside_reader_lock)
     events = []
     monkeypatch.setattr(server, 'record_diag', lambda *args: events.append(args))
 
@@ -63,6 +70,7 @@ def test_startup_scoped_basis_warms_the_foreground_topic_reader(store, monkeypat
     assert events[0][2]['topics_ready'] is True
     assert 'ticket_encoding' in events[0][2]
     assert server._ARCHIVE_DELTA_TICKET_JSON[0] is ticket_state
+    assert archive_history_layer._TICKET_GUARDS[0] is ticket_state
     details = {}
     inputs, edges, _ = topics.archive_projection_inputs(store, max_rows=20, diagnostics=details)
     assert details['topics_snapshot_reused'] is True

@@ -362,6 +362,26 @@ def test_seven_day_reuses_ticket_projection_only_for_the_same_snapshot(monkeypat
     assert disabled["token"] != updated["token"]
 
 
+def test_history_ticket_guards_follow_the_published_ticket_state(monkeypatch):
+    from ccc_server import archive_history_layer as layer
+
+    monkeypatch.setattr(layer, "_TICKET_GUARDS", None)
+    state = object()
+    ideas = {"row": {"queue": "EX", "moved_at": 1}}
+    first = layer._overlay_guards((ideas,), (), {}, (state, ideas))[0]
+    copied = {sid: dict(ticket) for sid, ticket in ideas.items()}
+    assert layer._overlay_guards((copied,), (), {}, (state, copied))[0] is first
+
+    changed = {"row": {"queue": "EX", "moved_at": 1.0}}
+    assert changed == ideas
+    fresh = layer._overlay_guards((changed,), (), {}, (object(), changed))[0]
+    assert fresh["row"] != first["row"]
+    empty = {}
+    assert layer._overlay_guards((empty,), (), {}, (state, empty)) == ({},)
+    assert layer.prepare_ticket_guards(None, ideas) == first
+    assert layer.prepare_ticket_guards(None, ideas) is not first
+
+
 def test_effect_scope_keeps_ticket_members_pending_and_lineage():
     from types import SimpleNamespace
 
@@ -1313,8 +1333,10 @@ def test_cold_read_pins_the_selected_hot_rows_after_a_row_ages_out(tmp_path, mon
     monkeypatch.setattr(server, "_conversation_lifecycle_snapshot", lambda: (set(), set(), set(), {}))
     monkeypatch.setattr(server, "_overlay_conversation_lifecycle_flags", lambda rows, **kwargs: rows)
     monkeypatch.setattr(server, "_archive_list_source_overlays", lambda *_, **kwargs: ([], [extra]))
-    monkeypatch.setattr(server, "_capture_archive_history_sidecars", lambda _: dict.fromkeys(
-        ("resumes", "parents", "names", "drivers", "ideas", "overlays"), {}))
+    monkeypatch.setattr(server, "_capture_archive_history_sidecars", lambda _: {
+        **dict.fromkeys(("resumes", "parents", "names", "drivers", "ideas", "overlays"), {}),
+        "tickets": None,
+    })
     monkeypatch.setattr(layer, "_INVENTORY", (None, frozenset(), None))
     reader = object()
     monkeypatch.setattr(continuation_topics, "archive_projection_inputs",
