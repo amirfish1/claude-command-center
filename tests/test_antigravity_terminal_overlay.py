@@ -101,9 +101,11 @@ def test_source_includes_terminal_overlay_in_body_version(terminal, monkeypatch)
     ('7d', False, {}, True),
     ('7d', True, {}, False),
     ('7d', False, {'include_prs': True}, False),
-    ('1d', False, {}, False),
+    ('1d', False, {}, True),
+    ('1d', True, {}, False),
+    ('all', False, {}, False),
 ])
-def test_process_probe_overlaps_only_default_seven_day_cut(
+def test_process_probe_overlaps_only_default_recent_cuts(
         terminal, monkeypatch, window, force_refresh, options, prefetched):
     processes = server.find_live_antigravity_processes()
     probed = threading.Event()

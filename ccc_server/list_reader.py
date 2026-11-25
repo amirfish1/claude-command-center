@@ -55,6 +55,8 @@ _state = {
     "sidecars": None,
     "reloads": 0,
     "reload_ms": None,
+    "warms": 0,
+    "warm_ms": None,
     "mutations": 0,
     "declined": 0,
     "served": 0,
@@ -76,7 +78,7 @@ def ready():
 def status():
     with _lock:
         return {key: _state[key] for key in (
-            "loaded", "acp", "reloads", "reload_ms", "mutations", "declined",
+            "loaded", "acp", "reloads", "reload_ms", "warms", "warm_ms", "mutations", "declined",
             "served", "errors", "last_error")} | {"enabled": enabled()}
 
 
@@ -253,14 +255,37 @@ def _reload(hydrate=True):
         _state["reload_ms"] = round((time.perf_counter() - started) * 1000.0, 1)
 
 
+# Sidebar windows whose full body is prebuilt after each reload (CCC-686).
+# A page load (no delta token) or a token minted by the other process (the
+# dashboard fallback, a previous child) needs a full 1d body. After every
+# publication the first such read rebuilt it on the request path: 0.5-3 s,
+# the whole tail of the list_read gate while deltas stayed under 800 ms.
+WARM_WINDOWS = ("1d",)
+
+
+def _warm_bodies():
+    srv = _state["server"]
+    started = time.perf_counter()
+    for window in WARM_WINDOWS:
+        try:
+            srv._archive_list_warm({}, window, True)
+        except Exception as exc:
+            _note_error(exc)
+    with _lock:
+        _state["warms"] += 1
+        _state["warm_ms"] = round((time.perf_counter() - started) * 1000.0, 1)
+
+
 def _reload_in_background():
     try:
         _reload()
     except Exception as exc:
         _note_error(exc)
+        return
     finally:
         with _lock:
             _state["reloading"] = False
+    _warm_bodies()
 
 
 def sync(now=None):

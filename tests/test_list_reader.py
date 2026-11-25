@@ -23,13 +23,17 @@ class _FakeSrv:
                                                     mutated_sids=None):
         self.calls.append(("restamp", archived_set, trashed_set, mutated_sids))
 
+    def _archive_list_warm(self, cache_options, window, stale_ok, **kwargs):
+        self.calls.append(("warm", cache_options, window, stale_ok, kwargs))
+
 
 class ListReaderOpsTest(unittest.TestCase):
     def setUp(self):
         self.saved = dict(list_reader._state)
         self.srv = _FakeSrv()
         list_reader._state.update(server=self.srv, loaded=True, acp=False, mutations=0,
-                                  sidecars=None, stamps={}, reloading=False, checked=0.0)
+                                  sidecars=None, stamps={}, reloading=False, checked=0.0,
+                                  warms=0, warm_ms=None, errors=0)
 
     def tearDown(self):
         list_reader._state.clear()
@@ -60,7 +64,25 @@ class ListReaderOpsTest(unittest.TestCase):
                 mock.patch.object(list_reader, "_reload", side_effect=lambda *a, **k: started.set()):
             list_reader.sync(now=100.0)
             self.assertTrue(started.wait(5))
+        self.assertEqual([c for c in self.srv.calls if c[0] != "warm"], [])  # no restamp
+
+    def test_reload_warms_page_load_body(self):
+        # CCC-686: a full 1d read after each publication rebuilt the body on
+        # the request path; the background reload now prebuilds it.
+        list_reader._state["reloading"] = True
+        with mock.patch.object(list_reader, "_reload"):
+            list_reader._reload_in_background()
+        self.assertEqual(self.srv.calls, [("warm", {}, "1d", True, {})])
+        self.assertFalse(list_reader._state["reloading"])
+        self.assertEqual(list_reader.status()["warms"], 1)
+
+    def test_failed_reload_does_not_warm(self):
+        list_reader._state["reloading"] = True
+        with mock.patch.object(list_reader, "_reload", side_effect=RuntimeError("no snapshot")), \
+                mock.patch("builtins.print"):
+            list_reader._reload_in_background()
         self.assertEqual(self.srv.calls, [])
+        self.assertFalse(list_reader._state["reloading"])
 
     def test_sync_restamps_on_missed_sidecar_change(self):
         list_reader._state["stamps"] = {"k": 10.0}

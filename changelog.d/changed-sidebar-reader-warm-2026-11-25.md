@@ -1,0 +1,1 @@
+- Sidebar list reads after a page load stay fast: the list reader prebuilds the one-day body after each refresh, and the one-day read starts its process lookup in parallel.

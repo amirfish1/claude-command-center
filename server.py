@@ -21122,9 +21122,11 @@ def _archive_list_source_rows_read(cache_options, *, force_refresh=False, phases
     default_stale_read = not force_refresh and not any(cache_options.values())
     with contextlib.ExitStack() as stack:
         overlay_options = {}
-        if window == "7d" and default_stale_read:
+        if window in ("1d", "7d") and default_stale_read:
             # The process table is independent of the archive cut. Open logs
             # and overlay exclusions are still read in their usual order.
+            # 1d is the sidebar's poll window: its `ps` wait (60-160 ms) was
+            # serial on nearly every read (CCC-686).
             overlay_options["antigravity_processes"] = _archive_prefetch_antigravity_processes(stack)
             if phases is not None:
                 phases["antigravity_probe_started"] = True
