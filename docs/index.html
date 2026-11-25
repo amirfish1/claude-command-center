@@ -66,7 +66,8 @@
   .nav-links a { text-decoration: none; color: var(--fg-dim); }
   .nav-links a:hover { color: var(--fg); }
   @media (max-width: 860px) { .nav-links { gap: 16px; } .nav-links a.nav-extra { display: none; } }
-  @media (max-width: 640px) { .nav-links a:not(.download-link) { display: none; } }
+  @media (max-width: 640px) { .nav-links a:not(.download-link):not(.gh) { display: none; } .brand .version { display: none; } }
+  @media (max-width: 360px) { .nav-links a.download-link { display: none; } }
   @media (max-width: 420px) { .brand { font-size: 13px; gap: 8px; } }
 
   /* Hero */
