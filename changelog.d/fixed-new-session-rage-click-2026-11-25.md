@@ -1,0 +1,1 @@
+- Clicking Send (or pressing Enter) repeatedly on a new session no longer launches the same session twice.

@@ -3,6 +3,7 @@
   'use strict';
   function createComposer({ state, helpers }) {
     const { setActivePaneById, liveStatusMatchesOpenConv, activePaneId, guardComposerSend, announcedFromForPane, hideSlashCommandMenu, rememberComposerCommand, stopTextToSpeech, spawnFromBacklogIssue, replyToIssueFromInputBar, closeIssueFromInputBar, currentConversationRow, applyOptimisticConversationGoalAction, renderConversationGoalStrip, showOpToast, _autosizeTextareaLike, clearInputDraftForConversation, spawnFromInlineInput, devinSteerCapableNow, hasPendingSendEchoBeforeCompact, getConvViewForPane, _compactRunBlocksResend, isCompactionCapableSource, beginCompactRun, appendPendingSendEcho, announcedInjectionPreview, markSessionSending, updateInputBar, composerUserEditRevision, looksDormantNoProcess, getConvView, startCodexWakeBreakdown, durableActionId, isClaudeSource, markPendingSendQueued, tapbackTakePending, fetchInjectWithRetry, tapbackRestorePending, _showTerminalSuspectedDialog, removePendingSendEcho, bindPendingSendDeliveryId, clearAcceptedComposerInput, renderConvWakeOutcome, clearOptimisticAgentIndicator, refreshConversationList, syncQueuedSteerTray, markPendingSendDelivered, refreshLiveStatus, scheduleFireAndWatchRefresh, applyClearSuccession, beginWtReceiptTracking, compactResponseIsComplete, adoptCompactRunResult, completeCompactRun, clearSessionSending, markCompactRunWorking, scheduleCompactUsageRefresh, handleCompactTimeout, formatInjectFailure, _isCompactTimeoutReason, restoreInputAfterSendFailure, failCompactRun, isCursorUsageLimitFailure, appendSendFailureNotice, renderInlineWakeError, isTouchPrimary } = helpers;
+  const newSessionSpawnsInFlight = new Set();
   async function sendToTerminal(paneId, mode = 'send') {
     if (paneId) {
       setActivePaneById(paneId);
@@ -116,8 +117,19 @@
     }
     // New-session mode: input doubles as the prompt for a fresh spawn.
     if (state.currentConversation === '__new__') {
-      if (state._ttsActive) await stopTextToSpeech();
-      await spawnFromInlineInput(text);
+      // Rage-click guard: Send stays live through the folder checks that run
+      // before the spawn POST, with the prompt still in the box, so a second
+      // click or Enter launched the same session twice. Drop a repeat of a
+      // prompt that is already launching; a different prompt still launches,
+      // and the prompt is released once its launch settles (Retry works).
+      if (newSessionSpawnsInFlight.has(text)) return;
+      newSessionSpawnsInFlight.add(text);
+      try {
+        if (state._ttsActive) await stopTextToSpeech();
+        await spawnFromInlineInput(text);
+      } finally {
+        newSessionSpawnsInFlight.delete(text);
+      }
       return;
     }
     const sid = state.currentSession.id;
