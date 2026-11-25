@@ -103,3 +103,38 @@ def test_composer_marks_and_bounds_pre_post_steps():
     assert "spawnPhaseAt.request_sent = Date.now()" in fn
     # The folder check is raced against a timeout like the repo guess.
     assert "spawnCwdIsMissing(launchCwd),\n      new Promise(resolve => setTimeout(() => resolve(false), 800))" in fn
+
+
+def _load_check():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "check_spawn_presubmit", ROOT / "scripts" / "check-spawn-presubmit.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_watch_check_verdicts():
+    check = _load_check()
+
+    def row(t0, presubmit, network=50.0, engine="claude", client=True):
+        marks = {"server_request_received": 100 + network,
+                 "server_engine_submit": 100 + network + presubmit}
+        if client:
+            marks["client_request_sent"] = 100.0
+        return {"engine": engine, "t0": t0, "marks": marks}
+
+    assert check.analyse({}, 0)["status"] == "pending"
+    fast = {f"s{i}": row(10 + i, 20) for i in range(5)}
+    fast["api"] = row(30, 9000, client=False)       # scripted launch ignored
+    fast["old"] = row(1, 9000)                        # before deploy ignored
+    result = check.analyse(fast, 5)
+    assert result["status"] == "pass" and result["real_data"]
+    assert result["evidence"]["launches"] == 5
+    slow = dict(fast, bad=row(40, 4000))
+    assert check.analyse(slow, 5)["status"] == "fail"
+    # A slow phone link is reported but is not the dashboard's stall.
+    net = dict(fast, net=row(40, 20, network=12000))
+    result = check.analyse(net, 5)
+    assert result["status"] == "pass"
+    assert result["evidence"]["click_to_submit_over_limit"][0]["network_ms"] == 12000
