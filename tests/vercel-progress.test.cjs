@@ -14,7 +14,7 @@ for (const width of [1280, 390]) test('Vercel phases share CI progress at ' + wi
     const page = await browser.newPage();
     await page.setViewport({width, height:900});
     await page.setContent(`<style>${css}</style><div style="width:${Math.min(width, 330)}px;--text:#eee;--surface:#191919;--border:#555;--accent:#8ab4ff;--green:#89dd99;--red:#ff9999;--text-muted:#aaa;background:#191919;padding:12px;box-sizing:border-box">
-      <div data-local-ci-host id="localCiProgress"></div><div class="sidebar"><div data-local-ci-host class="${width <= 1200 ? 'local-ci-mobile' : ''}" id="localCiMobileList"></div></div>
+      <div class="sidebar"><div data-local-ci-host class="${width <= 1200 ? 'local-ci-mobile' : ''}" id="localCiMobileList"></div></div>
       <div class="main"><div data-local-ci-host class="local-ci-mobile" id="localCiMobileReader"></div></div></div>`);
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));

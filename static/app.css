@@ -36025,8 +36025,6 @@ a.local-ci-job:hover { color: var(--accent); }
 .local-ci-dismiss:hover { background: var(--surface-2); color: var(--text); }
 .local-ci-dismiss:disabled { opacity: .5; cursor: wait; }
 .local-ci-mobile { display: none; }
-/* The header status line replaced the stacked desktop list at every width. */
-#localCiProgress { display: none !important; }
 .local-ci-mobile-toggle {
   display: flex; align-items: center; gap: 6px; width: auto; min-height: 22px;
   padding: 0; border: 0; background: transparent; color: var(--text);

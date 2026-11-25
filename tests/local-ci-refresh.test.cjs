@@ -36,7 +36,6 @@ for (const width of [1280, 390]) test('CI survives refresh before live status re
     } else {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.end(`<style>${css}</style><div style="width:${Math.min(width, 330)}px;padding:12px;box-sizing:border-box">
-        <div data-local-ci-host id="localCiProgress" hidden></div>
         <div class="sidebar">${width > 1200 ? '<div class="mobile-home-status">' : ''}<div data-local-ci-host class="local-ci-mobile" id="localCiMobileList" hidden></div>${width > 1200 ? '</div>' : ''}</div>
         </div><script>
           const nativeFetch = window.fetch.bind(window);
