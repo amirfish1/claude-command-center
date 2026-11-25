@@ -19,6 +19,7 @@ from types import MappingProxyType
 
 from ccc_server import core as _core
 from ccc_server import ship_graph as _sg
+from ccc_server.log_parse import _metadata_session_id
 from ccc_server.sqlite_batch import fetch_rows as _sqlite_fetch_rows
 
 MAX_HOPS = 64
@@ -186,20 +187,6 @@ def _precise_topic_token(conn, db_path, broad, *, pinned=False):
 
 def _topic(title):
     return ' '.join(str(title or '').split()).split(':', 1)[0].strip()[:240]
-
-
-@functools.lru_cache(maxsize=32768)
-def _metadata_session_id(filename):
-    # Paths stay stable while metadata titles change. Avoid parsing every
-    # filename again when a new session makes the topic projection miss.
-    # The first pass also covers a large archive: ordinary POSIX filenames
-    # need only the final component and suffix, without allocating a Path.
-    if isinstance(filename, str) and os.name == 'posix':
-        name = filename.rsplit('/', 1)[-1]
-        if name and not name.endswith('.'):
-            dot = name.rfind('.')
-            return name[:dot] if 0 < dot < len(name) - 1 else name
-    return Path(filename).stem
 
 
 def _file_stat_sig(db_path):

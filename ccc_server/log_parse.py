@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone, time as datetime_time
 from pathlib import Path
 import contextlib
+import functools
 import json
 import os
 import re
@@ -737,6 +738,18 @@ def get_model_picker_picks() -> list:
 
 
 
+@functools.lru_cache(maxsize=32768)
+def _metadata_session_id(filename):
+    # Paths stay stable while metadata titles change. Common POSIX paths
+    # only need the final component and suffix.
+    if isinstance(filename, str) and os.name == 'posix':
+        name = filename.rsplit('/', 1)[-1]
+        if name and not name.endswith('.'):
+            dot = name.rfind('.')
+            return name[:dot] if 0 < dot < len(name) - 1 else name
+    return Path(filename).stem
+
+
 def _conv_meta_title(meta):
     return meta.get('custom_title') or meta.get('agent_name') or meta.get('ai_title')
 
@@ -752,12 +765,17 @@ class _ConvMetaCache(dict):
     title_snapshot = None
 
     def __setitem__(self, path, meta):
-        if self.title_snapshot is not None:
+        snapshot = self.title_snapshot
+        if snapshot is not None:
             previous = self.get(path)
-            # New paths can replace the last title of a same-ID transcript
-            # even when the new entry itself has no title.
-            if (type(previous) is not dict or type(meta) is not dict
-                    or not _same_conv_meta_title(previous, meta)):
+            if type(previous) is dict and type(meta) is dict:
+                changed = not _same_conv_meta_title(previous, meta)
+            else:
+                # A new untitled path can shadow an existing title with
+                # the same session ID.
+                changed = (type(meta) is not dict or path in self or bool(_conv_meta_title(meta))
+                           or _metadata_session_id(path) in snapshot)
+            if changed:
                 self.title_snapshot = None
         super().__setitem__(path, meta)
 

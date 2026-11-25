@@ -1156,6 +1156,10 @@ def test_archive_title_snapshot_reuses_metadata_until_title_changes(monkeypatch)
     assert topics._external_titles() == {'shared': 'First'}
     snapshot = cache.title_snapshot
     assert topics._archive_fallback_titles() == {'shared': 'First'}
+    untitled = '/new/untitled.jsonl'
+    cache[untitled] = {'mtime': 41}
+    assert topics._external_titles() is snapshot
+    assert cache[untitled] == {'mtime': 41}
     cache[first] = {'custom_title': 'First', 'mtime': 42}
     assert topics._external_titles() is snapshot
     assert topics._archive_fallback_titles() == {'shared': 'First'}
@@ -1165,6 +1169,11 @@ def test_archive_title_snapshot_reuses_metadata_until_title_changes(monkeypatch)
     assert topics._external_titles() == {'shared': 'Renamed'}
     assert topics._archive_fallback_titles() == {'shared': 'Renamed'}
     assert snapshot == {'shared': 'First'}
+
+    cache[untitled] = {'ai_title': 'New title'}
+    assert topics._external_titles() == {'shared': 'Renamed', 'untitled': 'New title'}
+    cache['/later/untitled.jsonl'] = {'mtime': 42}
+    assert topics._external_titles() == {'shared': 'Renamed'}
 
     cache[duplicate] = {'mtime': 43}
     assert topics._external_title(topics._external_titles(), 'shared') == 'Native'
