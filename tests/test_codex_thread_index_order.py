@@ -189,6 +189,33 @@ def test_sidebar_title_omission_falls_back_without_json_each(thread_db, monkeypa
     ) == [{"id": "known", "title": "Original"}]
 
 
+def test_overlay_rank_keeps_known_ids_and_reloads_their_details_if_needed(thread_db):
+    with sqlite3.connect(thread_db) as con:
+        _schema(con)
+        con.execute("ALTER TABLE threads ADD COLUMN title TEXT")
+        con.execute("ALTER TABLE threads ADD COLUMN cwd TEXT")
+        con.executemany("INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [
+            ("known", 3, 3000, 0, 0, 0, "Known title", "/known"),
+            ("missing", 2, 2000, 0, 0, 0, "Missing title", "/missing"),
+            ("outside", 1, 1000, 0, 0, 0, "Outside title", "/outside"),
+        ])
+    known = {"known", "unranked-a", "unranked-b"}
+    options = dict(limit=2, columns=("id", "updated_at_ms", "title", "cwd", "archived"))
+    fetch = codex._codex_fetch_threads_in_home
+    normal = fetch(**options, omit_titles_for=known)
+    assert normal[0] == {"id": "known", "updated_at_ms": 3000, "title": None,
+                         "cwd": "/known", "archived": 0}
+    assert fetch(**options, omit_titles_for=known, rank_only_for_known=True) == [
+        {"id": "known", "updated_at_ms": 3000}, normal[1],
+    ]
+    known = {"missing", "unranked-a", "unranked-b"}
+    assert fetch(**options, omit_titles_for=known, rank_only_for_known=True) == [
+        {"id": "known", "updated_at_ms": 3000, "title": "Known title",
+         "cwd": "/known", "archived": 0},
+        {"id": "missing", "updated_at_ms": 2000},
+    ]
+
+
 @pytest.mark.parametrize("all_known", [False, True])
 @pytest.mark.parametrize("without_rowid", [False, True])
 def test_sidebar_title_filter_only_binds_ranked_ids(thread_db, monkeypatch, all_known, without_rowid):

@@ -9200,7 +9200,8 @@ def _codex_db_signature(db):
 
 
 def _codex_fetch_threads(where="", params=(), limit=None, columns=None, *,
-                         omit_titles_for=None, batch=True, exact_ids=None):
+                         omit_titles_for=None, batch=True, exact_ids=None,
+                         rank_only_for_known=False):
     from ccc_server.codex_accounts import homes
     bases = [_core._codex_home()] if os.environ.get("CCC_CODEX_ACCOUNT_KEY") else homes()
     rows = {}
@@ -9208,6 +9209,7 @@ def _codex_fetch_threads(where="", params=(), limit=None, columns=None, *,
         for row in _codex_fetch_threads_in_home(
             where, params, limit, columns, None if home == _core._codex_home() else home,
             omit_titles_for=omit_titles_for, batch=batch, exact_ids=exact_ids,
+            rank_only_for_known=rank_only_for_known,
         ):
             rows.setdefault(row["id"], row)
     if exact_ids is not None:
@@ -9218,7 +9220,7 @@ def _codex_fetch_threads(where="", params=(), limit=None, columns=None, *,
 
 def _codex_fetch_threads_in_home(
     where="", params=(), limit=None, columns=None, home=None, *, omit_titles_for=None,
-    batch=True, exact_ids=None,
+    batch=True, exact_ids=None, rank_only_for_known=False,
 ):
     """Read rows from Codex's local thread index without creating files.
 
@@ -9227,6 +9229,8 @@ def _codex_fetch_threads_in_home(
     mode so a dashboard scan cannot create a missing DB or mutate state.
     Narrow projections avoid reading prompt/source payloads on liveness paths.
     The bounded sidebar projection can leave out titles for already-loaded IDs.
+    Overlay callers that discard known threads after merging accounts can also
+    request only their identity and update order.
     Exact-ID projections read unordered rows from one snapshot per account.
     """
     columns = tuple(columns) if columns is not None else None
@@ -9235,7 +9239,8 @@ def _codex_fetch_threads_in_home(
     query_params = (*params, int(limit)) if limit else params
     for db in (_codex_state_db_candidates() if home is None else _codex_state_db_candidates(home)):
         sig = _codex_db_signature(db)
-        cache_key = (str(db), where, params, limit, columns, bool(omit_titles_for), exact_ids)
+        cache_key = (str(db), where, params, limit, columns, bool(omit_titles_for),
+                     exact_ids, rank_only_for_known)
         if sig is not None:
             with _CODEX_THREADS_CACHE_LOCK:
                 hit = _CODEX_THREADS_CACHE.get(cache_key)
@@ -9307,7 +9312,7 @@ def _codex_fetch_threads_in_home(
                     order = f"{primary} DESC, rowid ASC"
             deleted = _core._codex_deleted_thread_ids()
 
-            def read_rows(order_by, title_filter, *, include_rowid=False):
+            def read_rows(order_by, title_filter):
                 if exact_ids is not None:
                     # These rows fill a dictionary by ID. Avoid repeated opens,
                     # schema probes and time sorts for batches from one account.
@@ -9336,16 +9341,12 @@ def _codex_fetch_threads_in_home(
                         )
                         bindings = (json.dumps(list(title_filter)), *bindings)
                     fields = [title if field == "title" else field for field in selected]
-                result_fields = selected
-                if include_rowid:
-                    fields = [*fields, "rowid AS ccc_source_rowid"]
-                    result_fields = [*selected, "ccc_source_rowid"]
                 query = f"SELECT {', '.join(fields)} {from_threads} ORDER BY {order_by}"
                 if limit:
                     query += " LIMIT ?"
                 if columns is not None and batch:
-                    return [dict(zip(result_fields, row)) for row in _sqlite_fetch_rows(
-                        con, query, bindings, result_fields)]
+                    return [dict(zip(selected, row)) for row in _sqlite_fetch_rows(
+                        con, query, bindings, selected)]
                 return [dict(r) for r in con.execute(query, bindings).fetchall()]
 
             omit_titles = bool(limit and not where and omit_titles_for
@@ -9360,10 +9361,24 @@ def _codex_fetch_threads_in_home(
                     # Unusual WITHOUT ROWID stores still support the legacy query.
                     return read_rows(fallback_order, title_filter)
 
-            def read_titles_for_missing_rows():
-                # Keep the first ranked result. Fetch only the missing titles
-                # by rowid in the same snapshot, including when ids repeat.
-                rows = read_rows(order, (), include_rowid=True)
+            def read_ranked_with_missing_details():
+                # Keep the first ranked result. Fetch missing details by
+                # rowid in the same snapshot, including when ids repeat.
+                detail_fields = ["title"]
+                rank_keys = selected
+                if rank_only_for_known:
+                    order_fields = ("id", "updated_at", "updated_at_ms")
+                    detail_fields = [field for field in selected if field not in order_fields]
+                    rank_keys = [field for field in selected if field in order_fields]
+                fields = ["NULL AS title" if field == "title" else field for field in rank_keys]
+                rank_keys = (*rank_keys, "ccc_source_rowid")
+                query = (f"SELECT {', '.join(fields)}, rowid AS ccc_source_rowid "
+                         f"FROM threads ORDER BY {order} LIMIT ?")
+                if batch:
+                    rows = [dict(zip(rank_keys, row)) for row in
+                            _sqlite_fetch_rows(con, query, query_params, rank_keys)]
+                else:
+                    rows = [dict(row) for row in con.execute(query, query_params)]
                 missing = {}
                 for row in rows:
                     rowid = row.pop("ccc_source_rowid")
@@ -9371,10 +9386,11 @@ def _codex_fetch_threads_in_home(
                         missing[rowid] = row
                 if missing:
                     marks = ",".join("?" for _ in missing)
-                    query = f"SELECT rowid AS ccc_source_rowid, title FROM threads WHERE rowid IN ({marks})"
-                    for rowid, title in _sqlite_fetch_rows(
-                            con, query, tuple(missing), ("ccc_source_rowid", "title")):
-                        missing[rowid]["title"] = title
+                    query = (f"SELECT rowid AS ccc_source_rowid, {', '.join(detail_fields)} "
+                             f"FROM threads WHERE rowid IN ({marks})")
+                    for rowid, *details in _sqlite_fetch_rows(
+                            con, query, tuple(missing), ("ccc_source_rowid", *detail_fields)):
+                        missing[rowid].update(zip(detail_fields, details))
                 return rows
 
             try:
@@ -9392,7 +9408,7 @@ def _codex_fetch_threads_in_home(
                         getlimit = getattr(con, "getlimit", None)
                         if getlimit is None or int(limit) <= getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER):
                             try:
-                                all_rows = read_titles_for_missing_rows()
+                                all_rows = read_ranked_with_missing_details()
                             except sqlite3.OperationalError as exc:
                                 if "no such column: rowid" not in str(exc):
                                     raise

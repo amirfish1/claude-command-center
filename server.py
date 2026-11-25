@@ -21197,7 +21197,8 @@ def _archive_overlay_codex_sessions(rows, now=None, *, existing_ids=None):
     columns = ("id", "title", "cwd", "model", "reasoning_effort",
                "created_at", "created_at_ms", "updated_at", "updated_at_ms", "archived")
     try:
-        candidates = _codex_fetch_threads(limit=200, columns=columns, omit_titles_for=existing)
+        candidates = _codex_fetch_threads(limit=200, columns=columns, omit_titles_for=existing,
+                                         rank_only_for_known=True)
     except Exception:
         return []
     missing = [r for r in candidates if r.get("id") not in existing and not r.get("archived")]
