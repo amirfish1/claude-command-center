@@ -132,11 +132,15 @@ def test_http_delta_shares_gzip_and_preserves_etag_and_fresh_reads(monkeypatch, 
     current = dict(token=f'{nonce}.2.context.0', nonce=nonce, ver=2,
                    ctx='context', track_since=1)
     since = f'{nonce}.1.context.0'
-    calls, sharing = [], []
+    calls, sharing, captures = [], [], []
     monkeypatch.setattr(server, '_archive_list_disk_candidate', lambda *a, **kw: None)
     monkeypatch.setattr(server, '_archive_list_source_rows_cached',
                         lambda *a, **kw: ([{'session_id': 'example'}], True, 2))
-    monkeypatch.setattr(server, '_archive_list_delta_state', lambda *a, **kw: current)
+    def delta_state(*args, capture_tickets=False):
+        captures.append(capture_tickets)
+        return current
+
+    monkeypatch.setattr(server, '_archive_list_delta_state', delta_state)
 
     def payload(*args, **kwargs):
         calls.append(1)
@@ -159,11 +163,14 @@ def test_http_delta_shares_gzip_and_preserves_etag_and_fresh_reads(monkeypatch, 
     thread.start()
     url = f'http://127.0.0.1:{httpd.server_address[1]}/api/conversations/list?window=7d&since={since}'
 
-    def request(*, fresh=False, etag=None):
+    def request(*, fresh=False, etag=None, saved=False):
         headers = {'Accept-Encoding': 'gzip'}
         if etag:
             headers['If-None-Match'] = etag
-        req = urllib.request.Request(url + '&stale_ok=' + ('0' if fresh else '1'), headers=headers)
+        target = url + '&stale_ok=' + ('0' if fresh else '1')
+        if saved:
+            target += '&row_layouts=1&saved_order=' + 'a' * 64
+        req = urllib.request.Request(target, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=10) as response:
                 return response.status, dict(response.headers), response.read()
@@ -194,6 +201,9 @@ def test_http_delta_shares_gzip_and_preserves_etag_and_fresh_reads(monkeypatch, 
         assert request(fresh=True)[0] == 200
         assert sharing == [True, True, True, False]
         assert len(calls) == 3
+        assert request(saved=True)[0] == 200
+        assert request(saved=True, fresh=True)[0] == 200
+        assert captures == [False, False, False, False, True, False]
         assert delta_flights == {}
     finally:
         release.set()

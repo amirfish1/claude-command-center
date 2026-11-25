@@ -39783,6 +39783,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             seven_day_layer_requested = (scoped_layouts and not since and stale_ok
                                          and not any(cache_options.values())
                                          and qs.get("history_layer") == ["1"])
+            saved_seven_day_requested = scoped_layouts and stale_ok and bool(since and saved_order)
             # CCC-142: ?since=<delta_token> asks for only the rows that changed
             # after the client's last body. Anything the token can't vouch for
             # (restart, projection inputs moved, history trimmed) gets a full
@@ -39792,7 +39793,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 try:
                     _delta = _archive_list_delta_state(
                         list_cache_key, rows, window, from_cache,
-                        capture_tickets=seven_day_layer_requested)
+                        capture_tickets=seven_day_layer_requested or saved_seven_day_requested)
                 except Exception:
                     _delta = None
             _delta_phase = {
