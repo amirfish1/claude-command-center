@@ -484,10 +484,12 @@ _FEDERATION_ROUTE_ACTIONS = {
     "memory_shipped": ("GET", "/api/memory/shipped", False),
     "memory_brief": ("GET", "/api/memory/brief", False),
     "memory_file_history": ("GET", "/api/memory/file-history", False),
+    "memory_decisions": ("GET", "/api/memory/decisions", False),
 }
 
 _MEMORY_ROUTE_ACTIONS = frozenset(
-    {"memory_recall", "memory_shipped", "memory_brief", "memory_file_history"}
+    {"memory_recall", "memory_shipped", "memory_brief", "memory_file_history",
+     "memory_decisions"}
 )
 
 # Least-privilege pairing (multi-machine spec section 5): a peer entry can

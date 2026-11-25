@@ -1432,7 +1432,8 @@ def cmd_decisions(args):
         print("ccc decisions: missing topic (pass it as an argument or pipe it on stdin)",
               file=sys.stderr)
         return 2
-    qs = urllib.parse.urlencode({"topic": text, "limit": args.limit})
+    qs = urllib.parse.urlencode({"topic": text, "limit": args.limit,
+                                 "scope": getattr(args, "scope", "all")})
     if getattr(args, "repo", None):
         qs += "&" + urllib.parse.urlencode({"repo": args.repo})
     try:
@@ -1448,7 +1449,8 @@ def cmd_decisions(args):
         print(f"(no decisions found for {text!r})")
         return 0
     for r in results:
-        meta = " | ".join(x for x in (r.get("title"), r.get("repo"), r.get("date")) if x)
+        where = f"[{r.get('node_name')}]" if r.get("local") is False else ""
+        meta = " | ".join(x for x in (where, r.get("title"), r.get("repo"), r.get("date")) if x)
         print(f"{r.get('session_id') or '?':<38} {meta}")
         provenance = r.get("provenance")
         if provenance:
@@ -3839,6 +3841,8 @@ def main(argv=None):
                    help="max sessions to return (default 10, server caps at 50)")
     p.add_argument("--json", action="store_true", help="raw decisions result JSON")
     p.add_argument("--repo", metavar="NAME", help="exact repository name to search")
+    p.add_argument("--scope", choices=("all", "local"), default="all",
+                   help="all (default): also ask paired CCC machines; local: this machine only")
     p.set_defaults(func=cmd_decisions)
 
     p = sub.add_parser(

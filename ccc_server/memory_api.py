@@ -440,13 +440,19 @@ def _decision_hits(topic: str, limit: int) -> list[dict]:
     return out
 
 
-def decisions(topic: str, limit: int = 10, repo: str | None = None) -> dict:
+def decisions(topic: str, limit: int = 10, repo: str | None = None,
+              scope: str = "local") -> dict:
     """Stored user decision quotes first; labelled session snippets as fallback.
 
     The request never runs extraction. Quotes remain candidate evidence, not
     approved or necessarily current policy. All original result fields stay
-    available to older CLI/UI consumers.
+    available to older CLI/UI consumers. `scope="all"` also asks every paired
+    machine, since each one extracts quotes only from its own transcripts.
     """
+    if scope == "all":
+        from ccc_server import memory_fanout as _fanout
+        return _fanout.decisions_all(topic, limit,
+                                     lambda t, n: decisions(t, limit=n, repo=repo))
     from ccc_server import decision_extraction as _dex
 
     t = (topic or "").strip()

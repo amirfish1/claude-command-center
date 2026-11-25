@@ -39470,7 +39470,8 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 except ValueError:
                     limit = 10
                 repo = (qs.get("repo", [""])[0] or "").strip() or None
-                self.send_json(_memory_decisions(topic, limit=limit, repo=repo))
+                self.send_json(_memory_decisions(topic, limit=limit, repo=repo,
+                                                 scope=_memory_scope(qs)))
         elif path == "/api/memory/decisions/extracted":
             # ccc_server/decision_extraction.py -- explicit user rulings
             # found by the nightly scan, listed by recency. Topic search

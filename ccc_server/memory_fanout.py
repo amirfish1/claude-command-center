@@ -437,6 +437,40 @@ def recall_all(query: str, limit: int, local_recall) -> dict:
     return out
 
 
+# -- decisions ---------------------------------------------------------------
+
+
+def _decision_rank(row: dict) -> int:
+    """Stored owner quotes outrank unverified session snippets."""
+    return 0 if row.get("provenance") == "extracted_user_quote" else 1
+
+
+def decisions_all(topic: str, limit: int, local_decisions) -> dict:
+    """scope=all decisions: each machine extracts owner quotes only from its
+    own transcripts, so ask every paired machine and merge. Quotes from any
+    machine come before snippets; within a kind, newest first."""
+    node = _self_node()
+    local, local_ms, entries = _with_local(
+        lambda: local_decisions(topic, limit), "memory_decisions",
+        {"topic": topic, "limit": min(limit, 30)})
+    rows = [{**r, "node_name": node["name"], "local": True}
+            for r in local.get("results") or []]
+    for e in entries:
+        if e.get("status") != OK and not e.get("stale"):
+            continue
+        for r in (e.get("result") or {}).get("results") or []:
+            rows.append({**r, "node_name": e["name"], "local": False,
+                         **({"stale": True} if e.get("stale") else {})})
+    rows.sort(key=lambda r: str(r.get("date") or ""), reverse=True)
+    rows.sort(key=_decision_rank)
+    out = dict(local)
+    out["topic"] = local.get("topic", topic)
+    out["results"] = rows[:limit]
+    out.update(_envelope(node, local_ms, local, entries))
+    out["scope"] = "all"
+    return out
+
+
 # -- shipped -----------------------------------------------------------------
 
 

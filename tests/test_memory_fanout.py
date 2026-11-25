@@ -216,6 +216,26 @@ def test_recall_all_tags_rows_and_lists_nodes(script):
     assert [n["status"] for n in out["nodes"]] == ["ok", "ok", "timeout"]
 
 
+# -- decisions_all ---------------------------------------------------------------
+
+
+def test_decisions_all_merges_peer_quotes_before_snippets(script):
+    script.by_node[PEER_A["node_id"]] = lambda a, args: {"results": [
+        {"session_id": "r1", "snippet": "use sqlite", "date": "2026-11-01",
+         "provenance": "extracted_user_quote"}]}
+    script.by_node[PEER_B["node_id"]] = _raise("timeout")
+    local = lambda t, n: {"topic": t, "results": [
+        {"session_id": "l1", "snippet": "maybe", "date": "2026-11-20",
+         "provenance": "session_snippet"},
+        {"session_id": "l2", "snippet": "no pins", "date": "2026-10-01",
+         "provenance": "extracted_user_quote"}]}
+    out = mf.decisions_all("storage", 10, local)
+    assert [(r["session_id"], r["local"]) for r in out["results"]] == [
+        ("r1", False), ("l2", True), ("l1", True)]
+    assert out["results"][0]["node_name"] == PEER_A["name"]
+    assert out["scope"] == "all" and out["peers_unreachable"] == ["third"]
+
+
 # -- shipped_all -----------------------------------------------------------------
 
 

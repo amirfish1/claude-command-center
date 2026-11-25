@@ -1,0 +1,1 @@
+- `ccc decisions` now asks every paired machine by default (`--scope local` for this machine only); stored decision quotes from any machine are listed before session snippets, tagged with the machine they came from.
