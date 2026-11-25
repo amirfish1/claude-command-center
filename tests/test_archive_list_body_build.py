@@ -1102,3 +1102,34 @@ def test_overlay_only_change_serves_previous_body(monkeypatch, tmp_path):
     assert read(((6, 'ovl-b'), 'ctx2'), 'd', (6, 'ctx2')) == ('d', 'version-miss')
     # No delta token: never served stale for an overlay change.
     assert read((6, 'ovl-c'), 'e', None) == ('e', 'version-miss')
+
+
+def test_source_read_rereads_when_a_publication_lands_mid_read(monkeypatch):
+    # CCC-691: a snapshot stored while the overlays ran left the rows matching
+    # no version, so the read built an uncached body with no delta token.
+    server = importlib.import_module('server')
+    key = server._archive_response_cache_key()
+    old_rows, new_rows = [{'session_id': 'a'}], [{'session_id': 'a2'}]
+    cache = {key: {'ver': 1, 'rows': old_rows}}
+    monkeypatch.setattr(server, '_archive_serve_cache', cache)
+    reads = []
+
+    def serve(key_, *a, **kw):
+        entry = cache[key_]
+        reads.append(entry['ver'])
+        return entry['rows'], True, entry['ver']
+
+    def overlays(rows, existing, phase, **kw):
+        if len(reads) == 1:
+            cache[key] = {'ver': 2, 'rows': new_rows}  # the publication lands
+        return rows, []
+    monkeypatch.setattr(server, '_archive_serve_rows_versioned', serve)
+    monkeypatch.setattr(server, '_archive_list_source_overlays', overlays)
+    phases = {}
+    rows, _, ver = server._archive_list_source_rows_read({}, phases=phases)
+    assert reads == [1, 2] and rows is new_rows and ver == 2 and phases['ver_retry']
+    # An unchanged snapshot never re-reads, even when the body is unversioned.
+    reads.clear()
+    monkeypatch.setattr(server, '_archive_list_body_ver', lambda *a: 0)
+    server._archive_list_source_rows_read({})
+    assert reads == [2]

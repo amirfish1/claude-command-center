@@ -21188,34 +21188,50 @@ def _archive_list_source_rows_read(cache_options, *, force_refresh=False, phases
     if check_client is not None:
         packed_options["check_client"] = check_client
     default_stale_read = not force_refresh and not any(cache_options.values())
-    with contextlib.ExitStack() as stack:
-        overlay_options = {}
-        if window in ("1d", "7d") and default_stale_read:
-            # The process table is independent of the archive cut. Open logs
-            # and overlay exclusions are still read in their usual order.
-            # 1d is the sidebar's poll window: its `ps` wait (60-160 ms) was
-            # serial on nearly every read (CCC-686).
-            overlay_options["antigravity_processes"] = _archive_prefetch_antigravity_processes(stack)
-            if phases is not None:
-                phases["antigravity_probe_started"] = True
-        rows, from_cache, _snap_ver = _archive_serve_rows_versioned(
-            key,
-            cache_options,
-            copy_rows=False,
-            force_refresh=force_refresh,
-            window=window,
-            defer_cold=True,
-            reuse_sidebar_history=window == "all" and default_stale_read,
-            **packed_options,
-        )
-        if check_client is not None:
-            check_client()
-        _phase("serve_ms")
-        rows, extra = _archive_list_source_overlays(
-            rows, _archive_overlay_existing_ids(rows), _phase, **overlay_options)
-    body_ver = _archive_list_body_ver(key, rows, extra)
-    _phase("ver_ms")
+    for attempt in range(2):
+        with contextlib.ExitStack() as stack:
+            overlay_options = {}
+            if window in ("1d", "7d") and default_stale_read:
+                # The process table is independent of the archive cut. Open logs
+                # and overlay exclusions are still read in their usual order.
+                # 1d is the sidebar's poll window: its `ps` wait (60-160 ms) was
+                # serial on nearly every read (CCC-686).
+                overlay_options["antigravity_processes"] = _archive_prefetch_antigravity_processes(stack)
+                if phases is not None:
+                    phases["antigravity_probe_started"] = True
+            rows, from_cache, _snap_ver = _archive_serve_rows_versioned(
+                key,
+                cache_options,
+                copy_rows=False,
+                force_refresh=force_refresh,
+                window=window,
+                defer_cold=True,
+                reuse_sidebar_history=window == "all" and default_stale_read,
+                **packed_options,
+            )
+            if check_client is not None:
+                check_client()
+            _phase("serve_ms")
+            rows, extra = _archive_list_source_overlays(
+                rows, _archive_overlay_existing_ids(rows), _phase, **overlay_options)
+        body_ver = _archive_list_body_ver(key, rows, extra)
+        _phase("ver_ms")
+        # CCC-691: a publication stored while the overlays ran left these rows
+        # matching no snapshot, so the read built an uncached body without a
+        # delta token (0.5-1 s, and a full body again on the next poll).
+        # Read the new snapshot once instead.
+        if body_ver or not _snap_ver or attempt or not _archive_serve_moved(key, _snap_ver):
+            break
+        if phases is not None:
+            phases["ver_retry"] = True
     return rows, from_cache, body_ver
+
+
+def _archive_serve_moved(key, snap_ver):
+    """True when the serve snapshot for `key` is no longer version `snap_ver`."""
+    with _archive_serve_lock:
+        sc = _archive_serve_cache.get(key)
+        return sc is not None and sc.get("ver", 0) != snap_ver
 
 
 def _archive_list_source_rows_for_sessions(session_ids):
