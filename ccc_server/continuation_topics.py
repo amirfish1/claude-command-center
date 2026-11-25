@@ -145,16 +145,31 @@ def _precise_topic_token(conn, db_path, broad, *, pinned=False):
         names = [f'ccc_topic_cache_{table}_{event}' for table in _TRACKED_TABLES
                  for event in ('insert', 'update', 'delete')]
         marks = ','.join('?' for _ in names)
-        row = conn.execute(
+        fields = (
             'SELECT revision, (SELECT count(*) FROM sqlite_master WHERE type=\'trigger\' '
-            f'AND name IN ({marks})), (SELECT schema_version FROM pragma_schema_version) '
-            'FROM continuation_topic_cache_state WHERE id=1', names).fetchone()
+            f'AND name IN ({marks})), (SELECT schema_version FROM pragma_schema_version)'
+        )
+        state = ' FROM continuation_topic_cache_state WHERE id=1'
+        # Read the witness and revision in the same SQLite snapshot. On an
+        # older or read-only database the ordinary revision stays usable.
+        try:
+            row = conn.execute(
+                fields + f', (SELECT nonce FROM {_TOPIC_CUT_WITNESS} WHERE id=1 '
+                "AND EXISTS (SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?))"
+                + state, (*names, _TOPIC_CUT_TRIGGER),
+            ).fetchone()
+        except sqlite3.OperationalError as exc:
+            if f'no such table: {_TOPIC_CUT_WITNESS}' not in str(exc):
+                raise
+            row = conn.execute(fields + ', NULL' + state, names).fetchone()
         if row is None or row[1] != len(names):
             return broad
         # Keep the main-file signature: checkpoint/restore/replacement may
         # invalidate conservatively, while unrelated WAL appends do not.
         identity = broad[1][0] if db_path else broad[0]
-        token = ('topics-v1', broad[0], identity, row[0], row[2], broad[3], broad[-1])
+        # Scoped title caches compare the database inputs without the final
+        # external-title signature. The witness belongs to the database inputs.
+        token = ('topics-v1', broad[0], identity, row[0], row[2], broad[3], row[3], broad[-1])
     except sqlite3.Error:
         return broad
     finally:
@@ -420,17 +435,7 @@ def _archive_read_version(conn, *, pinned=False):
     if token is not None and token[0] == "topics-v1":
         # The revision is scoped to tracked topic data. The archive captures
         # external titles separately and compares inside and outside a write.
-        try:
-            witness = conn.execute(
-                f'SELECT nonce FROM {_TOPIC_CUT_WITNESS} WHERE id=1 '
-                'AND (SELECT revision FROM continuation_topic_cache_state WHERE id=1)=? '
-                'AND (SELECT schema_version FROM pragma_schema_version)=? '
-                "AND EXISTS (SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?)",
-                (token[3], token[4], _TOPIC_CUT_TRIGGER),
-            ).fetchone()
-        except sqlite3.Error:
-            witness = None
-        return (*token[:5], witness[0] if witness else None)
+        return (*token[:5], token[-2])
     return conn.total_changes, conn.execute("PRAGMA data_version").fetchone()[0]
 
 

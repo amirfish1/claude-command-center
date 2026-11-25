@@ -82,6 +82,7 @@ def test_archive_topic_cut_across_a_checkpoint(store, monkeypatch, change):
         store.execute("INSERT INTO continuation_topics VALUES ('root', '', 'root', 'Old', 0)")
         if change == 'legacy':
             store.execute('DROP TRIGGER ccc_topic_cache_state_witness')
+            store.execute('DROP TABLE continuation_topic_cache_witness')
     store.execute('PRAGMA wal_checkpoint(TRUNCATE)')
     monkeypatch.setattr(topics, '_ARCHIVE_TOPIC_SNAPSHOT', (None, None, None))
     inputs, edges, before = topics.archive_projection_inputs(store, max_rows=20)
