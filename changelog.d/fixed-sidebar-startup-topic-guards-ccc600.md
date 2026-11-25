@@ -1,0 +1,1 @@
+- Prepare continuation topic guards during dashboard startup so the sidebar can reuse them when loading the seven-day archive.

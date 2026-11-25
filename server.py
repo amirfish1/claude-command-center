@@ -20345,13 +20345,20 @@ def _archive_history_warm_scoped_basis():
         diagnostics = {"stage": "startup_scoped_topics"}
         try:
             reader = continuation_topics.archive_connection()
-            diagnostics["topics_ready"] = continuation_topics.archive_projection_inputs(
+            prepared = continuation_topics.archive_projection_inputs(
                 reader, max_rows=archive_history_layer.MAX_ROWS, diagnostics=diagnostics,
-            ) is not None
+            )
         except (OSError, sqlite3.Error):
-            diagnostics["topics_ready"] = False
+            prepared = None
         finally:
             _ARCHIVE_HISTORY_LOCK.release()
+        diagnostics["topics_ready"] = prepared is not None
+        if prepared is not None:
+            inputs, _, _ = prepared
+            # These maps are immutable. Encoding them needs no reader lock,
+            # and later cuts still check the exact map identity or values.
+            with _archive_history_timing(diagnostics, "topic_guards"):
+                archive_history_layer.prepare_pinned_overlay_guards(inputs[:2])
         record_diag("archive_rebuild", (time.perf_counter() - started) * 1000.0, diagnostics)
 
 

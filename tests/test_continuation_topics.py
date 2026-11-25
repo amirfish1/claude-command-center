@@ -5,6 +5,7 @@ from collections import OrderedDict
 import pytest
 
 import server
+from ccc_server import archive_history_layer
 from ccc_server import continuation_topics as topics
 from ccc_server import usage_limit
 
@@ -32,12 +33,21 @@ def test_startup_scoped_basis_warms_the_foreground_topic_reader(store, monkeypat
     monkeypatch.setattr(topics, 'archive_connection', lambda: store)
     monkeypatch.setattr(server, '_archive_history_artifact', lambda target: (0, 0))
     monkeypatch.setattr(server, '_archive_seven_day_load_basis', lambda *args: object())
+    monkeypatch.setattr(archive_history_layer, '_PINNED_OVERLAY_GUARDS', ((), ()))
+    prepare_guards = archive_history_layer.prepare_pinned_overlay_guards
+
+    def prepare_outside_reader_lock(*args):
+        assert not server._ARCHIVE_HISTORY_LOCK.locked()
+        return prepare_guards(*args)
+
+    monkeypatch.setattr(archive_history_layer, 'prepare_pinned_overlay_guards', prepare_outside_reader_lock)
     events = []
     monkeypatch.setattr(server, 'record_diag', lambda *args: events.append(args))
 
     with server._ARCHIVE_HISTORY_LOCK:
         server._archive_history_warm_scoped_basis()
     assert topics._ARCHIVE_TOPIC_SNAPSHOT == (None, None, None)
+    assert archive_history_layer._PINNED_OVERLAY_GUARDS == ((), ())
     assert not events
 
     server._archive_history_warm_scoped_basis()
@@ -47,12 +57,18 @@ def test_startup_scoped_basis_warms_the_foreground_topic_reader(store, monkeypat
     assert details['topics_snapshot_reused'] is True
     assert inputs[0]['old'] == ('', 'old', 'Old', 0)
     assert not edges
+    cached_inputs, cached_guards = archive_history_layer._PINNED_OVERLAY_GUARDS
+    assert cached_inputs[0] is inputs[0]
+    guards = archive_history_layer._overlay_guards(inputs, inputs[:2], {})
+    assert guards[0] is cached_guards[0]
 
     with store:
         store.execute("UPDATE continuation_topics SET topic_title='New' WHERE sid='old'")
     inputs, _, _ = topics.archive_projection_inputs(store, max_rows=20, diagnostics=details)
     assert details['topics_snapshot_reused'] is False
     assert inputs[0]['old'] == ('', 'old', 'New', 0)
+    refreshed = archive_history_layer._overlay_guards(inputs, inputs[:2], {})
+    assert refreshed[0]['old'] != guards[0]['old']
 
 
 def test_named_root_projection_preserves_explicit_and_indexed_origins(store):

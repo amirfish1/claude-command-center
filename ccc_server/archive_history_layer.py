@@ -446,15 +446,25 @@ def _pinned_overlay(values, previous, encoded, transition=None):
     return result
 
 
-def _overlay_guards(overlay_maps, pinned, transitions):
-    """Reuse encoded guards for maps owned by one immutable read snapshot."""
+def prepare_pinned_overlay_guards(pinned, transitions=None):
+    """Prepare encoded guards for maps owned by one immutable read snapshot."""
     global _PINNED_OVERLAY_GUARDS
-    previous, encoded = _PINNED_OVERLAY_GUARDS
+    cached = _PINNED_OVERLAY_GUARDS
+    previous, encoded = cached
     if len(pinned) != len(previous) or any(a is not b for a, b in zip(pinned, previous)):
+        transitions = transitions or {}
         encoded = tuple(_pinned_overlay(values, old, guard, transitions.get(id(values)))
                         for values, old, guard in zip_longest(pinned, previous, encoded)
                         if values is not None)
-        _PINNED_OVERLAY_GUARDS = pinned, encoded
+        # Startup preparation can overlap a foreground cut. Prefer an entry
+        # that was published while this one was being encoded.
+        if _PINNED_OVERLAY_GUARDS is cached:
+            _PINNED_OVERLAY_GUARDS = pinned, encoded
+    return encoded
+
+
+def _overlay_guards(overlay_maps, pinned, transitions):
+    encoded = prepare_pinned_overlay_guards(pinned, transitions)
     by_identity = {id(values): guard for values, guard in zip(pinned, encoded)}
     return tuple(guard if (guard := by_identity.get(id(values))) is not None else
                  {sid: _guard_value(value) for sid, value in values.items()} for values in overlay_maps)
