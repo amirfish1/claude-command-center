@@ -330,6 +330,10 @@ test('embedded entry binds real controls before readiness and keeps drafts live'
         if (folded) {
           if (!group.classList.contains('activity-run-source')) throw new Error('History did not fold');
           group.previousElementSibling.querySelector('.activity-run-toggle').click();
+          // Opening Working history keeps tool calls collapsed (fda6b4f5);
+          // the reader then opens the tool group, as its header click does.
+          if (!group.classList.contains('collapsed')) throw new Error('Tool group should stay collapsed in opened history');
+          group.classList.remove('collapsed');
         }
       }, {lines, folded});
       await frame.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
