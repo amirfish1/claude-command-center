@@ -545,20 +545,36 @@ def _ingest_file(conn, path_str: str):
 def _rollup(conn, since_day: str, until_day=None):
     """Deduped per-(day, model, session) token rows for the window.
 
-    Reads the ingest-maintained rollup table, so a request never scans the
-    raw event log — the per-(day, model, session) working set is tiny.
+    Read the preaggregated table in bounded batches. Keep one snapshot
+    because the background scanner can update keys between batches.
     """
+    keys = "day, model, session_id"
+    columns = ("day", "model", "session_id", "i", "cw", "cr", "o", "sc")
     sql = (
-        "SELECT day, model, session_id,"
+        f"SELECT {keys},"
         " SUM(input_tokens) i, SUM(cache_write_tokens) cw,"
         " SUM(cache_read_tokens) cr, SUM(output_tokens) o, MAX(sidechain) sc"
-        " FROM rollup WHERE day >= ? {until} GROUP BY day, model, session_id"
+        f" FROM rollup WHERE {{lower}}{{upper}} GROUP BY {keys} ORDER BY {keys} LIMIT ?"
     )
-    if until_day:
-        rows = conn.execute(sql.format(until="AND day < ?"), (since_day, until_day)).fetchall()
-    else:
-        rows = conn.execute(sql.format(until=""), (since_day,)).fetchall()
-    return rows
+    upper = " AND day < ?" if until_day else ""
+    bounds = (until_day,) if until_day else ()
+    batch_size = 2048
+    lower, position = "day >= ?", (since_day,)
+    rows = []
+    conn.execute("BEGIN")
+    try:
+        while True:
+            batch = _sqlite_fetch_rows(
+                conn, sql.format(lower=lower, upper=upper),
+                (*position, *bounds, batch_size), columns,
+            )
+            rows.extend(batch)
+            if len(batch) < batch_size:
+                return rows
+            # Replace the day floor so SQLite can seek on the composite key.
+            lower, position = f"({keys}) > (?, ?, ?)", batch[-1][:3]
+    finally:
+        conn.rollback()
 
 
 def _ledger_has_data(conn):
@@ -983,11 +999,11 @@ def savings_payload(range_key="today", *, refresh=False, projects_root=None,
     except (sqlite3.Error, OSError):
         rows = []
 
-    for r in rows:
-        i, cw, cr, o = r["i"] or 0, r["cw"] or 0, r["cr"] or 0, r["o"] or 0
+    for day, model, sid, i, cw, cr, o, _ in rows:
+        i, cw, cr, o = i or 0, cw or 0, cr or 0, o or 0
         total = i + cw + cr + o
-        model = r["model"] or ""
-        sid = r["session_id"] or ""
+        model = model or ""
+        sid = sid or ""
         is_free = bool(sid) and sid in free_set
         if is_free:
             cost = _price(_SONNET_RATES, i, cw, cr, o)
@@ -1005,7 +1021,7 @@ def savings_payload(range_key="today", *, refresh=False, projects_root=None,
         tokens += total
         if sid:
             sessions.add(sid)
-        d = by_day.setdefault(r["day"], {"day": r["day"], "api_value_usd": 0.0,
+        d = by_day.setdefault(day, {"day": day, "api_value_usd": 0.0,
                                          "free_saved_usd": 0.0, "tokens": 0})
         d["api_value_usd"] += cost
         if is_free:

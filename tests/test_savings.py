@@ -78,6 +78,41 @@ def _payload(tmp_path, range_key="today", **kw):
     return savings.savings_payload(range_key, **kw)
 
 
+def test_rollup_batches_share_one_snapshot(tmp_path, monkeypatch):
+    ledger = tmp_path / "savings.sqlite3"
+    reader = savings._connect_ledger(ledger)
+    writer = savings._connect_ledger(ledger)
+    try:
+        with writer:
+            writer.executemany(
+                "INSERT INTO rollup (day, model, session_id, input_tokens) VALUES (?, ?, ?, ?)",
+                [(YESTERDAY, "", f"s-{i:04d}", i) for i in range(2050)]
+                + [(TODAY, "", "outside-window", 9)],
+            )
+        fetch_rows = savings._sqlite_fetch_rows
+        batches = []
+
+        def fetch_then_update(*args):
+            rows = fetch_rows(*args)
+            batches.append(len(rows))
+            if len(batches) == 1:
+                with writer:
+                    writer.execute("UPDATE rollup SET input_tokens = -1 WHERE session_id = 's-2049'")
+                    writer.execute("INSERT INTO rollup (day, model, session_id) VALUES (?, '', 'z')",
+                                   (YESTERDAY,))
+            return rows
+
+        monkeypatch.setattr(savings, "_sqlite_fetch_rows", fetch_then_update)
+        rows = savings._rollup(reader, YESTERDAY, TODAY)
+        assert len(batches) > 1
+        assert [(row[2], row[3]) for row in rows] == [(f"s-{i:04d}", i) for i in range(2050)]
+        assert not reader.in_transaction
+        assert savings._rollup(reader, YESTERDAY, TODAY)[-2][3] == -1
+    finally:
+        reader.close()
+        writer.close()
+
+
 def test_concurrent_ranges_share_a_scan_through_backlog(tmp_path, monkeypatch):
     root = tmp_path / "projects"
     ledger = tmp_path / "savings.sqlite3"
