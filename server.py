@@ -22646,8 +22646,10 @@ _ARCHIVE_REFRESH_WATCHDOG_S = _ARCHIVE_REFRESH_WORKER_TIMEOUT + 60.0
 
 
 # A full garbage collection walks the whole heap with the GIL held, so every
-# request stops for it. Record the long ones next to the list timings.
+# request stops for it. Record the long ones next to the list timings, tagged
+# with the kind of explicit pass that caused them (None = automatic).
 _GC_PAUSE_RECORD_MS = 50.0
+_gc_pass_tag = {"pass": None, "reason": None}
 
 
 def _install_gc_pause_diag():
@@ -22664,9 +22666,12 @@ def _install_gc_pause_diag():
         started = None
         ms = (time.perf_counter() - wall_start) * 1000.0
         if ms >= _GC_PAUSE_RECORD_MS:
-            record_diag("gc_pause", ms, {"generation": info.get("generation"),
-                                         "collected": info.get("collected"),
-                                         "cpu_ms": round((time.thread_time() - cpu_start) * 1000.0, 2)})
+            detail = {"generation": info.get("generation"),
+                      "collected": info.get("collected"),
+                      "cpu_ms": round((time.thread_time() - cpu_start) * 1000.0, 2)}
+            if info.get("generation") == 2 and _gc_pass_tag["pass"]:
+                detail.update(_gc_pass_tag)
+            record_diag("gc_pause", ms, detail)
 
     gc.callbacks.append(on_gc)
 
@@ -22675,14 +22680,43 @@ def _install_gc_pause_diag():
 # minute, and matched the >=1s stalls of every request (CCC-142). Nearly all
 # of that heap is long-lived cache that never forms cycles. freeze() takes it
 # out of later passes in constant time, and frozen objects are still freed by
-# refcount. Only frozen cycles need a real pass, which runs on a slow timer.
+# refcount. Each tick first collects the objects made since the last freeze, so
+# cycles that died young are reclaimed instead of frozen.
+#
+# Only cycles that die after being frozen need a full pass. On a 2.8GB heap
+# that pass stopped every request for 1.5-6.5s (once 12.6s) every 30 minutes
+# while reclaiming only ~6k-26k objects (CCC-685), so it now runs only when the
+# process grew by _GC_FULL_PASS_GROWTH_BYTES since the last one, or after
+# _GC_FULL_PASS_MAX_S for cycles that hold files or sockets rather than memory.
 _GC_FREEZE_EVERY_S = 15.0
-_GC_FULL_PASS_EVERY_S = 1800.0
+_GC_FULL_PASS_MIN_S = 1800.0
+_GC_FULL_PASS_MAX_S = 12 * 3600.0
+_GC_FULL_PASS_GROWTH_BYTES = 256 * 1024 * 1024
 _GC_RESTART_GRACE_S = 60.0
 # With the old heap frozen, the default threshold still ran a ~170ms oldest
 # generation pass every 8s over the newest objects. Most of them die by
 # refcount, so counting 10000 allocations before a pass loses little.
 _GC_GEN0_THRESHOLD = 10000
+
+
+def _process_rss_bytes():
+    """Resident size of this process, or None where it cannot be read. macOS
+    has no /proc; its peak RSS still rises with any growth worth a full pass."""
+    try:
+        with open("/proc/self/statm", "rb") as f:
+            return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        import resource
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return int(peak if sys.platform == "darwin" else peak * 1024)
+    except Exception:
+        return None
+
+
+def _gc_new_state(now):
+    return {"last_full": now, "baseline_rss": _process_rss_bytes(), "due_since": None}
 
 
 def _gc_dashboard_restart_due():
@@ -22715,18 +22749,46 @@ def _gc_dashboard_restart_due():
     return False
 
 
-def _gc_freeze_tick(now, next_full_pass):
-    """Returns when the next full pass is due."""
-    if (now < next_full_pass
-            or (now < next_full_pass + _GC_RESTART_GRACE_S and _gc_dashboard_restart_due())):
-        # An imminent restart reclaims the whole heap. Keep the old deadline
-        # so a failed or delayed restart can only postpone the full pass briefly.
+def _gc_full_pass_reason(now, state):
+    since = now - state["last_full"]
+    if since < _GC_FULL_PASS_MIN_S:
+        return None
+    if since >= _GC_FULL_PASS_MAX_S:
+        return "backstop"
+    rss, baseline = _process_rss_bytes(), state.get("baseline_rss")
+    if rss is None or baseline is None:
+        return "interval"  # cannot measure growth: keep the old bounded cadence
+    if rss - baseline >= _GC_FULL_PASS_GROWTH_BYTES:
+        return "growth"
+    return None
+
+
+def _gc_collect_tagged(kind, reason=None):
+    _gc_pass_tag.update({"pass": kind, "reason": reason})
+    try:
+        gc.collect()
+    finally:
+        _gc_pass_tag.update({"pass": None, "reason": None})
+
+
+def _gc_freeze_tick(now, state):
+    """One tick: collect the unfrozen objects and freeze the survivors, with a
+    full-heap pass first when one is due (see _gc_full_pass_reason)."""
+    reason = _gc_full_pass_reason(now, state)
+    if reason and state["due_since"] is None:
+        state["due_since"] = now
+    if reason and not (now < state["due_since"] + _GC_RESTART_GRACE_S
+                       and _gc_dashboard_restart_due()):
+        # An imminent restart reclaims the whole heap, so the pass waits for
+        # it, but only briefly in case the restart fails or is delayed.
+        gc.unfreeze()
+        _gc_collect_tagged("full", reason)
         gc.freeze()
-        return next_full_pass
-    gc.unfreeze()
-    gc.collect()
+        state.update(_gc_new_state(now))
+        return state
+    _gc_collect_tagged("young")
     gc.freeze()
-    return now + _GC_FULL_PASS_EVERY_S
+    return state
 
 
 def _start_gc_freeze_thread():
@@ -22735,10 +22797,12 @@ def _start_gc_freeze_thread():
     gc.set_threshold(_GC_GEN0_THRESHOLD, *gc.get_threshold()[1:])
 
     def loop():
-        next_full_pass = time.monotonic() + _GC_FULL_PASS_EVERY_S
+        # Freeze the boot heap without a pass; later ticks walk only new objects.
+        gc.freeze()
+        state = _gc_new_state(time.monotonic())
         while True:
-            next_full_pass = _gc_freeze_tick(time.monotonic(), next_full_pass)
             time.sleep(_GC_FREEZE_EVERY_S)
+            _gc_freeze_tick(time.monotonic(), state)
 
     threading.Thread(target=loop, name="ccc-gc-freeze", daemon=True).start()
 
