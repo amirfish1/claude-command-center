@@ -41304,6 +41304,8 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                     boot_id=str(data.get("boot_id") or ""),
                     conv_id=str(data.get("conv_id") or ""),
                     detail=data.get("detail"),
+                    automated=(data.get("automated") is True
+                               or "HeadlessChrome" in (self.headers.get("User-Agent") or "")),
                 )
                 self.send_json(result)
             except ValueError as e:

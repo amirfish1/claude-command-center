@@ -46,6 +46,8 @@ def _steady_reason(row):
     """Why a sample is not steady-state ('' when it counts)."""
     if row.get("warmup"):
         return "warmup"
+    if row.get("automated"):
+        return "automated"
     try:
         load1, ncpu = row.get("load1"), row.get("ncpu")
         if load1 is not None and ncpu is not None and float(load1) > float(ncpu):

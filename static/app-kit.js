@@ -214,7 +214,7 @@
     if (ready.hidden || out.ms > 120000) return;
     try {
       fetch('/api/perf-event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
-        body: JSON.stringify({ kind: 'app_ready', ms: out.ms, detail: out }) }).catch(function () {});
+        body: JSON.stringify({ kind: 'app_ready', ms: out.ms, detail: out, automated: !!navigator.webdriver }) }).catch(function () {});
     } catch (_) {}
   }
   // Freezes: a timer that should tick four times a second. A long gap while
@@ -233,7 +233,7 @@
       sent++;
       try {
         fetch('/api/perf-event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
-          body: JSON.stringify({ kind: 'app_freeze', ms: Math.round(blocked),
+          body: JSON.stringify({ kind: 'app_freeze', ms: Math.round(blocked), automated: !!navigator.webdriver,
             detail: { app: APP, at_s: Math.round(now / 1000), framed: window.parent !== window } }) }).catch(function () {});
       } catch (_) {}
     }, TICK);

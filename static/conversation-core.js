@@ -60,7 +60,8 @@
   function _perfEvent(kind, ms, extra) {
     try { console.info('[PERF] ' + kind + ' ' + Math.round(ms) + 'ms'); } catch (_) {}
     try {
-      const body = Object.assign({ kind: kind, ms: ms, boot_id: sharedState._cccBootId }, extra || {});
+      const body = Object.assign({ kind: kind, ms: ms, boot_id: sharedState._cccBootId,
+        automated: !!navigator.webdriver }, extra || {});
       fetch('/api/perf-event', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

@@ -367,7 +367,7 @@ def _threshold_for(kind, warm):
 # ---------------------------------------------------------------------------
 
 
-def record_event(kind, ms, boot_id="", conv_id="", detail=None):
+def record_event(kind, ms, boot_id="", conv_id="", detail=None, automated=False):
     """Validate + persist one perf sample; returns the breach verdict.
 
     Raises ValueError on a bad kind or non-numeric/negative ms (the route
@@ -431,6 +431,11 @@ def record_event(kind, ms, boot_id="", conv_id="", detail=None):
         "breach": breach,
         "detail": detail if isinstance(detail, dict) else None,
     }
+    if automated:
+        # A scripted browser (navigator.webdriver or HeadlessChrome): its
+        # deliberate empty-cache probes are not what a person waited for
+        # (CCC-600). Kept for attribution; steady stats leave it out.
+        row["automated"] = True
     try:
         path = _events_path()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -702,6 +707,8 @@ def _exclusion_reason(row):
     Rows predating the load/up_s fields count (fail toward filing)."""
     if row.get("warmup"):
         return "warmup"
+    if row.get("automated"):
+        return "automated"
     try:
         load1, ncpu = row.get("load1"), row.get("ncpu")
         if load1 is not None and ncpu is not None and float(load1) > float(ncpu):

@@ -11,7 +11,8 @@ at most one restart per 30 minutes (RESTART_DEBOUNCE_S), and a busy host
 always has one pending. That left the 30-minute boot exclusion with ~6
 steady minutes per day, so the gate stayed pending at zero samples while
 users loaded the sidebar on warming servers. The server's own warmup flag
-(first 5 minutes, CCC_PERF_WARMUP_S) still excludes the cold replay itself.
+(first 5 minutes, CCC_PERF_WARMUP_S) still excludes the cold replay itself,
+and scripted-browser probes (automated=true) are not user samples.
 """
 import argparse
 from datetime import datetime, timedelta, timezone
@@ -30,7 +31,7 @@ GATES = (
 
 def _excluded(row):
     """Warmup or saturated-host samples; post-warmup boot samples count."""
-    return perf_gate._steady_reason(row) in ('warmup', 'load')
+    return perf_gate._steady_reason(row) in ('warmup', 'automated', 'load')
 
 
 def check(events, repo, commit):

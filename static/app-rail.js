@@ -361,7 +361,7 @@
       fetch("/api/perf-event", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: kind, ms: Math.max(0, Math.round(ms)), detail: detail || {} }),
+        body: JSON.stringify({ kind: kind, ms: Math.max(0, Math.round(ms)), detail: detail || {}, automated: !!navigator.webdriver }),
         keepalive: true
       }).catch(function () {});
     } catch (e) {}

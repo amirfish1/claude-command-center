@@ -16,11 +16,12 @@ finally:
     sys.path.remove(str(scripts))
 
 
-def _events(tmp_path, timings, up_s=3600, warmup=False, load1=1):
+def _events(tmp_path, timings, up_s=3600, warmup=False, load1=1, automated=False):
     rows = []
     for kind, ms, count in timings:
         rows.extend({'kind': kind, 'ts': datetime.now(timezone.utc).isoformat(),
                      'ms': ms, 'warmup': warmup, 'load1': load1, 'ncpu': 4, 'up_s': up_s,
+                     **({'automated': True} if automated else {}),
                      'detail': {'status': 304 if kind == 'list_read' and ms == 0 else 200}}
                     for _ in range(count))
     target = tmp_path / 'events.jsonl'
@@ -66,3 +67,8 @@ def test_warmup_and_saturated_samples_stay_excluded(tmp_path):
     assert check.check(warm, tmp_path, '')['evidence']['gates'][0]['samples'] == 0
     busy = _events(tmp_path, [('list_read', 5000, 50)], up_s=600, load1=9)
     assert check.check(busy, tmp_path, '')['evidence']['gates'][0]['samples'] == 0
+
+
+def test_scripted_browser_probes_are_not_user_samples(tmp_path):
+    probes = _events(tmp_path, [('list_read', 5000, 50)], up_s=600, automated=True)
+    assert check.check(probes, tmp_path, '')['evidence']['gates'][0]['samples'] == 0

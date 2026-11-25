@@ -121,6 +121,16 @@ class TestRecordEvent(PerfEventsTestBase):
         self.assertFalse(row["warm"])
         self.assertTrue(row["breach"])
 
+    def test_automated_browser_sample_is_tagged_and_not_steady(self):
+        # CCC-600: scripted empty-cache probes are not user experience.
+        pe.record_event("list_read", 2500, automated=True)
+        pe.record_event("list_read", 200)
+        rows = [json.loads(line) for line in
+                self.events_path().read_text(encoding="utf-8").splitlines()]
+        self.assertTrue(rows[0]["automated"])
+        self.assertNotIn("automated", rows[1])
+        self.assertEqual(pe._exclusion_reason(rows[0]), "automated")
+
     def test_archive_load_warm_no_breach(self):
         with mock.patch.object(pe, "archive_is_warm", return_value=True):
             result = pe.record_event("archive_load", 500, conv_id="c1", boot_id="b1")
