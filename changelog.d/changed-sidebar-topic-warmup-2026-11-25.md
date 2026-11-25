@@ -1,0 +1,1 @@
+- Prepare continuation topics alongside the saved seven-day sidebar after startup so the first full view can reuse them.

@@ -24,6 +24,37 @@ def row(sid, title='', origin=''):
     return {'session_id': sid, 'display_name': title, 'continued_from_session_id': origin}
 
 
+def test_startup_scoped_basis_warms_the_foreground_topic_reader(store, monkeypatch):
+    topics._connection(store)
+    with store:
+        store.execute("INSERT INTO continuation_topics VALUES ('old', '', 'old', 'Old', 0)")
+    monkeypatch.setattr(topics, '_ARCHIVE_TOPIC_SNAPSHOT', (None, None, None))
+    monkeypatch.setattr(topics, 'archive_connection', lambda: store)
+    monkeypatch.setattr(server, '_archive_history_artifact', lambda target: (0, 0))
+    monkeypatch.setattr(server, '_archive_seven_day_load_basis', lambda *args: object())
+    events = []
+    monkeypatch.setattr(server, 'record_diag', lambda *args: events.append(args))
+
+    with server._ARCHIVE_HISTORY_LOCK:
+        server._archive_history_warm_scoped_basis()
+    assert topics._ARCHIVE_TOPIC_SNAPSHOT == (None, None, None)
+    assert not events
+
+    server._archive_history_warm_scoped_basis()
+    assert events[0][2]['topics_ready'] is True
+    details = {}
+    inputs, edges, _ = topics.archive_projection_inputs(store, max_rows=20, diagnostics=details)
+    assert details['topics_snapshot_reused'] is True
+    assert inputs[0]['old'] == ('', 'old', 'Old', 0)
+    assert not edges
+
+    with store:
+        store.execute("UPDATE continuation_topics SET topic_title='New' WHERE sid='old'")
+    inputs, _, _ = topics.archive_projection_inputs(store, max_rows=20, diagnostics=details)
+    assert details['topics_snapshot_reused'] is False
+    assert inputs[0]['old'] == ('', 'old', 'New', 0)
+
+
 def test_named_root_projection_preserves_explicit_and_indexed_origins(store):
     topics.attach_topics([row('root', 'Project'), row('explicit', 'Old explicit'),
                           row('indexed', 'Old indexed')], wait_for_writer=True, names={})

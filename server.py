@@ -20328,6 +20328,33 @@ def _archive_history_warm_saved_basis():
                 {"stage": "startup_rebased_basis", "rebased_cached": cached})
 
 
+def _archive_history_warm_scoped_basis():
+    """Prepare the saved seven-day basis and its guarded topic records."""
+    from ccc_server import archive_history_layer, background_work, continuation_topics
+
+    target = _archive_seven_day_basis_path()
+    artifact = _archive_history_artifact(target)
+    if artifact is None:
+        return
+    with background_work.slot():
+        if _archive_seven_day_load_basis(_archive_response_cache_key(), target, artifact) is None:
+            return
+        if not _ARCHIVE_HISTORY_LOCK.acquire(blocking=False):
+            return
+        started = time.perf_counter()
+        diagnostics = {"stage": "startup_scoped_topics"}
+        try:
+            reader = continuation_topics.archive_connection()
+            diagnostics["topics_ready"] = continuation_topics.archive_projection_inputs(
+                reader, max_rows=archive_history_layer.MAX_ROWS, diagnostics=diagnostics,
+            ) is not None
+        except (OSError, sqlite3.Error):
+            diagnostics["topics_ready"] = False
+        finally:
+            _ARCHIVE_HISTORY_LOCK.release()
+        record_diag("archive_rebuild", (time.perf_counter() - started) * 1000.0, diagnostics)
+
+
 def _archive_history_rebased_basis(state, key, encodings):
     from ccc_server import archive_history_layer as layer
 
@@ -53558,10 +53585,7 @@ def main():
 
         def warm_sidebar_bases():
             _archive_history_warm_saved_basis()
-            target = _archive_seven_day_basis_path()
-            artifact = _archive_history_artifact(target)
-            if artifact is not None:
-                _archive_seven_day_load_basis(_archive_response_cache_key(), target, artifact)
+            _archive_history_warm_scoped_basis()
 
         threading.Thread(target=_after_boot_delay(warm_sidebar_bases),
                          daemon=True, name="ccc-sidebar-basis-warm").start()
