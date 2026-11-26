@@ -91,8 +91,25 @@ file_repofixer() {  # $1=kind $2=repo $3=details
   if [ "$1" = "stale worktrees/branches" ]; then
     fingerprint="$(printf '%s' "$3" | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
     key="$key-$fingerprint"
-    if wt ls -q REPO-FIXER --client-id "$key" --status all --limit 0 --json 2>/dev/null |
-      python3 -c 'import json, sys; sys.exit(not any(ticket["status"] != "closed" for ticket in json.load(sys.stdin)))' 2>/dev/null; then
+    # Skip when every warned path/branch is already listed by an open ticket
+    # for this repo: a shrinking inventory (cleanup in progress) is not news.
+    if wt ls -q REPO-FIXER --status all --limit 0 --json 2>/dev/null |
+      RF_TITLE="release gate: $1 in $repo_name" RF_WARNS="$3" python3 -c '
+import json, os, sys
+def items(text):
+    out = set()
+    for line in text.splitlines():
+        if not line.startswith("WARN ") or ": " not in line[5:]:
+            continue
+        label, _, rest = line[5:].split(": ", 1)[1].partition(": ")
+        out.update((label, item) for item in rest.split())
+    return out
+want = items(os.environ["RF_WARNS"])
+have = set()
+for ticket in json.load(sys.stdin):
+    if ticket.get("status") != "closed" and ticket.get("title") == os.environ["RF_TITLE"]:
+        have |= items(ticket.get("note") or "")
+sys.exit(not (want and want <= have))' 2>/dev/null; then
       return 0
     fi
     ticket_args+=(--client-id "$key")

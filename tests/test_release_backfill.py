@@ -341,11 +341,15 @@ def test_daily_reuses_active_housekeeping_ticket(transport, monkeypatch):
         with open(os.environ["FAKE_CALLS"], "a") as calls:
             calls.write(json.dumps(args) + "\\n")
         if args[0] == "ls":
-            client = args[args.index("--client-id") + 1]
-            if client != os.environ.get("FAKE_CLIENT_ID"):
-                print("[]")
-            else:
-                print(json.dumps([{"status": os.environ["FAKE_TICKET_STATUS"]}]))
+            # Every ticket filed so far, all in FAKE_TICKET_STATUS.
+            with open(os.environ["FAKE_CALLS"]) as calls:
+                adds = [json.loads(line) for line in calls]
+            print(json.dumps([
+                {"status": os.environ.get("FAKE_TICKET_STATUS", "open"),
+                 "title": add[add.index("--title") + 1],
+                 "note": add[add.index("--note") + 1]}
+                for add in adds if add[0] == "add"
+            ]))
     ''')
     executable(directory / "bin/date", '''\
         #!/bin/sh
@@ -376,16 +380,20 @@ def test_daily_reuses_active_housekeeping_ticket(transport, monkeypatch):
 
     assert run("--dry-run") == []
     assert not calls.exists()
+    monkeypatch.setenv("FAKE_TICKET_STATUS", "open")
     [first] = run()
     client = first[first.index("--client-id") + 1]
-    monkeypatch.setenv("FAKE_CLIENT_ID", client)
-    monkeypatch.setenv("FAKE_TICKET_STATUS", "open")
     monkeypatch.setenv("FAKE_DAY", "2026-01-02")
     assert run() == [first]
 
-    monkeypatch.setenv("FAKE_WORKTREE", "/tmp/second")
+    # A new path is news: file a ticket for the changed inventory.
+    monkeypatch.setenv("FAKE_WORKTREE", "/tmp/first /tmp/second")
     _, changed = run()
     assert changed[changed.index("--client-id") + 1] != client
+
+    # Cleanup shrinking the inventory stays on the open tickets.
+    monkeypatch.setenv("FAKE_WORKTREE", "/tmp/second")
+    assert run() == [first, changed]
 
     monkeypatch.setenv("FAKE_WORKTREE", "/tmp/first")
     monkeypatch.setenv("FAKE_TICKET_STATUS", "closed")
