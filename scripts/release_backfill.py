@@ -18,7 +18,8 @@ import uuid
 import xml.etree.ElementTree as ET
 
 
-ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(os.environ.get("CCC_RELEASE_REPO_ROOT", SCRIPT_ROOT)).resolve()
 SPARKLE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 TAG = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+\Z")
 
@@ -266,7 +267,7 @@ def locked_shell(kind, dry=False):
                 return
             raise ValueError("release trigger is busy")
         variable = "CCC_RELEASE_TRIGGER_LOCKED" if kind == "trigger" else "CCC_RELEASE_DAILY_LOCKED"
-        command = ["bash", str(ROOT / f"scripts/release-{kind}.sh")]
+        command = ["bash", str(SCRIPT_ROOT / f"scripts/release-{kind}.sh")]
         if dry:
             command.append("--dry-run")
         result = subprocess.run(command, env=os.environ | {variable: "1"})

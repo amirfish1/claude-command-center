@@ -17,15 +17,19 @@
 # Env:   CCC_RELEASE_REPOS  space-separated sibling repos to require clean+pushed
 #                           (default: $HOME/Apps/watchtower)
 #        CCC_RELEASE_MIN_ENTRIES  default 3
+#        CCC_RELEASE_REPO_ROOT    optional checkout to check and release when the
+#                                 gate scripts are installed separately
 # Exit:  0 released or waived, 1 release attempt failed.
 #        CCC_RELEASE_CUT_FLAGS    extra cut-release.sh flags (default: --skip-dmg off macOS)
 # Log:   ~/Library/Logs/ccc-release/ (macOS) or ~/.local/state/ccc-release/
 set -uo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$REPO_ROOT"
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)" || exit 1
+cd "${CCC_RELEASE_REPO_ROOT:-$SCRIPT_ROOT}" || exit 1
+REPO_ROOT="$(pwd -P)"
+export CCC_RELEASE_REPO_ROOT="$REPO_ROOT"
 if [ "${CCC_RELEASE_DAILY_LOCKED:-}" != 1 ]; then
-  exec python3 "$REPO_ROOT/scripts/release_backfill.py" daily "$@"
+  exec python3 "$SCRIPT_ROOT/scripts/release_backfill.py" daily "$@"
 fi
 # Also accepts the flag via SSH_ORIGINAL_COMMAND, for a forced-command ssh key.
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
@@ -73,28 +77,60 @@ fi
 # macOS bash 3.2 treats an empty "${arr[@]}" as unbound under set -u.
 backfill_args=()
 [ "$DRY" = 0 ] || backfill_args+=(--dry-run)
-python3 "$REPO_ROOT/scripts/release_backfill.py" pending ${backfill_args[@]+"${backfill_args[@]}"} || {
+python3 "$SCRIPT_ROOT/scripts/release_backfill.py" pending ${backfill_args[@]+"${backfill_args[@]}"} || {
   say "FAILED: pending DMG backfill state could not be processed"; exit 1;
 }
 
 STREAK_FILE="$LOG_DIR/waive-streak"
 WARNINGS=""
+# The stable client ID finds every occurrence, including tickets awaiting a
+# decision. The previous closed ref gives a new occurrence an atomic add key.
+file_release_blocker() {  # $1=title $2=details $3=blocker fingerprint
+  local key previous
+  if [[ ! "$3" =~ ^[0-9a-f]{64}$ ]]; then
+    say "could not identify REPO-FIXER blocker: $1"
+    return
+  fi
+  key="release-gate-block-$3"
+  if ! previous="$(wt ls -q REPO-FIXER --status all --client-id "$key" --limit 0 --json |
+    python3 -c '
+import json
+import sys
+
+tickets = json.load(sys.stdin)
+if any(ticket["status"] != "closed" for ticket in tickets):
+    print("active")
+elif tickets:
+    print(max(tickets, key=lambda ticket: ticket["seq"])["ref"])
+else:
+    print("initial")')"; then
+    say "could not look up REPO-FIXER blocker: $1"
+    return
+  fi
+  [ "$previous" != active ] || return 0
+  wt add -q REPO-FIXER --no-dispatch --title "$1" --note "$2" \
+    --client-id "$key" --dedupe-key "$key-after-$previous" >/dev/null ||
+    say "could not file REPO-FIXER blocker: $1"
+}
+
 # Housekeeping goes to REPO-FIXER without stopping the release. Keep an
 # unchanged warning on its existing ticket for as long as that ticket is open.
-file_repofixer() {  # $1=kind $2=repo $3=details
-  local repo_name key fingerprint
-  local ticket_args=()
+file_repofixer() {  # $1=kind $2=repo $3=details $4=blocker fingerprint (for BLOCK)
+  local repo_name key fingerprint title
   repo_name="$(basename "$2")"
   [ "$DRY" = 1 ] && { say "[dry-run] would track REPO-FIXER ticket: $1 in $repo_name"; return 0; }
   command -v wt >/dev/null 2>&1 || return 0
-  key="release-gate-$1-$repo_name"
-  if [ "$1" = "stale worktrees/branches" ]; then
-    fingerprint="$(printf '%s' "$3" | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
-    key="$key-$fingerprint"
-    # Skip when every warned path/branch is already listed by an open ticket
-    # for this repo: a shrinking inventory (cleanup in progress) is not news.
-    if wt ls -q REPO-FIXER --status all --limit 0 --json 2>/dev/null |
-      RF_TITLE="release gate: $1 in $repo_name" RF_WARNS="$3" python3 -c '
+  title="release gate: $1 in $repo_name"
+  if [ "$1" = "uncommitted or unpushed work blocking release" ]; then
+    file_release_blocker "$title" "$3" "${4:-}"
+    return
+  fi
+  fingerprint="$(printf '%s' "$3" | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
+  key="release-gate-$1-$repo_name-$fingerprint"
+  # Skip when every warned path/branch is already listed by an open ticket
+  # for this repo: a shrinking inventory (cleanup in progress) is not news.
+  if wt ls -q REPO-FIXER --status all --limit 0 --json 2>/dev/null |
+    RF_TITLE="$title" RF_WARNS="$3" python3 -c '
 import json, os, sys
 def items(text):
     out = set()
@@ -110,29 +146,28 @@ for ticket in json.load(sys.stdin):
     if ticket.get("status") != "closed" and ticket.get("title") == os.environ["RF_TITLE"]:
         have |= items(ticket.get("note") or "")
 sys.exit(not (want and want <= have))' 2>/dev/null; then
-      return 0
-    fi
-    ticket_args+=(--client-id "$key")
+    return 0
   fi
-  wt add -q REPO-FIXER --no-dispatch --title "release gate: $1 in $repo_name" --note "$3" \
-    --dedupe-key "$key-$(date +%Y-%m-%d)" ${ticket_args[@]+"${ticket_args[@]}"} >/dev/null 2>&1 || true
+  wt add -q REPO-FIXER --no-dispatch --title "$title" --note "$3" \
+    --dedupe-key "$key-$(date +%Y-%m-%d)" --client-id "$key" >/dev/null 2>&1 || true
 }
 # Blocks on real risk (uncommitted work, unpushed main). Warnings only file a ticket.
 check_repo() {
-  local out blocks warns
-  out="$("$REPO_ROOT/scripts/repo-clean-check.sh" "$1" 2>&1)"; local rc=$?
+  local out blocks warns block_key
+  out="$("$SCRIPT_ROOT/scripts/repo-clean-check.sh" "$1" --block-key 2>&1)"; local rc=$?
   warns="$(printf '%s\n' "$out" | grep '^WARN ' || true)"
   [ -z "$warns" ] || { WARNINGS="$WARNINGS$warns
 "; file_repofixer "stale worktrees/branches" "$1" "$warns"; }
   if [ $rc -ne 0 ]; then
     blocks="$(printf '%s\n' "$out" | grep '^BLOCK ' || true)"
+    block_key="$(printf '%s\n' "$out" | sed -n 's/^BLOCK-KEY //p')"
     file_repofixer "uncommitted or unpushed work blocking release" "$1" "$blocks
-Find the owning sessions with the clean-all-repos skill and get them to commit and push."
+Find the owning sessions with the clean-all-repos skill and get them to commit and push." "$block_key"
     # Escalate instead of waiving forever: a second day running becomes a FAILED
     # verdict, which the trigger turns into a WhatsApp ping.
     local n=$(( $(cat "$STREAK_FILE" 2>/dev/null || echo 0) + 1 )); [ "$DRY" = 1 ] || echo "$n" > "$STREAK_FILE"
     if [ "$n" -ge 2 ]; then say "FAILED: release blocked $n days running; $blocks"; exit 1; fi
-    waive "$1 has work that is not landed (REPO-FIXER ticket filed):
+    waive "$1 has work that is not landed:
 $blocks"
   fi
 }
