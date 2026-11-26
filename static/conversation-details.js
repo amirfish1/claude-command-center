@@ -5042,7 +5042,9 @@
           // the application to start; filled in once the body is consumed.
           _perfBoot = { call_ms: Math.round(_perfCallAt), headers_ms: Math.round(earlyTiming.headers) };
           try {
-            const abs = new URL(_perfFetchUrl, window.location.href).href;
+            // response.url names the origin that served it (the reader
+            // process for a direct read), which Resource Timing is keyed by.
+            const abs = r.url || new URL(_perfFetchUrl, window.location.href).href;
             const ents = performance.getEntriesByName(abs, 'resource');
             const ent = ents.length ? ents[ents.length - 1] : null;
             if (ent && ent.responseEnd) _perfBoot.net_end_ms = Math.round(ent.responseEnd);
