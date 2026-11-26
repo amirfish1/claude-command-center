@@ -370,6 +370,28 @@ def test_child_exits_when_a_restarted_dashboard_replaces_its_socket(module, tmp_
     assert exits == [0]
 
 
+def test_reader_keeps_serving_until_the_next_child_publishes(tmp_path, monkeypatch):
+    # The supervisor unlinks the socket before spawning; the old reader keeps
+    # its direct port until the new child (which first hydrates) is up.
+    from ccc_server import conv_reader as mod
+    path = tmp_path / "s.sock"
+    path.write_text("old")
+    inode = mod._socket_inode(path)
+    path.unlink()
+    exits, ticks = [], []
+
+    def tick(_s):
+        ticks.append(exits[:])
+        if len(ticks) == 3:
+            path.write_text("new child")
+
+    monkeypatch.setattr(mod.time, "sleep", tick)
+    monkeypatch.setattr(mod, "_hand_off", lambda: (exits.append(0), (_ for _ in ()).throw(SystemExit))[1])
+    with pytest.raises(SystemExit):
+        mod._watch_parent(os.getppid(), path, inode)
+    assert ticks == [[], [], []] and exits == [0]
+
+
 @pytest.fixture
 def fts_state():
     saved = (session_fts._last_sync_ts, dict(session_fts._helper_indexing),

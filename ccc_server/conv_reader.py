@@ -643,13 +643,24 @@ def _watch_parent(parent_pid, path, inode=None):
                 pass
             _save_list_lineage()
             os._exit(0)
-        if inode is not None and _socket_inode(path) != inode:
-            # The next child is up and shares the direct port.
+        current = _socket_inode(path) if inode is not None else None
+        if current is not None and current != inode:
+            # The next child is up and shares the direct port. Not on a
+            # missing path: the supervisor unlinks it before spawning, and
+            # this child keeps answering direct reads while the next one
+            # hydrates (CCC-702).
             _hand_off()
         time.sleep(1.0)
 
 
+# A child that hasn't finished hydrating its list rows by this many seconds
+# after start binds the shared port anyway. The supervisor kills a child that
+# isn't ready within READY_TIMEOUT_S.
+HYDRATE_WAIT_S = 18.0
+
+
 def serve(path, parent_pid, port=None, dashboard_port=None):
+    started = time.monotonic()
     os.umask(0o077)
     path = Path(path)
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -666,6 +677,10 @@ def serve(path, parent_pid, port=None, dashboard_port=None):
             signal.signal(signal.SIGTERM, lambda *_: (_save_list_lineage(), os._exit(0)))
         except (ValueError, OSError):
             pass
+        # CCC-702: bind the shared port with hydrated rows. The previous
+        # child answers until this one's socket appears, so open pages never
+        # see the unhydrated start-up rows (and their delta tokens survive).
+        list_reader.wait_hydrated(started + HYDRATE_WAIT_S - time.monotonic())
     # The first compact sender header would otherwise index the journals inside
     # someone's open; the previous child still answers while this runs.
     try:

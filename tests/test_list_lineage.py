@@ -28,6 +28,9 @@ def srv(monkeypatch, tmp_path):
     monkeypatch.setattr(server._idea_tickets, 'idea_ticket_rows_map', lambda: dict(ideas))
     monkeypatch.setattr(server, '_load_usage_limit_resumes', lambda: {})
     monkeypatch.setattr(list_lineage, '_loaded', {})
+    monkeypatch.setattr(list_lineage, '_ctx_refs', {})
+    monkeypatch.setattr(list_lineage, '_blob_touched', {})
+    monkeypatch.setattr(list_lineage, '_blob_cache', {})
     monkeypatch.setattr(list_lineage, '_saved', dict(list_lineage._saved, sig=None))
     server._test_ideas = ideas
     yield server
@@ -41,6 +44,7 @@ def _restart(server, monkeypatch, rows, nonce='bbbbbbbb'):
     server._ARCHIVE_DELTA_CTX_HIST.clear()
     server._ARCHIVE_DELTA_DIGESTS.clear()
     list_lineage._loaded.clear()
+    list_lineage._blob_cache.clear()
     monkeypatch.setattr(server, '_ARCHIVE_DELTA_LINEAGE_LOADER',
                         lambda n: list_lineage.load(server, n))
     key = server._archive_response_cache_key()
@@ -187,3 +191,54 @@ def test_fingerprint_follows_projection_code_only(srv, monkeypatch):
     list_lineage._fingerprint.clear()
     assert list_lineage.fingerprint(srv) == base
     list_lineage._fingerprint.clear()
+
+
+def test_context_is_saved_once_as_shared_blobs(srv, monkeypatch):
+    now = time.time()
+    srv._test_ideas['a'] = {'ref': 'IDEAS-1', 'note': 'x' * 5000}
+    _, state = _publish(srv, [_row('a', 'A', now), _row('b', 'B', now)])
+    token = state['token']
+    assert list_lineage.save(srv, force=True)
+    folder = list_lineage.directory(srv)
+    blobs = sorted(p.name for p in (folder / 'blobs').iterdir())
+    assert blobs and all(len(name) == 40 for name in blobs)
+    # The ideas text lives in a blob, not in the per-save lineage file.
+    assert 'IDEAS-1' not in (folder / 'aaaaaaaa.json').read_text()
+    stamps = {p.name: p.stat().st_mtime_ns for p in (folder / 'blobs').iterdir()}
+
+    _publish(srv, [_row('a', 'A', now), _row('b', 'B2', now)])
+    assert list_lineage.save(srv, force=True)
+    assert {p.name: p.stat().st_mtime_ns for p in (folder / 'blobs').iterdir()} == stamps
+
+    base, state = _restart(srv, monkeypatch, [_row('a', 'A', now), _row('b', 'B2', now)])
+    delta = srv._archive_list_delta_payload(state, token, base, window='7d')
+    assert [r['session_id'] for r in delta['conversations']] == ['b']
+
+    # A pruned or tampered blob means the ctx can't vouch: full body.
+    victim = folder / 'blobs' / blobs[0]
+    victim.write_text('tampered')
+    list_lineage._loaded.clear(); list_lineage._blob_cache.clear()
+    assert srv._archive_list_delta_reject(state, token) == 'ctx'
+
+
+def test_prune_ages_out_old_blobs(srv):
+    folder = list_lineage.directory(srv) / 'blobs'
+    folder.mkdir(parents=True)
+    old, fresh = folder / ('0' * 40), folder / ('1' * 40)
+    old.write_text('x'); fresh.write_text('y')
+    past = time.time() - list_lineage.MAX_AGE_S - 60
+    os.utime(old, (past, past))
+    list_lineage.prune(srv)
+    assert not old.exists() and fresh.exists() and folder.is_dir()
+
+
+def test_reader_child_waits_for_its_first_hydrated_reload():
+    from ccc_server import list_reader
+    import threading
+    flag = threading.Event()
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(list_reader, '_hydrated', flag)
+        assert list_reader.wait_hydrated(0.01) is False
+        assert list_reader.wait_hydrated(-5) is False  # deadline already past
+        flag.set()
+        assert list_reader.wait_hydrated(0) is True

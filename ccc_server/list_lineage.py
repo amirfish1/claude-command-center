@@ -14,7 +14,9 @@ when it hands off to the next child:
 * per serve-cache key: ``ver``, ``track_since``, ``row_rev`` and a digest of
   every row at ``ver`` (the exact source row, as sorted-key JSON);
 * the remembered ctx-history entries (parents, resumes, idea tickets, title
-  overlays) that per-session context comparison needs;
+  overlays) that per-session context comparison needs, as references to
+  content-addressed ``blobs/<sha1>`` files written once (they rarely change,
+  and inline they made every periodic save rewrite ~2.5 MB);
 * a fingerprint of the code that turns a source row into a sidebar row.
 
 A later process that receives a token from that nonce, with
@@ -40,10 +42,13 @@ import time
 import types
 from pathlib import Path
 
-SCHEMA = 1
+SCHEMA = 2
 SAVE_INTERVAL_S = 2.0
 MAX_AGE_S = 2 * 86400
 MAX_CTX_BYTES = 16 << 20
+BLOB_TOUCH_S = 3600.0
+_CTX_FIELDS = ("parents", "resumes", "ideas", "titles")
+_BLOB_RE = re.compile(r"[0-9a-f]{40}")
 _NONCE_RE = re.compile(r"[0-9a-f]{8}")
 
 _lock = threading.Lock()
@@ -52,6 +57,9 @@ _saved = {"sig": None, "path": None, "saves": 0, "save_ms": None, "errors": 0,
           "last_error": None, "adopted": 0}
 _fingerprint = {}     # id(server module) -> fingerprint
 _thread = {"started": False}
+_ctx_refs = {}        # ctx name -> ({field: sha1}, {sha1: text}) (names are content hashes)
+_blob_touched = {}    # sha1 -> monotonic time this process last wrote/touched it
+_blob_cache = {}      # sha1 -> text, for loading
 
 
 def directory(srv):
@@ -221,21 +229,62 @@ def export(srv):
     with srv._archive_delta_ctx_lock:
         hist = list(srv._ARCHIVE_DELTA_CTX_HIST.items())
     ctx = {}
+    blobs = {}
     budget = MAX_CTX_BYTES
     for name, entry in reversed(hist):  # newest first
         scope = entry["scope"]
         if scope[0] not in keys:
             continue
-        saved = {"scope": list(scope), "parents": entry["parents"],
-                 "resumes": entry["resumes"], "ideas": entry["ideas"], "titles": entry["titles"]}
-        size = sum(len(saved[f]) for f in ("resumes", "ideas", "titles")) + 64 * len(entry["parents"])
+        refs, texts = _ctx_blobs(name, entry)
+        size = sum(len(texts[h]) for h in set(refs.values()) if h not in blobs)
         if size > budget:
             break
         budget -= size
-        ctx[name] = saved
+        blobs.update(texts)
+        ctx[name] = {"scope": list(scope), "blobs": refs}
+    live = set(ctx)
+    for name in [n for n in _ctx_refs if n not in live]:
+        _ctx_refs.pop(name, None)
     return {"schema": SCHEMA, "nonce": srv._ARCHIVE_DELTA_NONCE,
             "fingerprint": fingerprint(srv), "pid": os.getpid(),
-            "written_at": time.time(), "keys": keys, "ctx": ctx}
+            "written_at": time.time(), "keys": keys, "ctx": ctx, "_blobs": blobs}
+
+
+def _ctx_blobs(name, entry):
+    """Content references for one ctx entry, computed once per entry."""
+    hit = _ctx_refs.get(name)
+    if hit is not None:
+        return hit
+    refs, texts = {}, {}
+    for field in _CTX_FIELDS:
+        value = entry[field]
+        text = (json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+                if field == "parents" else str(value))
+        digest = hashlib.sha1(text.encode("utf-8")).hexdigest()
+        refs[field] = digest
+        texts[digest] = text
+    _ctx_refs[name] = (refs, texts)
+    return refs, texts
+
+
+def _write_blobs(target, blobs):
+    """Write each blob once; refresh the mtime of reused ones hourly."""
+    folder = target / "blobs"
+    folder.mkdir(parents=True, exist_ok=True)
+    now = time.monotonic()
+    for digest, text in blobs.items():
+        last = _blob_touched.get(digest)
+        if last is not None and now - last < BLOB_TOUCH_S:
+            continue
+        path = folder / digest
+        try:
+            os.utime(path)
+        except FileNotFoundError:
+            tmp = folder / f".{digest}.{os.getpid()}.tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            os.replace(tmp, path)
+        _blob_touched[digest] = now
 
 
 def save(srv, *, force=False):
@@ -251,6 +300,7 @@ def save(srv, *, force=False):
             return False
         target = directory(srv)
         target.mkdir(parents=True, exist_ok=True)
+        _write_blobs(target, data.pop("_blobs"))  # before the file that names them
         path = target / f"{data['nonce']}.json"
         tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
         with open(tmp, "w", encoding="utf-8") as fh:
@@ -268,15 +318,17 @@ def save(srv, *, force=False):
 
 
 def prune(srv, now=None):
-    """Delete other processes' lineage files older than MAX_AGE_S."""
+    """Delete other processes' lineage files and blobs older than MAX_AGE_S."""
     now = time.time() if now is None else now
     own = f"{srv._ARCHIVE_DELTA_NONCE}.json"
-    try:
-        entries = list(os.scandir(directory(srv)))
-    except OSError:
-        return
+    entries = []
+    for folder in (directory(srv), directory(srv) / "blobs"):
+        try:
+            entries.extend(os.scandir(folder))
+        except OSError:
+            pass
     for entry in entries:
-        if entry.name == own:
+        if entry.name == own or entry.name == "blobs":
             continue
         try:
             if now - entry.stat().st_mtime > MAX_AGE_S:
@@ -322,12 +374,36 @@ def _parse(srv, raw):
     for name, entry in (raw.get("ctx") or {}).items():
         try:
             scope = tuple(entry["scope"])
-            ctx[str(name)] = {"scope": scope, "parents": dict(entry["parents"]),
-                              "resumes": str(entry["resumes"]), "ideas": str(entry["ideas"]),
-                              "titles": str(entry["titles"])}
-        except (KeyError, TypeError, ValueError):
+            texts = {f: _read_blob(srv, entry["blobs"][f]) for f in _CTX_FIELDS}
+            if any(t is None for t in texts.values()):
+                continue  # pruned or never written: that ctx can't vouch
+            ctx[str(name)] = {"scope": scope, "parents": dict(json.loads(texts["parents"])),
+                              "resumes": texts["resumes"], "ideas": texts["ideas"],
+                              "titles": texts["titles"]}
+        except (KeyError, TypeError, ValueError, AttributeError):
             continue
     return {"nonce": raw.get("nonce"), "keys": keys, "ctx": ctx}
+
+
+def _read_blob(srv, digest):
+    digest = str(digest)
+    if not _BLOB_RE.fullmatch(digest):
+        return None
+    with _lock:
+        text = _blob_cache.get(digest)
+    if text is not None:
+        return text
+    try:
+        text = (directory(srv) / "blobs" / digest).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if hashlib.sha1(text.encode("utf-8")).hexdigest() != digest:
+        return None
+    with _lock:
+        _blob_cache[digest] = text
+        while len(_blob_cache) > 32:
+            _blob_cache.pop(next(iter(_blob_cache)))
+    return text
 
 
 def load(srv, nonce):

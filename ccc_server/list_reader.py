@@ -156,6 +156,7 @@ def setup(server_mod):
         _reload(hydrate=False)
     except Exception as exc:
         _note_error(exc)
+        _hydrated.set()  # nothing to wait for: this child declines reads
         return
     with _lock:
         _state["reloading"] = True
@@ -418,14 +419,30 @@ def _warm_after_mutation():
         threading.Thread(target=_warm_until_settled, name="list-reader-warm", daemon=True).start()
 
 
+# Set once the first hydrated reload after start-up has finished (or failed).
+_hydrated = threading.Event()
+
+
+def wait_hydrated(timeout):
+    """Wait up to `timeout` s for the start-up hydration (CCC-702).
+
+    Until it lands, this child serves unhydrated rows: the question and
+    sidecar fields of most rows are missing, so every row differs from what
+    open pages hold and a restart-surviving delta token resends the whole
+    list. The previous child keeps answering the shared port meanwhile."""
+    return _hydrated.wait(max(0.0, float(timeout)))
+
+
 def _reload_in_background():
     span = _busy_begin("reload")
     try:
         _reload()
     except Exception as exc:
         _note_error(exc)
+        _hydrated.set()
         return
     else:
+        _hydrated.set()
         # Claimed before "reloading" clears, so rebuilding() has no gap
         # between the reload publishing rows and the warm building bodies.
         warm = _claim_warm()
