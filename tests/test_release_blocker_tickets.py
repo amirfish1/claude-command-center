@@ -72,7 +72,7 @@ def gate(tmp_path):
     fake_wt.chmod(0o755)
     tickets.write_text("[]")
     env = dict(os.environ, HOME=str(home), TMPDIR=str(tmp_path), TEST_TICKETS=str(tickets),
-               CCC_RELEASE_LOG_DIR=str(log), CCC_RELEASE_MODE_FILE=str(home / "mode"),
+               CCC_RELEASE_LOG_DIR=str(log), CCC_RELEASE_WT=str(fake_wt), CCC_RELEASE_MODE_FILE=str(home / "mode"),
                CCC_RELEASE_REPO_ROOT=str(checkout), CCC_RELEASE_REPOS=str(checkout))
     for name in ("CCC_RELEASE_DAILY_LOCKED", "SSH_ORIGINAL_COMMAND"):
         env.pop(name, None)

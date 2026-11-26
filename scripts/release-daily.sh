@@ -33,6 +33,8 @@ if [ "${CCC_RELEASE_DAILY_LOCKED:-}" != 1 ]; then
 fi
 # Also accepts the flag via SSH_ORIGINAL_COMMAND, for a forced-command ssh key.
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+# The PATH above puts system wt ahead of $HOME/.local/bin; tests name their stand-in here.
+WT="${CCC_RELEASE_WT:-wt}"
 # A mode file lets release-trigger.sh pass --dry-run through launchd (consumed once).
 MODE_FILE="${CCC_RELEASE_MODE_FILE:-$HOME/.claude/command-center/release-daily.mode}"
 MODE="$(cat "$MODE_FILE" 2>/dev/null || true)"
@@ -92,7 +94,7 @@ file_release_blocker() {  # $1=title $2=details $3=blocker fingerprint
     return
   fi
   key="release-gate-block-$3"
-  if ! previous="$(wt ls -q REPO-FIXER --status all --client-id "$key" --limit 0 --json |
+  if ! previous="$("$WT" ls -q REPO-FIXER --status all --client-id "$key" --limit 0 --json |
     python3 -c '
 import json
 import sys
@@ -108,7 +110,7 @@ else:
     return
   fi
   [ "$previous" != active ] || return 0
-  wt add -q REPO-FIXER --no-dispatch --title "$1" --note "$2" \
+  "$WT" add -q REPO-FIXER --no-dispatch --title "$1" --note "$2" \
     --client-id "$key" --dedupe-key "$key-after-$previous" >/dev/null ||
     say "could not file REPO-FIXER blocker: $1"
 }
@@ -119,7 +121,7 @@ file_repofixer() {  # $1=kind $2=repo $3=details $4=blocker fingerprint (for BLO
   local repo_name key fingerprint title
   repo_name="$(basename "$2")"
   [ "$DRY" = 1 ] && { say "[dry-run] would track REPO-FIXER ticket: $1 in $repo_name"; return 0; }
-  command -v wt >/dev/null 2>&1 || return 0
+  command -v "$WT" >/dev/null 2>&1 || return 0
   title="release gate: $1 in $repo_name"
   if [ "$1" = "uncommitted or unpushed work blocking release" ]; then
     file_release_blocker "$title" "$3" "${4:-}"
@@ -129,7 +131,7 @@ file_repofixer() {  # $1=kind $2=repo $3=details $4=blocker fingerprint (for BLO
   key="release-gate-$1-$repo_name-$fingerprint"
   # Skip when every warned path/branch is already listed by an open ticket
   # for this repo: a shrinking inventory (cleanup in progress) is not news.
-  if wt ls -q REPO-FIXER --status all --limit 0 --json 2>/dev/null |
+  if "$WT" ls -q REPO-FIXER --status all --limit 0 --json 2>/dev/null |
     RF_TITLE="$title" RF_WARNS="$3" python3 -c '
 import json, os, sys
 def items(text):
@@ -148,7 +150,7 @@ for ticket in json.load(sys.stdin):
 sys.exit(not (want and want <= have))' 2>/dev/null; then
     return 0
   fi
-  wt add -q REPO-FIXER --no-dispatch --title "$title" --note "$3" \
+  "$WT" add -q REPO-FIXER --no-dispatch --title "$title" --note "$3" \
     --dedupe-key "$key-$(date +%Y-%m-%d)" --client-id "$key" >/dev/null 2>&1 || true
 }
 # Blocks on real risk (uncommitted work, unpushed main). Warnings only file a ticket.
