@@ -22772,14 +22772,19 @@ def _install_gc_pause_diag():
 # Only cycles that die after being frozen need a full pass. On a 2.8GB heap
 # that pass stopped every request for 1.5-6.5s (once 12.6s) every 30 minutes
 # while reclaiming only ~6k-26k objects (CCC-685). A trigger on 256MiB of RSS
-# growth then still ran it ~30 min after every boot for 2.0-2.5s to reclaim
-# 228-274 objects: the growth is cache fill, which no collection frees
-# (CCC-687). Dashboard restarts (longest uptime 10.7h in 12 days) reclaim the
-# heap, so the only full pass left is a backstop after _GC_FULL_PASS_MAX_S for
-# a process that keeps running. It waits for a tick with no request in
-# flight, for at most _GC_FULL_PASS_QUIET_WAIT_S, so it rarely stalls a reply.
+# growth from boot then still ran it ~30 min after every boot for 2.0-2.5s to
+# reclaim 228-274 objects: the growth is cache fill, which no collection
+# frees (CCC-687). A 12h backstop then stalled 5.8s to reclaim 5330 objects
+# (CCC-695). Frozen garbage builds up that slowly, and restarts reclaim it,
+# so a full pass now runs only on evidence of a real leak: resident memory
+# or open files grown far past what they were once the caches had filled.
+# Even then it waits for a tick with no request in flight, for at most
+# _GC_FULL_PASS_QUIET_WAIT_S, and never repeats within _GC_FULL_PASS_MIN_S.
 _GC_FREEZE_EVERY_S = 15.0
-_GC_FULL_PASS_MAX_S = 12 * 3600.0
+_GC_LEAK_BASELINE_AFTER_S = 2 * 3600.0
+_GC_LEAK_RSS_BYTES = 2 * 1024 ** 3
+_GC_LEAK_FDS = 512
+_GC_FULL_PASS_MIN_S = 3600.0
 _GC_FULL_PASS_QUIET_WAIT_S = 3600.0
 _GC_RESTART_GRACE_S = 60.0
 # With the old heap frozen, the default threshold still ran a ~170ms oldest
@@ -22788,8 +22793,39 @@ _GC_RESTART_GRACE_S = 60.0
 _GC_GEN0_THRESHOLD = 10000
 
 
-def _gc_new_state(now):
-    return {"last_full": now, "due_since": None}
+def _process_rss_bytes():
+    """Resident size of this process, or None where it cannot be read. macOS
+    has no /proc; its peak RSS still rises with a leak worth a full pass."""
+    try:
+        with open("/proc/self/statm", "rb") as f:
+            return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        import resource
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return int(peak if sys.platform == "darwin" else peak * 1024)
+    except Exception:
+        return None
+
+
+def _process_open_fds():
+    for path in ("/proc/self/fd", "/dev/fd"):
+        try:
+            return len(os.listdir(path))
+        except OSError:
+            continue
+    return None
+
+
+def _gc_leak_sample():
+    return {"rss": _process_rss_bytes(), "fds": _process_open_fds()}
+
+
+def _gc_new_state(now, baseline=None):
+    """baseline stays None until the caches have filled (see
+    _GC_LEAK_BASELINE_AFTER_S); growth before that is not a leak."""
+    return {"last_full": now, "due_since": None, "baseline": baseline}
 
 
 def _gc_dashboard_restart_due():
@@ -22823,8 +22859,21 @@ def _gc_dashboard_restart_due():
 
 
 def _gc_full_pass_reason(now, state):
-    if now - state["last_full"] >= _GC_FULL_PASS_MAX_S:
-        return "backstop"
+    """'rss' or 'fds' when that has grown past its leak bound since the
+    settled baseline, else None. Takes the baseline on the first tick after
+    _GC_LEAK_BASELINE_AFTER_S."""
+    if state.get("baseline") is None:
+        # No full pass runs before this, so last_full is still the boot.
+        if now - state["last_full"] >= _GC_LEAK_BASELINE_AFTER_S:
+            state["baseline"] = _gc_leak_sample()
+        return None
+    if now - state["last_full"] < _GC_FULL_PASS_MIN_S:
+        return None
+    sample, base = _gc_leak_sample(), state["baseline"]
+    for key, bound in (("rss", _GC_LEAK_RSS_BYTES), ("fds", _GC_LEAK_FDS)):
+        if sample.get(key) is not None and base.get(key) is not None \
+                and sample[key] - base[key] >= bound:
+            return key
     return None
 
 
@@ -22863,7 +22912,9 @@ def _gc_freeze_tick(now, state):
         gc.unfreeze()
         _gc_collect_tagged("full", reason)
         gc.freeze()
-        state.update(_gc_new_state(now))
+        # Rebase on what the pass left, so memory it could not free (a leak
+        # that is not cycle garbage) does not trigger a pass every hour.
+        state.update(_gc_new_state(now, _gc_leak_sample()))
         return state
     _gc_collect_tagged("young")
     gc.freeze()

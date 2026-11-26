@@ -1,1 +1,1 @@
-The dashboard no longer freezes for 2-6 seconds every 30 minutes or half an hour after each restart; short-lived leftovers are cleaned on every regular pass, and the rare full memory sweep waits for a moment with no request in flight.
+The dashboard no longer freezes for 2-6 seconds every 30 minutes, half an hour after each restart, or after 12 hours of uptime; short-lived leftovers are cleaned on every regular pass, and the full memory sweep runs only if memory or open files grow abnormally, waiting for a moment with no request in flight.
