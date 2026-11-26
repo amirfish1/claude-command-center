@@ -4,7 +4,7 @@
 
 **Your agents are on call. You are not.**
 
-Bugs from customers and from monitoring go to coding agents that fix them.
+Bugs from customers and monitoring, and the tickets you hand off, go into a queue that worker agents pick up and fix.
 CCC decides the small reversible things, messages you when it needs a real decision, and takes your answer from the same thread.
 
 ![A phone thread. CCC asks for one decision on a bug, you reply "keep it", and later it reports the fix and you reply "yes"](docs/images/oncall-hero.png)
