@@ -208,6 +208,37 @@ class AgentDefaultsTests(unittest.TestCase):
             self.assertEqual(post.call_args.args[2]["model"], "routine-model")
             self.assertEqual(post.call_args.args[2]["engine"], "codex")
 
+    def test_rejected_worker_route_falls_through_to_opted_in_fallback(self):
+        """A routine pinned to a model the engine catalog dropped
+        must start on the next worker_fallback route, not fail the run."""
+        routes = [{"engine": "claude", "model": "fallback-model", "effort": "high"}]
+        self.save(worker_engine="codex", worker_model="retired-model",
+                  worker_fallback={"enabled": True, "models": routes})
+        routine = {"id": "watch", "name": "Watch", "prompt": "check", "kind": "agent"}
+
+        def spawn(_port, _path, body):
+            if body["model"] == "retired-model":
+                return {"ok": False, "error": "unsupported codex model: 'retired-model'"}
+            return {"session_id": "fallback-run"}
+
+        with patch.object(ar, "_post_json", side_effect=spawn) as post:
+            ar._run_agent(self.folder, "demo", "Demo", routine, 0, 1)
+        last = post.call_args.args[2]
+        self.assertEqual((last["engine"], last["model"], last["reasoning_effort"]),
+                         ("claude", "fallback-model", "high"))
+        state = ar.load_state(self.folder)["routines"]["watch"]
+        self.assertEqual((state["status"], state["session_id"]), ("running", "fallback-run"))
+
+        self.save(worker_engine="codex", worker_model="retired-model",
+                  worker_fallback={"enabled": False, "models": routes})
+        with patch.object(ar, "_post_json", side_effect=spawn) as post, \
+                patch.object(ar, "_notify"):
+            ar._run_agent(self.folder, "demo", "Demo", routine, 0, 2)
+        self.assertEqual(post.call_count, 1)
+        state = ar.load_state(self.folder)["routines"]["watch"]
+        self.assertEqual(state["status"], "failed")
+        self.assertIn("retired-model", state["summary"])
+
     def test_blank_worker_values_do_not_inherit_another_engines_model_or_effort(self):
         self.save(engine="claude", reasoning_effort="high",
                   models={"claude": "session-model"}, worker_engine="codex",

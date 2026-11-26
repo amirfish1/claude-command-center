@@ -527,9 +527,44 @@ def _agent_spawn_options():
     return options
 
 
+def _agent_spawn_routes():
+    """The worker route, then each opted-in worker_fallback route (Settings order)."""
+    routes = [_agent_spawn_options()]
+    defaults = _read_json(SPAWN_DEFAULTS_FILE, {})
+    fallback = defaults.get("worker_fallback") if isinstance(defaults, dict) else None
+    if not isinstance(fallback, dict) or fallback.get("enabled") is not True:
+        return routes
+    for row in fallback.get("models") or []:
+        engine = str((row or {}).get("engine") or "").strip() if isinstance(row, dict) else ""
+        if not engine:
+            continue
+        route = {"engine": engine, "reasoning_effort": row.get("effort") or ""}
+        model = str(row.get("model") or "").strip()
+        if model:
+            route["model"] = model
+        if "worker_auto_compact_k" in defaults:
+            route["auto_compact_k"] = defaults["worker_auto_compact_k"]
+        if route not in routes:
+            routes.append(route)
+    return routes
+
+
+def _spawn_agent(port, body):
+    """Spawn on the first route CCC accepts. A rejected launch (for example a
+    model the engine's catalog dropped) creates no session, so the next
+    configured route is tried instead of failing the whole run."""
+    errors = []
+    for route in _agent_spawn_routes():
+        res = _post_json(port, "/api/sessions/spawn", {**route, **body})
+        if res.get("session_id"):
+            return res
+        errors.append(str(res.get("error") or "unknown"))
+    return {"ok": False, "error": errors[0] if len(errors) == 1 else
+            f"{errors[0]} (and {len(errors) - 1} fallback route(s) also failed: {errors[-1]})"}
+
+
 def _run_agent(folder, app_id, label, routine, port, started):
-    res = _post_json(port, "/api/sessions/spawn", {
-        **_agent_spawn_options(),
+    res = _spawn_agent(port, {
         "prompt": agent_prompt(app_id, label, routine, port),
         "cwd": str(folder), "name": f"{app_id}-{routine['id']}"[:60],
     })
@@ -684,8 +719,7 @@ def ensure_agent(app_id, port, fresh=False, apps_dir=None, docs_path=""):
     docs = f" How apps and routines work is documented in {docs_path}." if docs_path else ""
     if (folder / "CLAUDE.md").is_file() or (folder / "AGENTS.md").is_file():
         docs += " This app came with its own instructions (CLAUDE.md or AGENTS.md in this folder); follow them."
-    res = _post_json(port, "/api/sessions/spawn", {
-        **_agent_spawn_options(),
+    res = _spawn_agent(port, {
         "cwd": str(folder), "name": f"{label} agent"[:60],
         "prompt": (
             f'You are the builder agent for the CCC app "{label}", which lives in this folder. '
