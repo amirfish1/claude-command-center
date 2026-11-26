@@ -30,9 +30,11 @@ def test_annotation_queue_uses_linked_github_issue_title():
             queued.update(kwargs)
             return {"number": 1, "project": "WT", "ref": "WT-1"}
 
+    # Without the workers switch off, the fake "WT-1" was dispatched through
+    # the real WatchTower install and nudged a live WT worker (WT-1 notices).
     with mock.patch.object(server, "_q", Queue()), mock.patch.object(
         server, "github_issue_title", return_value="Actual issue title"
-    ):
+    ), mock.patch.object(server, "_WT_WORKERS_AVAILABLE", False):
         result = server.enqueue_annotation_ux_fixes_queue(
             "Please fix this issue",
             meta={

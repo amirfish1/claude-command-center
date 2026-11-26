@@ -69,6 +69,24 @@ if not os.environ.get("CCC_ONCALL_STATE_DIR", "").strip():
     os.environ["CCC_ONCALL_STATE_DIR"] = tempfile.mkdtemp(prefix="ccc-test-oncall-")
 
 
+# server.py drives the installed WatchTower library (enqueue, dispatch, config).
+# A test that forgot to stub it dispatched fake tickets against the live
+# store and nudged real workers, and CONFIG/STARTUP_TIMING lines landed in
+# the live activity log. Point WatchTower's side-effect files at a scratch
+# directory before any test imports it; a test's own override still wins.
+_wt_sandbox = tempfile.mkdtemp(prefix="ccc-test-watchtower-")
+for _var, _name in (
+    ("WATCHTOWER_STORE", "queue.json"),
+    ("WATCHTOWER_WORKERS_FILE", "workers.json"),
+    ("WATCHTOWER_ACTIVITY_LOG", "activity.log"),
+    ("WATCHTOWER_LAUNCH_FAILURES_FILE", "launch-failures.json"),
+    ("WATCHTOWER_WORKER_SESSIONS_FILE", "worker-sessions.json"),
+    ("WATCHTOWER_WORKER_IDS_FILE", "worker-ids.json"),
+    ("WATCHTOWER_SPAWN_PACING_FILE", "spawn-pacing.json"),
+):
+    os.environ.setdefault(_var, os.path.join(_wt_sandbox, _name))
+
+
 # The Codex restart fence (CCC-250) must never touch the live worker's.
 os.environ.setdefault(
     "CCC_CODEX_RESTART_FENCE",
