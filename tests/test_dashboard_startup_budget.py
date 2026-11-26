@@ -119,7 +119,10 @@ def test_archive_network_request_starts_before_optional_boot_probes():
     assert bootstrap_at < telemetry_at
     bootstrap = SOURCE[controller_at:SOURCE.index("// Pause periodic", bootstrap_at)]
     assert "backgroundApiFetch(" in bootstrap
-    assert "_archiveBootstrapUrl, { signal: _archiveBootstrapController.signal }" in bootstrap
+    # Both the conv_reader list fetch and the backgroundApiFetch fallback take
+    # the same abortable init, so the 45 s timeout covers either path.
+    assert "_archiveBootstrapInit = { signal: _archiveBootstrapController.signal }" in bootstrap
+    assert bootstrap.count("_archiveBootstrapUrl, _archiveBootstrapInit") == 2
     assert "const _archiveBootstrapController = new AbortController()" in bootstrap
     assert "_archiveBootstrapController.abort()" in bootstrap
     assert "clearTimeout(_archiveBootstrapTimeout)" in bootstrap
