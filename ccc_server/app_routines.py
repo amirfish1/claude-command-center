@@ -563,7 +563,80 @@ def _spawn_agent(port, body):
             f"{errors[0]} (and {len(errors) - 1} fallback route(s) also failed: {errors[-1]})"}
 
 
+_MCP_RULE = re.compile(r"mcp__(?:claude_ai_)?([A-Za-z0-9-]+(?:_[A-Za-z0-9-]+)*?)__\w+")
+
+
+def starved_connector_tools(folder, prompt):
+    """MCP tools the routine's prompt needs but the app folder denies outright.
+
+    A tool pruner (TokenEconomizer) denies tools the folder's interactive
+    sessions never used, which can include a connector only a routine needs:
+    the routine then starts with no tools for it at all. A connector counts
+    when the prompt names it ("Gmail", "Google Calendar") and every one of its
+    tools in the folder's catalog is denied; a connector with some tools left
+    was trimmed on purpose and is not touched."""
+    settings = _read_json(Path(folder) / ".claude" / "settings.local.json", {})
+    perms = settings.get("permissions") if isinstance(settings, dict) else None
+    deny = perms.get("deny") if isinstance(perms, dict) else None
+    if not isinstance(deny, list) or not prompt:
+        return []
+    by_server, offered = {}, {}
+    for rule in deny:
+        if isinstance(rule, str) and _mcp_server(rule):
+            by_server.setdefault(_mcp_server(rule), set()).add(rule)
+    for tool in _te_catalog():
+        if _mcp_server(tool):
+            offered.setdefault(_mcp_server(tool), set()).add(tool)
+    out = []
+    for server, rules in sorted(by_server.items()):
+        name = server.replace("_", " ")
+        if not re.search(r"(?<![\w-])" + re.escape(name) + r"(?![\w-])", prompt, re.I):
+            continue
+        if offered.get(server, set()) - rules:
+            continue
+        out.extend(sorted(rules))
+    return out
+
+
+def _mcp_server(tool):
+    m = _MCP_RULE.fullmatch(tool)
+    return m.group(1) if m else None
+
+
+def _te_home():
+    return Path(os.environ.get("TOKENECONOMIZER_HOME") or Path.home() / ".tokeneconomizer")
+
+
+def _te_catalog():
+    """Tool names TokenEconomizer has seen offered on Claude (empty when absent)."""
+    doc = _read_json(_te_home() / "hosts" / "claude" / "catalog.json", {})
+    tools = doc.get("tools") if isinstance(doc, dict) else None
+    return [t for t in tools if isinstance(t, str)] if isinstance(tools, list) else []
+
+
+def _restore_starved_tools(folder, routine):
+    """Give a routine back the connector a tool pruner took from its folder,
+    through the pruner's own restore so it records them as kept and does not
+    deny them again. Only rules the pruner applied are removed; a person's own
+    deny rules stay. Returns the restored tool names."""
+    tools = starved_connector_tools(folder, routine.get("prompt") or "")
+    te = _te_home() / "bin" / "te"
+    if not tools or not te.exists():
+        return []
+    try:
+        proc = subprocess.run(
+            [str(te), "--host", "claude", "--cwd", str(folder), "toolprune", "restore", *tools],
+            capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print(f"[app-routines] {routine.get('id')}: could not restore {len(tools)} tools: {e}")
+        return []
+    print(f"[app-routines] {routine.get('id')}: toolprune restore -> "
+          f"{(proc.stdout or proc.stderr).strip()[:300]}")
+    return tools if proc.returncode == 0 else []
+
+
 def _run_agent(folder, app_id, label, routine, port, started):
+    _restore_starved_tools(folder, routine)
     res = _spawn_agent(port, {
         "prompt": agent_prompt(app_id, label, routine, port),
         "cwd": str(folder), "name": f"{app_id}-{routine['id']}"[:60],

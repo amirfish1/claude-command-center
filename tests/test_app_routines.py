@@ -303,3 +303,85 @@ class AgentSuccessorTests(unittest.TestCase):
     def test_no_lineage_leaves_agent_alone(self):
         with patch.object(ar, "_identity_map", return_value={}):
             self.assertEqual(ar.describe("demo", self.tmp.name)["agent"]["session_id"], "old-session-1")
+
+
+class StarvedConnectorTests(unittest.TestCase):
+    """A tool pruner can deny every tool of a connector that only a routine
+    uses (its interactive sessions never touch it); the routine then starts
+    with no way to do its job. Regression for a mail-watch routine that ran
+    for days with no mail tools."""
+
+    MAIL = ["mcp__claude_ai_Mail__search", "mcp__claude_ai_Mail__read",
+            "mcp__claude_ai_Mail__send"]
+    CAL = ["mcp__claude_ai_Team_Calendar__list", "mcp__claude_ai_Team_Calendar__add"]
+    NOTES = ["mcp__claude_ai_Notes__find", "mcp__claude_ai_Notes__write"]
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name)
+        self.folder = make_app(base, [])
+        deny = self.MAIL + self.CAL + self.NOTES[1:] + ["WebFetch"]
+        (self.folder / ".claude").mkdir()
+        self.settings = self.folder / ".claude" / "settings.local.json"
+        self.settings.write_text(json.dumps({"permissions": {"deny": deny}}))
+        self.te_home = base / "te"
+        (self.te_home / "hosts" / "claude").mkdir(parents=True)
+        (self.te_home / "hosts" / "claude" / "catalog.json").write_text(json.dumps(
+            {"tools": ["Bash", "WebFetch"] + self.MAIL + self.CAL + self.NOTES}))
+        env = patch.dict("os.environ", {"TOKENECONOMIZER_HOME": str(self.te_home)})
+        env.start()
+        self.addCleanup(env.stop)
+        self.routine = {"id": "watch", "name": "Watch", "kind": "agent",
+                        "prompt": "Search mail for replies, check the team calendar and "
+                                  "Notes, then fetch the page."}
+
+    def install_te(self):
+        """A stand-in pruner CLI: records its argv and drops the named rules."""
+        (self.te_home / "bin").mkdir()
+        te = self.te_home / "bin" / "te"
+        te.write_text(
+            f"#!{sys.executable}\nimport json, sys\n"
+            f"open({str(self.te_home / 'argv.json')!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
+            "tools = sys.argv[sys.argv.index('restore') + 1:]\n"
+            f"p = {str(self.settings)!r}\n"
+            "d = json.load(open(p))\n"
+            "d['permissions']['deny'] = [t for t in d['permissions']['deny'] if t not in tools]\n"
+            "json.dump(d, open(p, 'w'))\n")
+        te.chmod(0o755)
+
+    def denied(self):
+        return json.loads(self.settings.read_text())["permissions"]["deny"]
+
+    def test_named_fully_denied_connector_is_restored_before_the_session_starts(self):
+        self.install_te()
+        seen = []
+        with patch.object(ar, "_post_json",
+                          side_effect=lambda *_a: seen.append(self.denied()) or {"session_id": "s"}):
+            ar._run_agent(self.folder, "demo", "Demo", self.routine, 0, 1)
+        # Restored by the time the session spawns, via the pruner's own restore.
+        left = seen[0]
+        self.assertFalse(set(self.MAIL + self.CAL) & set(left))
+        argv = json.loads((self.te_home / "argv.json").read_text())
+        self.assertEqual(argv[:6], ["--host", "claude", "--cwd", str(self.folder),
+                                    "toolprune", "restore"])
+        # A connector with tools still offered was trimmed on purpose, and a
+        # non-connector deny is not inferred from prose: both stay denied.
+        self.assertIn(self.NOTES[1], left)
+        self.assertIn("WebFetch", left)
+
+    def test_unnamed_connector_and_missing_pruner_leave_settings_alone(self):
+        self.routine["prompt"] = "Fetch the page."
+        self.install_te()
+        with patch.object(ar, "_post_json", return_value={"session_id": "s"}) as post:
+            ar._run_agent(self.folder, "demo", "Demo", self.routine, 0, 1)
+        self.assertFalse((self.te_home / "argv.json").exists())
+        self.assertEqual(post.call_count, 1)
+
+        (self.te_home / "bin" / "te").unlink()
+        self.routine["prompt"] = "Search mail."
+        before = self.denied()
+        with patch.object(ar, "_post_json", return_value={"session_id": "s"}) as post:
+            ar._run_agent(self.folder, "demo", "Demo", self.routine, 0, 2)
+        self.assertEqual(self.denied(), before)
+        self.assertEqual(post.call_count, 1)
