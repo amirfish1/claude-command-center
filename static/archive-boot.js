@@ -154,8 +154,17 @@
   // cold reader build can also legitimately take several seconds, and that
   // work must stay off the dashboard. So a read that makes no progress for
   // DIRECT_PATIENCE_MS pings the reader on the same origin: a live reader
-  // keeps the read (up to DIRECT_MAX_WAIT_MS), a silent one falls back.
-  const DIRECT_PATIENCE_MS = 2000, DIRECT_PING_MS = 1500, DIRECT_MAX_WAIT_MS = 20000;
+  // keeps the read.
+  // CCC-694: a silent ping does not prove the reader connection is the
+  // problem: on a slow client link both origins crawl and the ping, queued
+  // behind the read, times out too. Aborting then threw the direct read's
+  // progress away and paid for a second full read (10-22 s stalls). So a
+  // stalled read now hedges: the dashboard read starts alongside it and
+  // whichever completes first wins; the other is cancelled. A live reader
+  // whose read still makes no progress for DIRECT_HEDGE_MS is hedged too:
+  // past the 5-9 s cold builds, waiting longer only adds to the stall.
+  const DIRECT_PATIENCE_MS = 2000, DIRECT_PING_MS = 1500, DIRECT_HEDGE_MS = 8000,
+    DIRECT_MAX_WAIT_MS = 20000;
   async function directAlive(base) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), DIRECT_PING_MS);
@@ -176,7 +185,7 @@
     for (;;) {
       const {done, value} = await reader.read();
       if (done) break;
-      progress();
+      progress(value.byteLength);
       chunks.push(value);
       size += value.byteLength;
     }
@@ -185,8 +194,17 @@
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
     return bytes;
   }
+  // A buffered copy keeps the source URL (callers tell direct reads apart by
+  // it), status, headers and the time its headers arrived.
+  function bufferedCopy(response, bytes, headersAt) {
+    const copy = new Response(bytes, {status: response.status,
+      statusText: response.statusText, headers: response.headers});
+    Object.defineProperty(copy, 'url', {value: response.url});
+    copy._cccHeadersAt = headersAt;
+    return copy;
+  }
   window.__cccListFetch = function (url, init, viaDashboard) {
-    const dashboard = () => (viaDashboard || window.fetch)(url, init);
+    const dashboard = (dashInit = init) => (viaDashboard || window.fetch)(url, dashInit);
     const base = typeof url === 'string' && url.startsWith('/api/conversations/list?') ? listDirectBase() : null;
     if (!base) return dashboard();
     const outer = init && init.signal;
@@ -196,56 +214,147 @@
       if (outer.aborted) attempt.abort(outer.reason);
       else outer.addEventListener('abort', relay, {once: true});
     }
+    // Direct-leg timeline for the list_read beacon (CCC-694): when headers
+    // and bytes arrived, how many pings went unanswered, whether and when
+    // the dashboard hedge started and which read won.
+    const t0 = performance.now();
+    const leg = {ms: 0, headers_ms: null, bytes: 0, pings: 0, ping_fails: 0,
+      hedge_ms: null, end: '', winner: 'direct'};
+    const finishLeg = (response, end, winner) => {
+      leg.ms = Math.round(performance.now() - t0);
+      leg.end = end;
+      leg.winner = winner;
+      if (response && typeof response === 'object') {
+        try { response._cccDirectLeg = leg; } catch (_) {}
+      }
+      return response;
+    };
+    let hedge = null, hedgeController = null;
+    const startHedge = () => {
+      if (hedge) return;
+      leg.hedge_ms = Math.round(performance.now() - t0);
+      hedgeController = new AbortController();
+      const relayHedge = () => hedgeController.abort(outer.reason);
+      if (outer) outer.addEventListener('abort', relayHedge, {once: true});
+      const hedgeInit = Object.assign({}, init || {}, {signal: hedgeController.signal});
+      hedge = (async () => {
+        try {
+          const response = await dashboard(hedgeInit);
+          // Compare complete reads: buffer an ordinary dashboard body too.
+          if (response && response.ok && response.status !== 304 && response.body
+              && typeof response.arrayBuffer === 'function') {
+            const headersAt = performance.now();
+            return bufferedCopy(response, await response.arrayBuffer(), headersAt);
+          }
+          return response;
+        } finally {
+          if (outer) outer.removeEventListener('abort', relayHedge);
+        }
+      })();
+      // The hedge is the dashboard read: a usable answer that completes
+      // first wins. A failed one leaves the direct read to finish.
+      hedge.then(response => {
+        if (!response || !(response.ok || response.status === 304)) {
+          hedgeFailed = true;
+          return;
+        }
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        attempt.abort();
+        hedgeWon(response);
+      }, () => { hedgeFailed = true; });
+    };
     // Progress watchdog: headers or a body chunk reset it.
-    let timer, settled = false, lastProgress = performance.now();
+    let timer, settled = false, lastProgress = performance.now(), hedgeWon, hedgeFailed = false;
     const watch = () => {
       clearTimeout(timer);
       if (settled) return;
       timer = setTimeout(async () => {
         if (settled) return;
         const waited = performance.now() - lastProgress;
-        const alive = waited < DIRECT_MAX_WAIT_MS && await directAlive(base);
-        if (settled) return;
-        if (alive) watch();
-        else attempt.abort();
+        if (hedge) {
+          // Already hedged: no more pings. Only a failed hedge with a
+          // direct read stalled past the limit ends the direct read; it
+          // then settles on the hedge's own answer.
+          if (hedgeFailed && waited >= DIRECT_MAX_WAIT_MS) attempt.abort();
+          else watch();
+          return;
+        }
+        let alive = false;
+        if (waited < DIRECT_HEDGE_MS) {
+          leg.pings += 1;
+          alive = await directAlive(base);
+          if (settled) return;
+          if (!alive) leg.ping_fails += 1;
+        }
+        if (!alive) startHedge();
+        watch();
       }, DIRECT_PATIENCE_MS);
     };
-    const progress = () => { lastProgress = performance.now(); watch(); };
+    const progress = bytes => {
+      lastProgress = performance.now();
+      if (bytes) leg.bytes += bytes;
+      watch();
+    };
     const options = Object.assign({}, init || {}, { signal: attempt.signal, credentials: 'include', mode: 'cors' });
-    return (async () => {
-      let retryMs;
+    const direct = (async () => {
+      let retryMs, end;
       try {
         watch();
         const response = await nativeFetch(base + url, options);
         if (response.ok || response.status === 304) {
           const headersAt = performance.now();
+          leg.headers_ms = Math.round(headersAt - t0);
           if (response.status === 304 || !response.body) {
             response._cccHeadersAt = headersAt;
-            return response;
+            return {response};
           }
           progress();
           const bytes = await readDirectBody(response, progress);
-          const copy = new Response(bytes, {status: response.status,
-            statusText: response.statusText, headers: response.headers});
-          // Callers read the reader's absolute URL to tell direct reads apart.
-          Object.defineProperty(copy, 'url', {value: response.url});
-          copy._cccHeadersAt = headersAt;
-          return copy;
+          return {response: bufferedCopy(response, bytes, headersAt)};
         }
         try { response.body?.cancel(); } catch (_) {}
         // 503: the reader is loading or declined this read; ask again soon.
         retryMs = response.status === 503 ? 15000 : 60000;
+        end = 'status-' + response.status;
       } catch (err) {
         if (outer && outer.aborted) throw err;
         retryMs = 60000;
+        end = 'error';
       } finally {
-        settled = true;
-        clearTimeout(timer);
         if (outer) outer.removeEventListener('abort', relay);
       }
-      listDirect.downUntil = Date.now() + retryMs;
-      return dashboard();
+      return {retryMs, end};
     })();
+    return new Promise((resolve, reject) => {
+      hedgeWon = response => {
+        listDirect.downUntil = Date.now() + 60000;
+        resolve(finishLeg(response, 'hedged', 'dashboard'));
+      };
+      direct.then(result => {
+        if (settled) return;
+        if (result.response) {
+          settled = true;
+          clearTimeout(timer);
+          if (hedgeController) hedgeController.abort();
+          resolve(finishLeg(result.response, 'ok', 'direct'));
+          return;
+        }
+        // The direct read failed or was declined: the dashboard serves it.
+        settled = true;
+        clearTimeout(timer);
+        listDirect.downUntil = Date.now() + result.retryMs;
+        (hedge || dashboard()).then(
+          response => resolve(finishLeg(response, result.end, 'dashboard')), reject);
+      }, err => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (hedgeController) hedgeController.abort();
+        reject(err);
+      });
+    });
   };
 
   if (window.self !== window.top) return;

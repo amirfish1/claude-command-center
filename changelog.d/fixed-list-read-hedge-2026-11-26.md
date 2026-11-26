@@ -1,0 +1,1 @@
+Sidebar refreshes no longer stall for 10-20 s on a slow connection: when a list read from the reader process stops making progress, the dashboard read now starts alongside it and the first complete answer wins, instead of discarding the read and starting over.

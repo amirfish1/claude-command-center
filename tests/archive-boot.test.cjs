@@ -63,7 +63,8 @@ test('normal loader adopts the early response once without issuing another reque
 test('list telemetry includes early request time before the loader initialized',async()=>{
   const source = archiveLoader;
   const events=[];
-  const response={ok:true,status:200,_cccArchiveTiming:{start:100,headers:200},
+  const leg={ms:900,headers_ms:200,bytes:10,pings:1,ping_fails:0,hedge_ms:null,end:'ok',winner:'direct'};
+  const response={ok:true,status:200,_cccArchiveTiming:{start:100,headers:200},_cccDirectLeg:leg,
     headers:{get:()=>null},json:async()=>({conversations:[{id:'one'}]})};
   const state={_archiveAllInflight:new Map(),_archiveAllEtag:new Map(),_archiveAllData:new Map(),
     _archiveAllDelta:new Map(),_archiveBootstrapConsumed:false,
@@ -82,6 +83,7 @@ test('list telemetry includes early request time before the loader initialized',
   assert.equal(event.detail.start_nav_ms,100);
   assert.equal(event.detail.ttfb_ms,100);
   assert(event.ms>=1000,'time before application initialization stays in the metric');
+  assert.deepEqual(event.detail.direct_leg,leg,'the reader read timeline ships with the beacon (CCC-694)');
 });
 
 test('overlapped history fetches immediately but parses only after initial paint', async () => {
@@ -213,4 +215,123 @@ test('direct body stall falls back; healthy direct body keeps url and header tim
   ctl.abort();
   await assert.rejects(res);
   assert.equal(dash.length,1);
+});
+
+test('a stalled direct read hedges instead of restarting; first complete read wins (CCC-694)',async()=>{
+  const tick=()=>new Promise(setImmediate);
+  const setup=()=>{
+    const run=start({search:'?ccc_app=demo'});
+    run.window.location={protocol:'https:',hostname:'box.example',origin:'https://box.example'};
+    run.window.__CCC_LIST_READER_PORT__=18091;
+    run.fire=async()=>{await tick();await tick();run.timers.at(-1)();await tick();await tick();};
+    return run;
+  };
+  const isPing=url=>url.endsWith('/api/conv-reader/ping');
+  const hang=init=>new Promise((_,reject)=>init.signal.addEventListener('abort',()=>reject(Error('aborted'))));
+  // Slow link: headers and part of the body arrive, then the body stalls and
+  // the ping (queued behind it) times out. The dashboard read starts alongside.
+  const slowBody=()=>{
+    let finish;
+    const impl=(url,init)=>{
+      if(isPing(url)) return hang(init);
+      const chunks=['{"conversations":'];
+      const body=new ReadableStream({async pull(c){
+        if(chunks.length){c.enqueue(new TextEncoder().encode(chunks.shift()));return;}
+        // A real fetch body errors when its request is aborted.
+        const aborted=await new Promise(resolve=>{finish=()=>resolve(false);
+          init.signal.addEventListener('abort',()=>resolve(true),{once:true});});
+        if(aborted){c.error(Error('aborted'));return;}
+        c.enqueue(new TextEncoder().encode('[{"id":"a"}]}')); c.close();
+      }});
+      const r=new Response(body,{status:200});
+      Object.defineProperty(r,'url',{value:url});
+      return Promise.resolve(r);
+    };
+    return {impl, finish:()=>finish()};
+  };
+  // 1. The direct read finishes first: it wins and the hedge is cancelled.
+  let run=setup(); let slow=slowBody(); const hedges=[];
+  run.window.__fetchImpl=slow.impl;
+  let via=(url,init)=>{hedges.push(init);return hang(init);};
+  let res=run.window.__cccListFetch('/api/conversations/list?window=7d',{},via);
+  await run.fire();          // body stalled: ping sent
+  await run.fire();          // ping timed out: hedge starts, direct kept
+  assert.equal(hedges.length,1,'dashboard read started alongside');
+  slow.finish();
+  res=await res;
+  assert.deepEqual(await res.json(),{conversations:[{id:'a'}]});
+  assert.equal(res.url,'https://box.example:18091/api/conversations/list?window=7d');
+  assert.equal(hedges[0].signal.aborted,true,'losing dashboard read cancelled');
+  assert.equal(res._cccDirectLeg.winner,'direct');
+  assert.equal(res._cccDirectLeg.ping_fails,1);
+  assert.ok(Number.isFinite(res._cccDirectLeg.hedge_ms));
+  assert.equal(res._cccDirectLeg.bytes,'{"conversations":[{"id":"a"}]}'.length);
+  const before=run.reads.filter(r=>!isPing(r.url)).length;
+  run.window.__fetchImpl=(url)=>Promise.resolve(Object.assign(new Response(null,{status:304}),{}));
+  await run.window.__cccListFetch('/api/conversations/list?window=7d',{},via);
+  assert.equal(run.reads.filter(r=>!isPing(r.url)).length,before+1,'a direct win does not park the reader');
+  // 2. The dashboard read finishes first: it wins, its body is complete, the
+  // direct read is cancelled and direct reads park.
+  run=setup(); slow=slowBody(); let directInit;
+  run.window.__fetchImpl=(url,init)=>{if(!isPing(url))directInit=init;return slow.impl(url,init);};
+  via=()=>{const r=new Response('{"conversations":[]}',{status:200});
+    Object.defineProperty(r,'url',{value:'https://box.example/api/conversations/list?window=7d'});return Promise.resolve(r);};
+  res=run.window.__cccListFetch('/api/conversations/list?window=7d',{},via);
+  await run.fire(); await run.fire();
+  res=await res;
+  assert.deepEqual(await res.json(),{conversations:[]});
+  assert.equal(res.url,'https://box.example/api/conversations/list?window=7d');
+  assert.equal(directInit.signal.aborted,true,'losing direct read cancelled');
+  assert.equal(res._cccDirectLeg.winner,'dashboard');
+  assert.equal(res._cccDirectLeg.end,'hedged');
+  const parked=run.reads.length; const dash=[];
+  await run.window.__cccListFetch('/api/conversations/list?window=7d',{},url=>{dash.push(url);return Promise.resolve({ok:true,status:200});});
+  assert.equal(run.reads.length,parked,'parked after the dashboard won');
+  assert.equal(dash.length,1);
+  // 3. A failed hedge leaves the direct read to finish.
+  run=setup(); slow=slowBody();
+  run.window.__fetchImpl=slow.impl;
+  via=()=>Promise.reject(Error('offline'));
+  res=run.window.__cccListFetch('/api/conversations/list?window=7d',{},via);
+  await run.fire(); await run.fire();
+  slow.finish();
+  res=await res;
+  assert.deepEqual(await res.json(),{conversations:[{id:'a'}]});
+  assert.equal(res._cccDirectLeg.winner,'direct');
+  // 4. A failed hedge with a direct read stalled past the limit settles on
+  // the hedge's answer rather than hanging.
+  run=setup(); slow=slowBody();
+  run.window.__fetchImpl=slow.impl;
+  via=()=>Promise.resolve({ok:false,status:502,via:'dash'});
+  res=run.window.__cccListFetch('/api/conversations/list?window=7d',{},via);
+  await run.fire(); await run.fire();
+  // The harness clock advances 10 ms per read: fire the watchdog past the
+  // 20 s no-progress limit until the read settles.
+  let settledRes=null; res.then(r=>{settledRes=r;});
+  for(let i=0;i<4000&&!settledRes;i++){ await run.fire(); }
+  assert.equal(settledRes&&settledRes.status,502);
+  assert.equal(settledRes._cccDirectLeg.winner,'dashboard');
+});
+test('a live reader whose read makes no progress is hedged after the hedge limit (CCC-694)',async()=>{
+  const tick=()=>new Promise(setImmediate);
+  const run=start({search:'?ccc_app=demo'});
+  run.window.location={protocol:'https:',hostname:'box.example',origin:'https://box.example'};
+  run.window.__CCC_LIST_READER_PORT__=18091;
+  const fire=async()=>{await tick();await tick();run.timers.at(-1)();await tick();await tick();};
+  const isPing=url=>url.endsWith('/api/conv-reader/ping');
+  run.window.__fetchImpl=(url,init)=>isPing(url)?Promise.resolve({ok:true,status:200})
+    :new Promise((_,reject)=>init.signal.addEventListener('abort',()=>reject(Error('aborted'))));
+  const hedges=[];
+  const via=(url,init)=>{hedges.push(init);return Promise.resolve({ok:true,status:200,via:'dash'});};
+  const res=run.window.__cccListFetch('/api/conversations/list?window=7d',{},via);
+  await fire(); await fire();
+  assert.equal(hedges.length,0,'an answered ping keeps a short stall on the reader');
+  let settled=null; res.then(r=>{settled=r;});
+  // The harness clock advances 10 ms per read; fire past the 8 s limit.
+  for(let i=0;i<2000&&!settled;i++) await fire();
+  assert.equal(settled&&settled.via,'dash');
+  assert.equal(hedges.length,1);
+  assert.equal(settled._cccDirectLeg.winner,'dashboard');
+  assert.equal(settled._cccDirectLeg.ping_fails,0);
+  assert.ok(settled._cccDirectLeg.pings>=2);
 });

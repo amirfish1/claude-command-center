@@ -4848,6 +4848,8 @@
     // (its ?since= varies) for the Resource Timing split (CCC-229).
     let _perfServer = null;
     let _perfFetchUrl = url;
+    // Reader read timeline from __cccListFetch (CCC-694), when it went direct.
+    let _perfDirectLeg = null;
     const _perfListLog = function (bytes, status, extra) {
       try {
         if (typeof window.__cccPerfRow !== 'function') return;
@@ -4892,6 +4894,7 @@
               longtask_ms: _perfLongTaskMs(_perfT0, _perfEnd),
               rt: _perfHdrAt ? _convResourceTiming(_perfFetchUrl, _perfT0) : null,
               direct: _perfListDirect(_perfFetchUrl),
+              direct_leg: _perfDirectLeg,
             },
           });
         }
@@ -4986,6 +4989,7 @@
         if (earlyTiming && Number.isFinite(earlyTiming.start)) {
           _perfT0 = Math.min(_perfT0, earlyTiming.start);
         }
+        _perfDirectLeg = r._cccDirectLeg || null;
         _perfHdrAt = earlyTiming && Number.isFinite(earlyTiming.headers)
           ? earlyTiming.headers
           // A bounded direct read buffers its body; keep ttfb at its headers.
