@@ -140,7 +140,9 @@ def _retryable_worker_failure(result):
         return False
     return bool(re.search(
         r"\b(?:429|50[0234]|529|insufficient_quota|resource_exhausted|rate_limit_exceeded)\b"
-        r"|weekly limit|usage limit|out of (?:usage )?credits|rate limit|quota (?:exceeded|exhausted)|overloaded",
+        r"|weekly limit|usage limit|out of (?:usage )?credits|rate limit|quota (?:exceeded|exhausted)|overloaded"
+        # A route whose model the engine rejects (catalog dropped it) did no work; try the next one (OPS-1068).
+        r"|model is not supported|unsupported (?:\w+ )?model|model_not_found",
         result.get("error") or "", re.I,
     ))
 

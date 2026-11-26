@@ -63,6 +63,23 @@ class HeadlessRunTests(unittest.TestCase):
             self.assertEqual(result["structured_output"], {})
             claude.assert_not_called()
 
+    def test_rejected_worker_model_falls_through_to_the_next_route(self):
+        """OPS-1068: a zero-token 'model is not supported' rejection suppressed both studio digests."""
+        defaults = {"worker_engine": "codex", "worker_model": "gpt-6.2-sol",
+                    "worker_fallback": {"enabled": True, "models": [{"engine": "claude", "model": "sonnet-5-5"}]}}
+        rejected = {"ok": False, "subtype": "error", "engine": "codex", "model": "gpt-6.2-sol", "effort": "",
+                    "usage": {}, "error": '{"type":"error","status":400,"error":{"message":"The '
+                                         "'gpt-6.2-sol' model is not supported when using Codex with a "
+                                         'ChatGPT account."}}'}
+        fallback = {"ok": True, "subtype": "success", "engine": "claude", "model": "claude-sonnet-5-5", "effort": ""}
+        with patch.object(headless_run, "_load_defaults", return_value=(defaults, "file")), \
+                patch.object(headless_run, "_run_codex", return_value=rejected), \
+                patch.object(headless_run, "_run_claude", return_value=fallback) as claude:
+            result = headless_run.run_headless("synthetic", worker_defaults=True)
+        self.assertTrue(result["ok"])
+        self.assertEqual([a["engine"] for a in result["execution"]["attempts"]], ["codex", "claude"])
+        claude.assert_called_once()
+
     def test_claude_dispatch_flags_and_envelope(self):
         captured = {}
 
