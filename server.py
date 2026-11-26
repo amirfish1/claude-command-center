@@ -39926,6 +39926,13 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             _src_phases = {}
             list_cache_key = _archive_response_cache_key(**cache_options)
             since = (qs.get("since", [""])[0] or "").strip()
+            if since and self._list_reader_relay(since):
+                record_diag("list_server", (time.perf_counter() - _lt0) * 1000.0, {
+                    "window": window, "status": "relayed", "since": "foreign",
+                    "cpu_ms": round((time.thread_time() - _lc0) * 1000.0, 1),
+                    "stale_ok": stale_ok,
+                })
+                return
             saved_order = qs.get("saved_order", [""])[0]
             if not re.fullmatch(r"[0-9a-f]{64}", saved_order):
                 saved_order = ""
@@ -40704,6 +40711,19 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         if isinstance(ip, ipaddress.IPv4Address):
             return ip in ipaddress.ip_network("100.64.0.0/10")
         return ip in ipaddress.ip_network("fd7a:115c:a1e0::/48")
+
+    def _list_reader_relay(self, since):
+        """CCC-701: answer a list read holding another process's delta token
+        from the conversation-reader child over loopback. True when sent."""
+        from ccc_server import list_reader
+        if (_conv_reader.is_child() or not list_reader.enabled()
+                or not list_reader.foreign_token(since, _ARCHIVE_DELTA_NONCE)):
+            return False
+        status = _conv_reader.status()
+        port = status.get("http_port")
+        if not (status.get("ready") and type(port) is int and port != self.server.server_address[1]):
+            return False
+        return list_reader.relay(self, port)
 
     def _check_proxy_secret(self):
         """SECURITY: reject requests missing or carrying an invalid proxy secret.

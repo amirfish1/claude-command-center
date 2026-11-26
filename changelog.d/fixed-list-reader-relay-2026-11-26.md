@@ -1,0 +1,1 @@
+- The sidebar list no longer reloads in full when a read falls back between the dashboard and its conversation reader; the dashboard now passes those reads to the reader, which answers with only the changes.

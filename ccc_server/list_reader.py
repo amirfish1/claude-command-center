@@ -544,3 +544,86 @@ def acp_snapshot(acp_state):
 
 def acp_signature(snapshot):
     return json.dumps(snapshot, sort_keys=True, default=str)
+
+
+# CCC-701: a fallback list read carrying the reader's delta token. The
+# browser falls back to the dashboard when its connection to the reader port
+# stalls (CCC-681/694), not because the reader is down. The dashboard could
+# not answer the reader's token (its nonce is per process), so it sent the
+# whole 370-680 KB list, and its own token then made the next direct read a
+# full body again: 18 of 60 slow reads in the CCC-679 watch window were such
+# full bodies. Relaying the read to the reader over loopback keeps it a
+# delta in the reader's token lineage, built off the dashboard's GIL.
+RELAY_CONNECT_S = 0.25
+# Headers must arrive within this long, or the dashboard serves the read as
+# before. A cold reader build takes up to several seconds.
+RELAY_HEADERS_S = 3.0
+RELAY_MAX_BYTES = 64 << 20
+_RELAY_REQUEST_HEADERS = ("Accept-Encoding", "If-None-Match", "X-CCC-Archive-Boot",
+                          "X-CCC-Proxy-Secret", "Authorization")
+_RELAY_SKIP_RESPONSE = frozenset((
+    "connection", "keep-alive", "transfer-encoding", "content-length", "date", "server",
+    "access-control-allow-origin", "access-control-allow-credentials",
+    "access-control-expose-headers", "timing-allow-origin",
+))
+_relay_stats = {"relayed": 0, "fallbacks": 0, "last_error": None}
+
+
+def foreign_token(since, own_nonce):
+    """True when `since` is a list delta token minted by another process."""
+    nonce = str(since or "").split(".", 1)[0]
+    return bool(nonce) and nonce != own_nonce and len(str(since)) <= 256
+
+
+def relay_status():
+    with _lock:
+        return dict(_relay_stats)
+
+
+def relay(handler, port, *, connect_s=RELAY_CONNECT_S, headers_s=RELAY_HEADERS_S):
+    """Answer `handler`'s list GET with the reader's response on loopback
+    `port`. True when the response was sent; False leaves the read to the
+    dashboard (reader declined, failed, or too slow to start answering)."""
+    import http.client
+    import socket
+
+    conn = http.client.HTTPConnection("127.0.0.1", int(port), timeout=connect_s)
+    try:
+        conn.connect()
+        # Keep the socket: a Connection: close reply detaches it from conn.
+        sock = conn.sock
+        sock.settimeout(headers_s)
+        headers = {name: value for name in _RELAY_REQUEST_HEADERS
+                   if (value := handler.headers.get(name))}
+        conn.request("GET", handler.path, headers=headers)
+        response = conn.getresponse()
+        if response.status not in (200, 304):
+            raise ConnectionError(f"reader answered {response.status}")
+        sock.settimeout(max(headers_s, 30.0))
+        body = response.read(RELAY_MAX_BYTES + 1)
+        if len(body) > RELAY_MAX_BYTES:
+            raise ConnectionError("reader body too large to relay")
+        kept = [(name, value) for name, value in response.getheaders()
+                if name.lower() not in _RELAY_SKIP_RESPONSE]
+    except (OSError, http.client.HTTPException, socket.timeout, ValueError) as exc:
+        with _lock:
+            _relay_stats["fallbacks"] += 1
+            _relay_stats["last_error"] = repr(exc)[:200]
+        return False
+    finally:
+        conn.close()
+    handler.send_response(response.status)
+    for name, value in kept:
+        handler.send_header(name, value)
+    handler.send_header("X-CCC-List-Relay", "reader")
+    if response.status != 304:
+        handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    if response.status != 304:
+        try:
+            handler.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+    with _lock:
+        _relay_stats["relayed"] += 1
+    return True
