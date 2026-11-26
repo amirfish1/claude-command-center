@@ -4818,6 +4818,32 @@
     try { return new URL(fetchedUrl, window.location.href).origin !== window.location.origin; } catch (_) { return false; }
   }
 
+  // dash_boot (CCC-696): navigation start -> the application ready to use
+  // the session list (its first list call), once per page. This is the
+  // startup cost a boot list read waits behind; list_read sets it aside.
+  function _sendDashBoot(callAt) {
+    try {
+      if (sharedState._dashBootSent || typeof _perfEvent !== 'function') return;
+      sharedState._dashBootSent = true;
+      const detail = { wall_ms: Math.round(callAt) };
+      try {
+        const nav = performance.getEntriesByType('navigation')[0];
+        if (nav) {
+          detail.html_ms = Math.round(nav.responseEnd);
+          detail.dcl_ms = Math.round(nav.domContentLoadedEventEnd || 0) || null;
+        }
+        let n = 0, kb = 0;
+        for (const e of performance.getEntriesByType('resource')) {
+          if (e.initiatorType !== 'script' || e.startTime > callAt) continue;
+          n++; kb += (e.transferSize || 0) / 1024;
+        }
+        detail.scripts = n;
+        detail.script_transfer_kb = Math.round(kb);
+      } catch (_) {}
+      _perfEvent('dash_boot', Math.round(_perfActiveElapsed(0, callAt)), { detail });
+    } catch (_) {}
+  }
+
   async function loadArchiveAll(opts = {}) {
     const params = new URLSearchParams();
     params.set('window', opts.window || _archiveWindow());
@@ -4838,6 +4864,12 @@
     const pending = sharedState._archiveAllInflight.get(url);
     if (pending) return pending;
     let _perfT0 = performance.now();
+    // When the application asked for the list. A boot read that started
+    // earlier (archive-boot.js) may have been ready long before (CCC-696).
+    const _perfCallAt = _perfT0;
+    let _perfBoot = null;
+    let _perfBootReady = NaN;
+    _sendDashBoot(_perfCallAt);
     // Stage split for the list_read tail (CCC-229): headers arrive after
     // client queueing + server work; body covers download + JSON parse,
     // which stretches when a fresh page's main thread is busy booting.
@@ -4864,7 +4896,19 @@
         const _perfEnd = status === 'superseded' && Number.isFinite(stoppedAt)
           ? Math.min(_perfNow, Math.max(_perfT0, stoppedAt)) : _perfNow;
         const wallMs = Math.round(_perfEnd - _perfT0);
-        const ms = Math.round(_perfActiveElapsed(_perfT0, _perfEnd));
+        // A boot read's list was ready (network done) before the app asked
+        // for it; that stretch is dashboard startup, gated as dash_boot, not
+        // list time. Its own decode cost stays in (CCC-696).
+        let _bootWaitMs = 0;
+        if (_perfBoot && Number.isFinite(_perfBootReady) && _perfBootReady < _perfCallAt) {
+          // Measured from the network end, the wait window also holds the
+          // list's own parse when that ran before the call; keep it in.
+          const ownParse = _perfBootReady === _perfBoot.net_end_ms && Number.isFinite(_perfBoot.parsed_ms)
+            && _perfBoot.parsed_ms <= _perfCallAt ? (_perfBoot.parse_ms || 0) : 0;
+          _bootWaitMs = Math.max(0, _perfActiveElapsed(_perfBootReady, _perfCallAt) - ownParse);
+          _perfBoot.app_wait_ms = Math.round(_bootWaitMs);
+        }
+        const ms = Math.round(Math.max(0, _perfActiveElapsed(_perfT0, _perfEnd) - _bootWaitMs));
         const size = bytes ? (bytes >= 1048576 ? (bytes / 1048576).toFixed(1) + 'MB'
           : Math.round(bytes / 1024) + 'KB')
           : (status === 304 ? '304'
@@ -4883,7 +4927,7 @@
           _perfEvent('list_read', ms, {
             detail: {
               bytes: bytes || 0, status: status, extra: extra || '',
-              wall_ms: wallMs, hidden_ms: wallMs - ms,
+              wall_ms: wallMs, hidden_ms: Math.max(0, Math.round(wallMs - ms - _bootWaitMs)),
               settle_delay_ms: Math.round(_perfNow - _perfEnd),
               ttfb_ms: _perfHdrAt ? Math.round(_perfHdrAt - _perfT0) : null,
               body_ms: _perfBodyMs ? Math.round(_perfBodyMs) : null,
@@ -4895,6 +4939,7 @@
               rt: _perfHdrAt ? _convResourceTiming(_perfFetchUrl, _perfT0) : null,
               direct: _perfListDirect(_perfFetchUrl),
               direct_leg: _perfDirectLeg,
+              boot: _perfBoot,
             },
           });
         }
@@ -4990,6 +5035,19 @@
           _perfT0 = Math.min(_perfT0, earlyTiming.start);
         }
         _perfDirectLeg = r._cccDirectLeg || null;
+        if (earlyTiming && Number.isFinite(earlyTiming.start)) {
+          // Boot read split (CCC-696), navigation-relative: when the app
+          // called for the list, the early read's headers, network end and
+          // parsed body. app_wait_ms = how long the ready list waited for
+          // the application to start; filled in once the body is consumed.
+          _perfBoot = { call_ms: Math.round(_perfCallAt), headers_ms: Math.round(earlyTiming.headers) };
+          try {
+            const abs = new URL(_perfFetchUrl, window.location.href).href;
+            const ents = performance.getEntriesByName(abs, 'resource');
+            const ent = ents.length ? ents[ents.length - 1] : null;
+            if (ent && ent.responseEnd) _perfBoot.net_end_ms = Math.round(ent.responseEnd);
+          } catch (_) {}
+        }
         _perfHdrAt = earlyTiming && Number.isFinite(earlyTiming.headers)
           ? earlyTiming.headers
           // A bounded direct read buffers its body; keep ttfb at its headers.
@@ -5039,6 +5097,15 @@
         const layered = raw?.history_layer !== undefined;
         let d = layered ? _decodeArchiveHistoryLayer(raw, params.get('window')) : _decodeArchiveRowLayouts(raw);
         _perfBodyMs = performance.now() - _perfHdrAt - _perfPaintWaitMs;
+        if (_perfBoot) {
+          // Ready = the network delivered the whole body, else the page
+          // parsed it. Headers alone prove nothing: without either, no wait
+          // is set aside and the early start stays in list_read.
+          if (Number.isFinite(earlyTiming.parsed)) _perfBoot.parsed_ms = Math.round(earlyTiming.parsed);
+          if (Number.isFinite(earlyTiming.parse_ms)) _perfBoot.parse_ms = Math.round(earlyTiming.parse_ms);
+          _perfBootReady = Number.isFinite(_perfBoot.net_end_ms) ? _perfBoot.net_end_ms
+            : (Number.isFinite(earlyTiming.parsed) ? earlyTiming.parsed : NaN);
+        }
         let _merged = null;
         if (d && d.delta) {
           const baseRows = sharedState._archiveAllData.get(url);

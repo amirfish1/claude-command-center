@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const {functions} = require('./conversation-source.cjs');
-const archiveLoader = functions(['_decodeArchiveRowLayouts', '_perfListDirect', 'loadArchiveAll']);
+const archiveLoader = functions(['_decodeArchiveRowLayouts', '_perfListDirect', '_sendDashBoot', 'loadArchiveAll']);
 const boot = fs.readFileSync(require.resolve('../static/archive-boot.js'), 'utf8');
 const defaults = fs.readFileSync(require.resolve('../static/conversation-defaults.js'), 'utf8');
 
@@ -84,6 +84,38 @@ test('list telemetry includes early request time before the loader initialized',
   assert.equal(event.detail.ttfb_ms,100);
   assert(event.ms>=1000,'time before application initialization stays in the metric');
   assert.deepEqual(event.detail.direct_leg,leg,'the reader read timeline ships with the beacon (CCC-694)');
+});
+
+test('a boot list ready before the app started reports that wait as dash_boot, not list time (CCC-696)',async()=>{
+  const source = archiveLoader;
+  const events=[];
+  // Fetch started at 100, body parsed at 300 (40 ms of it parsing); the app
+  // asks for the list only at ~1100.
+  const response={ok:true,status:200,_cccArchiveTiming:{start:100,headers:200,parsed:300,parse_ms:40},
+    headers:{get:()=>null},json:async()=>({conversations:[{id:'one'}]})};
+  const state={_archiveAllInflight:new Map(),_archiveAllEtag:new Map(),_archiveAllData:new Map(),
+    _archiveAllDelta:new Map(),_archiveBootstrapConsumed:false,
+    _archiveBootstrapUrl:'/api/conversations/list?window=7d&stale_ok=1&initial=1',
+    _archiveBootstrapFetchPromise:Promise.resolve(response),ARCHIVE_ALL_FETCH_TIMEOUT_MS:45000};
+  let now=1000;
+  const context={sharedState:state,window:{__cccPerfRow(){}},performance:{now:()=>now+=100},
+    URLSearchParams,AbortController,setTimeout:()=>0,clearTimeout(){},
+    _archiveWindow:()=> '7d',_clientLog(){},
+    _perfActiveElapsed:(a,b)=>b-a,_perfLongTaskMs:()=>0,_convResourceTiming:()=>null,
+    _perfEvent:(kind,ms,extra)=>events.push({kind,ms,...extra}),
+    backgroundApiFetch:()=>{throw Error('duplicate request');}};
+  vm.createContext(context); vm.runInContext(source,context);
+  assert.equal((await context.loadArchiveAll({initial:true})).length,1);
+  const boot=events.filter(e=>e.kind==='dash_boot');
+  assert.equal(boot.length,1,'one startup sample per page');
+  assert.equal(boot[0].ms,1100);
+  const event=events.find(e=>e.kind==='list_read');
+  const wait=event.detail.boot.app_wait_ms;
+  assert.equal(wait,1100-300,'the wait starts once the list was parsed');
+  assert.equal(event.ms,event.detail.wall_ms-wait,'the startup wait is set aside, the rest stays');
+  assert(event.detail.start_nav_ms===100,'the early fetch start is kept');
+  await context.loadArchiveAll({});
+  assert.equal(events.filter(e=>e.kind==='dash_boot').length,1);
 });
 
 test('overlapped history fetches immediately but parses only after initial paint', async () => {

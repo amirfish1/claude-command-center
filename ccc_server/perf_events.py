@@ -116,6 +116,10 @@ APP_READY_MS = _env_int("CCC_PERF_APP_READY_MS", 1000)
 # The page reports stretches from one second up; this is the length that
 # counts as a freeze someone would call a hang.
 APP_FREEZE_MS = _env_int("CCC_PERF_APP_FREEZE_MS", 2000)
+# dash_boot = the dashboard's navigation start -> its application ready to
+# use the session list (first list call). A boot list read that arrived
+# earlier waits behind this; list_read sets that wait aside (CCC-696).
+DASH_BOOT_MS = _env_int("CCC_PERF_DASH_BOOT_MS", 3000)
 WARM_WINDOW_S = _env_int("CCC_PERF_WARM_WINDOW_S", 3600)
 
 # Startup archive loads use the cold budget even when a persisted cache
@@ -216,7 +220,8 @@ _CLIENT_DIAG_KINDS = ("archive_initial_load", "archive_full_load")
 
 _VALID_KINDS = ("archive_load", "conv_open", "list_read", "live_build",
                 "tts_start", "tts_gap", "conv_open_cached",
-                "view_switch", "rail_apps", "app_ready", "app_freeze")
+                "view_switch", "rail_apps", "app_ready", "app_freeze",
+                "dash_boot")
 # Recorded and summarized with a breach verdict, but never self-filed: the
 # speaker kinds are tracked by a standing deep ticket (CCC-144) and its gates;
 # conv_open_cached (click -> saved-copy paint) by CCC-143 next to conv_open,
@@ -359,6 +364,8 @@ def _threshold_for(kind, warm):
         return APP_READY_MS
     if kind == "app_freeze":
         return APP_FREEZE_MS
+    if kind == "dash_boot":
+        return DASH_BOOT_MS
     return CONV_OPEN_MS
 
 
@@ -672,6 +679,7 @@ def summarize(hours=24, now=None):
             "rail_apps_ms": RAIL_APPS_MS,
             "app_ready_ms": APP_READY_MS,
             "app_freeze_ms": APP_FREEZE_MS,
+            "dash_boot_ms": DASH_BOOT_MS,
         },
         "kinds": kinds,
         "apps": _app_ready_by_app(

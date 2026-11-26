@@ -687,7 +687,11 @@
   const parseFullResponse = async (response, conditional) => {
     if (windowName !== 'all' && (windowName !== '7d' || conditional)) return response.json();
     const bytes = await response.arrayBuffer();
+    const parseAt = performance.now();
     const payload = JSON.parse(new TextDecoder().decode(bytes));
+    // The list's own decode cost, kept when its wait for the application
+    // is set aside (CCC-696).
+    if (response._cccArchiveTiming) response._cccArchiveTiming.parse_ms = performance.now() - parseAt;
     // An early response for a different view may never be consumed. Keep
     // the extra buffer only when the complete-list loader has picked it up.
     if (snapshot.consumed && !payload?.delta && !payload?.initial && (Array.isArray(payload?.row_layouts) || payload?.history_layer === 1)
@@ -738,6 +742,10 @@
         // it unread behind the preview paint can stall a large full reply.
         body = response._cccArchiveParsedBody = parseFullResponse(response, !!value);
         body.finally(() => clearTimeout(timeout)).catch(() => {});
+        // When the list was usable, so list_read can tell its own time from
+        // waiting for the application to start (CCC-696).
+        const timing = response._cccArchiveTiming;
+        body.then(() => { timing.parsed = performance.now(); }, () => {});
       }
       const base = await read;
       // Conditional validation still requires the exact persisted body.

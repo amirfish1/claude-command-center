@@ -1,0 +1,1 @@
+- Startup performance now has its own measurement: the dashboard reports how long it takes to become ready to show the session list (`dash_boot` in `/api/perf/stats`), and the first session-list read no longer counts the time its already-delivered list spent waiting for the dashboard to start.

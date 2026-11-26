@@ -310,6 +310,26 @@ class TestSummarize(PerfEventsTestBase):
         self.assertIsNotNone(pattern)
         self.assertEqual(pattern["kind"], "app_ready")
 
+    def test_dash_boot_is_its_own_gated_topic(self):
+        # Dashboard startup is measured on its own (CCC-696): a slow startup
+        # breaches dash_boot and files under its own topic, not the sidebar
+        # list investigation.
+        calm = mock.patch.object(pe, "_machine_load", return_value=(0.5, 8))
+        calm.start()
+        self.addCleanup(calm.stop)
+        self.assertFalse(pe.record_event("dash_boot", pe.DASH_BOOT_MS - 500,
+                                         detail={"scripts": 92})["breach"])
+        for ms in (pe.DASH_BOOT_MS + 400, pe.DASH_BOOT_MS + 900):
+            self.assertTrue(pe.record_event("dash_boot", ms)["breach"])
+        summary = pe.summarize(hours=24)
+        self.assertEqual(summary["thresholds"]["dash_boot_ms"], pe.DASH_BOOT_MS)
+        self.assertEqual(summary["kinds"]["dash_boot"]["count"], 3)
+        self.assertEqual(pe._perf_topic("dash_boot"), "dash_boot")
+        self.assertEqual(pe._ticket_perf_topic(
+            {"title": "Dashboard startup", "note": "x\nPerformance topic: dash_boot\n"}), "dash_boot")
+        pattern = pe.evaluate_breach_pattern(pe.read_events(0))
+        self.assertEqual(pattern["kind"], "dash_boot")
+
     def test_hours_clamped(self):
         summary = pe.summarize(hours=99999)
         self.assertEqual(summary["hours"], 720)

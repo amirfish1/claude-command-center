@@ -8,7 +8,7 @@ const {findChromePath} = require('../puppeteer-browser-config.js');
 const boot = fs.readFileSync('static/archive-boot.js', 'utf8');
 const {functions} = require('./conversation-source.cjs');
 const archive = functions(['_decodeArchiveRowLayouts', '_mergeArchiveListDelta',
-  '_decodeArchiveHistoryLayer', '_perfListDirect', 'loadArchiveAll']);
+  '_decodeArchiveHistoryLayer', '_perfListDirect', '_sendDashBoot', 'loadArchiveAll']);
 const fullUrl = '/api/conversations/list?window=7d&stale_ok=1';
 const rows = [{session_id:'recent', nested:{items:[1]}}, {session_id:'older'}];
 
