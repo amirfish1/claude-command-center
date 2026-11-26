@@ -51,7 +51,7 @@ def test_delta_retains_unchanged_parent_and_sends_it_with_new_child(monkeypatch)
     monkeypatch.setattr(server, '_archive_list_project_rows', lambda rows, **kw: rows)
     old_parent = {'session_id': 'parent', 'modified': 1}
     child = {'session_id': 'child', 'parent_session_id': 'parent', 'modified': 100000}
-    state = {'ctx': 'ctx', 'row_rev': {'child': 2}, 'track_since': 1,
+    state = {'nonce': 'nonce', 'ctx': 'ctx', 'row_rev': {'child': 2}, 'track_since': 1,
              'base': [old_parent, child], 'extra': []}
     result = server._archive_list_delta_payload(
         state, 'nonce.1.ctx.0', state['base'], window='8h', now=100000)
@@ -85,7 +85,7 @@ def test_delta_resends_unchanged_old_children_of_newly_visible_parent(monkeypatc
     monkeypatch.setattr(server, '_archive_list_project_rows', lambda rows, **kw: rows)
     parent = {'session_id': 'parent', 'modified': 100000}
     child = {'session_id': 'child', 'parent_session_id': 'parent', 'modified': 1}
-    state = {'ctx': 'ctx', 'row_rev': {'parent': 2}, 'track_since': 1,
+    state = {'nonce': 'nonce', 'ctx': 'ctx', 'row_rev': {'parent': 2}, 'track_since': 1,
              'base': [parent, child], 'extra': []}
     result = server._archive_list_delta_payload(
         state, 'nonce.1.ctx.0', state['base'], window='8h', now=100000)

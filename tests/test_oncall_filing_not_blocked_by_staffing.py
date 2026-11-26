@@ -19,6 +19,8 @@ def _real(tmp_path, **kwargs):
     env = {k: v for k, v in os.environ.items()
            if k not in ("CLAUDE_CODE_SESSION_ID", "CLAUDECODE", "CODEX_THREAD_ID", "WT_WORKER_ID", "WT_ROLE")}
     env["WATCHTOWER_DATA_DIR"] = str(tmp_path / "wt")
+    # conftest points WATCHTOWER_STORE at one session sandbox, and it wins over the data dir (OPS-1085).
+    env["WATCHTOWER_STORE"] = str(tmp_path / "wt" / "queues.json")
     return wtmod.WT([shutil.which("wt")], env=env, **kwargs)
 
 

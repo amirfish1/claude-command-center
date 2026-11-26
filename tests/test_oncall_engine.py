@@ -615,6 +615,8 @@ def test_full_walk_on_a_real_watchtower_queue(tmp_path):
     env = {k: v for k, v in os.environ.items()
            if k not in ("CLAUDE_CODE_SESSION_ID", "CLAUDECODE", "CODEX_THREAD_ID", "WT_WORKER_ID", "WT_ROLE")}
     env["WATCHTOWER_DATA_DIR"] = str(tmp_path / "wt")
+    # conftest points WATCHTOWER_STORE at one session sandbox, and it wins over the data dir (OPS-1085).
+    env["WATCHTOWER_STORE"] = str(tmp_path / "wt" / "queues.json")
     wt = wtmod.WT([shutil.which("wt")], env=env, dispatch=False)
 
     def run_wt(*args):
