@@ -108,7 +108,9 @@ test('a footer answer records the ticket and leaves a durable visible receipt in
     assert.equal(posts.length,2,'the disabled chip must not repeat either delivery');
     await page.evaluate(()=>receiptTest.fetchConversationEvents(receiptTest.activePaneId()));
     await page.waitForFunction(()=>!!document.querySelector('.event.user_text:not(.pending):not(.send-delivered) .user-msg[data-raw-text^="Decision recorded on OPS-7:"]'));
-    assert.equal(await page.$$eval('.user-msg',els=>els.filter(el=>el.textContent.startsWith('Decision recorded on OPS-7:')).length),1,'durable transcript replaces its optimistic echo');
+    // Count transcript bubbles only: the sticky header's "Last ask" slot
+    // mirrors the newest user message by design and is not a second receipt.
+    assert.equal(await page.$$eval('#conversationsView > .event.user_text .user-msg',els=>els.filter(el=>el.textContent.startsWith('Decision recorded on OPS-7:')).length),1,'durable transcript replaces its optimistic echo');
     const visible=await page.$('.user-msg[data-raw-text^="Decision recorded on OPS-7:"]');
     await visible.scrollIntoView();
     assert.equal(await visible.evaluate(el=>{const r=el.getBoundingClientRect();return el.checkVisibility()&&r.top>=0&&r.bottom<=innerHeight;}),true);
