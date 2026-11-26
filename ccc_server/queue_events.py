@@ -1191,6 +1191,7 @@ _SLIM_TEXT_MAX = 240
 _SLIM_EVENT_TEXT_MAX = 120
 _SLIM_MEMO_MAX = 16
 _SLIM_ITEM_MEMO_MAX = 4096
+_SLIM_DETAIL_ONLY_KEYS = ("token_usage", "prior_claim_proc", "claim_proc", "plan", "release_event")
 _slim_memo_lock = threading.Lock()
 _slim_memo = {"src": None, "items": None}
 _slim_memo_by_id = collections.OrderedDict()  # id(items) -> (items, slim_items)
@@ -1208,6 +1209,11 @@ def _slim_item(item):
         return item
     out = dict(item)
     out.pop("_github_body", None)
+    # Per-attempt token accounting, claim process records, the planner's plan
+    # and the release record are detail-only. On a large queue they were ~5 MB
+    # of the boot list download and parse (CCC-697).
+    for key in _SLIM_DETAIL_ONLY_KEYS:
+        out.pop(key, None)
     for key in ("text", "note"):
         if key in out:
             out[key] = _slim_clip(out[key], _SLIM_TEXT_MAX)

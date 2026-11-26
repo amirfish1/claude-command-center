@@ -67,6 +67,20 @@ def test_closed_rows_lose_prose_but_keep_list_fields():
     assert len(slim["history"][1]["text"]) <= server._SLIM_EVENT_TEXT_MAX + 1
 
 
+def test_closed_rows_drop_detail_only_records_open_rows_keep_them():
+    # CCC-697: token accounting, claim process records, the plan and the
+    # release record only feed the detail view, which hydrates slim rows.
+    server = _load_server()
+    heavy = {"token_usage": {"attempts": [{"id": "a"}]}, "prior_claim_proc": [{"pid": 1}],
+             "claim_proc": {"pid": 2}, "plan": {"text": _LONG}, "release_event": {"at": "x"}}
+    closed, opened = dict(_closed_row(), **heavy), dict(_open_row(), **heavy)
+    slim_closed, slim_open = server._ux_fixes_slim_items([closed, opened])
+    for key in heavy:
+        assert key not in slim_closed, key
+        assert slim_open[key] == heavy[key], key
+        assert closed[key] == heavy[key], key  # source memo untouched
+
+
 def test_source_rows_are_never_mutated():
     # The untrimmed memo is what /api/ux-fixes/item falls back to.
     server = _load_server()

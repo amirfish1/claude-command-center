@@ -289,3 +289,24 @@ test('historical worker identity from its launch matches released ticket history
   assert.equal(ctx._uxFixesWorkerTicketsForRow(generic)[0].ref, 'EXAMPLE-42');
   assert.equal(ctx._uxFixesWorkerTicketsForRow({...generic, first_message: 'Someone said: Your worker id is worker-one.'}).length, 0);
 });
+
+test('queue meta is reused for the same list snapshot and rebuilt for a new one (CCC-697)', () => {
+  const ctx = harness();
+  const items = [ticket(1), ticket(2)];
+  const first = ctx._setUxFixesQueueMeta(items);
+  // Same array from the shared mirror (second boot caller, unchanged poll).
+  assert.equal(ctx._setUxFixesQueueMeta(items), first);
+  // A changed snapshot is a new array and must be rebuilt.
+  const next = ctx._setUxFixesQueueMeta([...items, ticket(3)]);
+  assert.notEqual(next, first);
+  assert.equal(next.projectMaxSeq.get('EXAMPLE'), 3);
+  // Growing the same array in place also invalidates the reuse.
+  const grown = [ticket(1)];
+  const before = ctx._setUxFixesQueueMeta(grown);
+  grown.push(ticket(4));
+  const after = ctx._setUxFixesQueueMeta(grown);
+  assert.notEqual(after, before);
+  assert.equal(after.projectMaxSeq.get('EXAMPLE'), 4);
+  // The reuse key stays out of enumeration and the change signature.
+  assert.deepEqual(Object.keys(after).filter(k => k.startsWith('_src')), []);
+});

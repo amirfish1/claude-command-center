@@ -19800,6 +19800,15 @@
   }
 
   function _setUxFixesQueueMeta(items) {
+    // The shared queue mirror keeps the same items array until the list
+    // changes, and two boot callers (chip refresh, queue panel) plus every
+    // unchanged 15 s poll pass that one array. Rebuilding meta for thousands
+    // of closed tickets cost ~250 ms of main thread each time (CCC-697).
+    const prevMeta = sharedState.uxFixesQueueMeta;
+    if (prevMeta && Array.isArray(items) && prevMeta._src === items && prevMeta._srcLen === items.length) {
+      sharedState._uxFixesQueueMetaLoadedAt = Date.now();
+      return prevMeta;
+    }
     const ticketsByRef = new Map();
     const byClaimedSession = new Map();
     const activeByProject = new Map();
@@ -19962,6 +19971,10 @@
       projectMaxSeq, byClaimedSession, activeByProject, lastFixBySession, lastFixByProject,
       closedTicketsBySession, ticketsBySession, _sig,
     };
+    if (Array.isArray(items)) {
+      Object.defineProperty(sharedState.uxFixesQueueMeta, '_src', { value: items });
+      Object.defineProperty(sharedState.uxFixesQueueMeta, '_srcLen', { value: items.length });
+    }
     sharedState._uxFixesQueueMetaLoadedAt = Date.now();
     return sharedState.uxFixesQueueMeta;
   }
@@ -20172,21 +20185,15 @@
       try {
         const data = await _queueListFetch();
         const meta = _setUxFixesQueueMeta(data.items);
-        if (opts.render !== false) {
-          if (typeof _renderArchiveIfLoaded === 'function') _renderArchiveIfLoaded();
-          // The line above only repaints the Archive view; the progress chips
-          // also live on LIVE session rows, which otherwise update only when an
-          // unrelated poll happens to re-render the sidebar. Repaint here too,
-          // gated on the content signature so an unchanged queue is a no-op.
-          if (meta && meta._sig !== sharedState._uxFixesChipPaintedSig) {
-            sharedState._uxFixesChipPaintedSig = meta._sig;
-            try {
-              if (typeof hostServices.renderSidebar === 'function' && typeof filterConversations === 'function') {
-                const $cs = document.getElementById('convSearch');
-                (0, hostServices.renderSidebar)(filterConversations($cs ? $cs.value : ''));
-              }
-            } catch (_) {}
-          }
+        // The progress chips live on archive and LIVE session rows, which
+        // otherwise update only when an unrelated poll re-renders the sidebar.
+        // Repaint only when the chip signature changed: this 15 s poll used to
+        // rebuild the whole archive list every time, and twice on a change.
+        // The frame-coalesced render (which also covers the archive list)
+        // merges with the queue panel's repaint of the same snapshot (CCC-697).
+        if (opts.render !== false && meta && meta._sig !== sharedState._uxFixesChipPaintedSig) {
+          sharedState._uxFixesChipPaintedSig = meta._sig;
+          _scheduleSidebarRender({ lifecycle: true });
         }
         return meta;
       } catch (_) {

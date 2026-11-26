@@ -1,0 +1,1 @@
+Dashboard startup and the 15-second queue poll no longer rebuild WatchTower ticket chips and the whole session list when no ticket changed, and the trimmed ticket list drops closed-ticket records only detail views read, cutting about 0.3-0.5 s of page freeze after each load.
