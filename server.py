@@ -18293,11 +18293,23 @@ def _archive_list_disk_candidate(cache_key, window, since, accept_encoding="", *
     now = time.time() if now is None else now
     if since and since.split(".", 1)[0] == _ARCHIVE_DELTA_NONCE:
         return None
+    if since and _archive_delta_lineage_saved(since):
+        return None  # CCC-702: the delta path answers it
     if now - _SERVER_START_TS > _ARCHIVE_LIST_DISK_BOOT_S:
         return None
     if (cache_key, window) in _ARCHIVE_LIST_BUILT:
         return None
     return _archive_list_disk_load(cache_key, window, now, accept_encoding=accept_encoding)
+
+
+def _archive_delta_lineage_saved(since):
+    loader = _ARCHIVE_DELTA_LINEAGE_LOADER
+    if loader is None:
+        return False
+    try:
+        return bool(loader(since.split(".", 1)[0]))
+    except Exception:
+        return False
 
 
 def _archive_list_start_warm(slot, warm):
@@ -18538,6 +18550,42 @@ def _archive_serve_cache_store(key, rows, generation, ts=None, *, transfer_rows=
 _ARCHIVE_DELTA_NONCE = os.urandom(4).hex()
 _ARCHIVE_DELTA_JSON = json.JSONEncoder(sort_keys=True, separators=(",", ":"), default=str)
 _ARCHIVE_DELTA_TICKET_JSON = None
+# CCC-702: callable(nonce) -> the lineage another conv_reader child saved
+# (ccc_server/list_lineage.py), or None. Only the child sets it, so a token
+# from the previous child gets a content-verified delta after a restart.
+_ARCHIVE_DELTA_LINEAGE_LOADER = None
+# id(row) -> (row, digest of its sorted-key JSON). Rows are not modified after
+# publication; holding the row keeps its id from being reused.
+_ARCHIVE_DELTA_DIGESTS = {}
+
+
+def _archive_delta_row_digest(row):
+    hit = _ARCHIVE_DELTA_DIGESTS.get(id(row))
+    if hit is not None and hit[0] is row:
+        return hit[1]
+    digest = hashlib.blake2b(_ARCHIVE_DELTA_JSON.encode(row).encode(), digest_size=8).hexdigest()
+    _ARCHIVE_DELTA_DIGESTS[id(row)] = (row, digest)
+    return digest
+
+
+def _archive_delta_digest_prune(live_ids):
+    for key in list(_ARCHIVE_DELTA_DIGESTS):
+        if key not in live_ids:
+            _ARCHIVE_DELTA_DIGESTS.pop(key, None)
+
+
+def _archive_delta_adopted(state, nonce):
+    """(key lineage, saved ctx entries) that process `nonce` saved for this
+    state's serve key, or None (CCC-702)."""
+    loader = _ARCHIVE_DELTA_LINEAGE_LOADER
+    if loader is None or nonce == state.get("nonce"):
+        return None
+    try:
+        lineage = loader(nonce)
+    except Exception:
+        return None
+    entry = lineage["keys"].get(state.get("source_key")) if lineage else None
+    return None if entry is None else (entry, lineage["ctx"])
 
 
 def _archive_delta_ticket_json(state, ideas):
@@ -18700,18 +18748,20 @@ def _archive_delta_ctx_remember(ctx, key, window, resumes_json, ideas_json, titl
             _ARCHIVE_DELTA_CTX_HIST.popitem(last=False)
 
 
-def _archive_delta_ctx_pair(old_ctx, new_ctx):
+def _archive_delta_ctx_pair(old_ctx, new_ctx, saved=None):
+    """Remembered entries for two ctx states. `saved` holds an adopted
+    lineage's entries (CCC-702), where the old ctx must come from."""
     with _archive_delta_ctx_lock:
-        old = _ARCHIVE_DELTA_CTX_HIST.get(old_ctx)
+        old = (saved if saved is not None else _ARCHIVE_DELTA_CTX_HIST).get(old_ctx)
         new = _ARCHIVE_DELTA_CTX_HIST.get(new_ctx)
     if old is None or new is None or old["scope"] != new["scope"]:
         return None
     return old, new
 
 
-def _archive_delta_ctx_changed_sids(old_ctx, new_ctx):
+def _archive_delta_ctx_changed_sids(old_ctx, new_ctx, saved=None):
     """Session ids whose context inputs changed, or None for incompatible scopes."""
-    pair = _archive_delta_ctx_pair(old_ctx, new_ctx)
+    pair = _archive_delta_ctx_pair(old_ctx, new_ctx, saved)
     if pair is None:
         return None
     old, new = pair
@@ -18749,7 +18799,18 @@ def _archive_list_delta_reject(state, since):
     except (ValueError, TypeError):
         return "malformed"
     if nonce != state["nonce"]:
-        return "nonce"
+        # CCC-702: a token from a previous reader child that saved its
+        # lineage. Never trust a ctx match across processes: the graph
+        # revision in it is a per-process counter.
+        adopted = _archive_delta_adopted(state, nonce)
+        if adopted is None:
+            return "nonce"
+        lineage, saved_ctx = adopted
+        if _archive_delta_ctx_pair(ctx, state["ctx"], saved_ctx) is None:
+            return "ctx"
+        if not (lineage["track_since"] <= since_ver <= lineage["ver"]):
+            return "range"
+        return None
     if ctx != state["ctx"] and _archive_delta_ctx_pair(ctx, state["ctx"]) is None:
         return "ctx"
     if not (state["track_since"] <= since_ver <= state["ver"]):
@@ -18792,10 +18853,23 @@ def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=
     """
     if _archive_list_delta_reject(state, since) is not None:
         return None
-    since_ver = int(str(since).split(".")[1])
-    since_ctx = str(since).split(".")[2]
+    since_nonce, since_ver, since_ctx = str(since).split(".")[:3]
+    since_ver = int(since_ver)
     ctx_sids = set()
-    if since_ctx != state["ctx"]:
+    adopted = None
+    if since_nonce != state["nonce"]:
+        # CCC-702: the client holds the previous process's rows. A row is
+        # stale if it changed there after the token, or if it differs from
+        # the digest saved at that process's last version.
+        adopted = _archive_delta_adopted(state, since_nonce)
+        if adopted is None:
+            return None
+        ctx_sids = _archive_delta_ctx_changed_sids(since_ctx, state["ctx"], adopted[1])
+        if ctx_sids is None:
+            return None
+        adopted_rev, adopted_since = adopted[0]["row_rev"], adopted[0]["track_since"]
+        adopted_digests = adopted[0]["digests"]
+    elif since_ctx != state["ctx"]:
         ctx_sids = _archive_delta_ctx_changed_sids(since_ctx, state["ctx"])
         if ctx_sids is None:
             return None
@@ -18827,7 +18901,12 @@ def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=
             return None
         seen.add(sid)
         ids.append(sid)
-        if (row_rev.get(sid, track_since) > since_ver or sid in ctx_sids
+        if adopted is not None:
+            stale = (adopted_rev.get(sid, adopted_since) > since_ver
+                     or adopted_digests.get(sid) != _archive_delta_row_digest(r))
+        else:
+            stale = row_rev.get(sid, track_since) > since_ver
+        if (stale or sid in ctx_sids
                 or sid in extra_sids
                 or id(r) in ancestor_ids):
             changed.append(r)
@@ -40154,7 +40233,8 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             elif since == _delta["token"]:
                 _since_diag = "current"
             else:
-                _since_diag = _archive_list_delta_reject(_delta, since) or "ok"
+                _since_diag = _archive_list_delta_reject(_delta, since) or (
+                    "ok" if since.split(".", 1)[0] == _delta["nonce"] else "adopted")
             if _delta is not None and since:
                 if since == _delta["token"]:
                     self.send_response(304)
@@ -40177,7 +40257,7 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                         _payload_ms.append((time.perf_counter() - _pt0) * 1000.0)
                         _delta_status = self._send_archive_list_body(*_delta_body)
                         _status = "delta" if _delta_status == 200 else _delta_status
-                    elif _status is None and _since_diag == "ok":
+                    elif _status is None and _since_diag in ("ok", "adopted"):
                         _since_diag = "unmergeable"
 
             _check_client = check_client if window != "all" or not body_ver else None

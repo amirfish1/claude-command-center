@@ -84,7 +84,13 @@ def status():
         return {key: _state[key] for key in (
             "loaded", "acp", "reloads", "reload_ms", "warms", "warm_ms", "mutations", "declined",
             "served", "errors", "last_error")} | {"enabled": enabled(),
-                                                 "windows": sorted(_state["windows"])}
+                                                 "windows": sorted(_state["windows"]),
+                                                 "lineage": _lineage_status()}
+
+
+def _lineage_status():
+    from ccc_server import list_lineage
+    return list_lineage.status()
 
 
 # ------------------------------------------------------------------ child
@@ -132,6 +138,13 @@ def setup(server_mod):
         return original_diag(kind, ms, detail)
 
     server_mod.record_diag = record_diag
+    # CCC-702: save this child's delta-token lineage, and answer tokens from
+    # the previous child's saved lineage with content-verified deltas.
+    from ccc_server import list_lineage
+    try:
+        list_lineage.start(server_mod)
+    except Exception as exc:
+        _note_error(exc)
     try:
         _provisional_acp(server_mod)
     except Exception as exc:
@@ -518,6 +531,15 @@ def handle_op(req):
     if op == "list_status":
         return {"ok": True, "status": status()}
     return {"ok": False}
+
+
+def save_lineage():
+    """Final lineage save before this child exits (CCC-702)."""
+    srv = _state["server"]
+    if srv is None or not enabled():
+        return
+    from ccc_server import list_lineage
+    list_lineage.save(srv)
 
 
 def note_served(declined=False):

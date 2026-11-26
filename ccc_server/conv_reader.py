@@ -590,6 +590,16 @@ def _serve_http(server_mod, port, dashboard_port=None):
     return srv
 
 
+def _save_list_lineage():
+    # The next child answers this child's delta tokens from the saved
+    # lineage (CCC-702); save the final versions before exiting.
+    try:
+        from ccc_server import list_reader
+        list_reader.save_lineage()
+    except Exception:
+        pass
+
+
 def _hand_off(grace_s=10.0):
     """Stop taking direct connections, let in-flight opens finish, exit."""
     srv = _http.get("server")
@@ -605,6 +615,7 @@ def _hand_off(grace_s=10.0):
                 if _http["active"] <= 0:
                     break
             time.sleep(0.05)
+    _save_list_lineage()
     os._exit(0)
 
 
@@ -630,6 +641,7 @@ def _watch_parent(parent_pid, path, inode=None):
                 path.unlink()
             except OSError:
                 pass
+            _save_list_lineage()
             os._exit(0)
         if inode is not None and _socket_inode(path) != inode:
             # The next child is up and shares the direct port.
@@ -647,6 +659,13 @@ def serve(path, parent_pid, port=None, dashboard_port=None):
     from ccc_server import list_reader
     if list_reader.enabled():
         list_reader.setup(server_mod)
+        try:
+            # A service stop signals the whole group: save the delta-token
+            # lineage first, as on hand-off (CCC-702).
+            import signal
+            signal.signal(signal.SIGTERM, lambda *_: (_save_list_lineage(), os._exit(0)))
+        except (ValueError, OSError):
+            pass
     # The first compact sender header would otherwise index the journals inside
     # someone's open; the previous child still answers while this runs.
     try:
