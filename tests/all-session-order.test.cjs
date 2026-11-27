@@ -9,7 +9,12 @@ const helpers = ['_archiveWindowTsSec', '_archiveWindowRowTs'].map(name => {
 }).join('\n');
 const keyStart = source.indexOf('    const _allTabClusterMtime =');
 const keyEnd = source.indexOf('    // Sort key matches', keyStart);
-const start = source.indexOf('    const _ticketLifecycleView =');
+// The lifecycle-view flag is declared near the top of the render function,
+// well before the block under test (which also owns `let _arcRows`), so
+// lift just that declaration and slice from the state-grouping setup on.
+const viewStart = source.indexOf('    const _ticketLifecycleView =');
+const viewDecl = source.slice(viewStart, source.indexOf('\n', viewStart));
+const start = source.indexOf('    const _sessionsByState = (() => {', viewStart);
 const end = source.indexOf("    } else if (_allTabView !== 'workers') {", start);
 
 function render(rows, { lane = 'alltickets', mode = 'state', grouping = 'time' } = {}) {
@@ -31,7 +36,7 @@ function render(rows, { lane = 'alltickets', mode = 'state', grouping = 'time' }
     _renderAllTabClusters: clusters => clusters.map(c => '[' + c.rows[0].card.id + ']').join(''),
   };
   return vm.runInNewContext(helpers + '\n' + source.slice(keyStart, keyEnd)
-    + "\nlet _arcRows = '', _ideaArchivedHtml = '';\n"
+    + "\nlet _arcRows = '', _ideaArchivedHtml = '';\n" + viewDecl + '\n'
     + source.slice(start, end) + '\n}\n_arcRows;', context);
 }
 const ids = html => Array.from(html.matchAll(/\[([^\]]+)\]/g), match => match[1]);

@@ -104,6 +104,23 @@ if ! "$PY" -m pytest tests/test_perf_budget.py -q --tb=short; then
 fi
 echo "pre-push: perf gate passed ✓"
 
+# All-tab order: sessions stay newest first. The test slices app.js, so a
+# refactor that moves a declaration breaks it silently unless it runs here
+# (CCC-715). Node-only and ~2 s; clones without node skip with a notice.
+if command -v node >/dev/null 2>&1; then
+  echo "pre-push: running All-order gate…"
+  if ! node --test tests/all-session-order.test.cjs >/tmp/ccc-all-order.log 2>&1; then
+    grep -E "^not ok|error:" /tmp/ccc-all-order.log | head -20
+    echo ""
+    echo "❌ All-order gate FAILED — All/Features no longer list newest first,"
+    echo "   or the test's app.js slice anchors moved. Fix the order or re-anchor."
+    exit 1
+  fi
+  echo "pre-push: All order passed ✓"
+else
+  echo "pre-push: All-order gate skipped (node not installed)"
+fi
+
 # Vertical budget: Workers rows must fit their line budget (ask the owner for
 # more height instead of raising it). Needs node + puppeteer; clones without
 # them skip with a notice rather than blocking an unrelated push.
