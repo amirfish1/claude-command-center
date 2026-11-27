@@ -104,3 +104,22 @@ def test_background_polls_have_their_own_looser_gate(tmp_path):
                             tmp_path, '')
     assert unchanged['evidence']['gates'][0]['samples'] == 50
     assert unchanged['evidence']['gates'][3]['samples'] == 50
+
+
+def test_waited_for_reads_are_gated_over_seven_days(tmp_path):
+    # After the Q1416 split only ~16 list_read samples arrive a day, so a
+    # 24 h window could never reach 50 and a failing gate stayed pending
+    # (CCC-691). list_read counts 7 days, same budget and minimum; other
+    # kinds keep 24 h.
+    from datetime import timedelta
+    old = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    rows = [{'kind': kind, 'ts': old, 'ms': ms, 'warmup': False, 'load1': 1, 'ncpu': 4,
+             'up_s': 3600, 'detail': {'status': 200}}
+            for kind, ms, count in (('list_read', 1500, 50), ('list_poll', 100, 50))
+            for _ in range(count)]
+    target = tmp_path / 'events.jsonl'
+    target.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+    gates = {g['kind']: g for g in check.check(target, tmp_path, '')['evidence']['gates']}
+    assert gates['list_read']['status'] == 'fail' and gates['list_read']['samples'] == 50
+    assert gates['list_read']['window_hours'] == 168 and gates['list_read']['budget_ms'] == 1000
+    assert gates['list_poll']['samples'] == 0 and gates['list_poll']['window_hours'] == 24

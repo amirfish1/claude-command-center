@@ -5,6 +5,9 @@ list_read gates the list reads a user waits for (boot, preview, window
 switch, forced refresh) at 1 s. Background refreshes of the window already
 on screen report as list_poll and have their own 3 s gate (owner Q1416,
 CCC-691): they were 90% of list_read samples, mostly phone round trips.
+That leaves ~16 waited-for reads a day, so list_read is measured over 7 days
+with the same budget and minimum; at 24 h it could never reach 50 samples
+and stayed pending even while it failed.
 
 Uses perf_gate.py's deployment proof and its warmup and host-load filters.
 Missing post-deployment samples stay pending; they never become a successful
@@ -33,6 +36,9 @@ GATES = (
     ('archive_load', 2000, 5),
     ('list_poll', 3000, 50),
 )
+WINDOW_HOURS = 24
+# Kinds measured over a longer window (same budget and minimum).
+KIND_WINDOW_HOURS = {'list_read': 7 * 24}
 
 
 def _excluded(row):
@@ -41,18 +47,27 @@ def _excluded(row):
     return perf_gate._steady_reason(row) in ('warmup', 'automated', 'hidden', 'load')
 
 
+def _window_hours(kind):
+    return KIND_WINDOW_HOURS.get(kind, WINDOW_HOURS)
+
+
 def check(events, repo, commit):
-    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    now = datetime.now(timezone.utc)
     deployed = perf_gate._Deployed(repo, commit)
     values_by_kind = {kind: [] for kind, _, _ in GATES}
-    for row in perf_gate._read_rows_for_kinds(events, since, values_by_kind):
-        kind = row.get('kind')
-        if kind not in values_by_kind or _excluded(row):
-            continue
-        if kind in ('list_read', 'list_poll') and str((row.get('detail') or {}).get('status')) == '304':
-            continue
-        if deployed(row):
-            values_by_kind[kind].append(float(row.get('ms') or 0))
+    by_window = {}
+    for kind, _, _ in GATES:
+        by_window.setdefault(_window_hours(kind), []).append(kind)
+    for hours, kinds in sorted(by_window.items()):
+        wanted = {kind: [] for kind in kinds}
+        for row in perf_gate._read_rows_for_kinds(events, now - timedelta(hours=hours), wanted):
+            kind = row.get('kind')
+            if kind not in wanted or _excluded(row):
+                continue
+            if kind in ('list_read', 'list_poll') and str((row.get('detail') or {}).get('status')) == '304':
+                continue
+            if deployed(row):
+                values_by_kind[kind].append(float(row.get('ms') or 0))
 
     gates = []
     for kind, budget, minimum in GATES:
@@ -61,11 +76,12 @@ def check(events, repo, commit):
         status = ('pending' if len(values) < minimum
                   else 'pass' if p95 <= budget else 'fail')
         gates.append({'kind': kind, 'status': status, 'samples': len(values),
-                      'minimum': minimum, 'p95_ms': p95, 'budget_ms': budget})
+                      'minimum': minimum, 'p95_ms': p95, 'budget_ms': budget,
+                      'window_hours': _window_hours(kind)})
     statuses = {gate['status'] for gate in gates}
     status = 'fail' if 'fail' in statuses else 'pending' if 'pending' in statuses else 'pass'
     return {'status': status, 'real_data': any(g['samples'] for g in gates),
-            'evidence': {'commit': commit, 'window_hours': 24,
+            'evidence': {'commit': commit, 'window_hours': WINDOW_HOURS,
                          'events': str(events), 'gates': gates}}
 
 

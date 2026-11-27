@@ -138,6 +138,10 @@ class _Deployed:
     def __call__(self, row):
         if not self.commit:
             return True
+        if self.commit_time and row.get("_ts") and row["_ts"] < self.commit_time:
+            # Logged before the fix existed: no build could contain it. Skips
+            # two git calls per old build (a 7-day window has ~190 builds).
+            return False
         build = str(row.get("build") or "")
         if build not in self.cache:
             self.cache[build] = self._verdict(build)

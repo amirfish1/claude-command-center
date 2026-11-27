@@ -162,3 +162,16 @@ def test_multi_kind_window_keeps_boundary_and_out_of_order_rows(tmp_path):
         events, since, ("live_build", "list_read", "archive_load"))
 
     assert [row["ms"] for row in selected] == [1, 4, 5, 6]
+
+
+def test_rows_older_than_the_fix_commit_skip_the_git_ancestry_check():
+    # A sample logged before the fix was committed cannot come from a build
+    # containing it; answering without git keeps 7-day windows fast (CCC-691).
+    repo = str(Path(__file__).resolve().parent.parent)
+    head = perf_gate._git(repo, "rev-parse", "HEAD")[1].strip()
+    deployed = perf_gate._Deployed(repo, head)
+    assert deployed.commit_time is not None
+    before = {"build": head, "_ts": deployed.commit_time - timedelta(seconds=1)}
+    after = {"build": head, "_ts": deployed.commit_time + timedelta(seconds=1)}
+    assert deployed(before) is False and deployed.cache == {}
+    assert deployed(after) is True and deployed.cache == {head: "contains"}
