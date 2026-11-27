@@ -247,3 +247,17 @@ def test_daily_pins_the_sibling_release_to_its_origin_revision(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr + log
     assert git("rev-parse", "HEAD", cwd=sibling) != landed, "fixture must add local work"
     assert (tmp_path / "sibling-args").read_text() == f"patch --source-commit {landed}"
+
+
+def test_release_suite_ignores_the_running_gates_environment(tmp_path):
+    """The gate runs this suite with its own release variables exported; the
+    fixtures must still release their temp repos, never the real checkout
+    (OPS-1108: the inherited root re-ran the gate recursively for 3h)."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CCC_RELEASE_")}
+    env.update(CCC_RELEASE_REPO_ROOT=str(tmp_path / "production-checkout"),
+               CCC_RELEASE_DAILY_LOCKED="1", CCC_RELEASE_LOG_DIR=str(tmp_path / "production-logs"))
+    node = "tests/test_release_source.py::test_daily_pins_the_sibling_release_to_its_origin_revision"
+    result = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", node],
+                            cwd=ROOT, env=env, capture_output=True, text=True, timeout=300)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (tmp_path / "production-logs").exists()

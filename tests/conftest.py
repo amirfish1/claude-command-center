@@ -19,6 +19,15 @@ _real_sleep = time.sleep
 
 import pytest
 
+# The daily release gate runs this suite from inside its own process, which
+# exports CCC_RELEASE_REPO_ROOT, CCC_RELEASE_DAILY_LOCKED and the production log
+# dir. Fixtures that copy os.environ into a release-script subprocess would
+# then operate on the real checkout and re-run the gate recursively (OPS-1108).
+# Tests set the release variables they need themselves.
+for _key in [k for k in os.environ if k.startswith("CCC_RELEASE_")]:
+    del os.environ[_key]
+os.environ.pop("SSH_ORIGINAL_COMMAND", None)
+
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "linux_only: requires native Linux process metadata")
