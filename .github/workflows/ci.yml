@@ -168,15 +168,17 @@ jobs:
         with:
           node-version: "22"
       # Several browser tests boot server.py, which needs watchtower.
-      # Puppeteer is pinned to the dev hosts' version: on 25.19 (Chrome 158)
-      # image-viewer-zoom hangs in DOM.describeNode (CCC-717). Bump deliberately.
+      # Puppeteer is pinned so a new Chrome can't change results unannounced.
+      # 25.19 (Chrome 158) intercepts <video src="about:blank"> loads; tests
+      # must continue() non-http requests or DOM.* calls hang (CCC-717).
+      # Bump deliberately, after the suite passes on the new version.
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Install watchtower and puppeteer
         run: |
           WATCHTOWER_REF=adf5bc16ab35c6f382005cddedca607be9928568 CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh
-          npm install --no-save --no-package-lock puppeteer@25.2.1
+          npm install --no-save --no-package-lock puppeteer@25.19.0
       - name: Run node unit tests
         run: node --test --test-concurrency=4 tests/*.test.cjs
 

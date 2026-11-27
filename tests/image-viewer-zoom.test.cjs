@@ -16,8 +16,11 @@ test('Image viewer zooms and pans on phones and desktops, and resets for the nex
     const page = await browser.newPage();
     await page.setViewport({width: 390, height: 844, hasTouch: true});
     await page.setRequestInterception(true);
-    page.on('request', req => req.respond({status: 200, contentType: 'text/html', body:
-      `<meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style>`}));
+    // Fulfil only the page itself. Chrome 158+ also intercepts the video's
+    // about:blank load, and fulfilling that with HTML wedges every later
+    // DOM.* call (element handles, $eval) until protocolTimeout (CCC-717).
+    page.on('request', req => /^https?:/.test(req.url()) ? req.respond({status: 200, contentType: 'text/html', body:
+      `<meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style>`}) : req.continue());
     await page.goto('http://ccc-image.test/');
     await page.addScriptTag({content: `function escapeAttr(s) { return s; }
       function isImeKey() { return false; }
@@ -59,8 +62,15 @@ test('Image viewer zooms and pans on phones and desktops, and resets for the nex
       assert.ok(Math.abs((await geometry()).width - fit.width) < 1, 'next image starts fitted');
     }
     await page.setViewport({width: 390, height: 700, hasTouch: true});
+    // The viewer refits from the window resize event, which Chrome dispatches
+    // on the next frame, so measuring right after setViewport races it.
+    await page.waitForFunction(() => {
+      const stage = document.querySelector('.img-lightbox-stage');
+      const box = stage.querySelector('img').getBoundingClientRect();
+      return box.width <= 390 && box.height <= stage.clientHeight;
+    }, {timeout: 5000}).catch(() => {});
     const resized = await geometry();
-    assert.ok(resized.width <= 390 && resized.height <= resized.stageHeight, 'fit follows resize');
+    assert.ok(resized.width <= 390 && resized.height <= resized.stageHeight, 'fit follows resize: ' + JSON.stringify(resized));
     for (const kind of ['video', 'frame']) {
       await page.evaluate(kind => openMediaLightbox('about:blank', {kind}), kind);
       assert.equal(await page.$eval('.img-lightbox-zoom', el => el.hidden), true, `${kind} has no image controls`);
@@ -76,8 +86,8 @@ test('Closing media consumes only its history entry and keeps the phone session 
     const page = await browser.newPage();
     await page.setViewport({width: 390, height: 844, hasTouch: true});
     await page.setRequestInterception(true);
-    page.on('request', req => req.respond({status: 200, contentType: 'text/html', body:
-      `<style>${css}</style><main id="session">Current session</main><textarea id="draft">Unsent draft</textarea>`}));
+    page.on('request', req => /^https?:/.test(req.url()) ? req.respond({status: 200, contentType: 'text/html', body:
+      `<style>${css}</style><main id="session">Current session</main><textarea id="draft">Unsent draft</textarea>`}) : req.continue());
     await page.goto('http://ccc-image.test/');
     await page.addScriptTag({content: `
       function escapeAttr(s) { return s; }
