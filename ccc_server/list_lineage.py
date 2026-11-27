@@ -349,7 +349,9 @@ def prune(srv, now=None):
 
 
 def start(srv, interval_s=SAVE_INTERVAL_S):
-    """Save in the background whenever the lineage changes (child only)."""
+    """Save in the background whenever the lineage changes (the list reader
+    child, and since CCC-691 the dashboard too, so the child can adopt
+    tokens the dashboard minted)."""
     with _lock:
         if _thread["started"]:
             return

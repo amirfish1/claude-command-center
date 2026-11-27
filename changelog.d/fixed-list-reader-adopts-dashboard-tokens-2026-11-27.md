@@ -1,0 +1,1 @@
+- Phones and other browsers no longer re-download the whole session list after their first load: the background list reader now continues from where the dashboard's first read left off.

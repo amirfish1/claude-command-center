@@ -344,3 +344,22 @@ def test_ctx_links_never_cross_scopes_or_loop(srv):
     links['mid'] = (('k', '7d', 1), 'old', frozenset())
     assert resolve('old', entries, links) is None
     assert resolve('unknown', entries, links) is None
+
+
+def test_dashboard_saves_its_lineage_for_the_reader_child(monkeypatch):
+    # CCC-691: a token the dashboard minted (boot or fallback read) must be
+    # adoptable by the reader child, so the dashboard saves lineage too.
+    server = importlib.import_module('server')
+    from ccc_server import list_reader
+    started = []
+    monkeypatch.setattr(list_lineage, 'start', lambda srv: started.append(srv))
+    monkeypatch.setattr(list_reader, 'enabled', lambda: True)
+    monkeypatch.setattr(server._conv_reader, 'is_child', lambda: False)
+    assert server._start_dashboard_list_lineage() is True
+    assert started == [server]
+    monkeypatch.setattr(server._conv_reader, 'is_child', lambda: True)
+    assert server._start_dashboard_list_lineage() is False  # the child starts its own
+    monkeypatch.setattr(server._conv_reader, 'is_child', lambda: False)
+    monkeypatch.setattr(list_reader, 'enabled', lambda: False)
+    assert server._start_dashboard_list_lineage() is False
+    assert started == [server]

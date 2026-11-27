@@ -18604,6 +18604,19 @@ def _archive_delta_digest_prune(live_ids):
             _ARCHIVE_DELTA_DIGESTS.pop(key, None)
 
 
+def _start_dashboard_list_lineage():
+    """Save the dashboard's delta-token lineage for the list reader child
+    (CCC-691). True when started; the child starts its own in list_reader."""
+    from ccc_server import list_lineage, list_reader
+    if _conv_reader.is_child() or not list_reader.enabled():
+        return False
+    try:
+        list_lineage.start(sys.modules[__name__])
+    except Exception:
+        return False
+    return True
+
+
 def _archive_delta_adopted(state, nonce):
     """(key lineage, saved ctx (entries, links)) that process `nonce` saved
     for this state's serve key, or None (CCC-702, CCC-709)."""
@@ -53969,6 +53982,12 @@ def main():
     # Conversation opens get their own process (and GIL) so background work
     # in this one cannot stall them (CCC-143). CCC_CONV_READER=0 disables.
     _conv_reader.start(port, acp_state=lambda: _ACP_SESSION_STATE)
+    # CCC-691: save this process's delta-token lineage too. A page whose
+    # boot or fallback read came from here otherwise sent its next direct
+    # read to the reader with a token the reader rejected ("nonce"): a full
+    # 7d body (~630 KB) 64 times a day. The reader now answers it with a
+    # digest-verified delta, as it does for a previous child's tokens.
+    _start_dashboard_list_lineage()
     # Phone access set up before the reader port existed: add its tailnet
     # entry too (best effort, off the startup path).
     threading.Thread(target=lambda: phone_access.ensure_reader_serve_if_enabled(port),
