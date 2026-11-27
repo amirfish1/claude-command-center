@@ -209,6 +209,30 @@ test('list reads go to the reader port first and fall back to the dashboard (CCC
   assert.equal(run.reads.length,before,'parked after a decline');
 });
 
+test('a direct list read is a CORS simple request; the dashboard read keeps its headers (OPS-1118)',async()=>{
+  const run=start({search:'?ccc_app=demo'});
+  const {window}=run; const dash=[];
+  window.location={protocol:'https:',hostname:'box.example',origin:'https://box.example'};
+  window.__CCC_LIST_READER_PORT__=18091;
+  const headers={'If-None-Match':'"e 1"','X-CCC-Abort-On-Disconnect':'1','X-CCC-Archive-Boot':'ab12','Accept':'*/*'};
+  const via=(url,init)=>{dash.push({url,init});return Promise.resolve({ok:true,status:200,via:'dash'});};
+  await window.__cccListFetch('/api/conversations/list?window=7d&since=t1',{headers},via);
+  const sent=run.reads.at(-1);
+  // Only CORS-safelisted request headers may remain, or the browser sends an
+  // OPTIONS round trip before every read.
+  const safelisted=new Set(['accept','accept-language','content-language']);
+  assert.deepEqual(Object.keys(sent.init.headers||{}).filter(h=>!safelisted.has(h.toLowerCase())),[]);
+  assert.equal(sent.init.cache,'no-store');
+  const query=new URL(sent.url).searchParams;
+  assert.equal(query.get('since'),'t1');
+  assert.deepEqual([query.get('h_inm'),query.get('h_abort'),query.get('h_boot')],['"e 1"','1','ab12']);
+  // The same-origin dashboard read is unchanged: headers stay headers.
+  run.response.ok=false; run.response.status=503;
+  await window.__cccListFetch('/api/conversations/list?window=7d&since=t1',{headers},via);
+  assert.equal(dash.at(-1).url,'/api/conversations/list?window=7d&since=t1');
+  assert.deepEqual(dash.at(-1).init.headers,headers);
+});
+
 test('a silent reader falls back; a busy live reader keeps its read (CCC-681)',async()=>{
   const tick=()=>new Promise(setImmediate);
   const setup=()=>{

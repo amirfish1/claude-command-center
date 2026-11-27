@@ -413,6 +413,11 @@ _OPEN_PATH = re.compile(r"^/api/conversations/(?!all$|list$|order$)[^/]+$")
 LIST_PATH = "/api/conversations/list"
 # Response headers the sidebar reads from a cross-origin list response.
 _LIST_EXPOSE = "Server-Timing, ETag, X-CCC-List-Body"
+# Request headers a direct list read sends as query parameters, so the
+# cross-origin GET needs no CORS preflight (OPS-1118; static/archive-boot.js).
+DIRECT_HEADER_PARAMS = {"h_inm": "If-None-Match",
+                        "h_abort": "X-CCC-Abort-On-Disconnect",
+                        "h_boot": "X-CCC-Archive-Boot"}
 _http = {"server": None, "active": 0}
 _http_lock = threading.Lock()
 
@@ -512,6 +517,7 @@ def _http_handler(server_mod):
                 list_reader.note_served(declined=True)
                 self._reply(503, b'{"error": "declined"}')
                 return
+            self._restore_list_headers()
             list_reader.sync()
             list_reader.note_served()
             query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
@@ -520,9 +526,29 @@ def _http_handler(server_mod):
             self._ccc_list_cors = True
             base._do_GET(self)
 
+        def _restore_list_headers(self):
+            """Turn the h_* query parameters of a direct list read back into
+            its request headers and drop them from the path (OPS-1118)."""
+            parsed = urllib.parse.urlparse(self.path)
+            segments = parsed.query.split("&") if parsed.query else []
+            kept = []
+            for segment in segments:
+                name, _, raw = segment.partition("=")
+                header = DIRECT_HEADER_PARAMS.get(name)
+                if header is None:
+                    kept.append(segment)
+                    continue
+                value = urllib.parse.unquote_plus(raw)
+                if len(value) <= 512 and value.isprintable():
+                    del self.headers[header]
+                    self.headers[header] = value
+            if len(kept) != len(segments):
+                self.path = parsed._replace(query="&".join(kept)).geturl()
+
         def do_OPTIONS(self):
-            # CORS preflight for list reads: they carry If-None-Match and
-            # X-CCC-* request headers, which opens never send.
+            # CORS preflight for list reads that still carry If-None-Match
+            # or X-CCC-* headers (pages loaded before OPS-1118 sent them as
+            # headers; current pages send them as h_* query parameters).
             path = urllib.parse.urlparse(self.path).path.rstrip("/")
             origin = (self.headers.get("Origin") or "").strip()
             if path != LIST_PATH or not origin or not self._check_same_origin():

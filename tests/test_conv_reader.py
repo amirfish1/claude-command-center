@@ -253,6 +253,43 @@ class DirectPortTest(unittest.TestCase):
         self.assertEqual(self._get("/api/sessions")[0].status, 404)
         self.assertEqual(self._get("/api/conversations/abc", method="POST")[0].status, 405)
 
+    def test_list_header_params_reach_the_list_handler_as_headers(self):
+        """OPS-1118: h_* parameters are the headers of a preflight-free read."""
+        from ccc_server import list_reader
+        import http.client
+        seen = []
+
+        def fake_do_get(handler):
+            seen.append((handler.path, {name: handler.headers.get(name)
+                                        for name in conv_reader.DIRECT_HEADER_PARAMS.values()}))
+            handler.send_response(304)
+            handler.send_header("Content-Length", "0")
+            handler.end_headers()
+
+        for name in ("enabled", "ready"):
+            p = mock.patch.object(list_reader, name, return_value=True)
+            p.start()
+            self.addCleanup(p.stop)
+        for name in ("sync", "note_served", "note_window"):
+            p = mock.patch.object(list_reader, name)
+            p.start()
+            self.addCleanup(p.stop)
+        p = mock.patch.object(self.server_mod.CommandCenterHandler, "_do_GET", fake_do_get, create=True)
+        p.start()
+        self.addCleanup(p.stop)
+        path = "/api/conversations/list?window=7d&since=a%2Bb.c"
+        headers = {"If-None-Match": '"e 1"', "X-CCC-Abort-On-Disconnect": "1",
+                   "X-CCC-Archive-Boot": "ab12"}
+        params = "&h_inm=%22e%201%22&h_abort=1&h_boot=ab12"
+        for request_path, request_headers in ((path, headers), (path + params, {})):
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+            conn.request("GET", request_path, headers=request_headers)
+            self.assertEqual(conn.getresponse().status, 304)
+            conn.close()
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(seen[1], seen[0])
+        self.assertEqual(seen[0], (path, headers))
+
     def test_next_child_can_share_the_port(self):
         if not hasattr(socket, "SO_REUSEPORT"):
             self.skipTest("no SO_REUSEPORT")

@@ -203,6 +203,28 @@
     copy._cccHeadersAt = headersAt;
     return copy;
   }
+  // OPS-1118: a cross-origin GET carrying If-None-Match or X-CCC-* headers
+  // is preflighted, and the list URL changes on every read (since=), so the
+  // preflight cache never hits: every direct read paid an OPTIONS round
+  // trip first, 1.3-1.9 s on a slow phone link. On the reader leg these
+  // headers travel as query parameters (the reader restores them), which
+  // keeps the read a CORS simple request. no-store keeps the browser cache
+  // from answering a validator it can no longer see.
+  const DIRECT_HEADER_PARAMS = {'if-none-match': 'h_inm',
+    'x-ccc-abort-on-disconnect': 'h_abort', 'x-ccc-archive-boot': 'h_boot'};
+  function simpleDirectRequest(url, init) {
+    const headers = init && init.headers;
+    if (!headers || typeof headers !== 'object' || typeof headers.forEach === 'function') return {url, init};
+    const kept = {};
+    let query = '';
+    for (const [name, value] of Object.entries(headers)) {
+      const param = DIRECT_HEADER_PARAMS[name.toLowerCase()];
+      if (param && value != null) query += '&' + param + '=' + encodeURIComponent(value);
+      else kept[name] = value;
+    }
+    if (!query) return {url, init};
+    return {url: url + query, init: Object.assign({}, init, {headers: kept, cache: 'no-store'})};
+  }
   window.__cccListFetch = function (url, init, viaDashboard) {
     const dashboard = (dashInit = init) => (viaDashboard || window.fetch)(url, dashInit);
     const base = typeof url === 'string' && url.startsWith('/api/conversations/list?') ? listDirectBase() : null;
@@ -297,12 +319,13 @@
       if (bytes) leg.bytes += bytes;
       watch();
     };
-    const options = Object.assign({}, init || {}, { signal: attempt.signal, credentials: 'include', mode: 'cors' });
+    const simple = simpleDirectRequest(url, init);
+    const options = Object.assign({}, simple.init || {}, { signal: attempt.signal, credentials: 'include', mode: 'cors' });
     const direct = (async () => {
       let retryMs, end;
       try {
         watch();
-        const response = await nativeFetch(base + url, options);
+        const response = await nativeFetch(base + simple.url, options);
         if (response.ok || response.status === 304) {
           const headersAt = performance.now();
           leg.headers_ms = Math.round(headersAt - t0);
