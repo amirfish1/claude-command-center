@@ -19672,16 +19672,55 @@ _ARCHIVE_HISTORY_HOT_SNAPSHOT_BYTES = 16 << 20
 _ARCHIVE_HISTORY_PROCESS_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ccc-archive-processes")
 
 
+# CCC-706: each 1d/7d list read forked `ps -A` for this overlay and waited on
+# it: 35-50 ms on an idle host, 100-190 ms under load, about a third of a small
+# delta read's server time. Reads share the last process table instead. Up to
+# FRESH_S old it is used as is; up to MAX_STALE_S old it is used while one
+# background scan refreshes it; older (or none) waits on a scan as before. The
+# overlay only fills the gap until the archive snapshot lists a new terminal
+# session, which itself takes ~20 s. On hermes 93% of these reads came within
+# 30 s of the previous one.
+_ARCHIVE_ANTIGRAVITY_PROCS_FRESH_S = 2.0
+_ARCHIVE_ANTIGRAVITY_PROCS_MAX_STALE_S = 30.0
+_archive_antigravity_procs = {"reader": None, "at": 0.0, "procs": None, "refresh": None}
+_archive_antigravity_procs_lock = threading.Lock()
+
+
+def _archive_antigravity_procs_store(read_processes, started, procs):
+    with _archive_antigravity_procs_lock:
+        shared = _archive_antigravity_procs
+        if shared["reader"] is not read_processes or started >= shared["at"]:
+            shared.update(reader=read_processes, at=started, procs=procs)
+
+
+def _archive_antigravity_procs_scan(read_processes):
+    started = time.monotonic()
+    procs = read_processes()
+    _archive_antigravity_procs_store(read_processes, started, procs)
+    return procs
+
+
 def _archive_prefetch_antigravity_processes(stack):
     read_processes = find_live_antigravity_processes
-    probe = _ARCHIVE_HISTORY_PROCESS_POOL.submit(read_processes)
+    now = time.monotonic()
+    with _archive_antigravity_procs_lock:
+        shared = _archive_antigravity_procs
+        age = now - shared["at"]
+        cached = shared["procs"] if shared["reader"] is read_processes and age >= 0 else None
+        if cached is not None and age < _ARCHIVE_ANTIGRAVITY_PROCS_MAX_STALE_S:
+            refresh = shared["refresh"]
+            if age >= _ARCHIVE_ANTIGRAVITY_PROCS_FRESH_S and (refresh is None or refresh.done()):
+                shared["refresh"] = _ARCHIVE_HISTORY_PROCESS_POOL.submit(
+                    _archive_antigravity_procs_scan, read_processes)
+            return lambda: cached
+    probe = _ARCHIVE_HISTORY_PROCESS_POOL.submit(_archive_antigravity_procs_scan, read_processes)
     stack.callback(probe.cancel)
 
     def read():
         # A queued probe cannot shorten this request. Keep the existing
         # synchronous path when the shared executor has not started ours.
         if probe.cancel():
-            return read_processes()
+            return _archive_antigravity_procs_scan(read_processes)
         return probe.result()
 
     return read

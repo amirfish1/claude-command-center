@@ -1,0 +1,1 @@
+- The sidebar list loads faster: reads share a recent process table for Antigravity terminal sessions instead of running a process scan on every read.

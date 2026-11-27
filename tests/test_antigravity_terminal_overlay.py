@@ -157,6 +157,61 @@ def test_pending_process_probe_falls_back_to_inline_read(monkeypatch):
     assert calls == [threading.get_ident()]
 
 
+def _shared_process_table(monkeypatch):
+    calls = []
+
+    def probe():
+        calls.append(threading.get_ident())
+        return [{'pid': len(calls)}]
+
+    monkeypatch.setattr(server, 'find_live_antigravity_processes', probe)
+    monkeypatch.setattr(server, '_archive_antigravity_procs',
+                        {'reader': None, 'at': 0.0, 'procs': None, 'refresh': None})
+    return calls
+
+
+def _prefetch_read():
+    with contextlib.ExitStack() as stack:
+        return server._archive_prefetch_antigravity_processes(stack)()
+
+
+def test_back_to_back_reads_share_one_process_scan(monkeypatch):
+    """CCC-706: a list read must not fork `ps` when the previous read just did."""
+    calls = _shared_process_table(monkeypatch)
+    assert _prefetch_read() == [{'pid': 1}]
+    assert _prefetch_read() == [{'pid': 1}]
+    assert len(calls) == 1
+
+
+def test_aging_process_table_serves_at_once_and_refreshes_once(monkeypatch):
+    calls = _shared_process_table(monkeypatch)
+    assert _prefetch_read() == [{'pid': 1}]
+    server._archive_antigravity_procs['at'] -= server._ARCHIVE_ANTIGRAVITY_PROCS_FRESH_S + 0.5
+    release = threading.Event()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        monkeypatch.setattr(server, '_ARCHIVE_HISTORY_PROCESS_POOL', pool)
+        pool.submit(release.wait, 5)  # the refresh cannot run yet
+        try:
+            # Both reads get the previous table without waiting on a scan;
+            # only one refresh is queued for them.
+            assert _prefetch_read() == [{'pid': 1}]
+            assert _prefetch_read() == [{'pid': 1}]
+        finally:
+            release.set()
+        refresh = server._archive_antigravity_procs['refresh']
+        assert refresh.result(timeout=5) == [{'pid': 2}]
+    assert len(calls) == 2
+    assert _prefetch_read() == [{'pid': 2}]
+
+
+def test_too_old_process_table_waits_for_a_new_scan(monkeypatch):
+    calls = _shared_process_table(monkeypatch)
+    assert _prefetch_read() == [{'pid': 1}]
+    server._archive_antigravity_procs['at'] -= server._ARCHIVE_ANTIGRAVITY_PROCS_MAX_STALE_S + 1
+    assert _prefetch_read() == [{'pid': 2}]
+    assert len(calls) == 2
+
+
 def test_native_launch_requires_parent_receipt_at_the_invoke_result_step(tmp_path, monkeypatch):
     peer = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
     paths = {}
