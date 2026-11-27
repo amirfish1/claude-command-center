@@ -37,6 +37,7 @@ import subprocess
 import threading
 import time
 
+from ccc_server import cgroup_pressure as _cgroup_pressure
 from ccc_server import core as _core
 
 # ---------------------------------------------------------------------------
@@ -483,6 +484,11 @@ def record_event(kind, ms, boot_id="", conv_id="", detail=None, automated=False)
 # live_read (CCC-319) is the wait the sidebar's live-status poll really sees,
 # now that live_build can run in the background behind a saved status.
 _DIAG_KINDS = ("list_server", "archive_rebuild", "live_read", "gc_pause") + _CLIENT_DIAG_KINDS
+# Rows that get cgroup throttle/pressure deltas (detail.cgroup) so a stall
+# that was mostly off-CPU can be told apart from CCC's own work (CCC-713).
+# Every recorded gc_pause (already >= 50 ms) and list reads slower than the
+# usual 60-200 ms; costs one ~0.2 ms reading per row.
+_CGROUP_DIAG_MIN_MS = {"gc_pause": 0.0, "list_server": 250.0}
 
 
 def record_diag(kind, ms, detail=None):
@@ -493,6 +499,12 @@ def record_diag(kind, ms, detail=None):
         ms_f = float(ms)
         if not math.isfinite(ms_f) or ms_f < 0:
             return
+        min_ms = _CGROUP_DIAG_MIN_MS.get(kind)
+        if (min_ms is not None and ms_f >= min_ms and isinstance(detail, dict)
+                and "cgroup" not in detail):
+            cgroup = _cgroup_pressure.attribution(ms_f / 1000.0)
+            if cgroup is not None:
+                detail = dict(detail, cgroup=cgroup)
         try:
             build = str(getattr(_core, "_SERVER_CODE_REV", "") or "")
         except Exception:

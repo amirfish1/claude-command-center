@@ -150,6 +150,7 @@ from ccc_server import spawn_phases as _spawn_phases
 from ccc_server import conv_reader as _conv_reader
 from ccc_server import swr_cache as _swr
 from ccc_server import memory_release as _memory_release
+from ccc_server import cgroup_pressure as _cgroup_pressure
 from ccc_server.index_page_cache import IndexPageCache
 from ccc_server.bounded_cache import ByteBudgetCache
 from ccc_server.static_encoding_cache import StaticEncodingCache
@@ -54169,6 +54170,8 @@ def main():
         _load_saved_live_activity()
         _install_gc_pause_diag()
         _start_gc_freeze_thread()
+        # Before-readings for detail.cgroup on gc_pause/list_server (CCC-713).
+        _cgroup_pressure.start_sampler()
     # CCC-142: the ACP registry load (counts every ACP transcript's lines,
     # ~135MB here) runs once per process under _ACP_LOCK. Left to the first
     # caller it landed on a request thread (live_build ~30s after a restart).

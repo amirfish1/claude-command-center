@@ -138,6 +138,11 @@ def setup(server_mod):
         return original_diag(kind, ms, detail)
 
     server_mod.record_diag = record_diag
+    # This child records most list_server rows; detail.cgroup needs readings
+    # from before each slow read began (CCC-713).
+    if not os.environ.get("CCC_EPHEMERAL"):
+        from ccc_server import cgroup_pressure
+        cgroup_pressure.start_sampler()
     # CCC-702: save this child's delta-token lineage, and answer tokens from
     # the previous child's saved lineage with content-verified deltas.
     from ccc_server import list_lineage
