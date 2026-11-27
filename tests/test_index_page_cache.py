@@ -60,7 +60,8 @@ def test_repeated_html_encoding_is_reused_without_browser_caching(tmp_path, monk
     for _ in range(3):
         status, headers, body = _get(server, '/?ccc_app=sessions', {'Accept-Encoding':'gzip'})
         assert status == 200 and gzip.decompress(body).decode() == source.read_text().replace('<body>', '<body data-repo="">', 1)
-        assert 'no-store' in headers['cache-control']
+        # CCC-718: the dashboard page revalidates on every load (no-cache).
+        assert 'no-cache' in headers['cache-control'] and headers['etag']
     assert len(calls) == 1
     status, headers, body = _get(server, '/?ccc_app=sessions')
     assert status == 200 and 'content-encoding' not in headers
@@ -86,3 +87,55 @@ def test_transform_dependencies_invalidate_without_source_changes(tmp_path, monk
     assert first != server._load_index_html(app_embed=True)
     assert f'/static/app-embed-boot.js?v={stamp}' in server._load_index_html(app_embed=True)
     assert 'app-embed-boot.js' not in server._load_index_html()
+
+
+def test_unchanged_dashboard_page_revalidates_without_a_body(tmp_path, monkeypatch):
+    """CCC-718: a phone re-downloaded the ~80 KB page on every boot."""
+    server = _server()
+    source = tmp_path / 'index.html'
+    source.write_text('<head></head><body>' + 'page data ' * 500 + '</body>')
+    monkeypatch.setattr(server, '_INDEX_HTML_PATH', source)
+    status, headers, body = _get(server, '/', {'Accept-Encoding': 'gzip'})
+    assert status == 200 and body and headers['cache-control'] == 'private, no-cache'
+    etag = headers['etag']
+    # Same page, same encoding: 304, no body, still revalidating next time.
+    status, again, body = _get(server, '/', {'Accept-Encoding': 'gzip', 'If-None-Match': 'W/' + etag})
+    assert status == 304 and body == b''
+    assert again['etag'] == etag and again['cache-control'] == 'private, no-cache'
+    assert 'html-304' in again['server-timing'] and 'content-length' not in again
+    # A different encoding is a different representation.
+    status, plain, body = _get(server, '/', {'If-None-Match': etag})
+    assert status == 200 and plain['etag'] != etag and body.startswith(b'<head>')
+    # Any change to the sent bytes (source, stamps, injected globals) is a new tag.
+    source.write_text('<head></head><body>' + 'changed data ' * 500 + '</body>')
+    status, changed, body = _get(server, '/', {'Accept-Encoding': 'gzip', 'If-None-Match': etag})
+    assert status == 200 and b'changed data' in gzip.decompress(body) and changed['etag'] != etag
+    status, _, _ = _get(server, '/', {'Accept-Encoding': 'gzip', 'If-None-Match': etag},
+                        http_port=9999)
+    assert status == 200
+
+
+def test_app_pages_stay_no_store(tmp_path, monkeypatch):
+    """App pages embed startup data; only the dashboard page revalidates."""
+    server = _server()
+    calls = []
+    real = server.CommandCenterHandler._send_prepared_html
+    def spy(self, prepared, **kw):
+        calls.append(kw)
+        return real(self, prepared, **kw)
+    monkeypatch.setattr(server.CommandCenterHandler, '_send_prepared_html', spy)
+    monkeypatch.setattr(server._conv_reader, 'forward_page', lambda *a, **k: None)
+    monkeypatch.setattr(server, '_load_application_html', lambda *a, **k: '<body>' + 'x' * 2000 + '</body>')
+    status, headers, _ = _get(server, '/view/demo')
+    assert status == 200 and headers['cache-control'] == 'no-store, must-revalidate'
+    assert 'etag' not in headers and calls and not calls[-1].get('revalidate')
+
+
+def test_service_worker_has_no_fetch_listener():
+    """CCC-718: any fetch listener, even a no-op, routes every WebKit request
+    through the worker. Notification clicks still need the worker itself."""
+    import re
+    source = (Path(__file__).resolve().parent.parent / 'static' / 'sw.js').read_text()
+    code = re.sub(r'//[^\n]*', '', source)
+    assert "addEventListener('notificationclick'" in code
+    assert not re.search(r"""addEventListener\(\s*['"]fetch['"]|\bonfetch\b""", code)

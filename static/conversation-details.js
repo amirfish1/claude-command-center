@@ -4831,14 +4831,39 @@
         if (nav) {
           detail.html_ms = Math.round(nav.responseEnd);
           detail.dcl_ms = Math.round(nav.domContentLoadedEventEnd || 0) || null;
+          // CCC-718: split the document's time so a slow boot names its
+          // phase: service-worker start, new connection, first byte, body.
+          detail.ttfb_ms = Math.round(nav.responseStart);
+          detail.html_kb = Math.round((nav.transferSize || 0) / 1024);
+          if (nav.responseStatus) detail.html_status = nav.responseStatus;
+          if (nav.workerStart > 0) detail.sw_ms = Math.round(Math.max(0, nav.fetchStart - nav.workerStart));
+          if (nav.connectEnd > nav.connectStart) detail.conn_ms = Math.round(nav.connectEnd - nav.connectStart);
         }
-        let n = 0, kb = 0;
+        let n = 0, kb = 0, cached = 0, revalidated = 0, fetched = 0, end = 0;
         for (const e of performance.getEntriesByType('resource')) {
           if (e.initiatorType !== 'script' || e.startTime > callAt) continue;
-          n++; kb += (e.transferSize || 0) / 1024;
+          const size = e.transferSize || 0;
+          n++; kb += size / 1024;
+          if (size === 0) cached++; else if (size < 1024) revalidated++; else fetched++;
+          if (e.responseEnd <= callAt) end = Math.max(end, e.responseEnd);
         }
         detail.scripts = n;
         detail.script_transfer_kb = Math.round(kb);
+        detail.scripts_cached = cached;
+        detail.scripts_revalidated = revalidated;
+        detail.scripts_fetched = fetched;
+        detail.scripts_end_ms = Math.round(end);
+      } catch (_) {}
+      try {
+        const ua = navigator.userAgent || '';
+        detail.client = /CCC-iOS/.test(ua) ? 'ios-app'
+          : /CCC-macOS/.test(ua) ? 'mac-app'
+          : (/iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) ? 'ios'
+          : /Android/.test(ua) ? 'android' : 'desktop';
+        detail.standalone = !!(navigator.standalone
+          || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches));
+        detail.sw_controlled = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
+        if (window.top !== window) detail.framed = true;
       } catch (_) {}
       _perfEvent('dash_boot', Math.round(_perfActiveElapsed(0, callAt)), { detail });
     } catch (_) {}

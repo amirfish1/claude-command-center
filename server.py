@@ -36126,7 +36126,8 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                             time.time() - _SERVER_START_TS > _ARCHIVE_LIST_DISK_BOOT_S)
             html = _load_app_shell_html(selected_app) if app_shell else _load_index_html(app_embed=app_embed)
             html = _inject_runtime_globals(html, http_port)
-            self.send_html(html, dashboard_event_cursor=event_cursor)
+            self.send_html(html, dashboard_event_cursor=event_cursor,
+                           revalidate=not app_shell and not app_embed)
         elif path == "/api/control-plane/status":
             self.send_json(_control_plane_request("health"))
         elif path == "/api/model-picker/picks":
@@ -51090,16 +51091,31 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
         self.end_headers()
         self.wfile.write(body)
 
-    def send_html(self, content, *, dashboard_event_cursor=False):
+    def send_html(self, content, *, dashboard_event_cursor=False, revalidate=False):
         self._send_prepared_html(_prepare_html_response(
             content, self.headers.get("Accept-Encoding", "")),
-            dashboard_event_cursor=dashboard_event_cursor)
+            dashboard_event_cursor=dashboard_event_cursor, revalidate=revalidate)
 
-    def _send_prepared_html(self, prepared, *, dashboard_event_cursor=False):
+    def _send_prepared_html(self, prepared, *, dashboard_event_cursor=False, revalidate=False):
         body, enc = prepared["body"], prepared.get("encoding")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self._send_server_timing(cache=prepared.get("cache"),
+        # CCC-718: the dashboard page (revalidate=True) is ~80 KB compressed
+        # and was re-sent on every boot; over a slow phone link that alone
+        # took 1-4 s before any script ran. It still asks the server on every
+        # load (no-cache), but an unchanged page answers 304 with no body.
+        # The tag hashes the exact bytes sent, so the injected globals, asset
+        # stamps and encoding are all covered. App pages embed startup data
+        # and stay no-store.
+        etag = None
+        if revalidate:
+            etag = '"p-%s-%s"' % (hashlib.sha1(body).hexdigest()[:24], enc or "identity")
+            match = self.headers.get("If-None-Match", "") or ""
+            not_modified = etag in [t.strip().removeprefix("W/") for t in match.split(",")]
+        else:
+            not_modified = False
+        self.send_response(304 if not_modified else 200)
+        if not not_modified:
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+        self._send_server_timing(cache="html-304" if not_modified else prepared.get("cache"),
                                  page_timing=prepared.get("page_timing"))
         if dashboard_event_cursor:
             # The page's first state reads start after these headers arrive.
@@ -51108,7 +51124,16 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
             self.send_header("Server-Timing",
                              f'ccc-event-cursor;desc="{hub.boot_id}:{hub.latest_seq}"')
         # Page HTML always revalidates the current source and agent identity.
-        self.send_header("Cache-Control", "no-store, must-revalidate")
+        if etag:
+            self.send_header("Cache-Control", "private, no-cache")
+            self.send_header("ETag", etag)
+        else:
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+        if not_modified:
+            if enc:
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            return
         self.send_header("Content-Length", str(len(body)))
         if enc:
             self.send_header("Content-Encoding", enc)

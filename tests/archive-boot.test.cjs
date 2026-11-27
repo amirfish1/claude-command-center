@@ -118,6 +118,48 @@ test('a boot list ready before the app started reports that wait as dash_boot, n
   assert.equal(events.filter(e=>e.kind==='dash_boot').length,1);
 });
 
+test('dash_boot names the slow phase and the client (CCC-718)',async()=>{
+  const source = archiveLoader;
+  const events=[];
+  const response={ok:true,status:200,_cccArchiveTiming:{start:100,headers:200,parsed:300,parse_ms:40},
+    headers:{get:()=>null},json:async()=>({conversations:[{id:'one'}]})};
+  const state={_archiveAllInflight:new Map(),_archiveAllEtag:new Map(),_archiveAllData:new Map(),
+    _archiveAllDelta:new Map(),_archiveBootstrapConsumed:false,
+    _archiveBootstrapUrl:'/api/conversations/list?window=7d&stale_ok=1&initial=1',
+    _archiveBootstrapFetchPromise:Promise.resolve(response),ARCHIVE_ALL_FETCH_TIMEOUT_MS:45000};
+  const nav={responseStart:900,responseEnd:3800,domContentLoadedEventEnd:0,transferSize:300,
+    responseStatus:304,workerStart:20,fetchStart:420,connectStart:30,connectEnd:530};
+  const scripts=[
+    {initiatorType:'script',startTime:3900,transferSize:0,responseEnd:3950},
+    {initiatorType:'script',startTime:3900,transferSize:310,responseEnd:4100},
+    {initiatorType:'script',startTime:3900,transferSize:204800,responseEnd:4600},
+    {initiatorType:'script',startTime:9e9,transferSize:204800,responseEnd:9e9},
+    {initiatorType:'fetch',startTime:10,transferSize:500,responseEnd:20}];
+  let now=4900;
+  const win={__cccPerfRow(){},matchMedia:()=>({matches:true})};
+  win.top=win;
+  const context={sharedState:state,window:win,
+    navigator:{userAgent:'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)',maxTouchPoints:5,
+      serviceWorker:{controller:null}},
+    performance:{now:()=>now+=100,getEntriesByType:t=>t==='navigation'?[nav]:scripts},
+    URLSearchParams,AbortController,setTimeout:()=>0,clearTimeout(){},
+    _archiveWindow:()=> '7d',_clientLog(){},
+    _perfActiveElapsed:(a,b)=>b-a,_perfLongTaskMs:()=>0,_convResourceTiming:()=>null,
+    _perfEvent:(kind,ms,extra)=>events.push({kind,ms,...extra}),
+    backgroundApiFetch:()=>{throw Error('duplicate request');}};
+  vm.createContext(context); vm.runInContext(source,context);
+  await context.loadArchiveAll({initial:true});
+  const d=events.find(e=>e.kind==='dash_boot').detail;
+  assert.equal(d.html_ms,3800); assert.equal(d.ttfb_ms,900);
+  assert.equal(d.html_kb,0); assert.equal(d.html_status,304);
+  assert.equal(d.sw_ms,400); assert.equal(d.conn_ms,500);
+  assert.equal(d.scripts,3,'scripts requested after the list call are not boot cost');
+  assert.deepEqual([d.scripts_cached,d.scripts_revalidated,d.scripts_fetched],[1,1,1]);
+  assert.equal(d.scripts_end_ms,4600);
+  assert.equal(d.client,'ios'); assert.equal(d.standalone,true);
+  assert.equal(d.sw_controlled,false); assert.equal(d.framed,undefined);
+});
+
 test('overlapped history fetches immediately but parses only after initial paint', async () => {
   const source = archiveLoader;
   let releasePaint, reads = 0, parses = 0;
