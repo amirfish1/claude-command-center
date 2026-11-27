@@ -4901,6 +4901,14 @@
       ? url + '&row_layouts=1&order_spans=1' : url;
     const pending = sharedState._archiveAllInflight.get(url);
     if (pending) return pending;
+    // A background refresh of the window already on screen is list_poll: the
+    // user is not waiting on it, so it has its own looser gate (owner Q1416,
+    // CCC-691). Boot, preview, window-switch, forced, PR and saved-copy
+    // reads stay list_read, the reads a user waits for.
+    const _perfKind = !opts.initial && !opts.includePrs && opts.staleOk !== false
+      && sharedState.archiveLoaded === true && !sharedState._archiveFromLocalCache
+      && sharedState.archiveDataWindow === params.get('window')
+      && Array.isArray(sharedState._archiveAllData.get(key)) ? 'list_poll' : 'list_read';
     let _perfT0 = performance.now();
     // When the application asked for the list. A boot read that started
     // earlier (archive-boot.js) may have been ready long before (CCC-696).
@@ -4962,7 +4970,7 @@
         // samples, so list-read latency feeds the same breach evaluation and
         // (maintainer-box) self-filing as conv_open/archive_load.
         if (typeof _perfEvent === 'function') {
-          _perfEvent('list_read', ms, {
+          _perfEvent(_perfKind, ms, {
             detail: {
               bytes: bytes || 0, status: status, extra: extra || '',
               wall_ms: wallMs, hidden_ms: Math.max(0, Math.round(wallMs - ms - _bootWaitMs)),

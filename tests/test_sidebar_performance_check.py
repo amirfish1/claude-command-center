@@ -22,7 +22,7 @@ def _events(tmp_path, timings, up_s=3600, warmup=False, load1=1, automated=False
         rows.extend({'kind': kind, 'ts': datetime.now(timezone.utc).isoformat(),
                      'ms': ms, 'warmup': warmup, 'load1': load1, 'ncpu': 4, 'up_s': up_s,
                      **({'automated': True} if automated else {}),
-                     'detail': {'status': 304 if kind == 'list_read' and ms == 0 else 200}}
+                     'detail': {'status': 304 if kind in ('list_read', 'list_poll') and ms == 0 else 200}}
                     for _ in range(count))
     target = tmp_path / 'events.jsonl'
     target.write_text(''.join(json.dumps(row) + '\n' for row in rows))
@@ -43,9 +43,9 @@ def test_original_budget_failure_survives_other_missing_samples(tmp_path):
     assert result['evidence']['gates'][0]['samples'] == 50
 
 
-def test_all_three_gates_and_deployment_proof_are_required(tmp_path):
+def test_all_gates_and_deployment_proof_are_required(tmp_path):
     target = _events(tmp_path, [('list_read', 1000, 50), ('live_build', 1000, 100),
-                                 ('archive_load', 2000, 5)])
+                                 ('archive_load', 2000, 5), ('list_poll', 3000, 50)])
     assert check.check(target, tmp_path, '')['status'] == 'pass'
     # Actual git ancestry checks reject missing build stamps, including when
     # the requested commit is unavailable; fixtures cannot claim adoption.
@@ -88,3 +88,19 @@ def test_fully_hidden_reads_do_not_dilute_the_p95(tmp_path):
     assert check.perf_gate._steady_reason(rows[-1]) == 'hidden'
     # A partly hidden read still counts its visible time.
     assert check.perf_gate._steady_reason(dict(rows[-1], ms=10)) == ''
+
+
+def test_background_polls_have_their_own_looser_gate(tmp_path):
+    # Owner Q1416 (CCC-691): refreshes of the window already on screen are
+    # gated at 3 s p95, apart from the 1 s reads a user waits for.
+    rows = [('list_read', 1000, 50), ('live_build', 1000, 100), ('archive_load', 2000, 5)]
+    within = check.check(_events(tmp_path, rows + [('list_poll', 2900, 50)]), tmp_path, '')
+    assert within['status'] == 'pass'
+    over = check.check(_events(tmp_path, rows + [('list_poll', 3001, 50)]), tmp_path, '')
+    gate = over['evidence']['gates'][3]
+    assert over['status'] == 'fail' and gate['kind'] == 'list_poll' and gate['budget_ms'] == 3000
+    # A poll never counts toward the list_read gate, and 304s count in neither.
+    unchanged = check.check(_events(tmp_path, rows + [('list_poll', 0, 500), ('list_poll', 100, 50)]),
+                            tmp_path, '')
+    assert unchanged['evidence']['gates'][0]['samples'] == 50
+    assert unchanged['evidence']['gates'][3]['samples'] == 50

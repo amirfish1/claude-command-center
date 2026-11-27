@@ -1,0 +1,1 @@
+- Background refreshes of the sidebar list now report as their own `list_poll` speed metric with a 3 s budget; `list_read` keeps the 1 s budget for list loads you wait for (first load, switching views, forced refresh).

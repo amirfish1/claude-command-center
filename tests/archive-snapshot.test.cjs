@@ -1151,3 +1151,33 @@ test('a forced refresh asks for changes since the shared base, not the whole lis
   assert.equal(next.get('stale_ok'), '1');
   assert.equal(next.get('since'), 'forced', 'background polls continue from the forced read');
 });
+
+test('a background refresh of the window on screen reports list_poll; waited-for reads stay list_read', async () => {
+  // Owner Q1416 (CCC-691): polls have their own 3 s gate, apart from list_read.
+  const cases = [
+    [{}, {}, 'list_poll'],
+    [{archiveDataWindow:'1d'}, {}, 'list_read'],
+    [{archiveLoaded:false}, {}, 'list_read'],
+    [{_archiveFromLocalCache:true}, {}, 'list_read'],
+    [{noRows:true}, {}, 'list_read'],
+    [{}, {staleOk:false}, 'list_read'],
+    [{}, {initial:true}, 'list_read'],
+    [{}, {includePrs:true}, 'list_read'],
+  ];
+  for (const [stateOver, opts, want] of cases) {
+    const f = setup({response:reply(null,304)}), events = [];
+    Object.assign(f.state, {archiveLoaded:true, archiveDataWindow:'7d', _archiveFromLocalCache:false});
+    const {noRows, ...rest} = stateOver;
+    Object.assign(f.state, rest);
+    if (!noRows) for (const url of [fullUrl, fullUrl + '&initial=1',
+      '/api/conversations/list?window=7d&stale_ok=1&include_prs=1&resolve_prs=1&resolve_effective=1&resolve_worktrees=1&background=1',
+      '/api/conversations/list?window=7d']) f.state._archiveAllData.set(url, rows);
+    Object.assign(f.context, {
+      _perfActiveElapsed:(a,b)=>b-a, _perfLongTaskMs:()=>0, _convResourceTiming:()=>null,
+      _perfEvent:(kind,ms,extra)=>events.push({kind,ms,...extra}),
+    });
+    f.context.window.__cccPerfRow=()=>{};
+    await f.context.loadArchiveAll(opts);
+    assert.deepEqual(events.map(e=>e.kind).filter(k=>k.startsWith('list_')), [want], JSON.stringify([stateOver, opts]));
+  }
+});

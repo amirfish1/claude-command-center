@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Report the three original sidebar performance gates for permanent checks.
+"""Report the sidebar performance gates for permanent checks.
+
+list_read gates the list reads a user waits for (boot, preview, window
+switch, forced refresh) at 1 s. Background refreshes of the window already
+on screen report as list_poll and have their own 3 s gate (owner Q1416,
+CCC-691): they were 90% of list_read samples, mostly phone round trips.
 
 Uses perf_gate.py's deployment proof and its warmup and host-load filters.
 Missing post-deployment samples stay pending; they never become a successful
@@ -26,6 +31,7 @@ GATES = (
     ('list_read', 1000, 50),
     ('live_build', 1000, 100),
     ('archive_load', 2000, 5),
+    ('list_poll', 3000, 50),
 )
 
 
@@ -43,7 +49,7 @@ def check(events, repo, commit):
         kind = row.get('kind')
         if kind not in values_by_kind or _excluded(row):
             continue
-        if kind == 'list_read' and str((row.get('detail') or {}).get('status')) == '304':
+        if kind in ('list_read', 'list_poll') and str((row.get('detail') or {}).get('status')) == '304':
             continue
         if deployed(row):
             values_by_kind[kind].append(float(row.get('ms') or 0))

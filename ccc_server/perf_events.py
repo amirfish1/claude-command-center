@@ -121,6 +121,10 @@ APP_FREEZE_MS = _env_int("CCC_PERF_APP_FREEZE_MS", 2000)
 # use the session list (first list call). A boot list read that arrived
 # earlier waits behind this; list_read sets that wait aside (CCC-696).
 DASH_BOOT_MS = _env_int("CCC_PERF_DASH_BOOT_MS", 3000)
+# list_poll = a background list refresh of the window already on screen.
+# The user is not waiting on it, so it has its own looser gate (3 s p95)
+# while list_read keeps the reads a user waits for (owner Q1416, CCC-691).
+LIST_POLL_MS = _env_int("CCC_PERF_LIST_POLL_MS", 3000)
 WARM_WINDOW_S = _env_int("CCC_PERF_WARM_WINDOW_S", 3600)
 
 # Startup archive loads use the cold budget even when a persisted cache
@@ -222,7 +226,7 @@ _CLIENT_DIAG_KINDS = ("archive_initial_load", "archive_full_load")
 _VALID_KINDS = ("archive_load", "conv_open", "list_read", "live_build",
                 "tts_start", "tts_gap", "conv_open_cached",
                 "view_switch", "rail_apps", "app_ready", "app_freeze",
-                "dash_boot")
+                "dash_boot", "list_poll")
 # Recorded and summarized with a breach verdict, but never self-filed: the
 # speaker kinds are tracked by a standing deep ticket (CCC-144) and its gates;
 # conv_open_cached (click -> saved-copy paint) by CCC-143 next to conv_open,
@@ -251,7 +255,7 @@ _PERF_TICKET_UPDATE_S = 6 * 3600
 def _perf_topic(kind):
     # Initial paint and later list requests are two signals of the same
     # sidebar investigation. Conversation opens have a separate owner.
-    return "sidebar" if kind in ("archive_load", "list_read") else kind
+    return "sidebar" if kind in ("archive_load", "list_read", "list_poll") else kind
 
 
 def _ticket_perf_topic(ticket):
@@ -260,7 +264,7 @@ def _ticket_perf_topic(ticket):
     if marker:
         return marker.group(1)
     title = str(ticket.get("title") or "").lower()
-    for kind in ("archive_load", "list_read", "conv_open", "live_build"):
+    for kind in ("archive_load", "list_read", "list_poll", "conv_open", "live_build"):
         if title.startswith("[perf] slow %s:" % kind.replace("_", " ")):
             return _perf_topic(kind)
     # Adopt investigations filed by people before topic markers existed.
@@ -367,6 +371,8 @@ def _threshold_for(kind, warm):
         return APP_FREEZE_MS
     if kind == "dash_boot":
         return DASH_BOOT_MS
+    if kind == "list_poll":
+        return LIST_POLL_MS
     return CONV_OPEN_MS
 
 
@@ -692,6 +698,7 @@ def summarize(hours=24, now=None):
             "app_ready_ms": APP_READY_MS,
             "app_freeze_ms": APP_FREEZE_MS,
             "dash_boot_ms": DASH_BOOT_MS,
+            "list_poll_ms": LIST_POLL_MS,
         },
         "kinds": kinds,
         "apps": _app_ready_by_app(

@@ -131,6 +131,16 @@ class TestRecordEvent(PerfEventsTestBase):
         self.assertNotIn("automated", rows[1])
         self.assertEqual(pe._exclusion_reason(rows[0]), "automated")
 
+    def test_list_poll_is_a_sidebar_kind_with_its_own_budget(self):
+        # Owner Q1416 (CCC-691): background refreshes have a 3 s budget.
+        result = pe.record_event("list_poll", pe.LIST_POLL_MS + 1)
+        self.assertEqual(result["threshold_ms"], pe.LIST_POLL_MS)
+        self.assertTrue(result["breach"])
+        self.assertFalse(pe.record_event("list_poll", 1500)["breach"])
+        self.assertEqual(pe._perf_topic("list_poll"), "sidebar")
+        self.assertEqual(pe._ticket_perf_topic({"title": "[perf] slow list poll: p95 4000ms"}), "sidebar")
+        self.assertIn("list_poll_ms", pe.summarize()["thresholds"])
+
     def test_fully_hidden_read_is_not_a_zero_ms_sample(self):
         row = {"kind": "list_read", "ms": 0, "detail": {"wall_ms": 900, "hidden_ms": 900}}
         self.assertEqual(pe._exclusion_reason(row), "hidden")
