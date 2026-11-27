@@ -18604,8 +18604,8 @@ def _archive_delta_digest_prune(live_ids):
 
 
 def _archive_delta_adopted(state, nonce):
-    """(key lineage, saved ctx entries) that process `nonce` saved for this
-    state's serve key, or None (CCC-702)."""
+    """(key lineage, saved ctx (entries, links)) that process `nonce` saved
+    for this state's serve key, or None (CCC-702, CCC-709)."""
     loader = _ARCHIVE_DELTA_LINEAGE_LOADER
     if loader is None or nonce == state.get("nonce"):
         return None
@@ -18614,7 +18614,7 @@ def _archive_delta_adopted(state, nonce):
     except Exception:
         return None
     entry = lineage["keys"].get(state.get("source_key")) if lineage else None
-    return None if entry is None else (entry, lineage["ctx"])
+    return None if entry is None else (entry, (lineage["ctx"], lineage.get("links") or {}))
 
 
 def _archive_delta_ticket_json(state, ideas):
@@ -18756,6 +18756,20 @@ _ARCHIVE_DELTA_CTX_DECODER = json.JSONDecoder(
 )
 
 
+# CCC-709: the 8 full entries above cover only a few context changes (every
+# usage-limit resume or idea-ticket change mints a new ctx per window), so a
+# page reloaded an hour later sent a forgotten ctx and paid a full body: 633 KB
+# and 7.9 s on a phone. An evicted entry now leaves a link to the next newer
+# entry of its scope plus the sids whose context inputs differ between the two.
+# A token resolves by following links to a remembered entry; the union of the
+# link sids is a superset of the real difference, so the delta only resends
+# extra rows, never misses one. Links are tiny and persist with the lineage.
+_ARCHIVE_DELTA_CTX_LINKS = collections.OrderedDict()  # ctx -> (scope, next ctx, frozenset(sids))
+_ARCHIVE_DELTA_CTX_LINKS_MAX = 4096
+# A link this wide would resend about as much as a full body anyway.
+_ARCHIVE_DELTA_CTX_LINK_MAX_SIDS = 4096
+
+
 def _archive_delta_ctx_remember(ctx, key, window, resumes_json, ideas_json, titles_json, topic_revision):
     with _archive_delta_ctx_lock:
         if ctx in _ARCHIVE_DELTA_CTX_HIST:
@@ -18770,30 +18784,84 @@ def _archive_delta_ctx_remember(ctx, key, window, resumes_json, ideas_json, titl
         "ideas": ideas_json,
         "titles": titles_json,
     }
+    evicted = []
     with _archive_delta_ctx_lock:
         _ARCHIVE_DELTA_CTX_HIST[ctx] = entry
         _ARCHIVE_DELTA_CTX_HIST.move_to_end(ctx)
+        _ARCHIVE_DELTA_CTX_LINKS.pop(ctx, None)  # remembered in full again
         while len(_ARCHIVE_DELTA_CTX_HIST) > _ARCHIVE_DELTA_CTX_HIST_MAX:
-            _ARCHIVE_DELTA_CTX_HIST.popitem(last=False)
+            evicted.append(_archive_delta_ctx_evict_locked())
+    for name, old, successor in evicted:
+        _archive_delta_ctx_link(name, old, successor)
+
+
+def _archive_delta_ctx_evict_locked():
+    """Pop the oldest entry that a newer same-scope entry can stand in for
+    (else the oldest), so the newest entry of every scope stays in full."""
+    items = list(_ARCHIVE_DELTA_CTX_HIST.items())
+    for i, (name, entry) in enumerate(items):
+        for later_name, later in items[i + 1:]:
+            if later["scope"] == entry["scope"]:
+                del _ARCHIVE_DELTA_CTX_HIST[name]
+                return name, entry, (later_name, later)
+    name, entry = _ARCHIVE_DELTA_CTX_HIST.popitem(last=False)
+    return name, entry, None
+
+
+def _archive_delta_ctx_link(name, old, successor):
+    if successor is None:
+        return
+    next_name, new = successor
+    changed = _archive_delta_ctx_entry_diff(old, new)
+    if changed is None or len(changed) > _ARCHIVE_DELTA_CTX_LINK_MAX_SIDS:
+        return
+    with _archive_delta_ctx_lock:
+        if name in _ARCHIVE_DELTA_CTX_HIST:
+            return  # re-remembered meanwhile
+        _ARCHIVE_DELTA_CTX_LINKS[name] = (old["scope"], next_name, frozenset(changed))
+        _ARCHIVE_DELTA_CTX_LINKS.move_to_end(name)
+        while len(_ARCHIVE_DELTA_CTX_LINKS) > _ARCHIVE_DELTA_CTX_LINKS_MAX:
+            _ARCHIVE_DELTA_CTX_LINKS.popitem(last=False)
+
+
+def _archive_delta_ctx_resolve(ctx, entries, links):
+    """(entry, sids changed since `ctx`) for a remembered ctx, or for one whose
+    links lead to a remembered entry of the same scope; else None."""
+    sids, seen, scope = set(), set(), None
+    while True:
+        entry = entries.get(ctx)
+        if entry is not None:
+            if scope is not None and entry["scope"] != scope:
+                return None
+            return entry, sids
+        link = links.get(ctx)
+        if link is None or ctx in seen:
+            return None
+        seen.add(ctx)
+        link_scope, ctx, changed = link
+        if scope is None:
+            scope = link_scope
+        elif link_scope != scope:
+            return None
+        sids |= changed
 
 
 def _archive_delta_ctx_pair(old_ctx, new_ctx, saved=None):
-    """Remembered entries for two ctx states. `saved` holds an adopted
-    lineage's entries (CCC-702), where the old ctx must come from."""
+    """(old entry, new entry, sids changed along links) for two ctx states,
+    or None. `saved` holds an adopted lineage's (entries, links) (CCC-702),
+    where the old ctx must come from."""
     with _archive_delta_ctx_lock:
-        old = (saved if saved is not None else _ARCHIVE_DELTA_CTX_HIST).get(old_ctx)
+        entries, links = saved if saved is not None else (
+            _ARCHIVE_DELTA_CTX_HIST, _ARCHIVE_DELTA_CTX_LINKS)
+        old = _archive_delta_ctx_resolve(old_ctx, entries, links)
         new = _ARCHIVE_DELTA_CTX_HIST.get(new_ctx)
-    if old is None or new is None or old["scope"] != new["scope"]:
+    if old is None or new is None or old[0]["scope"] != new["scope"]:
         return None
-    return old, new
+    return old[0], new, old[1]
 
 
-def _archive_delta_ctx_changed_sids(old_ctx, new_ctx, saved=None):
-    """Session ids whose context inputs changed, or None for incompatible scopes."""
-    pair = _archive_delta_ctx_pair(old_ctx, new_ctx, saved)
-    if pair is None:
-        return None
-    old, new = pair
+def _archive_delta_ctx_entry_diff(old, new):
+    """Raw ids whose context inputs differ between two entries, or None."""
     changed = set()
     for field in ("parents", "resumes", "ideas", "titles"):
         a, b = old[field], new[field]
@@ -18811,6 +18879,19 @@ def _archive_delta_ctx_changed_sids(old_ctx, new_ctx, saved=None):
         for sid in a.keys() | b.keys():
             if a.get(sid) != b.get(sid):
                 changed.add(sid)
+    return changed
+
+
+def _archive_delta_ctx_changed_sids(old_ctx, new_ctx, saved=None):
+    """Session ids whose context inputs changed, or None for incompatible scopes."""
+    pair = _archive_delta_ctx_pair(old_ctx, new_ctx, saved)
+    if pair is None:
+        return None
+    old, new, linked = pair
+    changed = _archive_delta_ctx_entry_diff(old, new)
+    if changed is None:
+        return None
+    changed |= linked
     out = set(changed)
     for sid in changed:
         out.add(sid[len("session_"):] if sid.startswith("session_") else "session_" + sid)

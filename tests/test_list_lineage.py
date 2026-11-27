@@ -20,6 +20,7 @@ def srv(monkeypatch, tmp_path):
     server = importlib.import_module('server')
     monkeypatch.setattr(server, '_archive_serve_cache', {})
     monkeypatch.setattr(server, '_ARCHIVE_DELTA_CTX_HIST', collections.OrderedDict())
+    monkeypatch.setattr(server, '_ARCHIVE_DELTA_CTX_LINKS', collections.OrderedDict())
     monkeypatch.setattr(server, '_ARCHIVE_DELTA_DIGESTS', {})
     monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE_FILE', tmp_path / 'archive-cache.json')
     monkeypatch.setattr(server, '_ARCHIVE_DELTA_NONCE', 'aaaaaaaa')
@@ -42,6 +43,7 @@ def _restart(server, monkeypatch, rows, nonce='bbbbbbbb'):
     monkeypatch.setattr(server, '_ARCHIVE_DELTA_NONCE', nonce)
     server._archive_serve_cache.clear()
     server._ARCHIVE_DELTA_CTX_HIST.clear()
+    server._ARCHIVE_DELTA_CTX_LINKS.clear()
     server._ARCHIVE_DELTA_DIGESTS.clear()
     list_lineage._loaded.clear()
     list_lineage._blob_cache.clear()
@@ -288,3 +290,57 @@ def test_stale_inputs_body_catches_up_with_an_exact_delta(srv, monkeypatch, tmp_
     assert srv._archive_list_delta_reject(second, first['token']) == 'ctx'
     body, reason = page_load(base, second)
     assert reason == 'version-miss' and body['delta_token'] == second['token']
+
+
+def _churn_context(srv, rows, changes):
+    """Mint one new ctx per change, with other windows reading in between,
+    the way idea-ticket and usage-limit updates churn the live history."""
+    state = None
+    for i, sid in enumerate(changes):
+        srv._test_ideas[sid] = {'ref': f'CCC-{i}'}
+        base, state = _publish(srv, [dict(r) for r in rows])
+        key = srv._archive_response_cache_key()
+        for window in ('8h', '1d'):
+            srv._archive_list_delta_state(key, base, window, True)
+    return base, state
+
+
+def test_forgotten_context_resolves_through_links(srv, monkeypatch):
+    # CCC-709: a phone reloaded an hour later with a 7d token whose ctx had
+    # left the 8-entry history and paid a 633 KB full body (7.9 s).
+    now = time.time()
+    rows = [_row('a', 'A', now), _row('b', 'B', now), _row('c', 'C', now)]
+    _, first = _publish(srv, [dict(r) for r in rows])
+    base, state = _churn_context(srv, rows, ['c'] * 6 + ['b'] + ['c'] * 6)
+    assert first['ctx'] not in srv._ARCHIVE_DELTA_CTX_HIST
+    assert first['ctx'] in srv._ARCHIVE_DELTA_CTX_LINKS
+    # The newest entry of every scope stays in full.
+    scopes = {e['scope'][1] for e in srv._ARCHIVE_DELTA_CTX_HIST.values()}
+    assert scopes == {'7d', '1d', '8h'}
+
+    assert srv._archive_list_delta_reject(state, first['token']) is None
+    delta = srv._archive_list_delta_payload(state, first['token'], base, window='7d')
+    assert delta['delta'] is True
+    assert sorted(r['session_id'] for r in delta['conversations']) == ['b', 'c']
+
+    # The links travel with the lineage to the next reader process.
+    assert list_lineage.save(srv, force=True)
+    base, state = _restart(srv, monkeypatch, [dict(r) for r in rows])
+    assert srv._archive_list_delta_reject(state, first['token']) is None
+    delta = srv._archive_list_delta_payload(state, first['token'], base, window='7d')
+    assert sorted(r['session_id'] for r in delta['conversations']) == ['b', 'c']
+
+
+def test_ctx_links_never_cross_scopes_or_loop(srv):
+    entry = lambda scope: {'scope': scope, 'parents': {}, 'resumes': '{}',
+                           'ideas': '{}', 'titles': '{}'}
+    entries = {'cur': entry(('k', '7d', 1))}
+    links = {'old': (('k', '7d', 1), 'mid', frozenset({'x'})),
+             'mid': (('k', '7d', 1), 'cur', frozenset({'y'}))}
+    resolve = srv._archive_delta_ctx_resolve
+    assert resolve('old', entries, links) == (entries['cur'], {'x', 'y'})
+    links['mid'] = (('k', '1d', 1), 'cur', frozenset())
+    assert resolve('old', entries, links) is None
+    links['mid'] = (('k', '7d', 1), 'old', frozenset())
+    assert resolve('old', entries, links) is None
+    assert resolve('unknown', entries, links) is None

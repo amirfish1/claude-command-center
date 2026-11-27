@@ -27,8 +27,13 @@ context inputs differ, exactly like a delta inside one process. Nothing is
 trusted from version numbers alone, so a reader that lags the dashboard
 (CCC-691's objection to cross-process tokens) only resends more rows.
 
+Evicted ctx entries leave links (ctx -> next newer ctx of the same scope plus
+the sids whose context differs, CCC-709); the newest ``MAX_LINKS`` are saved
+so an old token can still reach a saved entry.
+
 Tokens minted after the last save, a changed projection fingerprint, or a
-missing ctx entry still get a full body (reasons "range", "nonce", "ctx").
+ctx with no saved entry or link still get a full body (reasons "range",
+"nonce", "ctx").
 """
 
 from __future__ import annotations
@@ -46,6 +51,7 @@ SCHEMA = 2
 SAVE_INTERVAL_S = 2.0
 MAX_AGE_S = 2 * 86400
 MAX_CTX_BYTES = 16 << 20
+MAX_LINKS = 1024
 BLOB_TOUCH_S = 3600.0
 _CTX_FIELDS = ("parents", "resumes", "ideas", "titles")
 _BLOB_RE = re.compile(r"[0-9a-f]{40}")
@@ -199,7 +205,8 @@ def _signature(srv):
                                 for k, e in srv._archive_serve_cache.items()))
     with srv._archive_delta_ctx_lock:
         ctxs = tuple(srv._ARCHIVE_DELTA_CTX_HIST)
-    return versions, ctxs
+        links = (len(srv._ARCHIVE_DELTA_CTX_LINKS), next(reversed(srv._ARCHIVE_DELTA_CTX_LINKS), None))
+    return versions, ctxs, links
 
 
 def export(srv):
@@ -228,6 +235,7 @@ def export(srv):
         return None
     with srv._archive_delta_ctx_lock:
         hist = list(srv._ARCHIVE_DELTA_CTX_HIST.items())
+        links = list(srv._ARCHIVE_DELTA_CTX_LINKS.items())[-MAX_LINKS:]
     ctx = {}
     blobs = {}
     budget = MAX_CTX_BYTES
@@ -245,9 +253,12 @@ def export(srv):
     live = set(ctx)
     for name in [n for n in _ctx_refs if n not in live]:
         _ctx_refs.pop(name, None)
+    ctx_links = {name: [list(scope), nxt, sorted(sids)]
+                 for name, (scope, nxt, sids) in links if scope[0] in keys}
     return {"schema": SCHEMA, "nonce": srv._ARCHIVE_DELTA_NONCE,
             "fingerprint": fingerprint(srv), "pid": os.getpid(),
-            "written_at": time.time(), "keys": keys, "ctx": ctx, "_blobs": blobs}
+            "written_at": time.time(), "keys": keys, "ctx": ctx, "ctx_links": ctx_links,
+            "_blobs": blobs}
 
 
 def _ctx_blobs(name, entry):
@@ -382,7 +393,17 @@ def _parse(srv, raw):
                               "titles": texts["titles"]}
         except (KeyError, TypeError, ValueError, AttributeError):
             continue
-    return {"nonce": raw.get("nonce"), "keys": keys, "ctx": ctx}
+    links = {}
+    raw_links = raw.get("ctx_links")
+    for name, link in (raw_links.items() if isinstance(raw_links, dict) else ()):
+        try:
+            scope, nxt, sids = link
+            if not isinstance(scope, list) or not isinstance(sids, list):
+                continue
+            links[str(name)] = (tuple(scope), str(nxt), frozenset(str(s) for s in sids))
+        except (TypeError, ValueError):
+            continue
+    return {"nonce": raw.get("nonce"), "keys": keys, "ctx": ctx, "links": links}
 
 
 def _read_blob(srv, digest):
