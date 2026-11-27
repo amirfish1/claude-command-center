@@ -167,8 +167,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Install puppeteer
-        run: npm install --no-save --no-package-lock puppeteer@25
+      # Several browser tests boot server.py, which needs watchtower.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install watchtower and puppeteer
+        run: |
+          WATCHTOWER_REF=adf5bc16ab35c6f382005cddedca607be9928568 CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh
+          npm install --no-save --no-package-lock puppeteer@25
       - name: Run node unit tests
         run: node --test --test-concurrency=4 tests/*.test.cjs
 
