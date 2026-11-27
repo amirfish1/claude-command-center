@@ -66,6 +66,8 @@ test('a failed read throws so callers keep their last good copy', async () => {
 test('worker heartbeats do not expire the ticket list', () => {
   assert.match(app, /const workersOnly = Array\.isArray\(what\)/);
   assert.match(app, /if \(!workersOnly\) _uxqItemsCache\.ts = 0;/);
-  assert.match(app, /if \(resources\.has\('queue'\) \|\| resources\.has\('workers'\)\)/);
+  // Health-only heartbeats must not trigger the archive reread either (6c641efb).
+  assert.match(app, /const ticketsChanged = resources\.has\('queue'\);/);
+  assert.match(app, /if \(ticketsChanged \|\| resources\.has\('workers'\)\) \{\n\s*\/\/[^\n]*\n\s*resources\.add\('archive'\)/);
   assert.match(app, /const refreshItems = !ticketsChanged \? null :/);
 });

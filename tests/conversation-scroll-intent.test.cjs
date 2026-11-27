@@ -251,7 +251,7 @@ test('a fresh open resumes following after leaving the previous conversation scr
 const prependStart = app.indexOf('  function _prependConversationEvents(');
 const thinkingStart = app.indexOf('  function _syncThinkingRuns(');
 const declaration = start => app.slice(start, app.indexOf('\n  }\n', start) + 4);
-const prepend = ['toolCallCarriesConversationContext', '_syncActivityRuns']
+const prepend = ['toolCallCarriesConversationContext', '_ccOrchLabels', 'refreshActivityTimers', '_syncActivityRuns']
   .map(name => require('./conversation-source.cjs').functionSource(name)).join('\n')
   + '\n' + declaration(thinkingStart) + '\n' + declaration(prependStart);
 const renderer = fs.readFileSync(require.resolve('../static/conversation-events.js'), 'utf8');

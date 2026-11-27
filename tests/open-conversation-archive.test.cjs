@@ -3,8 +3,14 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const app = require('./legacy-dashboard-source.cjs');
-const start = app.indexOf('  async function _setOpenSessionLifecycle(');
-const code = app.slice(start, app.indexOf('  // Show only the lifecycle/queue items', start));
+// Slice each function by its own closing brace: neighbouring comments are
+// renamed and moved too often to anchor on (CCC-716).
+const declaration = name => {
+  const start = app.search(new RegExp('^  (?:async )?function ' + name + '\\(', 'm'));
+  assert.ok(start >= 0, 'missing ' + name);
+  return app.slice(start, app.indexOf('\n  }\n', start) + 4);
+};
+const code = ['_setOpenSessionLifecycle', '_showArchivedUndoToast'].map(declaration).join('\n');
 
 test('a confirming local render cannot consume archive protection before a delayed poll', () => {
   const begin = app.indexOf('  const _optimisticOverrides = new Map()');

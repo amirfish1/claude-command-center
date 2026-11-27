@@ -8,7 +8,7 @@ const start = source.indexOf("  var AGENT_KEY =");
 const end = source.indexOf('  // Freezes:', start);
 assert.ok(start > 0 && end > start);
 
-function harness({ hidden = false, brokenAgent = false, waitFrom, parentOrigin } = {}) {
+function harness({ hidden = false, brokenAgent = false, waitFrom, parentOrigin, webdriver = false } = {}) {
   const beacons = [], events = [];
   const nav = { startTime: 0, requestStart: 5.4, responseStart: 30.6,
     responseEnd: 50, domInteractive: 110, duration: 0, name: 'private-navigation' };
@@ -33,6 +33,9 @@ function harness({ hidden = false, brokenAgent = false, waitFrom, parentOrigin }
     URL, Number, Math, Date,
     CustomEvent: function (type, init) { this.type = type; this.detail = init.detail; },
     fetch: (url, init) => { beacons.push(JSON.parse(init.body)); return Promise.resolve({}); },
+    // Beacons read navigator.webdriver (32c24588); a missing global throws
+    // inside the send's try and silently drops the beacon.
+    navigator: { webdriver },
   };
   ctx.window = ctx;
   ctx.parent = ctx;
@@ -63,6 +66,14 @@ test('readiness waits for both content and agent and retains their original cloc
   assert.equal(event.detail.page_timing.navigation.responseStart, 31);
   assert.equal(event.detail.agent_timing.origin_offset_ms, 100);
   assert.ok(event.detail.load_id);
+  assert.equal(event.automated, false);
+});
+
+test('scripted browsers mark their ready beacon as automated', () => {
+  const { ctx, beacons } = harness({ webdriver: true });
+  vm.runInContext("ready.agent = 'yes'; ready.agentAt = 1600; noteContent({ms: 200});", ctx);
+  assert.equal(beacons.length, 1);
+  assert.equal(beacons[0].automated, true);
 });
 
 test('attribution allowlists resource categories and omits URLs and session identifiers', () => {

@@ -153,6 +153,25 @@ jobs:
           ps -p "$SERVER_PID" >/dev/null
           curl -fsS http://127.0.0.1:18091/api/features >/dev/null
 
+  # Dashboard JS unit tests. Most slice functions out of static/*.js by text
+  # anchors, so a refactor that renames a neighbouring comment or adds a
+  # helper call breaks them silently. Nothing ran them before CCC-716 and four
+  # files had rotted on main. package.json is local-only, so install puppeteer
+  # (and its headless shell) here.
+  node-unit:
+    name: node unit (tests/*.test.cjs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install puppeteer
+        run: npm install --no-save --no-package-lock puppeteer@25
+      - name: Run node unit tests
+        run: node --test --test-concurrency=4 tests/*.test.cjs
+
   telemetry-worker:
     name: telemetry-worker
     runs-on: ubuntu-latest
