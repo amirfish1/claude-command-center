@@ -242,3 +242,49 @@ def test_reader_child_waits_for_its_first_hydrated_reload():
         assert list_reader.wait_hydrated(-5) is False  # deadline already past
         flag.set()
         assert list_reader.wait_hydrated(0) is True
+
+
+def test_stale_inputs_body_catches_up_with_an_exact_delta(srv, monkeypatch, tmp_path):
+    # CCC-704: a page load after a ticket change (new ctx) and a newer
+    # snapshot gets the previous body at once; its token then yields a delta
+    # with exactly the rows that moved, never another full body.
+    monkeypatch.setattr(srv, '_ARCHIVE_LIST_DISK_DIR', tmp_path)
+    monkeypatch.setattr(srv, '_ARCHIVE_LIST_BODY_CACHE', srv.ByteBudgetCache(1 << 20, 8))
+    monkeypatch.setattr(srv, '_ARCHIVE_LIST_LATEST', {})
+    monkeypatch.setattr(srv, '_ARCHIVE_LIST_STALE_OK', lambda reason, slot: reason == 'inputs')
+    key = srv._archive_response_cache_key()
+    now = time.time()
+
+    def page_load(base, state):
+        detail = {}
+        snap_ver = (state['ver'], state['ctx'])
+
+        def build():
+            return {'conversations': list(base), 'delta_token': state['token']}
+        raw, _, _ = srv._archive_list_body_get_or_build(
+            key, '7d', True, build, snap_ver, diagnostics=detail, allow_stale=True,
+            stale_base=srv._archive_list_stale_base(state['ver'], state),
+            stale_inputs=srv._archive_list_stale_inputs(state))
+        return json.loads(raw), detail['reason']
+
+    base, first = _publish(srv, [_row('a', 'A', now), _row('b', 'B', now), _row('c', 'C', now)])
+    body, reason = page_load(base, first)
+    assert reason == 'version-miss' and body['delta_token'] == first['token']
+
+    srv._test_ideas['c'] = {'ref': 'CCC-1'}                      # new ctx
+    base, second = _publish(srv, [_row('a', 'A2', now), _row('b', 'B', now), _row('c', 'C', now)])
+    assert second['ctx'] != first['ctx'] and second['ver'] > first['ver']
+    body, reason = page_load(base, second)
+    assert reason == 'stale-inputs' and body['delta_token'] == first['token']
+
+    # The page's follow-up read with the stand-in body's token.
+    assert srv._archive_list_delta_reject(second, first['token']) is None
+    delta = srv._archive_list_delta_payload(second, first['token'], base, window='7d')
+    assert delta['delta'] is True
+    assert sorted(r['session_id'] for r in delta['conversations']) == ['a', 'c']
+
+    # Once that token's context is forgotten, the page load is rebuilt.
+    srv._ARCHIVE_DELTA_CTX_HIST.pop(first['ctx'])
+    assert srv._archive_list_delta_reject(second, first['token']) == 'ctx'
+    body, reason = page_load(base, second)
+    assert reason == 'version-miss' and body['delta_token'] == second['token']

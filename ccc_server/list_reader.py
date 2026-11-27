@@ -464,12 +464,15 @@ def stale_ok(reason, slot):
 
     "rebuilding": only while a reload or warm is under way. "overlay": the
     body differs only in its live-session rows; allowed for bodies the warm
-    prebuilds, and that warm is started here so the next read hits."""
+    prebuilds, and that warm is started here so the next read hits.
+    "inputs": a newer snapshot or projection context (CCC-704); same rule
+    as "overlay". The previous body's delta token lets the page's next
+    read catch up with a delta."""
     if reason == "rebuilding":
         return rebuilding()
     key, window = slot[0], slot[1]
     name = LAYOUTS if window == "7d" and str(key).endswith(":layouts") else window
-    if reason == "overlay" and name in warm_windows():
+    if reason in ("overlay", "inputs") and name in warm_windows():
         if _claim_warm():
             threading.Thread(target=_warm_until_settled, name="list-reader-warm", daemon=True).start()
         return True

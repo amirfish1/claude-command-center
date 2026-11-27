@@ -1104,6 +1104,72 @@ def test_overlay_only_change_serves_previous_body(monkeypatch, tmp_path):
     assert read((6, 'ovl-c'), 'e', None) == ('e', 'version-miss')
 
 
+def test_new_snapshot_or_context_serves_previous_body_with_its_token(monkeypatch, tmp_path):
+    # CCC-704: a ticket/resume/title change (new ctx) or a newer snapshot
+    # with no warm running rebuilt the 7d body on the page load (0.7-1.4 s).
+    # The previous body still carries its own delta token, so the page's
+    # follow-up read catches up with a delta.
+    server = importlib.import_module('server')
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_DISK_DIR', tmp_path)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_CACHE', server.ByteBudgetCache(1 << 20, 8))
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_LATEST', {})
+    asked = []
+
+    def hook(reason, slot):
+        asked.append((reason, slot[1]))
+        return reason == 'inputs'
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_STALE_OK', hook)
+
+    def read(snap_ver, tag, base, stale_inputs=lambda base: True):
+        detail = {}
+        raw, _, _ = server._archive_list_body_get_or_build(
+            'key', '7d', True, lambda: {'conversations': [{'session_id': tag}]}, snap_ver,
+            diagnostics=detail, allow_stale=True, stale_base=base, stale_inputs=stale_inputs)
+        return json.loads(raw)['conversations'][0]['session_id'], detail['reason']
+
+    assert read((5, 'ctx1'), 'a', (5, 'ctx1')) == ('a', 'version-miss')
+    # A read that did not ask for stale_ok wants current rows.
+    assert read((5, 'ctx2'), 'x', (5, 'ctx2'), stale_inputs=None) == ('x', 'version-miss')
+    # Nor when the previous body's token could not be caught up by a delta.
+    seen = []
+    assert read((5, 'ctx2b'), 'y', (5, 'ctx2b'),
+                stale_inputs=lambda base: seen.append(base) or False) == ('y', 'version-miss')
+    assert seen == [(5, 'ctx2')]
+    assert read((5, 'ctx3'), 'b', (5, 'ctx3')) == ('y', 'stale-inputs')
+    assert read((6, 'ctx2'), 'c', (6, 'ctx2')) == ('y', 'stale-inputs')
+    assert asked[-1] == ('inputs', '7d')
+    # A request without a delta token never gets a stale body.
+    assert read((7, 'ctx2'), 'd', None) == ('d', 'version-miss')
+    # Nor does a body built without a token (stale_base None).
+    assert read((8, 'ctx2'), 'e', (8, 'ctx2')) == ('e', 'version-miss')
+    # A list mutation (archive, trash, clear) voids the previous body.
+    server._archive_list_void_latest()
+    assert read((9, 'ctx2'), 'f', (9, 'ctx2')) == ('f', 'version-miss')
+    # Refused by the hook (window not prebuilt): rebuilt as before.
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_STALE_OK', lambda reason, slot: False)
+    assert read((10, 'ctx2'), 'g', (10, 'ctx2')) == ('g', 'version-miss')
+
+
+def test_stale_inputs_requires_a_token_the_current_state_can_answer(monkeypatch):
+    # CCC-704: the stand-in body's token must get a delta on the page's
+    # follow-up read, not another full (stale) body.
+    server = importlib.import_module('server')
+    assert server._archive_list_stale_inputs(None) is None
+    state = {'nonce': 'n1', 'ver': 9, 'ctx': 'cur', 'track_since': 4}
+    remembered = {'cur'}
+    monkeypatch.setattr(server, '_archive_delta_ctx_pair',
+                        lambda old, new, saved=None: (old, new) if old in remembered else None)
+    answerable = server._archive_list_stale_inputs(state)
+    assert answerable((7, 'cur'))
+    assert answerable((4, 'cur')) and answerable((9, 'cur'))
+    assert not answerable((3, 'cur'))        # tracking trimmed past it
+    assert not answerable((7, 'forgotten'))  # context no longer remembered
+    remembered.add('older')
+    assert answerable((7, 'older'))
+    assert not answerable(None)
+    assert not answerable(('x', 'cur'))
+
+
 def test_source_read_rereads_when_a_publication_lands_mid_read(monkeypatch):
     # CCC-691: a snapshot stored while the overlays ran left the rows matching
     # no version, so the read built an uncached body with no delta token.

@@ -131,6 +131,18 @@ class ListReaderOpsTest(unittest.TestCase):
         # The claimed warm counts as rebuilding.
         self.assertTrue(list_reader.stale_ok("rebuilding", ("k", "1d", True)))
 
+    def test_stale_ok_inputs_follows_the_overlay_rule(self):
+        # CCC-704: a new snapshot/context may serve the previous body only
+        # for prebuilt windows, and always starts the warm that replaces it.
+        list_reader._state["windows"] = {}
+        with mock.patch.object(list_reader.threading, "Thread") as thread:
+            self.assertFalse(list_reader.stale_ok("inputs", ("k", "8h", True)))
+            self.assertEqual(thread.call_count, 0)
+            list_reader.note_window("7d", layouts=True)
+            self.assertTrue(list_reader.stale_ok("inputs", ("k:layouts", "7d", True)))
+        self.assertEqual(thread.call_count, 1)
+        self.assertTrue(list_reader.rebuilding())
+
     def test_layouts_7d_read_warms_the_layouts_body(self):
         # CCC-691: the browser's 7d read asks for row layouts, a separate body
         # from the plain 7d one CCC-690 warmed.
