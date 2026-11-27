@@ -45,7 +45,10 @@ async function open(t,width=1440,trigger='#queueChip'){
  const ctx=await browser.createBrowserContext(),page=await ctx.newPage(),errors=[],posts=[];page.setDefaultTimeout(8000);await page.setViewport({width,height:1000});page.on('pageerror',e=>errors.push(e.message));await page.setRequestInterception(true);
  page.on('request',req=>{if(req.method()==='POST')posts.push({url:req.url(),body:req.postData()?JSON.parse(req.postData()):null});return req.url().startsWith(url)?req.continue():req.abort();});
  t.after(async()=>{await ctx.close();assert.deepEqual(errors,[]);assert(posts.every(p=>p.url===url+'/api/queue/config-options'||(p.url===url+'/api/queue/config'&&!(p.body&&p.body.policy_action))));assert.equal(fs.readFileSync(state,'utf8'),defaults);});
- await page.goto(url,{waitUntil:'load'});await page.focus(trigger);await page.keyboard.press('Enter');await page.waitForFunction(loaded);return{page,posts};
+ await page.goto(url,{waitUntil:'load'});await page.focus(trigger);await page.keyboard.press('Enter');await page.waitForFunction(loaded);
+ // Initial focus lands in a requestAnimationFrame; let it fire first or it
+ // steals focus a test already moved (seen on slow CI runners, CCC-716).
+ await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));return{page,posts};
 }
 const read=()=>JSON.parse(fs.readFileSync(file,'utf8'));
 async function save(page){
