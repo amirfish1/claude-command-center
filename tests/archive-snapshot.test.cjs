@@ -1128,3 +1128,26 @@ test('legacy object snapshots still seed the current server validation', async (
       status:(await window.__cccArchiveSnapshot.fetch).status})),{rows,status:304});
   } finally {await context.close();}
 });
+
+test('a forced refresh asks for changes since the shared base, not the whole list', async () => {
+  // OPS-1097: a forced read (no stale_ok) once had its own empty cache, so
+  // every spawn/refresh re-downloaded the full list (633 KB, 13.5 s on a phone).
+  const f = setup({response:reply({conversations:rows, delta_token:'base'})});
+  await f.context.loadArchiveAll();
+  f.context.backgroundApiFetch = async (url, init) => {
+    f.reads.push({url, init});
+    return reply({delta:true, since:'base', ids:['recent','older'], delta_token:'forced',
+      conversations:[{session_id:'recent', modified:7}]});
+  };
+  const forced = await f.context.loadArchiveAll({staleOk:false});
+  const sent = new URL(f.reads[1].url, 'http://localhost').searchParams;
+  assert.equal(sent.get('stale_ok'), null, 'a forced read still asks the server to rebuild');
+  assert.equal(sent.get('since'), 'base');
+  assert.deepEqual(Array.from(forced, row => [row.session_id, row.modified]),
+    [['recent', 7], ['older', undefined]]);
+  f.context.backgroundApiFetch = async (url, init) => { f.reads.push({url, init}); return reply(null, 304); };
+  assert.equal(await f.context.loadArchiveAll().then(r => r[0].modified), 7);
+  const next = new URL(f.reads[2].url, 'http://localhost').searchParams;
+  assert.equal(next.get('stale_ok'), '1');
+  assert.equal(next.get('since'), 'forced', 'background polls continue from the forced read');
+});

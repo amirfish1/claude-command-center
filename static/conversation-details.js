@@ -4859,6 +4859,19 @@
     }
     if (opts.initial) params.set('initial', '1');
     const url = '/api/conversations/list' + (params.toString() ? '?' + params.toString() : '');
+    // A forced read (no stale_ok) makes the server rebuild first, but its rows
+    // are the same list as this window's stale_ok read. Both share one cached
+    // base, ETag and delta token, so a forced refresh (spawn, archive, refresh)
+    // gets only the changed rows. Before, it always re-downloaded the whole
+    // list: 633 KB took 13.5 s on a slow phone link (OPS-1097). In-flight
+    // dedupe and the persisted snapshot stay per URL: a forced read never
+    // adopts a disk base, it only reuses rows this page already validated.
+    const keyParams = new URLSearchParams();
+    for (const [name, value] of params) {
+      keyParams.append(name, value);
+      if (name === 'window' && opts.staleOk === false) keyParams.set('stale_ok', '1');
+    }
+    const key = '/api/conversations/list?' + keyParams.toString();
     const requestUrl = !opts.initial && !opts.includePrs && params.get('window') === 'all'
       ? url + '&row_layouts=1&order_spans=1' : url;
     const pending = sharedState._archiveAllInflight.get(url);
@@ -4947,19 +4960,19 @@
     };
     const p = (async () => {
       try {
-        if (!opts.initial && !opts.includePrs && !sharedState._archiveAllData.has(url)) {
+        if (!opts.initial && !opts.includePrs && !sharedState._archiveAllData.has(key)) {
           const snapshot = await window.__cccArchiveSnapshot?.read;
-          if (snapshot?.url === url && !sharedState._archiveAllData.has(url)) {
-            sharedState._archiveAllData.set(url, snapshot.rows);
-            if (snapshot.etag) sharedState._archiveAllEtag.set(url, snapshot.etag);
-            if (snapshot.delta) sharedState._archiveAllDelta.set(url, {
+          if (snapshot?.url === url && !sharedState._archiveAllData.has(key)) {
+            sharedState._archiveAllData.set(key, snapshot.rows);
+            if (snapshot.etag) sharedState._archiveAllEtag.set(key, snapshot.etag);
+            if (snapshot.delta) sharedState._archiveAllDelta.set(key, {
               rows: snapshot.rows, token: snapshot.delta, order: snapshot.order,
             });
           }
         }
-        const prevEtag = sharedState._archiveAllEtag.get(url);
-        const requestBase = sharedState._archiveAllData.get(url);
-        const deltaBase = sharedState._archiveAllDelta.get(url);
+        const prevEtag = sharedState._archiveAllEtag.get(key);
+        const requestBase = sharedState._archiveAllData.get(key);
+        const deltaBase = sharedState._archiveAllDelta.get(key);
         // The token and order proof describe this particular array of rows.
         const deltaToken = Array.isArray(requestBase) && deltaBase?.rows === requestBase ? deltaBase.token : null;
         const baseOrder = deltaToken && /^[0-9a-f]{64}$/.test(deltaBase.order) ? deltaBase.order : '';
@@ -5066,7 +5079,7 @@
         // structural signature is unchanged.
         if (r.status === 304) {
           _perfListLog(0, 304);
-          const cached = sharedState._archiveAllData.get(url);
+          const cached = sharedState._archiveAllData.get(key);
           if (!Array.isArray(cached)) {
             _clientLog('[ARCHIVE-DIAG] conversations/list 304 with no cached body');
             return null;
@@ -5110,7 +5123,7 @@
         }
         let _merged = null;
         if (d && d.delta) {
-          const baseRows = sharedState._archiveAllData.get(url);
+          const baseRows = sharedState._archiveAllData.get(key);
           const savedOrder = baseRows === requestBase && d.since === deltaToken ? requestedOrder : null;
           _merged = _mergeArchiveListDelta(baseRows, d, savedOrder);
         }
@@ -5120,8 +5133,8 @@
           // A skipped saved preview is useful again while a full resync
           // runs, including transport retries before a failure is final.
           if (window.__cccArchiveSnapshot?.url === url) window.__cccArchiveSnapshot.onResync?.();
-          sharedState._archiveAllDelta.delete(url);
-          sharedState._archiveAllEtag.delete(url);
+          sharedState._archiveAllDelta.delete(key);
+          sharedState._archiveAllEtag.delete(key);
           const r2 = await (window.__cccListFetch
             ? window.__cccListFetch(requestUrl, { signal: controller.signal }, backgroundApiFetch)
             : backgroundApiFetch(requestUrl, { signal: controller.signal }));
@@ -5167,19 +5180,19 @@
         // Cache the ETag only after the body parsed and landed — otherwise a
         // truncated/aborted download leaves an ETag whose next 304 replays
         // an empty list.
-        sharedState._archiveAllData.set(url, convs);
+        sharedState._archiveAllData.set(key, convs);
         // A merged list matches no full body's ETag; the delta token alone
         // validates it from here on.
-        if (_merged) sharedState._archiveAllEtag.delete(url);
-        else if (etag) sharedState._archiveAllEtag.set(url, etag);
-        if (d.delta_token) sharedState._archiveAllDelta.set(url, {
+        if (_merged) sharedState._archiveAllEtag.delete(key);
+        else if (etag) sharedState._archiveAllEtag.set(key, etag);
+        if (d.delta_token) sharedState._archiveAllDelta.set(key, {
           rows: convs, token: d.delta_token, order: d.order_token,
         });
-        else sharedState._archiveAllDelta.delete(url);
+        else sharedState._archiveAllDelta.delete(key);
         if (!opts.includePrs && !opts.initial) {
           _scheduleArchiveSidebarCache(convs, params.get('window'));
           window.__cccArchiveSnapshot?.save({url, rows:convs,
-            etag:sharedState._archiveAllEtag.get(url), delta:d.delta_token,
+            etag:sharedState._archiveAllEtag.get(key), delta:d.delta_token,
             order:d.order_token},
             _merged ? {from: deltaToken,
               ids:d.same_order ? null : Object.hasOwn(d, 'order_spans')
