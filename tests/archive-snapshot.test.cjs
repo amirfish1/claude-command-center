@@ -1081,6 +1081,46 @@ test('successive deltas preserve ordering, replacements and removals without rew
   } finally {await context.close();}
 });
 
+test('a token-holding boot read stays on the page origin and warms the reader afterwards (CCC-725)', async () => {
+  const readerHits = [];
+  const reader = http.createServer((req,res) => {
+    readerHits.push(req.url);
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Content-Type','application/json');
+    res.end(req.url.startsWith('/api/conv-reader/ping') ? '{"ok":true}' : JSON.stringify({conversations:rows}));
+  });
+  await new Promise(r=>reader.listen(0,'127.0.0.1',r));
+  const context=await browser.createBrowserContext(), page=await context.newPage();
+  try {
+    await page.evaluateOnNewDocument(port => { window.__CCC_LIST_READER_PORT__ = port; }, reader.address().port);
+    await page.goto(origin,{waitUntil:'load'});
+    // Without a saved copy the boot read has no token: it goes to the reader.
+    await page.evaluate(async()=>{await window.__cccArchiveSnapshot.fetch;});
+    assert.ok(readerHits.some(u=>u.startsWith('/api/conversations/list')),'a full boot read stays direct');
+    await page.evaluate(async({url,rows})=>{
+      window.__cccArchiveSettled=true;
+      window.__cccArchiveSnapshot.save({url,rows,delta:'valid',etag:'"valid"'});
+    },{url:fullUrl,rows});
+    await waitForSnapshot(page,'valid');
+    readerHits.length = 0;
+    await page.reload({waitUntil:'load'});
+    const seen = await page.evaluate(async()=>{
+      const response=await window.__cccArchiveSnapshot.fetch;
+      return {origin:new URL(response.url).origin, status:response.status,
+        since:new URL(response.url).searchParams.get('since'), route:response._cccArchiveTiming.route};
+    });
+    assert.deepEqual(seen,{origin,status:304,since:'valid',route:'same-origin'});
+    assert.equal(readerHits.filter(u=>u.startsWith('/api/conversations/list')).length,0,
+      'the token-holding boot read skips the reader origin');
+    assert.equal(readerHits.length,0,'the reader warm-up waits for the archive to settle');
+    await page.evaluate(()=>{window.__cccArchiveSettled=true;window.dispatchEvent(new Event('ccc:archive-settled'));});
+    await page.waitForFunction(()=>performance.getEntriesByType('resource')
+      .some(e=>e.name.includes('/api/conv-reader/ping')));
+    assert.ok(readerHits.some(u=>u.startsWith('/api/conv-reader/ping')),'the reader connection is opened for later polls');
+  } finally {await context.close();await new Promise(r=>reader.close(r));}
+});
+
 test('expired, future-dated, oversized, malformed and other-window records cannot seed validation', async () => {
   const context=await browser.createBrowserContext(), page=await context.newPage();
   try {

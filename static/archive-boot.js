@@ -758,8 +758,24 @@
       // Start from the committed hint while IndexedDB opens. A concurrent
       // save or cleared storage can invalidate it; stop the speculative read.
       if (earlyValidator) read.then(base => { if (!matchesBase(base)) controller.abort(); });
-      const response = await window.__cccListFetch(target, {signal:controller.signal, headers});
-      response._cccArchiveTiming = {start,headers:response._cccHeadersAt ?? performance.now()};
+      // CCC-725: a boot read holding a saved delta token answers with a small
+      // delta, so on a phone the reader port's fresh TLS handshake (~1 s) was
+      // most of its cost. It goes to the page's own, already-open connection;
+      // the dashboard relays a reader token to the reader (CCC-701), keeping
+      // the build off its GIL. Full boot reads (no token) stay direct.
+      const directBase = value?.delta ? listDirectBase() : null;
+      const response = directBase
+        ? await nativeFetch(target, {signal:controller.signal, headers})
+        : await window.__cccListFetch(target, {signal:controller.signal, headers});
+      response._cccArchiveTiming = {start,headers:response._cccHeadersAt ?? performance.now(),
+        route: directBase ? 'same-origin' : undefined};
+      // Open the reader connection in the background for later direct polls.
+      if (directBase) {
+        const warm = () => nativeFetch(directBase + '/api/conv-reader/ping', {
+          credentials:'include', mode:'cors', cache:'no-store'}).catch(() => {});
+        if (window.__cccArchiveSettled) warm();
+        else window.addEventListener('ccc:archive-settled', warm, {once:true});
+      }
       if (response.ok && response.status !== 304) {
         // Drain the early response while the application initializes. Leaving
         // it unread behind the preview paint can stall a large full reply.

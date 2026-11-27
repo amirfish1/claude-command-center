@@ -5087,6 +5087,12 @@
           // parsed body. app_wait_ms = how long the ready list waited for
           // the application to start; filled in once the body is consumed.
           _perfBoot = { call_ms: Math.round(_perfCallAt), headers_ms: Math.round(earlyTiming.headers) };
+          // CCC-725: a token-holding boot read goes same-origin; relay says
+          // whether the dashboard passed it to the reader.
+          if (earlyTiming.route) {
+            _perfBoot.route = earlyTiming.route;
+            try { _perfBoot.relay = r.headers.get('X-CCC-List-Relay') || ''; } catch (_) {}
+          }
           try {
             // response.url names the origin that served it (the reader
             // process for a direct read), which Resource Timing is keyed by.
