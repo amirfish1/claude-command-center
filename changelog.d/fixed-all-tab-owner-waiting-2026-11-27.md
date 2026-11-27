@@ -1,0 +1,1 @@
+- All now shows a session with no ticket while it waits on you, even without reply buttons, and keeps the conversation you have open; on large boards these had dropped into Other.

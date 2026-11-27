@@ -7,10 +7,11 @@ const modelCode = app.slice(app.indexOf('  const _NON_WORKER_SPAWNED_VIAS'), app
 const foldCode = app.slice(app.indexOf('  function _continuationFoldMaps('), app.indexOf('  let _f2ContinuationEdgesCache'));
 const budgetCode = app.slice(app.indexOf('  function _sidebarBudgetIdeaLane('), app.indexOf('  // What an empty list says'));
 
-function setup(rows, {engine = '', cutoff = 0, f2 = {}, workerIds = [], liveWorkers = [], ticketView = false} = {}) {
+function setup(rows, {engine = '', cutoff = 0, f2 = {}, workerIds = [], liveWorkers = [], ticketView = false, open = ''} = {}) {
   const classifications = [];
+  const sectioned = [];
   const context = {
-    Map, Set, currentConversation: '',
+    Map, Set, currentConversation: open,
     workerSelfTicketRef: row => row.selfTicket || '',
     _workerRoleFromPrompt: row => row.promptRole || '',
     workerRowFacts: row => ({isHelper: !!row.helperTicket, ticketRef: row.helperTicket}),
@@ -20,7 +21,7 @@ function setup(rows, {engine = '', cutoff = 0, f2 = {}, workerIds = [], liveWork
     ideaTicketsOn: () => true,
     ticketViewOn: () => ticketView,
     _ultraFreshCurrent: row => row.fresh || row,
-    ticketSessionSection: row => row.state === 'working' ? 'active' : 'needs-you',
+    ticketSessionSection: row => { sectioned.push(row.session_id); return row.state === 'working' ? 'active' : 'needs-you'; },
     _uxqHealthCache: {worker_session_ids: workerIds}, _wtWorkersCache: {workers: liveWorkers},
     classifyKanbanColumn: row => {
       classifications.push(row.session_id);
@@ -38,7 +39,7 @@ function setup(rows, {engine = '', cutoff = 0, f2 = {}, workerIds = [], liveWork
   const page = (tab, limit = 240, search = false) => context._boundSidebarRowsForRender(rows, limit, tab, {
     matches: row => model.matches(row, tab, search), parentIds: model.parentIds, search,
   });
-  return {context, model, page, classifications};
+  return {context, model, page, classifications, sectioned};
 }
 const row = (id, extra = {}) => ({session_id: id, modified: 100, engine: 'codex', ...extra});
 
@@ -154,6 +155,31 @@ test('live unticketed decisions reach All and Ticket view when routine terminal 
   assert.equal(model.matches(terminal, 'archived', false), false);
   assert.equal(model.matches(working, 'archived', false), true);
   assert.equal(model.matches(explicitOther, 'archived', false), true);
+});
+
+test('CCC-714: a ticketless session waiting on the owner without chips, or open, is in All', () => {
+  // f1acbe56 shape: no ticket, an owner step and no next_actions, on a board
+  // with more than 50 ticketless coding sessions.
+  const waiting = row('waiting', {state: 'idle', session_state: {
+    next_step_user: 'Say what "one system" should let you do; Q1400 waits on that.', next_actions: null}});
+  const done = row('done', {state: 'idle', session_state: {next_step_user: 'None.'}});
+  const approval = row('approval', {state: 'idle', needs_approval: true});
+  const archived = row('archived-wait', {archived: true, session_state: waiting.session_state});
+  const ordinary = Array.from({length: 51}, (_, i) => row('ordinary-' + i));
+  const rows = [...ordinary, waiting, done, approval, archived];
+  const {model, sectioned} = setup(rows, {open: 'ordinary-3'});
+  assert.equal(model.ticketlessInAll, false);
+  assert.equal(model.matches(waiting, 'alltickets', false), true);
+  assert.equal(model.matches(waiting, 'archived', false), false);
+  assert.equal(model.matches(approval, 'alltickets', false), true);
+  assert.equal(model.matches(done, 'alltickets', false), false, 'no owner step stays in Other');
+  assert.equal(model.matches(done, 'archived', false), true);
+  assert.equal(model.matches(archived, 'alltickets', false), false);
+  assert.equal(model.matches(ordinary[3], 'alltickets', false), true, 'the open conversation stays in All');
+  assert.equal(model.matches(ordinary[4], 'alltickets', false), false);
+  for (const r of rows) model.matches(r, 'archived', false);
+  assert.deepEqual([...new Set(sectioned)].sort(), ['approval', 'waiting'],
+    'only owner-step candidates pay for the section check');
 });
 
 test('engine and time filters exclude hidden rows from the remaining count; search spans both', () => {

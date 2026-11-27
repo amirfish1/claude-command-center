@@ -22729,6 +22729,8 @@
     'not available',
     'not-available',
   ]);
+  // Same "nothing for the owner" wording rowOutcomeView treats as no step.
+  const _NO_OWNER_STEP_RE = /^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?(?:\s+[—–-]\s+.*)?$/i;
 
   // Disposable checks are separate from the work they inspect. A model name
   // alone is not evidence: ordinary reviewers can use the same small model.
@@ -22946,15 +22948,30 @@
       && _archiveEngineAllowsRow(c, engineFilter) && laneFor(c) === 'coding').length;
     // This threshold is a property of the full list, not the current page.
     const ticketlessInAll = _ideaTicketsOn && codingCount <= 50;
+    // On a large board a ticketless session still belongs in All while it
+    // waits on the owner (approval, question, or an owner step with or
+    // without reply chips) and while it is the open conversation (CCC-714).
+    // Recency of "owner" input is no signal: worker and headless prompts set
+    // last_owner_input_at and turn_driver too. The cheap field check keeps
+    // ticketSessionSection off the thousands of rows that cannot qualify.
+    const openId = typeof currentConversation === 'string' ? currentConversation : '';
+    const ownerStepCandidate = (fresh, state) => {
+      if (fresh.needs_approval || fresh.question_waiting || state?.next_actions?.length) return true;
+      const next = String(state?.next_step_user || '').trim();
+      if (next && !_NO_OWNER_STEP_RE.test(next)) return true;
+      const comp = state?.completion;
+      return !!comp && comp.valid === true && !comp.ready_to_close;
+    };
     const codingInAllCache = new Map();
     const codingInAll = (c, lane = laneFor(c)) => {
       if (!_ideaTicketsOn || lane !== 'coding') return false;
       if (ticketlessInAll) return true;
       if (!codingInAllCache.has(c)) {
         const fresh = _ultraFreshCurrent(c);
-        const state = fresh.session_state;
-        codingInAllCache.set(c, !fresh.archived && !fresh.trashed
-          && state?.next_actions?.length > 1 && ticketSessionSection(fresh) === 'needs-you');
+        const open = !!openId && (openId === c.id || openId === _allTabSessionId(c));
+        codingInAllCache.set(c, !fresh.archived && !fresh.trashed && (open
+          || (ownerStepCandidate(fresh, fresh.session_state)
+            && ticketSessionSection(fresh) === 'needs-you')));
       }
       return codingInAllCache.get(c);
     };
