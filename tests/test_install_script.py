@@ -425,6 +425,11 @@ class TestPrePushScript(unittest.TestCase):
                 "exit 1\n"
             )
             python3.chmod(0o755)
+            # Later node gates read files this fixture does not copy; a host
+            # with node must not fail the python3 lookup under test.
+            node = bin_dir / "node"
+            node.write_text("#!/usr/bin/env bash\nexit 0\n")
+            node.chmod(0o755)
             env = os.environ | {"PATH": f"{bin_dir}:{os.environ['PATH']}"}
             result = subprocess.run(
                 ["bash", str(script_dir / "pre-push.sh")],
