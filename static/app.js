@@ -8914,6 +8914,8 @@
 
 
   let _ttsPrimed = conversationInitializers._ttsPrimed();
+  // Shared conversation-core.js: _ttsAudioSession.
+  // Shared conversation-core.js: _ttsDeviceVoiceLabel.
   // Shared conversation-core.js: _primeTtsEngine.
 
   // Shared conversation-core.js: updateTtsCaption.

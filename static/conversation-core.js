@@ -6695,7 +6695,24 @@
     return words[lo];
   }
 
+  // iOS mutes the page's audio (Web Audio and speech) when the ringer switch is
+  // on silent unless the page asks for media playback. A read is media the
+  // user just tapped for, so claim playback while it runs and hand back after.
+  function _ttsAudioSession(type) {
+    try {
+      const session = navigator.audioSession;
+      if (session && session.type !== type) session.type = type;
+    } catch (_) {}
+  }
+
+  function _ttsDeviceVoiceLabel() {
+    const ua = navigator.userAgent || '';
+    if (/iPhone|iPad|Android/.test(ua)) return 'Phone voice';
+    return /Macintosh/.test(ua) ? 'Mac voice' : 'Device voice';
+  }
+
   function _primeTtsEngine() {
+    _ttsAudioSession('playback');
     if (sharedState._ttsPrimed || !window.speechSynthesis) return;
     sharedState._ttsPrimed = true;
     try {
@@ -6725,6 +6742,7 @@
     clearTtsHighlight();
     clearTtsCaption();
     _ttsShowVoice('');
+    _ttsAudioSession('auto');
     _ttsPerfFlush(sharedState._ttsChunkState);
     sharedState._ttsChunkState = null;
 
@@ -6926,6 +6944,7 @@
   }
 
   function _ttsStartChunkedSpeech(text, paneId, baseOffset, pauseOnStart, deviceOnly) {
+    _ttsAudioSession('playback');
     const hebrew = _ttsIsHebrew(text);
     const browserVoice = !deviceOnly && !hebrew
       && !/[^\p{Script=Latin}\p{Script=Common}\p{Script=Inherited}]/u.test(text)
@@ -6976,9 +6995,10 @@
 
     utterance.onstart = () => {
       if (sharedState._ttsUtterance !== utterance || sharedState._ttsChunkState !== state) return;
-      _ttsPerfStart(state, { engine: 'mac', voice: 'Mac voice' });
+      const deviceVoice = _ttsDeviceVoiceLabel();
+      _ttsPerfStart(state, { engine: 'mac', voice: deviceVoice });
       setTtsButtonsState(true, false, state.paneId);
-      _ttsShowVoice('Mac voice');
+      _ttsShowVoice(deviceVoice);
       setTtsButtonsBusy(false);
       ttsButtons().forEach(btn => {
         if (ttsButtonPaneId(btn) === sharedState._ttsActivePaneId) {
