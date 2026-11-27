@@ -6912,8 +6912,22 @@
       wall_ms: Math.round(end - p.t0), mode: p.mode || 'clips', cue: !!p.cue,
       event_lag_ms: Math.round(seen - end),
       longtask_ms: _perfLongTaskMs(p.t0, seen), client: _ttsClientTag(),
-      session_ms: p.sessionMs, split: p.split,
+      session_ms: p.sessionMs, split: p.split, ..._ttsDiagFields(),
     } });
+  }
+
+  // Why a read used the device voice is otherwise visible only in the
+  // phone's console: report the browser-voice state and audio routing.
+  function _ttsDiagFields() {
+    const out = {};
+    try {
+      const bv = window.cccBrowserVoice;
+      out.bv_status = bv ? String(bv.status || '').slice(0, 200) : 'missing';
+      out.bv_enabled = !!(bv && bv.enabled);
+      out.audio_session = navigator.audioSession ? String(navigator.audioSession.type) : 'none';
+      out.device_voices = window.speechSynthesis ? window.speechSynthesis.getVoices().length : -1;
+    } catch (_) {}
+    return out;
   }
 
   function _ttsClientTag() {
@@ -6933,13 +6947,16 @@
     // A single-stream read has no clip gaps: a smooth multi-clip one still
     // reports its 0 ms, or the gate would only ever see the stalled reads.
     const smoothStream = p.started && p.mode === 'browser';
-    if (!p.gaps && !p.stalls && !smoothStream) return;
+    const deviceRead = p.mode === 'device';
+    if (!p.gaps && !p.stalls && !smoothStream && !deviceRead) return;
     _perfEvent('tts_gap', Math.max(p.maxGap, p.maxStall), { detail: {
       max_gap_ms: Math.round(p.maxGap), gaps: p.gaps,
       max_stall_ms: Math.round(p.maxStall), stalls: p.stalls,
       voice: state.voice || '', chars: p.chars,
       clips: p.clips, played: state.index, target: p.target, rate: sharedState._ttsRate,
       mode: p.mode || 'device', client: _ttsClientTag(),
+      started: !!p.started, read_ms: Math.round(performance.now() - p.t0),
+      device_errors: p.deviceErrors || [], browser_error: p.browserError || '', ..._ttsDiagFields(),
     } });
   }
 
@@ -7035,6 +7052,11 @@
       }
       _ttsSpeakNextChunk();
     });
+    const settleError = utterance.onerror;
+    utterance.onerror = (event) => {
+      if (state.perf) (state.perf.deviceErrors = state.perf.deviceErrors || []).push(String((event && event.error) || 'error'));
+      settleError(event);
+    };
 
     try {
       window.speechSynthesis.speak(utterance);
@@ -7051,6 +7073,7 @@
     const fallback = error => {
       if (stale()) return;
       _ttsLog('BROWSER', 'fallback: ' + String(error.message || error));
+      if (state.perf) state.perf.browserError = String(error.message || error).slice(0, 200);
       sharedState._ttsBrowserPlayback?.cancel(); sharedState._ttsBrowserPlayback = null;
       sharedState._ttsUtterance = null;
       _ttsSetStreaming(false);

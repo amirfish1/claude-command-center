@@ -8979,6 +8979,7 @@
   // the page. The event waits behind any long main-thread task.
   // Coarse browser family, so a gate breach can be split by client.
   // Shared conversation-core.js: _ttsClientTag.
+  // Shared conversation-core.js: _ttsDiagFields.
 
   // Shared conversation-core.js: _ttsPerfFlush.
   // A read paused and left (tab closed, reload) still reports its gaps.
