@@ -5006,8 +5006,12 @@
         const prevEtag = sharedState._archiveAllEtag.get(key);
         const requestBase = sharedState._archiveAllData.get(key);
         const deltaBase = sharedState._archiveAllDelta.get(key);
-        // The token and order proof describe this particular array of rows.
-        const deltaToken = Array.isArray(requestBase) && deltaBase?.rows === requestBase ? deltaBase.token : null;
+        // The token and order proof describe this particular array of rows,
+        // or the earlier rows kept behind a full reply that carried no token
+        // (detached, see below), while those token-less rows are on screen.
+        const detachedBase = Array.isArray(requestBase) && deltaBase?.detached === requestBase;
+        const deltaToken = Array.isArray(requestBase) && (deltaBase?.rows === requestBase || detachedBase)
+          ? deltaBase.token : null;
         const baseOrder = deltaToken && /^[0-9a-f]{64}$/.test(deltaBase.order) ? deltaBase.order : '';
         // Hard timeout: without one, a wedged request (accepted connection,
         // response never arrives) hangs this promise forever — and every
@@ -5162,9 +5166,11 @@
         }
         let _merged = null;
         if (d && d.delta) {
-          const baseRows = sharedState._archiveAllData.get(key);
-          const savedOrder = baseRows === requestBase && d.since === deltaToken ? requestedOrder : null;
-          _merged = _mergeArchiveListDelta(baseRows, d, savedOrder);
+          const currentRows = sharedState._archiveAllData.get(key);
+          const sameBase = currentRows === requestBase && d.since === deltaToken;
+          // A detached token's delta applies to the rows that token named.
+          const baseRows = sameBase && detachedBase ? deltaBase.rows : currentRows;
+          _merged = _mergeArchiveListDelta(baseRows, d, sameBase ? requestedOrder : null);
         }
         if ((layered && !d) || (d?.delta && !_merged)) {
           // Ids we never had: resync with one full body.
@@ -5224,12 +5230,27 @@
         // validates it from here on.
         if (_merged) sharedState._archiveAllEtag.delete(key);
         else if (etag) sharedState._archiveAllEtag.set(key, etag);
+        // CCC-726: a full reply can carry no token when the server had no
+        // versioned rows to name (since=no_state, e.g. mid-publication).
+        // Dropping the token made the next read a tokenless full body too
+        // (~630 KB). Keep the token with the rows it names, detached from the
+        // rows now shown; the next read asks for changes since it.
+        // Only the token this read actually sent, and only while it is still
+        // the current one (an unmergeable resync has already discarded it).
+        const keepToken = !d.delta_token && !_merged && !!deltaToken
+          && sharedState._archiveAllDelta.get(key) === deltaBase
+          && new URLSearchParams(String(_perfFetchUrl).split('?')[1] || '').get('since') === deltaToken;
         if (d.delta_token) sharedState._archiveAllDelta.set(key, {
           rows: convs, token: d.delta_token, order: d.order_token,
         });
+        else if (keepToken) sharedState._archiveAllDelta.set(key, {...deltaBase, detached: convs});
         else sharedState._archiveAllDelta.delete(key);
         if (!opts.includePrs && !opts.initial) {
           _scheduleArchiveSidebarCache(convs, params.get('window'));
+        }
+        // The saved copy already holds the base that token names; a
+        // token-less copy would make the next page load a full read.
+        if (!opts.includePrs && !opts.initial && !keepToken) {
           window.__cccArchiveSnapshot?.save({url, rows:convs,
             etag:sharedState._archiveAllEtag.get(key), delta:d.delta_token,
             order:d.order_token},

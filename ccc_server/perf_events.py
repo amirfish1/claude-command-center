@@ -32,6 +32,7 @@ import collections
 import json
 import math
 import os
+from pathlib import Path
 import re
 import subprocess
 import threading
@@ -52,9 +53,23 @@ PERF_TICKET_STATE_FILE = _core.COMMAND_CENTER_STATE_DIR / "perf-ticket-state.jso
 _STATE_DIR_OVERRIDE = None
 
 
-def _events_path():
+def _state_override():
+    """Tempdir for perf state, or None for the real one.
+
+    CCC_PERF_STATE_DIR is set by the test package (tests/__init__.py): test
+    servers built list replies through the real handler and appended them to
+    the live perf log, where they read as real list_server samples (CCC-726).
+    """
     if _STATE_DIR_OVERRIDE is not None:
-        return _STATE_DIR_OVERRIDE / "perf-events.jsonl"
+        return _STATE_DIR_OVERRIDE
+    env = os.environ.get("CCC_PERF_STATE_DIR", "").strip()
+    return Path(env) if env else None
+
+
+def _events_path():
+    override = _state_override()
+    if override is not None:
+        return override / "perf-events.jsonl"
     return PERF_EVENTS_FILE
 
 
@@ -69,8 +84,9 @@ def _app_events_path():
 
 
 def _ticket_state_path():
-    if _STATE_DIR_OVERRIDE is not None:
-        return _STATE_DIR_OVERRIDE / "perf-ticket-state.json"
+    override = _state_override()
+    if override is not None:
+        return override / "perf-ticket-state.json"
     return PERF_TICKET_STATE_FILE
 
 

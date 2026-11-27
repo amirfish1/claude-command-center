@@ -1221,3 +1221,57 @@ test('a background refresh of the window on screen reports list_poll; waited-for
     assert.deepEqual(events.map(e=>e.kind).filter(k=>k.startsWith('list_')), [want], JSON.stringify([stateOver, opts]));
   }
 });
+
+test('a full reply without a token keeps the sent token so the next read stays a delta (CCC-726)', async () => {
+  // since=no_state: the server had no versioned rows, so its full reply named
+  // no token. The next read used to send none and pay a second full body.
+  const f = setup({snapshot:{url:fullUrl}, response:reply({conversations:rows, delta_token:'base'})});
+  await f.context.loadArchiveAll();
+  assert.equal(f.saves.length, 1);
+  const unversioned = [{session_id:'recent', modified:5}, {session_id:'older'}, {session_id:'fresh'}];
+  const replies = [
+    reply({conversations:unversioned}),
+    reply({delta:true, since:'base', ids:['fresh','recent','older'], delta_token:'next',
+      conversations:[{session_id:'fresh'}, {session_id:'recent', modified:6}]}),
+    reply(null, 304),
+  ];
+  f.context.backgroundApiFetch = async (url, init) => { f.reads.push({url, init}); return replies.shift(); };
+  const shown = await f.context.loadArchiveAll();
+  assert.deepEqual(Array.from(shown, row => row.session_id), ['recent','older','fresh']);
+  assert.equal(new URL(f.reads[1].url, 'http://localhost').searchParams.get('since'), 'base');
+  assert.equal(f.saves.length, 1, 'the token-less copy does not replace the saved base its token names');
+  const merged = await f.context.loadArchiveAll();
+  const sent = new URL(f.reads[2].url, 'http://localhost').searchParams;
+  assert.equal(sent.get('since'), 'base', 'the next read asks for changes since the kept token');
+  assert.equal(sent.get('history_layer'), null);
+  assert.deepEqual(Array.from(merged, row => [row.session_id, row.modified]),
+    [['fresh', undefined], ['recent', 6], ['older', undefined]], 'the delta applies to the rows its token named');
+  assert.equal(f.savedDeltas[1].from, 'base', 'the saved patch continues from the persisted base');
+  await f.context.loadArchiveAll();
+  assert.equal(new URL(f.reads[3].url, 'http://localhost').searchParams.get('since'), 'next');
+});
+
+test('a kept token is never reused for rows the page replaced, nor after an unmergeable resync', async () => {
+  const f = setup({response:reply({conversations:rows, delta_token:'base'})});
+  await f.context.loadArchiveAll();
+  f.context.backgroundApiFetch = async (url, init) => { f.reads.push({url, init}); return reply({conversations:rows.slice()}); };
+  await f.context.loadArchiveAll();
+  f.state._archiveAllData.set(fullUrl, rows.slice());
+  await f.context.loadArchiveAll();
+  assert.equal(new URL(f.reads[2].url, 'http://localhost').searchParams.get('since'), null,
+    'a different row base cannot use the kept token');
+
+  const g = setup({response:reply({conversations:rows, delta_token:'base'})});
+  await g.context.loadArchiveAll();
+  const replies = [
+    reply({delta:true, since:'base', ids:['missing'], conversations:[], delta_token:'new'}),
+    reply({conversations:rows.slice()}),
+    reply({conversations:rows.slice(), delta_token:'fresh'}),
+  ];
+  g.context.backgroundApiFetch = async (url, init) => { g.reads.push({url, init}); return replies.shift(); };
+  await g.context.loadArchiveAll();
+  assert.equal(new URL(g.reads[2].url, 'http://localhost').searchParams.get('since'), null, 'resync is a plain full read');
+  await g.context.loadArchiveAll();
+  assert.equal(new URL(g.reads[3].url, 'http://localhost').searchParams.get('since'), null,
+    'a token the resync discarded is not kept');
+});

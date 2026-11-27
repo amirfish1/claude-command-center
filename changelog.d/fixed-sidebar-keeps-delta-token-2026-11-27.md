@@ -1,0 +1,1 @@
+- The sidebar no longer downloads the whole session list twice in a row when the server briefly answers a refresh without a change token; the next refresh asks only for what changed.
