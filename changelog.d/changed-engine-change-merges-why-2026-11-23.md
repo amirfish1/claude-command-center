@@ -1,1 +1,0 @@
-- The new-session composer has one engine control: **Change** opens the model picker, and the allowance and ranking card now floats beside it instead of sitting behind a separate **Why?** toggle and pushing the composer down.

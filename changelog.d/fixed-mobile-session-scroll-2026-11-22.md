@@ -1,1 +1,0 @@
-- Scrolling inside a session on a phone keeps its momentum: the jump and read-aloud buttons now update when the scroll pauses instead of on every scroll frame.

@@ -1,1 +1,0 @@
-- Opening a preview keeps the conversation at least 560px wide instead of squeezing it to a sliver, and each session now remembers which preview it had open: switching back or reloading reopens it, and closing it with × or Esc forgets it.

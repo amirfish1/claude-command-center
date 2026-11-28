@@ -1,1 +1,0 @@
-- Avoid full archive scans when the sidebar loads pinned or recently moved sessions and their ancestors.

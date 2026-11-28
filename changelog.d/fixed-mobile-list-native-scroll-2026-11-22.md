@@ -1,1 +1,0 @@
-- The phone session list now scrolls with full native momentum: the CI, workers and New session bars slide away with the list instead of being moved by script, so flicks no longer stutter or stop short.

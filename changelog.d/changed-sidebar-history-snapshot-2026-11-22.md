@@ -1,1 +1,0 @@
-- Reuse a validated local snapshot for the complete session archive so repeat reads only project sessions whose inputs changed.

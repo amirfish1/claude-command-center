@@ -1,1 +1,0 @@
-- Reused a background archive snapshot after large sidebar refreshes to reduce work when opening All again.

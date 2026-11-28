@@ -7,6 +7,314 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.1.0] - 2026-11-28
+
+### Added
+- Steer now works on Antigravity sessions: CCC drives each conversation through `agy acp`, so a steered message joins the running turn (the agent reads it after its current step) instead of waiting for the turn to end. Falls back to the previous stream-json process if ACP can't start; set `CCC_ANTIGRAVITY_ACP=0` to turn it off.
+- Operators can reserve a bounded dashboard observation window after a planned restart while keeping routine requests queued and emergency restarts available.
+- `ccc decisions` now asks every paired machine by default (`--scope local` for this machine only); stored decision quotes from any machine are listed before session snippets, tagged with the machine they came from.
+- Assistant messages get a 📝 "Copy and open as MD file" icon that copies the message, saves it as a Markdown file, and opens it in the file preview.
+- Web links now open in a real remote-rendered browser inside the right-hand preview pane: a headless Chromium streams frames into the rail with click, scroll, and keyboard input, so sites that block iframes (GitHub, Google, Slack…) render and stay interactive. Falls back to the old iframe preview when the browser helper can't start.
+- `ccc recall` now searches WatchTower ticket text (filing, comments, questions, answers and close summary) on every paired machine, and lists the sessions that closed or worked each matching ticket.
+- Show separate elapsed timers on the latest narration and tool preview in the conversation’s Working block.
+
+### Changed
+- The new-session **Why?** panel now lists the other ranked engines with their remaining allowance, or the reason each was skipped. Click one to use it instead.
+- Start validating the saved All sessions list while its IndexedDB snapshot opens so startup work delays the reload less.
+- Large archive updates refresh the saved server base in the background and keep recently superseded browser caches eligible for incremental updates.
+- Reduce disk reads during archive refreshes by selecting and ordering hot conversations before loading their bodies.
+- Batch SQLite checkpoints during small archive updates so a single transcript change is less likely to pay for earlier writes.
+- Load the All sidebar archive while checking for live Antigravity terminal sessions, so process discovery can overlap with the archive read.
+- Skip scanning unchanged cold sidebar pages during incremental conversation archive refreshes.
+- Reduce archive refresh overhead by scoping launch metadata lookups to the sessions being refreshed and running fewer garbage-collection passes in one-shot builds.
+- Reuse a fresh Codex liveness sample and a single launch-marker snapshot during background archive refreshes.
+- Reduce archive refresh work by rechecking spawn markers only for the sessions being refreshed.
+- Warm archive refreshes spend less time preparing titles from long Codex prompts.
+- Batch Codex continuation title lookups when validating the full conversation archive.
+- Warm archive refreshes reuse unchanged prose scores and read only the ticket and Codex title data needed by the archive.
+- Opening session artifacts and web previews (images, videos, PDFs, HTML files, Markdown links, and inline-code/conversation web URLs) on desktop now displays them in the right-hand status rail (`#statusRailFileViewer`) alongside the active session, automatically collapsing the left-hand session list to make room and restoring it on close.
+- Reduce delays when the All sidebar restores older session rows while the dashboard is busy.
+- `ccc run` sessions now write a typed spawn marker and file under the dashboard's Other lane by default instead of landing in Coding/All among interactive sessions; new `--lane {other,workers,coding}` flag picks a different lane or opts out.
+- Reduce full All archive downloads when many sessions change order.
+- Reduce the size of packed full-history sidebar responses by omitting JSON whitespace.
+- Startup performance now has its own measurement: the dashboard reports how long it takes to become ready to show the session list (`dash_boot` in `/api/perf/stats`), and the first session-list read no longer counts the time its already-delivered list spent waiting for the dashboard to start.
+- Reduced the work needed to refresh Devin session metadata in the sidebar.
+- Reduce dashboard contention by moving large Devin sidebar lock checks to the background helper.
+- The new-session composer has one engine control: **Change** opens the model picker, and the allowance and ranking card now floats beside it instead of sitting behind a separate **Why?** toggle and pushing the composer down.
+- The auto-pick **Why?** panel now has two tabs. **Allowances** shows two bars per account on the same scale: how much of the allowance is used and how much of its week (or day) has elapsed, so a shorter Used bar means spare quota, with banked resets and plan end dates as tokens and the account's models as one-click chips. **Ranking** lets you drag to reorder the Deep and Routine lists and drag a "good enough" line.
+- Auto-pick is now expiry-first: among models above your good-enough line, the allowance that would waste the most per hour wins (a daily window expiring tonight beats weekly spare). Behind-pace accounts sink unless a banked reset can refill them, and a plan end date counts everything left as expiring then.
+- Reduced the time the background archive publisher spends reading saved conversation titles.
+- Reuse compressed seven-day sidebar responses during dashboard startup when the browser accepts Zstandard.
+- Use Zstandard for full conversation archive downloads when the client supports it, reducing transfer size and server compression work.
+- Apply current archive, trash, and lane flags only to rows the recent Sessions preview inspects.
+- Large All archives use asynchronous browser storage reads on reload and smaller transfers on fresh visits.
+- Background refreshes of the sidebar list now report as their own `list_poll` speed metric with a 3 s budget; `list_read` keeps the 1 s budget for list loads you wait for (first load, switching views, forced refresh).
+- On phones, the read-aloud and last-message row above a session now scrolls away while you read back through the transcript and slides back in at the latest message, without interrupting momentum scrolling.
+- Phone session lists now use a native-style swipe: swipe left reveals More and Archive (a long swipe archives at once), swipe right stars the session for today, and More opens a bottom sheet with the session's other actions, with Trash shown in red.
+- The new-session **Change** panel now floats above the composer, so opening it no longer moves the Routine/Deep row. Model ranking and allowance pace are one list: each ranked model shows its used-versus-time meter and verdict, with **Edit order** for drag-to-reorder.
+- Narrow sidebar rows now show only the session name and its status line; ticket, AUTO, context %, lanes, earlier-sessions, PR and suggested-action chips are hidden there.
+- A turn now shows a single "Working" block: the latest narration and the latest command replace each other in place under it, instead of a new "Working" row after every message. Expand it to see the full history.
+- Show the All sidebar's initial selection sooner while the full archive is loading.
+- On phones, the session list shows changes after a page load about a second sooner: its first refresh reuses the page's open connection instead of opening a new one to the list reader.
+- Opening a file or web preview now narrows the session list to its narrow layout instead of hiding it, and closing the preview restores its previous width.
+- Opening a preview keeps the conversation at least 560px wide instead of squeezing it to a sliver, and each session now remembers which preview it had open: switching back or reloading reopens it, and closing it with × or Esc forgets it.
+- The standalone queue board downloads only changed tickets after its first load, reducing repeat transfer while keeping ticket order and removals current.
+- Full queue lists use Zstandard when the client supports it, reducing compression work while preserving gzip and plain JSON responses.
+- Reused a background archive snapshot after large sidebar refreshes to reduce work when opening All again.
+- Saved seven-day sidebar reloads reuse the encoding of an unchanged ticket snapshot.
+- Reduce the work needed to open the All sidebar by reusing unchanged archive preview pages.
+- Reuse the sidebar list's ticket encoding while ticket and lineage data stays unchanged.
+- Savings reads transcript file stamps in a batch without rounding them, reducing contention during ledger refreshes.
+- Concurrent Savings requests share one transcript scan per ledger. While a scan is running, other ranges can display committed totals with the existing partial-data indicator.
+- Savings refreshes use one filesystem scan to check transcript types and modification times, reducing background work on large archives.
+- Reduce continuation-topic lookup work when opening a large conversation sidebar window.
+- Skip redundant Settings ownership scans when the dashboard updates help or status text.
+- Reuse the compact seven-day archive response in the browser cache to reduce storage and speed up saved reloads.
+- Reduced server work when rebuilding the seven-day sidebar from cached rows while keeping current ticket updates and live session timestamps.
+- The seven-day conversation list reuses window membership from a matching recent preview when it is available.
+- Reduce nested row copying when building the packed seven-day conversation sidebar response.
+- Keep archive snapshot reads and refreshes responsive while the sidebar hashes its appended rows.
+- Reduce transfer size for large saved sidebar archive snapshots, including the seven-day view.
+- Build the mutable sidebar view faster when loading the full archive or reopening a saved archive.
+- Bound the Codex sidebar title lookup to the latest thread candidates so archive refreshes skip sending the entire archive ID set to SQLite.
+- Reuse continuation-topic records on repeated sidebar loads while the archive database is busy.
+- Reuse validated archive membership across sidebar refreshes when the captured rows are unchanged.
+- Skip reading Codex sidebar details for indexed threads that are too old to appear in the live overlay.
+- Skip loading a second large sidebar archive file on startup when the current archive can be validated against the newer snapshot.
+- Cold All sidebar loads can reuse the archive snapshot already read from disk when the current changes fit a bounded projection.
+- Reuse the All sidebar’s continuation-title snapshot across transcript activity that leaves titles unchanged.
+- Defer gzip for conversation-list requests that prefer another encoding, preserving gzip fallback and restart replay.
+- Reduce filesystem work when the conversation sidebar checks for recent Devin sessions missing from its archive snapshot.
+- Reuse stored row bytes to check unchanged All sidebar rows on the first load after a restart.
+- The full seven-day conversation list can reuse the preview's window selection while the preview is still choosing which recent rows to display.
+- Reuse unchanged session-family graphs when checking for sidebar updates.
+- Reduced conversation sidebar selection work by tracking family links that can add rows to the current window.
+- Reduce repeated guard comparisons and family edge processing when the sidebar validates an All history update.
+- The All sessions archive can read its ordered inventory without loading the full row bodies from SQLite.
+- All archive refreshes send fewer repeated rows, and local browsers can use faster Zstandard compression for deltas.
+- Reuse a validated local snapshot for the complete session archive so repeat reads only project sessions whose inputs changed.
+- Skip redundant identity encoding when building a sidebar archive response from a hot-only selection.
+- Reuse sidebar identity and ancestry checks for unchanged conversations when the live archive snapshot refreshes.
+- Reduce cold sidebar load delays under CPU contention by reading hot archive rows in bounded SQLite batches.
+- Reduce the server work needed to read the full sidebar archive inventory.
+- Large updates to the All sidebar use a more compact response on compatible browsers.
+- The sidebar conversation list is now served by the conversation-reader process, so it loads quickly even while the dashboard is busy; reads fall back to the dashboard automatically. Set `CCC_LIST_READER=0` to turn it off.
+- Use Zstandard for conversation lists when browsers advertise it alongside equally preferred Brotli, reducing compression delays on fresh responses.
+- Skip redundant topic resolution for established standalone sessions when loading the conversation sidebar.
+- Reduce the data transferred by full seven-day sidebar loads using shared row layouts.
+- Reuse continuation-topic reads after small batches of new standalone topics commit in another process.
+- Seven-day sidebar rebuilds reuse prepared fields for unchanged rows after an archive refresh.
+- Compress sidebar previews with Zstandard when the client supports it, reducing encoding time and transfer size.
+- Share the recent preview’s source snapshot with the matching seven-day sidebar load to avoid scanning live overlays twice.
+- The All archive preview reads indexed timestamps directly from SQLite, reducing the work needed to show recent sessions.
+- Reduce repeated work when the sidebar selects recent conversations and calculates when that selection expires.
+- Start the Antigravity process lookup alongside seven-day sidebar reads to reduce the wait for recent sessions.
+- Avoid measuring the status rail twice when opening the session archive with the rail expanded.
+- Sidebar list reads after a page load stay fast: the list reader prebuilds the one-day body after each refresh, and the one-day read starts its process lookup in parallel.
+- Prepare the full sidebar archive in the background after a large first refresh so the next All load can reuse its results.
+- Decode packed sidebar rows faster during full archive loads and saved archive reloads.
+- Reuse the captured hot sessions across saved All sidebar refreshes when the archive source is unchanged.
+- Seven-day sidebar reloads use smaller updates when a few sessions enter, leave, or move within a saved list.
+- Saved All sidebar updates can reuse more of the saved session order when many rows move, reducing the size of the refresh.
+- Reduce field projection work when building conversation sidebar responses.
+- Reuse a validated archive snapshot to deliver the complete seven-day conversation sidebar with a smaller projection after the snapshot changes.
+- Reuse conversation title lookups across archive windows so the sidebar spends less time resolving continuation topics.
+- Skip a redundant native title lookup when a concurrent topic write has already invalidated the sidebar’s first archive snapshot.
+- Reuse ticket projection guards across archive reads of the same ticket snapshot.
+- Reduced sidebar archive work by projecting only recent ticket moves for bounded history lookups.
+- The archive sidebar can reuse its continuation topics after several small local commits, avoiding a full topic read when every revision is accounted for.
+- Reduce the work needed to resolve topics when loading the conversation sidebar archive.
+- Reduce database page reads when the conversation sidebar reloads continuation origins.
+- Reduce the work needed to read continuation topics when loading the conversation sidebar.
+- Cold conversation sidebar loads read continuation topics in fewer SQLite batches.
+- Reuse continuation-topic records when a small, verified topic update overlaps an archive load.
+- Reduced contention when the conversation sidebar rebuilds its continuation-topic snapshot.
+- Prepare continuation topics alongside the saved seven-day sidebar after startup so the first full view can reuse them.
+- Reduce sidebar work by resolving mounted row controls only and computing throughput counts when Debug mode is enabled.
+- Reduce the work needed to load the saved All sidebar by retaining only rows that can take part in ticket processing.
+- Reduce dashboard layout work by preserving reader scroll once when opening the status rail.
+- Reduce layout work during dashboard startup when the status rail already has the correct width.
+- Thinking text stays visible in full while a turn's Working block is collapsed; only tool calls fold away.
+- Reduce database round trips when loading continuation titles for large conversation lists.
+- Reduce CPU use when the usage-limit watcher scans old Claude transcripts.
+- WatchTower alerts reuse status fields from the published ticket snapshot, avoiding a second parse of ticket histories after refresh.
+- Opening a turn's Working history now shows thinking in full while tool calls stay collapsed.
+
+### Fixed
+- Stop building bounded sidebar archive responses when the dashboard cancels their requests.
+- Stop building recent archive updates when the requesting tab has moved on, while still completing updates shared with another tab.
+- Stop building a shared All sidebar response once every browser waiting for it has navigated away.
+- Stop shared sidebar archive reads early when all browser requests waiting for the snapshot disconnect.
+- The sidebar stops reading continuation topics when a local browser cancels an archive request.
+- Stop reading the full sidebar archive after a local browser disconnects, including when the archive uses its unpacked SQLite fallback.
+- All now shows a session with no ticket while it waits on you, even without reply buttons, and keeps the conversation you have open; on large boards these had dropped into Other.
+- Antigravity session rows show background work and pick up the final reply when the native transcript changes.
+- Shortened the Antigravity session footer account labels to leave more room for the context meter and other controls.
+- Antigravity sessions over the auto-compact limit now compact after 10 minutes idle, so your next message runs right away instead of waiting behind a compaction.
+- Antigravity queued messages now show a Steer button. It's enabled when the session runs on `agy acp` (so the button doubles as the "is this on ACP?" indicator), and otherwise shown disabled with a tooltip explaining that the next message switches the session to ACP. The composer's Steer button works for ACP Antigravity sessions too.
+- Show live Antigravity activity in resumed session rows while the transcript catches up, and surface prolonged gaps in activity.
+- Reduce repeated Antigravity log scans in the sidebar once native transcript output is available.
+- Loopback previews in app shells and embedded conversations use the dashboard's bound port behind HTTPS, including when the conversation reader builds the page.
+- Speed up archive sidebar rendering by indexing continuation titles once per render.
+- Speed up archive refreshes when many small conversations age out of the recent history at once.
+- Small batches of sessions aging out of the recent archive no longer trigger repacking of every cold sidebar page they touch.
+- Archive rebuilds retain the hot-row index so the next transcript edit can update cold history pages incrementally.
+- Keep All conversation history loads on the faster packed path when recently active sessions age out of the hot window.
+- Warm archive refreshes reuse compact transcript lineage records and avoid reading full parser metadata for unchanged sessions.
+- Avoid a redundant full scan of session launch markers during background archive refreshes.
+- Archive refreshes that include engine updates now reuse unchanged dormant conversations across cache generations.
+- New transcripts can join the archive without a full session-index scan during refresh.
+- Archive refreshes reuse previously hydrated dormant rows after a verified point update, reducing work for small transcript changes.
+- Reduce repeat All conversations list latency when nearby refreshes straddle the history cache's expiry.
+- One-session archive refreshes update only the affected pages of the packed sidebar preview index.
+- Keep conversation archive lists available when sessions have queued inputs, and avoid collecting queue health twice while building seven-day lists.
+- Archiving a session on the phone now collapses its row smoothly instead of making the list jump, and no longer opens the next session's chat when the archived one was the last one you viewed.
+- Warm archive refreshes can update edited transcripts without reading the full archive row index.
+- Reduce disk writes on archive refreshes by storing transcript signatures separately from the archive list metadata.
+- Read recent Codex archive titles in one snapshot per account, reducing the work repeated during transcript refreshes.
+- Reuse unchanged continuation records across All-conversations sidebar requests.
+- Reuse unchanged continuation data on repeated All-history reads while keeping titles and new links current.
+- Archive refreshes use WatchTower worker identities without scanning transcripts for worker idle times.
+- The sidebar's first list read on page load now goes to the conversation-reader process too, instead of waiting behind a busy dashboard.
+- Dashboard startup and the 15-second queue poll no longer rebuild WatchTower ticket chips and the whole session list when no ticket changed, and the trimmed ticket list drops closed-ticket records only detail views read, cutting about 0.3-0.5 s of page freeze after each load.
+- Reduce post-spawn polling delays by looking up the requested Codex session directly when checking whether it has appeared.
+- Compact transcripts update one Working preview in place as reasoning and tools arrive, with expandable activity history.
+- Move connection notices to a compact panel near the top right and show whether the server is restarting, retries are underway, or a request failed.
+- Refreshing the daily throughput digest now calculates transcript totals in the background helper, reducing CPU use in the dashboard process.
+- Devin lanes report rate-limit stops and reset times to their dispatchers, and `ccc spawn --continue-from` follows the exact Devin session and its working directory.
+- Reuse the Devin sidebar's replay file inventory while its directory is unchanged, reducing work during repeated archive loads.
+- Show Working in the session list during native Devin CLI turns, including brief gaps between tools.
+- Embedded agent panes no longer fail when they load the session list on demand.
+- Sessions that ended recently no longer go missing from the session list and search. The background list refresh asked the worker about every past Codex session one at a time, kept hitting its time limit, and stopped picking up new sessions.
+- Refreshing the session sidebar (after a spawn, archive or manual refresh) now downloads only the sessions that changed instead of the whole list, so it no longer stalls for seconds on a slow connection.
+- The dashboard no longer freezes for 2-6 seconds every 30 minutes, half an hour after each restart, or after 12 hours of uptime; short-lived leftovers are cleaned on every regular pass, and the full memory sweep runs only if memory or open files grow abnormally, waiting for a moment with no request in flight.
+- **Grok transcripts no longer go missing behind plumbing noise.** Grok
+  Build >=1.0.92 leaves sessions that never completed a turn with an
+  `updates.jsonl` of pure `_x.ai` status events; transcript source
+  selection is now content-aware — it prefers whichever of
+  `updates.jsonl` / `chat_history.jsonl` / the CCC ACP transcript
+  actually carries conversation events, so cancelled or worker-driven
+  sessions show their prompt instead of an empty pane. Injected context
+  rows (`<user_info>`, `<system-reminder>`) are also filtered from
+  chat-history transcripts and titles now mine the real `<user_query>`
+  prompt.
+- `ccc run --worker-defaults` jobs (such as the BYM studio digest) now try the next Worker fallback route when the engine rejects the worker model as unsupported, instead of stopping after one attempt.
+- Queued messages to a headless Claude session could wait forever and then silently drop after the 600s hold TTL when an earlier injected input's `command_lifecycle` ended `cancelled` (queued → started → cancelled when its turn ended/errored before consuming it) instead of `completed`. Cancelled is now treated as a terminal acknowledgement, so the session stops reporting a turn in progress and the queue drains at the next boundary.
+- Hermes sidebar updates check the database for the watched conversation directly when messages invalidate the session index.
+- Archive refreshes write changed transcript metadata and archive rows, and send changed row bodies back to the dashboard.
+- Reduce repeated row indexing and hot-row selection during incremental archive refreshes.
+- Speaker on iPhone: reading aloud now plays even with the ringer switch on silent, and the phone's built-in voice is labeled "Phone voice" instead of "Mac voice".
+- The light theme no longer hides the first letter of the "Claude Command Center" title.
+- Session-limit notices are readable in the light theme instead of showing dark text on a dark card.
+- Sidebar refreshes no longer stall for 10-20 s on a slow connection: when a list read from the reader process stops making progress, the dashboard read now starts alongside it and the first complete answer wins, instead of discarding the read and starting over.
+- Phones and other browsers no longer re-download the whole session list after their first load: the background list reader now continues from where the dashboard's first read left off.
+- The sidebar list no longer reloads in full when a read falls back between the dashboard and its conversation reader; the dashboard now passes those reads to the reader, which answers with only the changes.
+- The sidebar no longer hangs for up to 45 seconds when the separate list-reader connection stalls; it falls back to the dashboard after a few seconds.
+- Fixed the daily DMG backfill on macOS, which crashed under bash 3.2 before building any pending signed app update.
+- Keep the mobile conversation Send button above the iPhone keyboard, including with expanded drafts and an active goal.
+- Scrolling the session list on phones no longer stops abruptly: the header finishes folding or unfolding only once the scroll comes to rest, so momentum scrolling stays smooth in both directions.
+- The phone session list now scrolls with full native momentum: the CI, workers and New session bars slide away with the list instead of being moved by script, so flicks no longer stutter or stop short.
+- Phone queue picker shows the list of queues again: the sheet stays on screen when the keyboard opens, and touch screens no longer pop up the keyboard as soon as the picker opens.
+- Keep multiline iPhone drafts and Send visible when the software keyboard opens over a conversation with read-aloud controls.
+- Scrolling inside a session on a phone keeps its momentum: the jump and read-aloud buttons now update when the scroll pauses instead of on every scroll frame.
+- Swiping a session row on a phone now shows the More and Archive buttons; they were laid out but hidden, so the swipe looked like it did nothing.
+- The mobile voice ticket button turns red while recording.
+- Give session names and previews more room in very narrow sidebars by removing portraits and timestamps from the title line.
+- Fixed the nav "Download" link to download the macOS DMG directly instead of scrolling to the install section. On mobile it was the only visible nav item, so tapping "Download" appeared to do nothing.
+- New sessions started from the composer reach Claude about 1.5 s sooner: the "already shipped?" check no longer runs for sessions a person starts, and the page frees its connection for the launch before checking the repo or folder. Each launch now records how long every step before it took, and logs a stack sample when one waits more than 3 s.
+- Clicking Send (or pressing Enter) repeatedly on a new session no longer launches the same session twice.
+- The sidebar no longer re-downloads the whole session list when you reload a page after a while: a saved list from earlier in the day now catches up with a small update even after many ticket or usage-limit changes (one phone reload went from a 633 KB download and 7.9 s to a small delta).
+- Show shared WatchTower launch and purpose evidence once in session origin details.
+- Reduce cold seven-day sidebar work by reusing existing row templates and caching the packed response for replay.
+- Large peer session inventories reuse their sorted cache between polls, reducing repeated dashboard CPU work.
+- Opening the dashboard after a quiet spell no longer waits for the sidebar reader to reload: it picks up new snapshots in the background (first sidebar read on phones ~400-970 ms faster on the server).
+- The dashboard opens faster on phones and slow connections: an unchanged page is no longer downloaded again on every load, and the service worker no longer sits in front of every request on iPhone and iPad.
+- Phone session list: the search and + buttons in the folded header no longer blink and fade back in about once a second while the list is scrolled.
+- An app's agent pane no longer reloads the whole session list four times after every message; it refreshes only its own row through the new `GET /api/conversations/<id>/row` endpoint.
+- Reduce dashboard queue refresh CPU by reusing the full snapshot's encoded rows for later delta checks.
+- Slow queue-list downloads no longer hold a shared slot needed by other dashboard background reads.
+- The Queues page follows the dashboard theme, including System mode and changes made while either page is open.
+- Fixed self-served previews falling back to the remote browser (or a blank
+  frame) when the dashboard is reached through the tailnet HTTPS proxy:
+  loopback URLs on the bound port now rewrite to a same-origin relative URL
+  so the plain iframe path survives mixed-content rules.
+- App routines and app builder agents now start on the next Worker fallback route when the worker model is rejected at launch, instead of failing the run.
+- Read Savings totals in bounded batches so a busy dashboard can serve other requests while loading the ledger.
+- Scheduled source releases keep the tested revision when main advances during the release gate.
+- The daily release cuts its WatchTower patch release from a pinned origin revision, so concurrent commits in the shared clone no longer fail the job after CCC ships.
+- Decision Inbox scans now load archive records only for live sessions, reducing CPU contention with sidebar loads on large archives.
+- Reduced the work needed to render the seven-day conversation sidebar preview.
+- Keep the compact seven-day sidebar snapshot when a refresh arrives before the first cache write.
+- Reuse unchanged ticket metadata when building the complete seven-day sidebar response.
+- Shorten the database lock held during WatchTower refreshes on large ship graphs by indexing ticket resolution edges.
+- Page loads with the 7d (or another non-default) sidebar window no longer rebuild the whole list on the request path after each archive update; the list reader now prebuilds every window a browser has used in the last day.
+- The All sidebar can reuse packed history after a restart even when hundreds of sessions have aged out of the recent snapshot.
+- Avoid full archive scans when the sidebar loads pinned or recently moved sessions and their ancestors.
+- Reduce browser work when loading and reloading the full session sidebar by copying archive rows more efficiently.
+- An All archive reload can reuse a slow saved snapshot after the server validates it, avoiding an unnecessary full download.
+- Retry a briefly locked archive database so sidebar startup can reuse saved row fingerprints. If the lock persists, show the fallback rows and refresh them in the background.
+- Read configured Codex accounts once when checking for new sessions and conversation titles in the sidebar.
+- Reduce sidebar refresh work by fetching Codex thread details only for threads missing from the archive during the ranked overlay read.
+- The conversation sidebar fetches missing Codex titles by row ID after ranking recent threads once, reducing repeated reads from the local thread index.
+- Reduce cold sidebar disk reads by covering continuation origins in the local ship index.
+- Open pages keep small sidebar updates across a dashboard restart: the restarted list reader answers the previous reader's delta token with only the rows that actually changed, checked against saved row digests, instead of resending the whole 1-7 day list.
+- Reduce sidebar list build work by reusing the serialized context snapshots that drive incremental updates.
+- Skip redundant family membership scans when the sidebar already contains the complete archive.
+- Reduce sidebar load delays by reusing the Codex goal snapshot while its database and write-ahead log remain unchanged.
+- Avoid rendering a hidden duplicate of the CI status list during dashboard startup and refreshes.
+- Reuse unchanged row data when rebuilding complete sidebar archive responses after small changes.
+- Reduce full sidebar archive reloads by reusing rows when a background refresh only changes the order of their top-level fields.
+- Reduce cold sidebar processing by reusing field layouts when encoding hot rows.
+- Rebuild the seven-day conversation archive in the background when its compressed snapshot no longer matches the rows served by the dashboard.
+- Reduce delays opening the full conversation archive when other dashboard work starts during its inventory scan.
+- The sidebar no longer downloads the whole session list twice in a row when the server briefly answers a refresh without a change token; the next refresh asks only for what changed.
+- Reuse unchanged conversation fingerprints after archive, trash, and lane updates so the sidebar refreshes faster.
+- Load the session sidebar faster on slow phone connections: list reads from the conversation reader no longer wait for a CORS preflight round trip first.
+- Sidebar list reads reuse their ticket and resume snapshots so the returned rows match the response’s refresh token.
+- The recent All-sidebar preview does less timestamp work when enough current sessions are available.
+- Build the first All sidebar preview with fewer database lookups for related sessions.
+- Reduce sidebar preview work by reusing activity timestamps and session family links during archive selection.
+- Reuse the prebuilt All sidebar history snapshot over gzip for browsers connected through a reverse proxy.
+- The sidebar list loads faster: reads share a recent process table for Antigravity terminal sessions instead of running a process scan on every read.
+- Prepare newly published sidebar history snapshots before the next archive request reads them.
+- Reuse row hashes from detached archive refreshes to reduce CPU work on the first full sidebar read.
+- Use compact order updates when saving large conversation archives so reordering rows can avoid rewriting the entire browser cache.
+- Reduce repeated sidebar archive validation work when continuation topics are unchanged.
+- Keep the sidebar's archive cache compatible with the rows retained during a
+refresh so reopening the seven-day view can reuse the cached archive.
+- Sidebar page loads stay fast after archiving, trashing or moving a session: the list reader rebuilds the cached list right away instead of on the next page load, and picks up archive updates in about a second instead of ~20 s.
+- Keep the previous sidebar archive snapshot available across dashboard restarts so saved tabs can refresh with just the changed conversations.
+- Reuse the saved sidebar order fingerprint when validating and encoding history updates.
+- Reduce conversation sidebar stalls when reading changed archive rows under load.
+- Sidebar archive updates reuse hot rows from the validated snapshot and load only the missing rows from disk.
+- Reduce sidebar refresh layout work while preserving the visible scroll anchor.
+- Reduce the pause after loading All sessions by saving the packed response directly for the next reload.
+- Keep the complete archive snapshot on its fast path after startup by capturing all cached title inputs and the selected recent rows.
+- A saved All sidebar can reload using the current archive snapshot when its previous validator expires, avoiding an extra disk read after a dashboard restart.
+- The sidebar no longer rebuilds the whole 7-day list on page load after a ticket or session change. It shows the last list at once and catches up with a small update right after.
+- Skip archive sidebar row hydration when a local topic commit has already superseded the read snapshot.
+- Prepare a saved sidebar history base in the background after dashboard startup so the first complete archive view can reuse it.
+- Keep the All sidebar on its cached path when the archive is read alongside startup activity.
+- Avoid unnecessary sidebar layout measurements while opening the desktop dashboard.
+- Prepare continuation topic guards during dashboard startup so the sidebar can reuse them when loading the seven-day archive.
+- Concurrent sidebar reads share the ticket-state reload after startup and ticket changes, reducing duplicate work before recent and full rows can appear.
+- Reuse the conversation topic cache when a sidebar request has already opened the session index.
+- The sidebar keeps its prepared conversation topics through SQLite checkpoints when the topic records are unchanged.
+- Retry the compact seven-day sidebar response once when concurrent topic indexing invalidates its snapshot.
+- Avoid a redundant sidebar topic scan when a concurrent edit lands before the archive read begins.
+- Reuse the sidebar's continuation-topic snapshot after a small archive update commits.
+- Reuse the All conversations sidebar's validated archive view after a refresh leaves the rows and their order unchanged.
+- Keep the sidebar title cache ready when new untitled transcripts leave the visible titles unchanged.
+- Show automatic silence checks with a sender label instead of exposing the transcript delivery header.
+- Keep the Investigate button visible and focused while the dashboard refreshes a silent session’s status.
+- Release the queue read slot when a client stops reading, so other dashboards can keep polling.
+- Place transcript jump controls in their own row so conversation text and the Investigate action stay accessible.
+- Delivery follows continuations with available transcripts or live sessions, so removed transcripts no longer intercept incoming messages.
+- Identify the mobile voice ticket toggle as a browser preference in its accessibility description.
+- The Workers tab shows each listed ticket once while keeping live worker status and newly claimed tickets visible.
+- Keep Workers ticket rows compact on tall windows while allowing long lists to scroll.
+- Show the full assistant progress note under Working in Compact and Normal conversation views.
+
 ## [7.0.0] - 2026-11-21
 
 ### Added
@@ -5687,7 +5995,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v7.0.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v7.1.0...HEAD
+[7.1.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v7.1.0
 [7.0.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v7.0.0
 [5.46.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.46.0
 [5.45.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.45.0

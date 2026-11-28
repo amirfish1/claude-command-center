@@ -1,1 +1,0 @@
-- Session-limit notices are readable in the light theme instead of showing dark text on a dark card.

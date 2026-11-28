@@ -1,1 +1,0 @@
-- Reduce the work needed to read continuation topics when loading the conversation sidebar.

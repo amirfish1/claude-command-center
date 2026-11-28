@@ -1,1 +1,0 @@
-- Skip archive sidebar row hydration when a local topic commit has already superseded the read snapshot.

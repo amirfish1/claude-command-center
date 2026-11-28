@@ -1,1 +1,0 @@
-- The sidebar no longer re-downloads the whole session list when you reload a page after a while: a saved list from earlier in the day now catches up with a small update even after many ticket or usage-limit changes (one phone reload went from a 633 KB download and 7.9 s to a small delta).

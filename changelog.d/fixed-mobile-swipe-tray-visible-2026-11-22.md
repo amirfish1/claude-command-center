@@ -1,1 +1,0 @@
-- Swiping a session row on a phone now shows the More and Archive buttons; they were laid out but hidden, so the swipe looked like it did nothing.

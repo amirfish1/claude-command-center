@@ -1,1 +1,0 @@
-- Phone session lists now use a native-style swipe: swipe left reveals More and Archive (a long swipe archives at once), swipe right stars the session for today, and More opens a bottom sheet with the session's other actions, with Trash shown in red.

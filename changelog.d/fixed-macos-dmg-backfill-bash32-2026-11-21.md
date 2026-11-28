@@ -1,1 +1,0 @@
-- Fixed the daily DMG backfill on macOS, which crashed under bash 3.2 before building any pending signed app update.

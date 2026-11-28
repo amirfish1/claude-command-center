@@ -1,1 +1,0 @@
-- Savings reads transcript file stamps in a batch without rounding them, reducing contention during ledger refreshes.

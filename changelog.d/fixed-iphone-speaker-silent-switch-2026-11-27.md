@@ -1,1 +1,0 @@
-- Speaker on iPhone: reading aloud now plays even with the ringer switch on silent, and the phone's built-in voice is labeled "Phone voice" instead of "Mac voice".

@@ -16,7 +16,7 @@ Usage:
 
 from __future__ import annotations
 
-__version__ = "7.0.0"
+__version__ = "7.1.0"
 
 import sender_envelope as _attribution
 from ccc_server.wt_snapshot import clip_title as _wt_clip_title, ticket_context as _wt_ticket_context

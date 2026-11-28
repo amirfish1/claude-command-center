@@ -1,1 +1,0 @@
-- Archiving a session on the phone now collapses its row smoothly instead of making the list jump, and no longer opens the next session's chat when the archived one was the last one you viewed.

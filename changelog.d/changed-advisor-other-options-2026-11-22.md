@@ -1,1 +1,0 @@
-- The new-session **Why?** panel now lists the other ranked engines with their remaining allowance, or the reason each was skipped. Click one to use it instead.

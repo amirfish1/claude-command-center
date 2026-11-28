@@ -1,1 +1,0 @@
-- Reduce the pause after loading All sessions by saving the packed response directly for the next reload.

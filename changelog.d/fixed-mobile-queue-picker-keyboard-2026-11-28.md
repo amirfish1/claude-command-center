@@ -1,1 +1,0 @@
-- Phone queue picker shows the list of queues again: the sheet stays on screen when the keyboard opens, and touch screens no longer pop up the keyboard as soon as the picker opens.

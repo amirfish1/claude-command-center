@@ -1,1 +1,0 @@
-- Reduced the time the background archive publisher spends reading saved conversation titles.

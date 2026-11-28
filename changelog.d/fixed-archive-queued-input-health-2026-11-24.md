@@ -1,1 +1,0 @@
-- Keep conversation archive lists available when sessions have queued inputs, and avoid collecting queue health twice while building seven-day lists.

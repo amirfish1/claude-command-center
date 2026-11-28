@@ -1,1 +1,0 @@
-- Opening session artifacts and web previews (images, videos, PDFs, HTML files, Markdown links, and inline-code/conversation web URLs) on desktop now displays them in the right-hand status rail (`#statusRailFileViewer`) alongside the active session, automatically collapsing the left-hand session list to make room and restoring it on close.

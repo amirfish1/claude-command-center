@@ -1,1 +1,0 @@
-- The sidebar conversation list is now served by the conversation-reader process, so it loads quickly even while the dashboard is busy; reads fall back to the dashboard automatically. Set `CCC_LIST_READER=0` to turn it off.

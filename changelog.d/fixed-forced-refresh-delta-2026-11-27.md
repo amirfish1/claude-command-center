@@ -1,1 +1,0 @@
-- Refreshing the session sidebar (after a spawn, archive or manual refresh) now downloads only the sessions that changed instead of the whole list, so it no longer stalls for seconds on a slow connection.

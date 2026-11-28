@@ -1,1 +1,0 @@
-- Reuse compressed seven-day sidebar responses during dashboard startup when the browser accepts Zstandard.

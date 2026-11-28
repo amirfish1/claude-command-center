@@ -1,1 +1,0 @@
-- The new-session **Change** panel now floats above the composer, so opening it no longer moves the Routine/Deep row. Model ranking and allowance pace are one list: each ranked model shows its used-versus-time meter and verdict, with **Edit order** for drag-to-reorder.

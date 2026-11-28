@@ -1,1 +1,0 @@
-- Release the queue read slot when a client stops reading, so other dashboards can keep polling.

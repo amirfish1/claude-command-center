@@ -1,1 +1,0 @@
-- Reuse unchanged row data when rebuilding complete sidebar archive responses after small changes.

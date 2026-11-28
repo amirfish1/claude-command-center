@@ -1,1 +1,0 @@
-- Stop building recent archive updates when the requesting tab has moved on, while still completing updates shared with another tab.

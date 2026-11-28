@@ -1,1 +1,0 @@
-- Steer now works on Antigravity sessions: CCC drives each conversation through `agy acp`, so a steered message joins the running turn (the agent reads it after its current step) instead of waiting for the turn to end. Falls back to the previous stream-json process if ACP can't start; set `CCC_ANTIGRAVITY_ACP=0` to turn it off.

@@ -1,1 +1,0 @@
-- The light theme no longer hides the first letter of the "Claude Command Center" title.

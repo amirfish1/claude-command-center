@@ -1,1 +1,0 @@
-- Reduce disk writes on archive refreshes by storing transcript signatures separately from the archive list metadata.

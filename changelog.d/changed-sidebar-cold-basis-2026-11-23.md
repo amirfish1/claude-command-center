@@ -1,1 +1,0 @@
-- Skip loading a second large sidebar archive file on startup when the current archive can be validated against the newer snapshot.

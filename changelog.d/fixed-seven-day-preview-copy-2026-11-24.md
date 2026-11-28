@@ -1,1 +1,0 @@
-- Reduced the work needed to render the seven-day conversation sidebar preview.

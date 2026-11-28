@@ -1,1 +1,0 @@
-- Sessions that ended recently no longer go missing from the session list and search. The background list refresh asked the worker about every past Codex session one at a time, kept hitting its time limit, and stopped picking up new sessions.

@@ -1,1 +1,0 @@
-The dashboard opens faster on phones and slow connections: an unchanged page is no longer downloaded again on every load, and the service worker no longer sits in front of every request on iPhone and iPad.

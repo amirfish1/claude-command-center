@@ -1,1 +1,0 @@
-- Sidebar page loads stay fast after archiving, trashing or moving a session: the list reader rebuilds the cached list right away instead of on the next page load, and picks up archive updates in about a second instead of ~20 s.

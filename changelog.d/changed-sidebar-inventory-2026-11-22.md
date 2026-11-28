@@ -1,1 +1,0 @@
-- Reduce the server work needed to read the full sidebar archive inventory.

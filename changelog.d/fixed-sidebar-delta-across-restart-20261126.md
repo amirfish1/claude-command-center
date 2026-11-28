@@ -1,1 +1,0 @@
-Open pages keep small sidebar updates across a dashboard restart: the restarted list reader answers the previous reader's delta token with only the rows that actually changed, checked against saved row digests, instead of resending the whole 1-7 day list.

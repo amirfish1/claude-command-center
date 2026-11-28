@@ -1,1 +1,0 @@
-`ccc run` sessions now write a typed spawn marker and file under the dashboard's Other lane by default instead of landing in Coding/All among interactive sessions; new `--lane {other,workers,coding}` flag picks a different lane or opts out.
