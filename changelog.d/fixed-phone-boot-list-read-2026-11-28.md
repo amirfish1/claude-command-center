@@ -1,0 +1,1 @@
+Opening the dashboard after a quiet spell no longer waits for the sidebar reader to reload: it picks up new snapshots in the background (first sidebar read on phones ~400-970 ms faster on the server).

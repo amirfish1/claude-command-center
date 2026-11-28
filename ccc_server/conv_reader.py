@@ -707,6 +707,8 @@ def serve(path, parent_pid, port=None, dashboard_port=None):
         # child answers until this one's socket appears, so open pages never
         # see the unhydrated start-up rows (and their delta tokens survive).
         list_reader.wait_hydrated(started + HYDRATE_WAIT_S - time.monotonic())
+        # CCC-730: reload on publication, not inside the next browser read.
+        list_reader.start_background_sync()
     # The first compact sender header would otherwise index the journals inside
     # someone's open; the previous child still answers while this runs.
     try:

@@ -61,6 +61,9 @@ _state = {
     "warm_again": False,   # a mutation landed during it: warm once more
     "busy": [],            # recent [kind, start, end|None] reload/warm spans
     "windows": {},         # {window: monotonic time of its last list read}
+    "last_read": None,     # monotonic time of the last served list read
+    "sync_thread": None,   # background sync (CCC-730)
+    "reload_triggers": {"read": 0, "background": 0},
     "mutations": 0,
     "declined": 0,
     "served": 0,
@@ -85,6 +88,8 @@ def status():
             "loaded", "acp", "reloads", "reload_ms", "warms", "warm_ms", "mutations", "declined",
             "served", "errors", "last_error")} | {"enabled": enabled(),
                                                  "windows": sorted(_state["windows"]),
+                                                 "background_sync": _state["sync_thread"] is not None,
+                                                 "reload_triggers": dict(_state["reload_triggers"]),
                                                  "lineage": _lineage_status()}
 
 
@@ -484,7 +489,47 @@ def stale_ok(reason, slot):
     return False
 
 
-def sync(now=None):
+# CCC-730: a sync only ran on the request path, so an idle child never saw
+# the dashboard's publications and the first read after any idle gap (a
+# phone opening the dashboard) started the hydrated reload (~2 s) and body
+# warm (~1.4 s) on this process's GIL while it was being built: 400-970 ms
+# on the server against 180-300 ms for the same adopted-token delta without
+# that overlap. The child now polls in the background, for as long as a
+# browser read it within RECENT_WINDOW_S (start-up counts as a read, since
+# open pages and phones come back to a new child after every restart).
+BACKGROUND_SYNC_S = SYNC_INTERVAL_S
+
+
+def _recently_read(now):
+    with _lock:
+        last = _state.get("last_read")
+    return last is not None and now - last < RECENT_WINDOW_S
+
+
+def _sync_loop(interval_s, stop):
+    while not stop.wait(interval_s):
+        try:
+            if _recently_read(time.monotonic()):
+                sync(trigger="background")
+        except Exception as exc:  # never let the loop die
+            _note_error(exc)
+
+
+def start_background_sync(interval_s=BACKGROUND_SYNC_S, stop=None):
+    """Start the background sync thread once; returns it (or None)."""
+    with _lock:
+        if _state.get("sync_thread") is not None or _state["server"] is None:
+            return None
+        if _state.get("last_read") is None:
+            _state["last_read"] = time.monotonic()
+        thread = threading.Thread(target=_sync_loop, args=(interval_s, stop or threading.Event()),
+                                  name="list-reader-sync", daemon=True)
+        _state["sync_thread"] = thread
+    thread.start()
+    return thread
+
+
+def sync(now=None, trigger="read"):
     """Pick up a new dashboard publication or sidecar change. Cheap: one
     SQLite query and three stats, at most once a second."""
     srv = _state["server"]
@@ -506,6 +551,8 @@ def sync(now=None):
             if _state["reloading"]:
                 return
             _state["reloading"] = True
+            triggers = _state["reload_triggers"]
+            triggers[trigger] = triggers.get(trigger, 0) + 1
         threading.Thread(target=_reload_in_background, name="list-reader-reload", daemon=True).start()
         return
     sidecars = _sidecar_stamp(srv)
@@ -570,6 +617,8 @@ def save_lineage():
 def note_served(declined=False):
     with _lock:
         _state["declined" if declined else "served"] += 1
+        if not declined:
+            _state["last_read"] = time.monotonic()
 
 
 # -------------------------------------------------------------- dashboard

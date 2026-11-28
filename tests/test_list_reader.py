@@ -2,6 +2,7 @@
 
 import os
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -166,6 +167,45 @@ class ListReaderOpsTest(unittest.TestCase):
             list_reader.sync(now=100.0)
             self.assertTrue(started.wait(5))
         self.assertEqual([c for c in self.srv.calls if c[0] != "warm"], [])  # no restamp
+
+    def test_background_sync_reloads_without_a_read(self):
+        # CCC-730: an idle child reloaded only inside the next browser read
+        # (a phone boot), which then shared the GIL with reload + warm.
+        list_reader._state.update(stamps={"k": 10.0}, last_read=None, sync_thread=None,
+                                  reload_triggers={"read": 0, "background": 0})
+        started, stop = threading.Event(), threading.Event()
+        with mock.patch.object(list_reader, "_store_stamps", return_value={"k": 11.0}), \
+                mock.patch.object(list_reader, "_reload_in_background",
+                                  side_effect=lambda: started.set()):
+            thread = list_reader.start_background_sync(interval_s=0.01, stop=stop)
+            try:
+                self.assertTrue(started.wait(5))
+                # A second start is a no-op while the first thread lives.
+                self.assertIsNone(list_reader.start_background_sync(interval_s=0.01, stop=stop))
+            finally:
+                stop.set()
+                thread.join(5)
+        self.assertEqual(list_reader.status()["reload_triggers"], {"read": 0, "background": 1})
+        self.assertTrue(list_reader.status()["background_sync"])
+
+    def test_background_sync_idles_without_recent_reads(self):
+        now = time.monotonic()
+        list_reader._state.update(last_read=now - list_reader.RECENT_WINDOW_S - 1, sync_thread=None)
+        stop = threading.Event()
+        with mock.patch.object(list_reader, "sync") as sync:
+            thread = list_reader.start_background_sync(interval_s=0.01, stop=stop)
+            time.sleep(0.1)
+            stop.set()
+            thread.join(5)
+        sync.assert_not_called()
+        self.assertFalse(list_reader._recently_read(now))
+
+    def test_served_read_counts_as_recent_but_declined_does_not(self):
+        list_reader._state.update(last_read=None, served=0, declined=0)
+        list_reader.note_served(declined=True)
+        self.assertIsNone(list_reader._state["last_read"])
+        list_reader.note_served()
+        self.assertTrue(list_reader._recently_read(time.monotonic()))
 
     def test_reload_warms_page_load_body(self):
         # CCC-686: a full 1d read after each publication rebuilt the body on
