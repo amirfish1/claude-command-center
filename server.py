@@ -21514,6 +21514,45 @@ def _archive_list_source_rows_for_sessions(session_ids):
     return [row for row in rows if isinstance(row, dict) and row.get("session_id") in session_ids]
 
 
+def _conversation_row_sources(conv_id):
+    """The list's source row for one session, cheapest source first.
+
+    Recent sessions are in the in-memory serve snapshot the sidebar list
+    reads. Older ones come from the persisted archive store; a session newer
+    than both (just started, or a /clear successor) from the same engine
+    overlays the list applies. Never rebuilds the full list source.
+    """
+    import sqlite3
+    from ccc_server import archive_store
+
+    key = _archive_response_cache_key()
+    hot, _, _ = _archive_serve_hot_rows_versioned(key, {}, copy_rows=False, defer_cold=True)
+    hot = hot or []
+    rows = [row for row in hot if isinstance(row, dict) and row.get("session_id") == conv_id]
+    if rows:
+        return [dict(rows[-1])]
+    try:
+        with _ARCHIVE_RESPONSE_CACHE_LOCK:
+            min_cached_at = float((_ARCHIVE_RESPONSE_CACHE.get(key) or {}).get("cached_at") or 0)
+        entry = archive_store.load_with_overrides(
+            _ARCHIVE_RESPONSE_CACHE_FILE, key, hot,
+            schema_version=_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
+            build_id=_ARCHIVE_RESPONSE_CACHE_BUILD_ID,
+            min_cached_at=min_cached_at, session_ids={conv_id},
+        )
+    except (OSError, ValueError, sqlite3.Error):
+        entry = None
+    if entry is not None:
+        rows = [row for row in _overlay_conversation_lifecycle_flags(
+            entry["conversations"], copy_on_change=True)
+            if isinstance(row, dict) and row.get("session_id") == conv_id]
+        if rows:
+            return [dict(rows[-1])]
+    overlay, _ = _archive_list_source_overlays([], _archive_overlay_existing_ids(hot), lambda _phase: None)
+    return [dict(row) for row in overlay or []
+            if isinstance(row, dict) and row.get("session_id") == conv_id][-1:]
+
+
 def compute_conversation_row(conv_id):
     """One conversation's row, projected exactly like /api/conversations/list.
 
@@ -21526,7 +21565,7 @@ def compute_conversation_row(conv_id):
     conv_id = (conv_id or "").strip()
     if not conv_id:
         return None
-    rows = _archive_list_source_rows_for_sessions({conv_id})
+    rows = _conversation_row_sources(conv_id)
     if not rows:
         return None
     # _ticket_effects=False: attach ticket fields without running the list's

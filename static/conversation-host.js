@@ -42,6 +42,11 @@
       renderArchiveList() { navigationChanged('archive'); },
       _renderQueuePanel() { navigationChanged('queues'); },
       async refreshConversationList() {
+        // CCC-728: a reader-only popout refreshes only its own row.
+        if (state.readerPopoutRowRefreshApplies()) {
+          if (await state.refreshReaderPopoutRow()) state.renderSidebar();
+          return;
+        }
         await state.refreshArchiveData({ force: true });
         if (state.popoutRepoPath()) await state.loadConversationList();
         state.renderSidebar();

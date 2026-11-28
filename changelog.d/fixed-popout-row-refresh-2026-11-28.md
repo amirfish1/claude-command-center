@@ -1,0 +1,1 @@
+- An app's agent pane no longer reloads the whole session list four times after every message; it refreshes only its own row through the new `GET /api/conversations/<id>/row` endpoint.
