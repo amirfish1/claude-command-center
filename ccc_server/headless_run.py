@@ -27,11 +27,16 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 
 from ccc_server.paths import SPAWN_DEFAULTS_FILE
 
 PORT_FILE = Path.home() / ".claude" / "command-center" / "port.txt"
+
+# Mirrors server.py's _SPAWN_MARKER_LANES. Anything else ("" / "coding") means
+# "leave the session unmarked" so it files with ordinary interactive sessions.
+_SPAWN_MARKER_LANES = frozenset({"other", "workers"})
 
 SUBSCRIPTION_STRIP_ENV = (
     "ANTHROPIC_API_KEY",
@@ -59,6 +64,50 @@ def _discover_server_url(server_url=None):
     if not cand.startswith(("http://", "https://")):
         cand = f"http://127.0.0.1:{cand}"
     return cand.rstrip("/")
+
+
+def _spawn_markers_dir():
+    """~/.claude/command-center/spawn-markers, resolved lazily so a late
+    CCC_STATE_DIR override (tests, side installs) still applies."""
+    override = os.environ.get("CCC_STATE_DIR", "").strip()
+    base = Path(os.path.expanduser(override)) if override else Path.home() / ".claude" / "command-center"
+    return base / "spawn-markers"
+
+
+def _stamp_spawn_marker(session_id, *, lane, kind, spawned_via):
+    """Merge lane metadata into spawn-markers/<session_id>.json.
+
+    This is the marker contract in server.py (_decode_spawn_marker_file): the
+    dashboard files the row under `lane` instead of inferring it. The
+    session-start hook and runtime writers own sibling keys, so merge — never
+    clobber. Best effort: a marker failure must never fail a run.
+    """
+    sid = str(session_id or "").strip()
+    if not sid or Path(sid).name != sid:
+        return
+    try:
+        markers_dir = _spawn_markers_dir()
+        markers_dir.mkdir(parents=True, exist_ok=True)
+        marker_path = markers_dir / f"{sid}.json"
+        try:
+            data = json.loads(marker_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        changed = False
+        for key, value in (("lane", lane), ("kind", kind), ("spawned_via", spawned_via)):
+            value = str(value or "").strip()[:64]
+            if value and data.get(key) != value:
+                data[key] = value
+                changed = True
+        if not changed:
+            return
+        tmp_path = Path(str(marker_path) + f".{os.getpid()}.tmp")
+        tmp_path.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
+        tmp_path.replace(marker_path)
+    except OSError:
+        pass
 
 
 def _load_defaults(server_url=None, defaults_file=None):
@@ -712,6 +761,9 @@ def run_headless(
     name=None,
     subscription_only=False,
     worker_defaults=False,
+    lane="other",
+    kind="headless",
+    spawned_via="ccc-run",
     server_url=None,
     defaults_file=None,
     binary=None,
@@ -749,6 +801,21 @@ def run_headless(
     env = _build_env(subscription_only, base_env=base_env)
     work_cwd = str(cwd or os.getcwd())
 
+    # A `ccc run` session is automation output, not a person at the keyboard:
+    # default it into the dashboard's Other lane via a typed spawn marker so it
+    # never competes with interactive sessions for the Coding/Workers lanes.
+    mark = str(lane or "").strip().lower() in _SPAWN_MARKER_LANES and not no_session_persistence
+    stamped_id = ""
+    # Pre-stamp: only the claude engine honors --session-id, so its marker can
+    # exist before the session row does. Other engines stamp after the run,
+    # from the id the CLI reports back. The worker route can retry across
+    # engines, so it only post-stamps (a reused --session-id would resume).
+    if mark and not worker_defaults and resolved_engine == "claude":
+        if not session_id:
+            session_id = str(uuid.uuid4())
+        _stamp_spawn_marker(session_id, lane=lane, kind=kind, spawned_via=spawned_via)
+        stamped_id = str(session_id)
+
     kwargs = dict(
         cwd=work_cwd,
         env=env,
@@ -775,7 +842,11 @@ def run_headless(
 
     if not worker_defaults:
         kwargs["model"] = _launch_model(resolved_engine, resolved_model)
-        return _dispatch(prompt, resolved_engine, kwargs)
+        result = _dispatch(prompt, resolved_engine, kwargs)
+        sid_out = str(result.get("session_id") or "").strip() if isinstance(result, dict) else ""
+        if mark and sid_out and sid_out != stamped_id:
+            _stamp_spawn_marker(sid_out, lane=lane, kind=kind, spawned_via=spawned_via)
+        return result
 
     deadline = time.monotonic() + timeout_s
     attempts = []
@@ -811,6 +882,9 @@ def run_headless(
             break
     result["execution"] = {"engine": result["engine"], "model": result["model"],
                            "effort": result["effort"], "attempts": attempts}
+    sid_out = str(result.get("session_id") or "").strip() if isinstance(result, dict) else ""
+    if mark and sid_out and sid_out != stamped_id:
+        _stamp_spawn_marker(sid_out, lane=lane, kind=kind, spawned_via=spawned_via)
     return result
 
 

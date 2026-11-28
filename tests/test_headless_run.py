@@ -10,6 +10,17 @@ from ccc_server import headless_run, jobs_add
 
 
 class HeadlessRunTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.markers_dir = Path(self._tmp.name) / "spawn-markers"
+        patcher = patch.object(headless_run, "_spawn_markers_dir", return_value=self.markers_dir)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _marker(self, sid):
+        return json.loads((self.markers_dir / f"{sid}.json").read_text(encoding="utf-8"))
+
     def test_resolve_session_defaults_from_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp) / "spawn-defaults.json"
@@ -204,6 +215,96 @@ class HeadlessRunTests(unittest.TestCase):
             )
             self.assertFalse(res["ok"])
             self.assertEqual(res["subtype"], "policy_violation")
+
+    def test_run_stamps_other_lane_marker(self):
+        """ccc run sessions file under the Other lane via spawn markers."""
+        captured = {}
+
+        def fake_runner(argv, stdin_text, cwd, env, timeout_s, max_output_bytes):
+            captured["argv"] = argv
+            return 0, json.dumps({
+                "subtype": "success", "is_error": False,
+                "session_id": argv[argv.index("--session-id") + 1],
+                "result": "done",
+            }), "", False, False
+
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "spawn-defaults.json"
+            p.write_text(json.dumps({"engine": "claude", "models": {"claude": "haiku-5-5"}}), encoding="utf-8")
+            res = headless_run.run_headless(
+                "draft a post", cwd=tmp, server_url="http://127.0.0.1:1",
+                defaults_file=p, runner=fake_runner,
+            )
+            self.assertTrue(res["ok"])
+            sid = res["session_id"]
+            self.assertEqual(captured["argv"][captured["argv"].index("--session-id") + 1], sid)
+            marker = self._marker(sid)
+            self.assertEqual(marker["lane"], "other")
+            self.assertEqual(marker["kind"], "headless")
+            self.assertEqual(marker["spawned_via"], "ccc-run")
+
+    def test_run_lane_opt_out_and_worker_lane(self):
+        defaults = {"engine": "claude", "models": {"claude": "sonnet-5-5"}}
+
+        def fake_runner(argv, stdin_text, cwd, env, timeout_s, max_output_bytes):
+            sid = argv[argv.index("--session-id") + 1] if "--session-id" in argv else "sid-x"
+            return 0, json.dumps({"subtype": "success", "is_error": False,
+                                  "session_id": sid, "result": "ok"}), "", False, False
+
+        with patch.object(headless_run, "_load_defaults", return_value=(defaults, "file")):
+            res = headless_run.run_headless("x", lane="workers", runner=fake_runner)
+            self.assertEqual(self._marker(res["session_id"])["lane"], "workers")
+
+            res = headless_run.run_headless("x", lane="coding", runner=fake_runner)
+            self.assertFalse((self.markers_dir / f"{res['session_id']}.json").exists())
+
+            res = headless_run.run_headless("x", no_session_persistence=True, runner=fake_runner)
+            self.assertFalse((self.markers_dir / f"{res['session_id']}.json").exists())
+
+    def test_run_stamps_caller_session_id_and_preserves_siblings(self):
+        sid = "11111111-2222-3333-4444-555555555555"
+        self.markers_dir.mkdir(parents=True)
+        (self.markers_dir / f"{sid}.json").write_text(
+            json.dumps({"caller": "hook", "lane": "workers"}), encoding="utf-8")
+        defaults = {"engine": "claude", "models": {"claude": "sonnet-5-5"}}
+        with patch.object(headless_run, "_load_defaults", return_value=(defaults, "file")), \
+                patch.object(headless_run, "_run_claude",
+                             return_value={"ok": True, "subtype": "success", "session_id": sid}):
+            headless_run.run_headless("x", session_id=sid, lane="other")
+        marker = self._marker(sid)
+        self.assertEqual(marker["caller"], "hook")
+        self.assertEqual(marker["lane"], "other")
+        self.assertEqual(marker["spawned_via"], "ccc-run")
+
+    def test_codex_run_post_stamps_thread_id(self):
+        def fake_runner(argv, stdin_text, cwd, env, timeout_s, max_output_bytes):
+            out_idx = argv.index("-o") + 1
+            Path(argv[out_idx]).write_text("done", encoding="utf-8")
+            jsonl = "\n".join([
+                json.dumps({"type": "thread.started", "thread_id": "thr-9"}),
+                json.dumps({"type": "turn.completed", "usage": {}}),
+            ])
+            return 0, jsonl, "", False, False
+
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "spawn-defaults.json"
+            p.write_text(json.dumps({"engine": "codex", "models": {"codex": "gpt-6.1-sol"}}), encoding="utf-8")
+            res = headless_run.run_headless(
+                "check", cwd=tmp, server_url="http://127.0.0.1:1", defaults_file=p, runner=fake_runner,
+            )
+            self.assertEqual(res["session_id"], "thr-9")
+            self.assertEqual(self._marker("thr-9")["lane"], "other")
+
+    def test_worker_defaults_post_stamps_result(self):
+        defaults = {"engine": "claude", "worker_engine": "claude", "worker_model": "sonnet-5-5"}
+        with patch.object(headless_run, "_load_defaults", return_value=(defaults, "file")), \
+                patch.object(headless_run, "_run_claude",
+                             return_value={"ok": True, "subtype": "success", "engine": "claude",
+                                           "model": "claude-sonnet-5-5", "effort": "",
+                                           "session_id": "sid-worker-1"}):
+            res = headless_run.run_headless("x", worker_defaults=True)
+            self.assertTrue(res["ok"])
+            self.assertEqual(self._marker("sid-worker-1")["lane"], "other")
 
     def test_jobs_add_prompt_mentions_default_engine_commands(self):
         prompt = jobs_add.compose_job_prompt({

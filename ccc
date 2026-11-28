@@ -2998,6 +2998,7 @@ def cmd_run(args):
         max_output_bytes=args.max_output_bytes,
         session_id=args.session_id,
         no_session_persistence=args.no_session_persistence,
+        lane=args.lane,
         name=args.name,
         subscription_only=args.subscription_only,
         worker_defaults=args.worker_defaults,
@@ -3660,6 +3661,9 @@ def main(argv=None):
     p.add_argument("--session-id", help="explicit session UUID where supported")
     p.add_argument("--no-session-persistence", action="store_true",
                    help="do not persist session transcript to disk")
+    p.add_argument("--lane", default="other", choices=["other", "workers", "coding"],
+                   help="dashboard lane for the session: other (default) or workers; "
+                        "'coding' leaves it unmarked among interactive sessions")
     p.add_argument("--name", help="display name for persisted session where supported")
     p.add_argument("--subscription-only", action="store_true",
                    help="strip API-key env vars so only subscription login is used")

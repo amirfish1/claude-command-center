@@ -19495,7 +19495,7 @@ _ARCHIVE_LIST_FIELDS = (
     "subagent_in_flight_count", "subagent_recent", "workflows", "session_state", "goal",
     "goal_status", "parent_session_id", "continued_from_session_id", "idea_ticket",
     "continuation_topic_title", "continuation_topic_session_id", "continuation_topic_root_session_id",
-    "hermes_parent_session_id", "spawned_via", "spawn_caller", "spawned_kind", "runtime",
+    "hermes_parent_session_id", "spawned_via", "spawn_caller", "spawned_kind", "spawned_lane", "runtime",
     "hermes_continued_from", "hermes_child_session_ids",
     "hermes_lineage_session_ids", "hermes_lineage_count", "hermes_is_parent",
     "model", "reasoning_effort", "latest_input_tokens", "lifetime_tokens", "cost_usd", "cost_breakdown_usd",
