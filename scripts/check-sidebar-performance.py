@@ -9,6 +9,11 @@ That leaves ~16 waited-for reads a day, so list_read is measured over 7 days
 with the same budget and minimum; at 24 h it could never reach 50 samples
 and stayed pending even while it failed.
 
+archive_load is also measured over 7 days (CCC-729). People boot the
+dashboard about 5 times a day, mostly on a phone, so at 24 h its p95 was
+simply the slowest boot: one boot whose phone network took 1.3 s to send
+the request failed the gate. The budget (2 s) and minimum (5) are unchanged.
+
 Uses perf_gate.py's deployment proof and its warmup and host-load filters.
 Missing post-deployment samples stay pending; they never become a successful
 check.
@@ -38,7 +43,7 @@ GATES = (
 )
 WINDOW_HOURS = 24
 # Kinds measured over a longer window (same budget and minimum).
-KIND_WINDOW_HOURS = {'list_read': 7 * 24}
+KIND_WINDOW_HOURS = {'list_read': 7 * 24, 'archive_load': 7 * 24}
 
 
 def _excluded(row):

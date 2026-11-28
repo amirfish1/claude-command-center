@@ -123,3 +123,22 @@ def test_waited_for_reads_are_gated_over_seven_days(tmp_path):
     assert gates['list_read']['status'] == 'fail' and gates['list_read']['samples'] == 50
     assert gates['list_read']['window_hours'] == 168 and gates['list_read']['budget_ms'] == 1000
     assert gates['list_poll']['samples'] == 0 and gates['list_poll']['window_hours'] == 24
+
+
+def test_archive_load_is_gated_over_seven_days(tmp_path):
+    # ~5 dashboard boots a day made the 24 h p95 the single slowest boot
+    # (CCC-729). archive_load counts 7 days; budget and minimum unchanged,
+    # so 4 fast boots plus one slow one still fail at n=5.
+    from datetime import timedelta
+    old = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    rows = [{'kind': 'archive_load', 'ts': old, 'ms': ms, 'warmup': False, 'load1': 1,
+             'ncpu': 4, 'up_s': 3600, 'detail': {'status': 200}}
+            for ms in (800, 900, 1000, 1100, 2716)]
+    target = tmp_path / 'events.jsonl'
+    target.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+    gates = {g['kind']: g for g in check.check(target, tmp_path, '')['evidence']['gates']}
+    gate = gates['archive_load']
+    assert gate['window_hours'] == 168 and gate['samples'] == 5
+    assert gate['budget_ms'] == 2000 and gate['minimum'] == 5
+    assert gate['status'] == 'fail'
+    assert gates['live_build']['window_hours'] == 24
