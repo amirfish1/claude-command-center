@@ -142,3 +142,57 @@ def test_archive_load_is_gated_over_seven_days(tmp_path):
     assert gate['budget_ms'] == 2000 and gate['minimum'] == 5
     assert gate['status'] == 'fail'
     assert gates['live_build']['window_hours'] == 24
+
+
+def _boot_rows(boot_id, archive_ms, stall_ms, proto='h2', ms=500):
+    now = datetime.now(timezone.utc).isoformat()
+    base = {'ts': now, 'warmup': False, 'load1': 1, 'ncpu': 4, 'up_s': 3600, 'boot_id': boot_id}
+    return [dict(base, kind='list_read', ms=ms,
+                 detail={'status': 200, 'server_ms': 300,
+                         'rt': {'stall_ms': stall_ms, 'req_wait_ms': 400, 'conn_ms': 0, 'proto': proto}}),
+            dict(base, kind='archive_load', ms=archive_ms, detail={'status': 200})]
+
+
+def _write(tmp_path, rows):
+    target = tmp_path / 'events.jsonl'
+    target.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+    return target
+
+
+def _gate(result, kind):
+    return next(g for g in result['evidence']['gates'] if g['kind'] == kind)
+
+
+def test_phone_held_boot_is_attributed_not_counted(tmp_path):
+    # CCC-733: the boot that failed archive_load was held 1291 ms on the
+    # phone before its HTTP/2 request was sent; the server cannot cause that.
+    rows = [r for i in range(5) for r in _boot_rows(f'ok{i}', 900, 10)]
+    rows += _boot_rows('held', 2716, 1291)
+    gate = _gate(check.check(_write(tmp_path, rows), tmp_path, ''), 'archive_load')
+    assert gate['samples'] == 5 and gate['network_bound'] == 1 and gate['status'] == 'pass'
+
+
+def test_slow_ccc_boots_still_fail_with_a_healthy_phone(tmp_path):
+    rows = [r for i in range(5) for r in _boot_rows(f's{i}', 5000, 10)]
+    gate = _gate(check.check(_write(tmp_path, rows), tmp_path, ''), 'archive_load')
+    assert gate['status'] == 'fail' and gate['network_bound'] == 0
+
+
+def test_http1_stall_stays_ccc_and_missing_timing_counts(tmp_path):
+    # On HTTP/1.1 a stall can be the connection limit filled by CCC's own
+    # slow requests, so it is never attributed to the phone.
+    rows = [r for i in range(5) for r in _boot_rows(f'h1{i}', 5000, 3000, proto='http/1.1')]
+    rows += [dict(r, detail={'status': 200}) if r['kind'] == 'list_read' else r
+             for r in _boot_rows('none', 5000, 0)]
+    gate = _gate(check.check(_write(tmp_path, rows), tmp_path, ''), 'archive_load')
+    assert gate['samples'] == 6 and gate['network_bound'] == 0 and gate['status'] == 'fail'
+
+
+def test_recurring_phone_holds_fail_as_a_degraded_link(tmp_path):
+    rows = [r for i in range(6) for r in _boot_rows(f'ok{i}', 900, 10)]
+    rows += [r for i in range(3) for r in _boot_rows(f'held{i}', 3000, 1500)]
+    gate = _gate(check.check(_write(tmp_path, rows), tmp_path, ''), 'archive_load')
+    assert gate['network_bound'] == 3 and gate['status'] == 'fail' and 'degraded' in gate['reason']
+    # The waited-for read itself is attributed the same way.
+    reads = _gate(check.check(_write(tmp_path, rows), tmp_path, ''), 'list_read')
+    assert reads['network_bound'] == 3 and reads['samples'] == 6
