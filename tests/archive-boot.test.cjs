@@ -160,6 +160,39 @@ test('dash_boot names the slow phase and the client (CCC-718)',async()=>{
   assert.equal(d.sw_controlled,false); assert.equal(d.framed,undefined);
 });
 
+test('a reader-only popout sends no dash_boot: its first list call is a later user action (CCC-727)',async()=>{
+  const cases=[[{CONV_POPOUT_MODE:true},''],[{READER_ONLY_POPOUT:true},''],[{GROUPCHAT_POPOUT_MODE:true},''],
+    [{},'?ccc_popout=conversation&embed=app&conv=x'],[{},'?popout=groupchat'],[{},'?ccc_popout=flow']];
+  for(const [flags,search] of cases){
+    const events=[];
+    const response={ok:true,status:200,_cccArchiveTiming:{start:100,headers:200,parsed:300,parse_ms:40},
+      headers:{get:()=>null},json:async()=>({conversations:[{id:'one'}]})};
+    const state=Object.assign({_archiveAllInflight:new Map(),_archiveAllEtag:new Map(),_archiveAllData:new Map(),
+      _archiveAllDelta:new Map(),_archiveBootstrapConsumed:true,ARCHIVE_ALL_FETCH_TIMEOUT_MS:45000},flags);
+    let now=130000;
+    const win={__cccPerfRow(){},location:{search}};
+    win.top={};
+    const context={sharedState:state,window:win,
+      performance:{now:()=>now+=100,getEntriesByType:()=>[]},
+      URLSearchParams,AbortController,setTimeout:()=>0,clearTimeout(){},
+      _archiveWindow:()=> '8h',_clientLog(){},
+      _perfActiveElapsed:(a,b)=>b-a,_perfLongTaskMs:()=>0,_convResourceTiming:()=>null,
+      _perfEvent:(kind,ms,extra)=>events.push({kind,ms,...extra}),
+      backgroundApiFetch:async()=>response};
+    vm.createContext(context); vm.runInContext(archiveLoader,context);
+    await context.loadArchiveAll({});
+    await context.loadArchiveAll({});
+    const boots=events.filter(e=>e.kind==='dash_boot');
+    if(search==='?ccc_popout=flow'){
+      // A flow popout loads its list at startup, so it is still measured.
+      assert.equal(boots.length,1); assert.equal(boots[0].detail.popout,'flow');
+    } else {
+      assert.equal(boots.length,0,JSON.stringify(flags)+search);
+    }
+    assert.equal(state._dashBootSent,true,'decided once per page');
+  }
+});
+
 test('overlapped history fetches immediately but parses only after initial paint', async () => {
   const source = archiveLoader;
   let releasePaint, reads = 0, parses = 0;

@@ -10,6 +10,7 @@ tests/ (not tests/test_smoke.py).
 import json
 import tempfile
 import time
+import sys
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -339,6 +340,39 @@ class TestSummarize(PerfEventsTestBase):
             {"title": "Dashboard startup", "note": "x\nPerformance topic: dash_boot\n"}), "dash_boot")
         pattern = pe.evaluate_breach_pattern(pe.read_events(0))
         self.assertEqual(pattern["kind"], "dash_boot")
+
+    def test_popout_dash_boot_is_not_startup(self):
+        # CCC-727: an app's agent pane (a framed conversation popout) calls
+        # the list only after a user action, here a send 130 s after it
+        # opened. That is reading time, not dashboard startup: it must not
+        # file or count toward dash_boot, in the server or in perf_gate.
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+        import perf_gate
+        calm = mock.patch.object(pe, "_machine_load", return_value=(0.5, 8))
+        calm.start()
+        self.addCleanup(calm.stop)
+        for detail in ({"framed": True, "client": "ios-app", "scripts": 4},
+                       {"popout": "conversation"}, {"popout": "groupchat"}):
+            self.assertTrue(pe.record_event("dash_boot", 130835, detail=detail)["breach"])
+        rows = pe.read_events(0)
+        self.assertEqual(len(rows), 3)
+        for row in rows:
+            self.assertEqual(pe._exclusion_reason(row), "popout")
+            self.assertEqual(perf_gate._steady_reason(row), "popout")
+        self.assertIsNone(pe.evaluate_breach_pattern(rows))
+        # A flow popout boots its list at startup, and other kinds keep the
+        # framed field without being excluded.
+        flow = {"kind": "dash_boot", "ms": 9000, "detail": {"popout": "flow"}}
+        self.assertEqual(pe._exclusion_reason(flow), "")
+        self.assertEqual(perf_gate._steady_reason(flow), "")
+        framed_open = {"kind": "conv_open", "ms": 9000, "detail": {"framed": True}}
+        self.assertEqual(pe._exclusion_reason(framed_open), "")
+        # Real dashboard boots still file.
+        for ms in (pe.DASH_BOOT_MS + 400, pe.DASH_BOOT_MS + 900):
+            pe.record_event("dash_boot", ms, detail={"client": "ios-app"})
+        pattern = pe.evaluate_breach_pattern(pe.read_events(0))
+        self.assertEqual(pattern["kind"], "dash_boot")
+        self.assertEqual(pattern["count"], 2)
 
     def test_hours_clamped(self):
         summary = pe.summarize(hours=99999)

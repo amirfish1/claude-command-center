@@ -740,6 +740,8 @@ def _alert_rows(events):
             continue
         if _fully_hidden(event):
             continue
+        if _popout_boot(event):
+            continue
         if event.get("warmup"):
             if event.get("kind") != "archive_load":
                 continue
@@ -760,6 +762,21 @@ def _fully_hidden(row):
         return False
 
 
+def _popout_boot(row):
+    """dash_boot from a reader-only popout is not dashboard startup (CCC-727).
+
+    A conversation/group-chat popout, including an app's agent pane (an
+    iframe), never loads the session list while it starts; its first list
+    call comes from a later user action such as the refreshes after a send.
+    Navigation -> that call measured how long someone read the pane (130 s).
+    New pages stop sending it; rows already recorded carry detail.framed.
+    """
+    if row.get("kind") != "dash_boot":
+        return False
+    detail = row.get("detail") if isinstance(row.get("detail"), dict) else {}
+    return bool(detail.get("framed")) or detail.get("popout") in ("conversation", "groupchat")
+
+
 def _exclusion_reason(row):
     """Why a row is left out of the filed p95, or '' when it counts.
     Rows predating the load/up_s fields count (fail toward filing)."""
@@ -769,6 +786,8 @@ def _exclusion_reason(row):
         return "automated"
     if _fully_hidden(row):
         return "hidden"
+    if _popout_boot(row):
+        return "popout"
     try:
         load1, ncpu = row.get("load1"), row.get("ncpu")
         if load1 is not None and ncpu is not None and float(load1) > float(ncpu):

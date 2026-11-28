@@ -53,6 +53,16 @@ def _fully_hidden(row):
         return False
 
 
+def _popout_boot(row):
+    """dash_boot from a reader-only popout (an app's agent pane, a q2
+    conversation frame) is not dashboard startup: its first list call follows
+    a later user action. Same rule as perf_events._popout_boot (CCC-727)."""
+    if row.get("kind") != "dash_boot":
+        return False
+    detail = row.get("detail") if isinstance(row.get("detail"), dict) else {}
+    return bool(detail.get("framed")) or detail.get("popout") in ("conversation", "groupchat")
+
+
 def _steady_reason(row):
     """Why a sample is not steady-state ('' when it counts)."""
     if row.get("warmup"):
@@ -61,6 +71,8 @@ def _steady_reason(row):
         return "automated"
     if _fully_hidden(row):
         return "hidden"
+    if _popout_boot(row):
+        return "popout"
     try:
         load1, ncpu = row.get("load1"), row.get("ncpu")
         if load1 is not None and ncpu is not None and float(load1) > float(ncpu):

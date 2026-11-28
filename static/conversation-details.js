@@ -4825,7 +4825,21 @@
     try {
       if (sharedState._dashBootSent || typeof _perfEvent !== 'function') return;
       sharedState._dashBootSent = true;
+      // CCC-727: a reader-only popout (one conversation or group chat,
+      // including an app's agent pane) never loads the session list while
+      // it starts. Its first list call comes later from a user action, such
+      // as the refreshes after a send, so navigation -> that call measures
+      // how long someone read the pane (130 s), not startup.
+      let popout = '';
+      try {
+        const params = new URLSearchParams(window.location.search || '');
+        popout = params.get('ccc_popout') || params.get('popout') || '';
+      } catch (_) {}
+      if (sharedState.READER_ONLY_POPOUT || sharedState.CONV_POPOUT_MODE
+          || sharedState.GROUPCHAT_POPOUT_MODE || popout === 'conversation'
+          || popout === 'groupchat') return;
       const detail = { wall_ms: Math.round(callAt) };
+      if (popout) detail.popout = popout.slice(0, 40);
       try {
         const nav = performance.getEntriesByType('navigation')[0];
         if (nav) {
