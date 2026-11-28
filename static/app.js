@@ -35230,10 +35230,24 @@
       const trigBottom = $trig.getBoundingClientRect().bottom;
       const panelTop = $panel ? $panel.getBoundingClientRect().top : 0;
       $card.style.setProperty('--fq-qp-top', Math.max(0, trigBottom - panelTop) + 'px');
+      // CCC-731: on a phone the bottom sheet is pinned to the visible
+      // viewport, not to #queuePanel. The panel's height follows --app-vh,
+      // so when the keyboard opens it collapses to ~100px and a sheet drawn
+      // inside it had no room for a single queue row. The sheet keeps its
+      // usual start just below the panel top; CSS lifts it when that would
+      // leave too little room.
+      const phoneSheet = _uxqPicker.isMobile && window.innerWidth <= 620;
+      if ($panel) $panel.classList.toggle('fq-qp-viewport', phoneSheet);
+      const vvTop = (window.visualViewport && window.visualViewport.offsetTop) || 0;
+      $card.style.setProperty('--fq-qp-sheet-top', Math.max(8, panelTop - vvTop + 26) + 'px');
     }
     _uxqRenderQueueTrigger(_uxqItemsCache.items, _uxqLastResolvedProject);
     _uxqRenderPicker();
-    // Autofocus the filter field after the DOM settles.
+    // Autofocus the filter field after the DOM settles. Not on touch screens:
+    // there the focus raises the keyboard over the list before the user has
+    // seen a single queue (CCC-731); tapping the field still opens it.
+    const touch = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+    if (touch) return;
     setTimeout(() => {
       const $f = $card && $card.querySelector('.fq-qp-filter-input');
       if ($f) $f.focus();

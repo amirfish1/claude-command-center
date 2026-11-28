@@ -17492,6 +17492,17 @@
     border-top: 1px solid #333b45; border-left: 0; border-right: 0; border-bottom: 0;
     box-shadow: 0 -14px 40px rgba(0,0,0,.55);
   }
+  /* CCC-731: phone sheet is fixed to the visible viewport (--app-vh tracks
+     the on-screen keyboard), above the bottom nav. It starts below the panel
+     top as before, but rises so at least ~360px of sheet stays usable. */
+  #queuePanel.fq-mobile.fq-qp-viewport .fq-qp {
+    position: fixed; left: 0; right: 0; bottom: auto;
+    top: var(--app-vv-top, 0px); height: var(--app-vh, 100dvh);
+    z-index: 960;
+  }
+  #queuePanel.fq-mobile.fq-qp-viewport .fq-qp-card {
+    top: max(8px, min(var(--fq-qp-sheet-top, 26px), calc(100% - 360px)));
+  }
   #queuePanel.fq-mobile .fq-qp-filter { padding: 6px 13px 10px; }
   #queuePanel.fq-mobile .fq-qp-filter-input {
     min-height: 40px; padding: 9px 12px; border-radius: 8px; font-size: 14px;

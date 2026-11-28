@@ -194,3 +194,29 @@ class TestQueueHeaderLayout(unittest.TestCase):
         self.assertIn("escapeHtml(_uxqRelTime(row.at))", app_js)
         self.assertNotIn("'resolved ' + _uxqRelTime(item.closed_at || row.at)", app_js)
         self.assertIn(".fq-recent-row.is-brief .fq-recent-resolved", app_css)
+
+    def test_phone_queue_picker_sheet_survives_the_keyboard(self):
+        """CCC-731: the phone picker sheet is pinned to the visible viewport.
+
+        #queuePanel's height follows --app-vh, so with the keyboard up it
+        collapses to ~100px; a sheet drawn inside it showed no queue rows.
+        Touch screens also skip the filter autofocus that raised the keyboard.
+        """
+        app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        app_css = (PROJECT_ROOT / "static" / "app.css").read_text(encoding="utf-8")
+
+        sheet = app_css[
+            app_css.index('#queuePanel.fq-mobile.fq-qp-viewport .fq-qp {'):
+            app_css.index('}', app_css.index('#queuePanel.fq-mobile.fq-qp-viewport .fq-qp {'))
+        ]
+        self.assertIn('position: fixed', sheet)
+        self.assertIn('var(--app-vh', sheet)
+        self.assertIn('calc(100% - 360px)', app_css)
+
+        open_fn = app_js[
+            app_js.index('function _uxqPickerOpen()'):
+            app_js.index('function _uxqPickerClose()')
+        ]
+        self.assertIn("classList.toggle('fq-qp-viewport'", open_fn)
+        self.assertIn("(pointer: coarse)", open_fn)
+        self.assertLess(open_fn.index('if (touch) return;'), open_fn.index('$f.focus()'))
