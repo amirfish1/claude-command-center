@@ -234,6 +234,91 @@ def test_variant_a_falls_back_to_chat_history(monkeypatch, tmp_path):
     assert result["events"][1]["blocks"][0]["text"] == "Array ponged."
 
 
+def _fixture_xai_noise_updates():
+    """Grok Build >=1.0.92 leaves sessions that never completed a turn with
+    an updates.jsonl of pure `_x.ai` plumbing — it must not mask the real
+    transcript sources."""
+    return [
+        {"method": "_x.ai/session/update", "params": {"update": {
+            "sessionUpdate": "hook_execution", "event_name": "session_start",
+            "runs": []}}},
+        {"method": "_x.ai/session/update", "params": {"update": {
+            "sessionUpdate": "background_tasks", "tasks": []}}},
+        {"method": "_x.ai/session/update", "params": {"update": {
+            "sessionUpdate": "turn_completed", "stop_reason": "end_turn"}}},
+    ]
+
+
+def _fixture_chat_history_rows():
+    """Real Grok Build chat_history.jsonl rows: injected context rows wrap
+    in <user_info>/<system-reminder>; the real prompt is <user_query>."""
+    return [
+        {"type": "system", "content": "You are Grok fake-1."},
+        {"type": "user", "content": [
+            {"type": "text", "text": "<user_info>\nOS Version: linux\n</user_info>"}]},
+        {"type": "user", "content": [
+            {"type": "text", "text": "<system-reminder>\nskills here\n</system-reminder>"}]},
+        {"type": "user", "content": [
+            {"type": "text", "text": "<user_query>\nfix the flux coil\n</user_query>"}],
+         "prompt_index": 0},
+        {"type": "assistant", "content": "Coil fixed."},
+    ]
+
+
+def test_variant_a_noise_updates_do_not_mask_chat_history(monkeypatch, tmp_path):
+    home = _make_variant_a_home(tmp_path)
+    sid = "03999999-aaaa-7bbb-8ccc-dddddddddddd"
+    session_dir = home / "sessions" / FAKE_CWD_ENCODED / sid
+    _write_jsonl(session_dir / "updates.jsonl", _fixture_xai_noise_updates())
+    _write_jsonl(session_dir / "chat_history.jsonl", _fixture_chat_history_rows())
+    monkeypatch.setenv("GROK_HOME", str(home))
+
+    result = server._parse_grok_conversation(sid)
+    assert [e["type"] for e in result["events"]] == ["user_text", "assistant"]
+    assert result["events"][0]["text"] == "fix the flux coil"
+
+
+def test_variant_a_mining_skips_injected_context_rows(monkeypatch, tmp_path):
+    home = _make_variant_a_home(tmp_path)
+    sid = "04999999-aaaa-7bbb-8ccc-dddddddddddd"
+    session_dir = home / "sessions" / FAKE_CWD_ENCODED / sid
+    _write_jsonl(session_dir / "updates.jsonl", _fixture_xai_noise_updates())
+    _write_jsonl(session_dir / "chat_history.jsonl", _fixture_chat_history_rows())
+    monkeypatch.setenv("GROK_HOME", str(home))
+
+    rows = server.find_grok_conversations(repo_only=False, include_old=True)
+    row = next(r for r in rows if r["session_id"] == sid)
+    assert row["jsonl_path"].endswith("chat_history.jsonl")
+    assert row["first_message"] == "fix the flux coil"
+    assert row["last_assistant_text"] == "Coil fixed."
+
+
+def test_grok_conversation_source_prefers_acp_over_noise_only_disk(
+    monkeypatch, tmp_path,
+):
+    home = _make_variant_a_home(tmp_path)
+    sid = "05999999-aaaa-7bbb-8ccc-dddddddddddd"
+    session_dir = home / "sessions" / FAKE_CWD_ENCODED / sid
+    _write_jsonl(session_dir / "updates.jsonl", _fixture_xai_noise_updates())
+    _write_jsonl(session_dir / "chat_history.jsonl", [
+        {"type": "system", "content": "You are Grok fake-1."},
+        {"type": "user", "content": [
+            {"type": "text", "text": "<system-reminder>\nskills\n</system-reminder>"}]},
+    ])
+    monkeypatch.setenv("GROK_HOME", str(home))
+    server._ACP_CONNS.pop("grok", None)
+    server._ACP_SESSION_STATE.setdefault("grok", {}).pop(sid, None)
+
+    acp = server._acp_transcript_path("grok", sid)
+    acp.parent.mkdir(parents=True, exist_ok=True)
+    _write_jsonl(acp, [{"type": "user_text", "text": "real prompt"}])
+    try:
+        src = server._grok_conversation_source(sid)
+        assert src == acp
+    finally:
+        acp.unlink()
+
+
 def test_variant_a_dot_cwd_file_wins_over_bucket_name(monkeypatch, tmp_path):
     home = tmp_path / ".grok"
     bucket = home / "sessions" / "fake-proj-a1b2c3"

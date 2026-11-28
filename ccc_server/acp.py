@@ -914,19 +914,29 @@ def _grok_conversation_source(sid):
 
     Prefers the CCC ACP transcript when this process has the session loaded;
     otherwise uses the on-disk Grok store so a terminal TUI's writes are
-    reflected. Falls back to the ACP transcript path when neither has data."""
+    reflected. An on-disk file only wins when it actually carries
+    conversation events — Grok Build >=1.0.92 leaves sessions that never
+    completed a turn with an updates.jsonl of pure `_x.ai` plumbing, which
+    must not mask chat_history.jsonl or the ACP transcript a worker-owned
+    conn recorded. Falls back to the ACP transcript path last."""
     if _grok_acp_session_loaded(sid):
         return _core._acp_transcript_path("grok", sid)
+    acp = _core._acp_transcript_path("grok", sid)
     session_dir = _core._grok_session_dir(sid)
     if session_dir is not None:
-        for name in ("updates.jsonl", "chat_history.jsonl"):
-            p = session_dir / name
-            try:
-                if p.is_file() and p.stat().st_size > 0:
-                    return p
-            except OSError:
-                continue
-    return _core._acp_transcript_path("grok", sid)
+        jsonl = _core._grok_session_jsonl(session_dir)
+        if jsonl is not None:
+            has_events, has_rows = _core._grok_jsonl_content_scan(jsonl)
+            if has_events or has_rows:
+                return jsonl
+        try:
+            if acp.is_file() and acp.stat().st_size > 0:
+                return acp
+        except OSError:
+            pass
+        if jsonl is not None:
+            return jsonl
+    return acp
 
 
 def _acp_save_state_unlocked(harness):

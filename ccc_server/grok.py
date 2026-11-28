@@ -365,11 +365,79 @@ def _grok_decode_bucket_cwd(bucket):
     return decoded if decoded.startswith("/") else ""
 
 
+# Cheap byte-level content probes so source selection keys on what a file
+# actually carries, not on existence/size: Grok Build >=1.0.92 leaves
+# sessions that never completed a turn with an updates.jsonl holding only
+# `_x.ai/session/update` plumbing (hook_execution, background_tasks,
+# turn_completed) while the prompt/model messages live in
+# chat_history.jsonl.
+_GROK_UPDATES_METHOD_RE = re.compile(rb'"method"\s*:\s*"session/update"')
+_GROK_CHAT_ROW_RES = (
+    # Model-side rows are conversation even without a prompt marker.
+    re.compile(
+        rb'"(?:type|role)"\s*:\s*"(?:assistant|reasoning|tool_result|tool)"'
+    ),
+    # <user_query> wraps real prompts; <user_info>/<system-reminder>/<rules>
+    # rows are injected context, not transcript content. Anchored to the
+    # text field start — injected rules prose mentions the tag mid-string.
+    re.compile(rb'"text"\s*:\s*"<user_query>'),
+    # Bare text payload not starting with a tag (older/other row shapes).
+    re.compile(rb'"text"\s*:\s*"(?!<)'),
+)
+_GROK_SCAN_HEAD = 256 * 1024
+_GROK_SCAN_TAIL = 64 * 1024
+_GROK_USER_QUERY_RE = re.compile(r"<user_query>\s*(.*?)\s*</user_query>", re.S)
+
+
+def _grok_jsonl_content_scan(path):
+    """(has_updates_stream, has_chat_rows) for a variant-A transcript file.
+
+    Head+tail byte scan; misses nothing for the small files this guards and
+    never parses JSON. `has_updates_stream` means updates.jsonl carries the
+    ACP `session/update` stream (the `_x.ai/` plumbing channel does not
+    count); `has_chat_rows` means a chat_history-style row with a
+    conversational type/role exists."""
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return False, False
+    if size <= 0:
+        return False, False
+    try:
+        with open(path, "rb") as f:
+            head = f.read(_GROK_SCAN_HEAD)
+            tail = f.read(_GROK_SCAN_TAIL) if size > len(head) else b""
+    except OSError:
+        return False, False
+    buf = head + tail
+    has_stream = bool(_GROK_UPDATES_METHOD_RE.search(buf))
+    if not has_stream:
+        # Older/flat updates rows carry `sessionUpdate` without a method
+        # envelope; `_x.ai` plumbing lines always have one.
+        for ln in buf.splitlines():
+            if b'"sessionUpdate"' in ln and b'"method"' not in ln:
+                has_stream = True
+                break
+    return (
+        has_stream,
+        any(rx.search(buf) for rx in _GROK_CHAT_ROW_RES),
+    )
+
+
 def _grok_session_jsonl(session_dir):
     """Transcript file for a variant-A session dir: updates.jsonl (ACP
-    stream) preferred, chat_history.jsonl (raw model messages) fallback."""
-    for name in ("updates.jsonl", "chat_history.jsonl"):
-        p = session_dir / name
+    stream) preferred when it carries session/update events;
+    chat_history.jsonl (raw model messages) when updates is missing or
+    holds only `_x.ai` plumbing."""
+    upd = session_dir / "updates.jsonl"
+    chat = session_dir / "chat_history.jsonl"
+    upd_events, _ = _grok_jsonl_content_scan(upd)
+    if upd_events:
+        return upd
+    _, chat_rows = _grok_jsonl_content_scan(chat)
+    if chat_rows:
+        return chat
+    for p in (upd, chat):
         try:
             if p.is_file():
                 return p
@@ -410,7 +478,14 @@ def _grok_mine_jsonl_texts(jsonl_path):
                 role, text = _grok_event_role_text(ev)
                 text = text.strip()
                 if role == "user" and text and not first_user:
-                    first_user = text
+                    # chat_history rows wrap the real prompt in <user_query>
+                    # and bury it under <user_info>/<system-reminder>/<rules>
+                    # bookkeeping rows — only the query is title material.
+                    if text.startswith("<"):
+                        m = _GROK_USER_QUERY_RE.search(text)
+                        text = m.group(1).strip() if m else ""
+                    if text:
+                        first_user = text
                 elif role == "assistant" and text:
                     last_assistant = text
     except OSError:
@@ -1836,6 +1911,12 @@ def _parse_grok_chat_history_file(path):
                 typ = str(ev.get("type") or ev.get("role") or "").lower()
                 if typ == "user":
                     text = _grok_content_text(ev.get("content")).strip()
+                    if text.startswith("<"):
+                        # Injected context rows (<user_info>,
+                        # <system-reminder>, <rules>) are not transcript
+                        # turns; real prompts ride inside <user_query>.
+                        m = _GROK_USER_QUERY_RE.search(text)
+                        text = m.group(1).strip() if m else ""
                     if not text:
                         continue
                     line += 1
