@@ -17108,7 +17108,8 @@ def find_all_conversations(
 # v16: Rebuild persisted rows to include turn-driver and owner-input metadata.
 # v17: Attribute native subagent prompts to their parent, not owner input.
 # v18: Restore native Antigravity parent links and launch titles.
-_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 18
+# v19: Carry spawned_lane through the /list projection (typed spawn markers).
+_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 19
 if test_isolation_active():
     # Same isolation as ACTIVITY_LOG_FILE: archive-build tests persist rows
     # for synthetic session ids into this shared cache (CCC-1165).
@@ -21511,6 +21512,28 @@ def _archive_list_source_rows_for_sessions(session_ids):
             rows, _ = _archive_list_source_overlays(rows, existing, lambda _phase: None)
 
     return [row for row in rows if isinstance(row, dict) and row.get("session_id") in session_ids]
+
+
+def compute_conversation_row(conv_id):
+    """One conversation's row, projected exactly like /api/conversations/list.
+
+    A reader-only popout (an app's agent pane, a q2 conversation frame) shows
+    one conversation and only needs its own row (state, goal, model) after a
+    send. Re-reading the whole list for that pulled every row, several times
+    per send (CCC-728). Reads the same hot snapshot as the list; no scan.
+    Returns None when the session has no row yet.
+    """
+    conv_id = (conv_id or "").strip()
+    if not conv_id:
+        return None
+    rows = _archive_list_source_rows_for_sessions({conv_id})
+    if not rows:
+        return None
+    # _ticket_effects=False: attach ticket fields without running the list's
+    # ticket side effects, which belong to the full sidebar read.
+    projected = _archive_list_project_rows(
+        rows[-1:], window="all", _retain_templates=False, _ticket_effects=False)
+    return projected[0] if projected else None
 
 
 def _archive_list_source_overlays(rows, existing_ids, phase, *, antigravity_processes=None):
@@ -38570,6 +38593,11 @@ class CommandCenterHandler(AppAssetHintsMixin, ReadKeepAliveMixin, ResponseTimin
                 ):
                     status["working_since"] = status["sidecar_ts"]
             self.send_json(status)
+        elif re.match(r"^/api/conversations/[^/]+/row$", path):
+            # CCC-728: one conversation's list row, for panes that never
+            # show the session list. Additive public API.
+            conv_id = urllib.parse.unquote(path.split("/")[-2])
+            self.send_json({"ok": True, "conversation": compute_conversation_row(conv_id)})
         elif re.match(r"^/api/conversations/[^/]+/tool-input$", path):
             conv_id = urllib.parse.unquote(path.split("/")[-2])
             qs = urllib.parse.parse_qs(parsed.query)
